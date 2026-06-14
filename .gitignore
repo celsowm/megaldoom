@@ -1,0 +1,40 @@
+# SGDK build outputs
+out/
+build/
+obj/
+res/*.s
+res/*.h
+*.bin
+*.gen
+*.lst
+*.out
+*.sym
+*.map
+*.o
+*.elf
+*.md5
+*.srec
+*.iso
+*.cue
+
+# Local toolchains and emulators downloaded by scripts
+.toolchain/
+.tools/
+
+# Local environment overrides
+.env
+.env.*
+!.env.example
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs / temp
+*.log
+*.tmp
+*.bak
