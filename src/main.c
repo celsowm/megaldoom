@@ -387,18 +387,18 @@ static void render_weapon(void) {
     s16 recoil = (s16)g_weapon_recoil;
     s16 yoff = recoil;
 
-    // Better placeholder pistol: barrel, grip, sight and tiny muzzle flash on B.
-    draw_rect(103, 121 + yoff, 50, 24, C_HUD_BG);
-    draw_rect_outline(103, 121 + yoff, 50, 24, C_HUD_LINE);
-    draw_rect(118, 108 + yoff, 22, 18, C_HUD_BG);
-    draw_rect_outline(118, 108 + yoff, 22, 18, C_HUD_LINE);
-    draw_rect(123, 92 + yoff, 10, 25, C_WHITE);
-    draw_rect(121, 90 + yoff, 14, 4, C_HUD_LINE);
-    draw_rect(93, 144 + yoff, 70, 7, C_WHITE);
+    // Keep the placeholder pistol inside the 3D view so it cannot cover the HUD.
+    draw_rect(108, 96 + yoff, 40, 13, C_HUD_BG);
+    draw_rect_outline(108, 96 + yoff, 40, 13, C_HUD_LINE);
+    draw_rect(119, 83 + yoff, 18, 14, C_HUD_BG);
+    draw_rect_outline(119, 83 + yoff, 18, 14, C_HUD_LINE);
+    draw_rect(125, 69 + yoff, 6, 18, C_WHITE);
+    draw_rect(122, 67 + yoff, 12, 3, C_HUD_LINE);
+    draw_rect(116, 108 + yoff, 24, 4, C_WHITE);
 
     if (g_weapon_recoil > 4 && !g_last_action_was_door) {
-        draw_rect(119, 82, 18, 8, C_DOOR_LIGHT);
-        draw_rect(124, 76, 8, 18, C_WHITE);
+        draw_rect(119, 59, 18, 7, C_DOOR_LIGHT);
+        draw_rect(124, 53, 8, 16, C_WHITE);
     }
 }
 
@@ -437,17 +437,122 @@ static void render_minimap(void) {
 #endif
 }
 
+static const u8 *font5x7_rows(char ch) {
+    static const u8 glyph_space[7] = {0, 0, 0, 0, 0, 0, 0};
+    static const u8 glyph_dash[7]  = {0, 0, 0, 31, 0, 0, 0};
+    static const u8 glyph_dot[7]   = {0, 0, 0, 0, 0, 12, 12};
+    static const u8 glyph_slash[7] = {1, 2, 4, 8, 16, 0, 0};
+    static const u8 glyph_0[7] = {14, 17, 19, 21, 25, 17, 14};
+    static const u8 glyph_1[7] = {4, 12, 4, 4, 4, 4, 14};
+    static const u8 glyph_2[7] = {14, 17, 1, 2, 4, 8, 31};
+    static const u8 glyph_3[7] = {30, 1, 1, 14, 1, 1, 30};
+    static const u8 glyph_4[7] = {2, 6, 10, 18, 31, 2, 2};
+    static const u8 glyph_5[7] = {31, 16, 16, 30, 1, 1, 30};
+    static const u8 glyph_6[7] = {14, 16, 16, 30, 17, 17, 14};
+    static const u8 glyph_7[7] = {31, 1, 2, 4, 8, 8, 8};
+    static const u8 glyph_8[7] = {14, 17, 17, 14, 17, 17, 14};
+    static const u8 glyph_9[7] = {14, 17, 17, 15, 1, 1, 14};
+    static const u8 glyph_a[7] = {14, 17, 17, 31, 17, 17, 17};
+    static const u8 glyph_b[7] = {30, 17, 17, 30, 17, 17, 30};
+    static const u8 glyph_c[7] = {14, 17, 16, 16, 16, 17, 14};
+    static const u8 glyph_d[7] = {30, 17, 17, 17, 17, 17, 30};
+    static const u8 glyph_e[7] = {31, 16, 16, 30, 16, 16, 31};
+    static const u8 glyph_f[7] = {31, 16, 16, 30, 16, 16, 16};
+    static const u8 glyph_g[7] = {14, 17, 16, 23, 17, 17, 15};
+    static const u8 glyph_h[7] = {17, 17, 17, 31, 17, 17, 17};
+    static const u8 glyph_i[7] = {14, 4, 4, 4, 4, 4, 14};
+    static const u8 glyph_j[7] = {7, 2, 2, 2, 18, 18, 12};
+    static const u8 glyph_k[7] = {17, 18, 20, 24, 20, 18, 17};
+    static const u8 glyph_l[7] = {16, 16, 16, 16, 16, 16, 31};
+    static const u8 glyph_m[7] = {17, 27, 21, 21, 17, 17, 17};
+    static const u8 glyph_n[7] = {17, 25, 21, 19, 17, 17, 17};
+    static const u8 glyph_o[7] = {14, 17, 17, 17, 17, 17, 14};
+    static const u8 glyph_p[7] = {30, 17, 17, 30, 16, 16, 16};
+    static const u8 glyph_q[7] = {14, 17, 17, 17, 21, 18, 13};
+    static const u8 glyph_r[7] = {30, 17, 17, 30, 20, 18, 17};
+    static const u8 glyph_s[7] = {15, 16, 16, 14, 1, 1, 30};
+    static const u8 glyph_t[7] = {31, 4, 4, 4, 4, 4, 4};
+    static const u8 glyph_u[7] = {17, 17, 17, 17, 17, 17, 14};
+    static const u8 glyph_v[7] = {17, 17, 17, 17, 17, 10, 4};
+    static const u8 glyph_w[7] = {17, 17, 17, 21, 21, 21, 10};
+    static const u8 glyph_x[7] = {17, 17, 10, 4, 10, 17, 17};
+    static const u8 glyph_y[7] = {17, 17, 10, 4, 4, 4, 4};
+    static const u8 glyph_z[7] = {31, 1, 2, 4, 8, 16, 31};
+
+    if (ch >= 'a' && ch <= 'z') ch -= 32;
+
+    switch (ch) {
+        case '-': return glyph_dash;
+        case '.': return glyph_dot;
+        case '/': return glyph_slash;
+        case '0': return glyph_0;
+        case '1': return glyph_1;
+        case '2': return glyph_2;
+        case '3': return glyph_3;
+        case '4': return glyph_4;
+        case '5': return glyph_5;
+        case '6': return glyph_6;
+        case '7': return glyph_7;
+        case '8': return glyph_8;
+        case '9': return glyph_9;
+        case 'A': return glyph_a;
+        case 'B': return glyph_b;
+        case 'C': return glyph_c;
+        case 'D': return glyph_d;
+        case 'E': return glyph_e;
+        case 'F': return glyph_f;
+        case 'G': return glyph_g;
+        case 'H': return glyph_h;
+        case 'I': return glyph_i;
+        case 'J': return glyph_j;
+        case 'K': return glyph_k;
+        case 'L': return glyph_l;
+        case 'M': return glyph_m;
+        case 'N': return glyph_n;
+        case 'O': return glyph_o;
+        case 'P': return glyph_p;
+        case 'Q': return glyph_q;
+        case 'R': return glyph_r;
+        case 'S': return glyph_s;
+        case 'T': return glyph_t;
+        case 'U': return glyph_u;
+        case 'V': return glyph_v;
+        case 'W': return glyph_w;
+        case 'X': return glyph_x;
+        case 'Y': return glyph_y;
+        case 'Z': return glyph_z;
+        default: return glyph_space;
+    }
+}
+
+static void draw_text5x7(s16 x, s16 y, const char *text, u8 col) {
+    while (*text) {
+        const u8 *rows = font5x7_rows(*text++);
+        for (u8 py = 0; py < 7; py++) {
+            u8 bits = rows[py];
+            for (u8 px = 0; px < 5; px++) {
+                if (bits & (1 << (4 - px))) {
+                    BMP_setPixel((u16)(x + px), (u16)(y + py), col);
+                }
+            }
+        }
+        x += 6;
+    }
+}
+
 static void render_hud(void) {
     draw_rect(0, HUD_Y, CANVAS_W, HUD_H, C_HUD_BG);
     draw_hline(0, CANVAS_W - 1, HUD_Y, C_HUD_LINE);
     render_minimap();
+}
 
-    BMP_drawText(VERSION_STRING, 8, 15);
-    BMP_drawText("D-PAD MOVE/TURN  A/C STRAFE", 8, 17);
-    BMP_drawText("B ACTION/FIRE", 8, 19);
+static void render_hud_text(void) {
+    draw_text5x7(58, HUD_Y + 8, VERSION_STRING, C_WHITE);
+    draw_text5x7(58, HUD_Y + 22, "ARROWS MOVE/TURN  A/D STRAFE", C_WHITE);
+    draw_text5x7(58, HUD_Y + 36, "B/S ACTION/FIRE", C_WHITE);
 
     if (g_last_action_was_door && g_weapon_recoil > 0) {
-        BMP_drawText("DOOR", 25, 19);
+        draw_text5x7(204, HUD_Y + 36, "DOOR", C_WHITE);
     }
 }
 
@@ -459,6 +564,7 @@ static void render_frame(void) {
     render_actor(&imp);
     render_hud();
     render_weapon();
+    render_hud_text();
 
     BMP_flip(TRUE);
 }
@@ -468,8 +574,8 @@ int main(bool hardReset) {
 
     VDP_setScreenWidth320();
     VDP_setScreenHeight224();
-    SYS_disableInts();
 
+    DMA_setBufferSize(2048);
     setup_palette();
     JOY_init();
     map_init();
@@ -478,8 +584,6 @@ int main(bool hardReset) {
     // double buffer = TRUE, plane = BG_B, palette = 0, low priority.
     BMP_init(TRUE, BG_B, 0, FALSE);
     BMP_setBufferCopy(FALSE);
-
-    SYS_enableInts();
 
     while (TRUE) {
         update_input();

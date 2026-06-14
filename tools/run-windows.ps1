@@ -14,6 +14,22 @@ function Resolve-LocalPath([string]$Path) {
     return [IO.Path]::GetFullPath((Join-Path $Root $Path))
 }
 
+function Set-MegalDoomBlastEmBindings([string]$EmulatorPath) {
+    $localTools = [IO.Path]::GetFullPath((Join-Path $Root ".tools\blastem"))
+    $emuDir = [IO.Path]::GetFullPath([IO.Path]::GetDirectoryName($EmulatorPath))
+    if (-not $emuDir.StartsWith($localTools, [StringComparison]::OrdinalIgnoreCase)) { return }
+
+    $cfg = Join-Path $emuDir "default.cfg"
+    if (-not (Test-Path $cfg)) { return }
+
+    $content = Get-Content -Raw -Path $cfg
+    $content = $content -replace '(?m)^(\s*)b\s+ui\.plane_debug\s*$', '$1f9 ui.plane_debug'
+    if ($content -notmatch '(?m)^\s*b\s+gamepads\.1\.b\s*$') {
+        $content = $content -replace '(?m)^(\s*)s\s+gamepads\.1\.b\s*$', '$1b gamepads.1.b' + "`r`n" + '$1s gamepads.1.b'
+    }
+    Set-Content -Path $cfg -Value $content -NoNewline
+}
+
 function Find-Rom {
     $known = @(
         (Join-Path $Root "out\rom.bin"),
@@ -60,4 +76,5 @@ if (-not $EmulatorPath -or -not (Test-Path $EmulatorPath)) {
 }
 
 Write-Host "Running: $RomPath" -ForegroundColor Green
+Set-MegalDoomBlastEmBindings $EmulatorPath
 & $EmulatorPath $RomPath

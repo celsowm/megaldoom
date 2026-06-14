@@ -14,6 +14,16 @@ $Archive = Join-Path ([IO.Path]::GetDirectoryName($InstallDir)) "blastem.zip"
 
 function Write-Step($Message) { Write-Host "==> $Message" -ForegroundColor Cyan }
 function Ensure-Dir($Path) { if (-not (Test-Path $Path)) { New-Item -ItemType Directory -Path $Path | Out-Null } }
+function Set-MegalDoomBlastEmBindings([string]$CfgPath) {
+    if (-not (Test-Path $CfgPath)) { return }
+
+    $content = Get-Content -Raw -Path $CfgPath
+    $content = $content -replace '(?m)^(\s*)b\s+ui\.plane_debug\s*$', '$1f9 ui.plane_debug'
+    if ($content -notmatch '(?m)^\s*b\s+gamepads\.1\.b\s*$') {
+        $content = $content -replace '(?m)^(\s*)s\s+gamepads\.1\.b\s*$', '$1b gamepads.1.b' + "`r`n" + '$1s gamepads.1.b'
+    }
+    Set-Content -Path $CfgPath -Value $content -NoNewline
+}
 
 if ((Test-Path (Join-Path $InstallDir "blastem.exe")) -and -not $Force) {
     Write-Step "BlastEm already present at $InstallDir"
@@ -53,6 +63,7 @@ if ((Test-Path (Join-Path $InstallDir "blastem.exe")) -and -not $Force) {
 }
 
 $emu = Join-Path $InstallDir "blastem.exe"
+Set-MegalDoomBlastEmBindings (Join-Path $InstallDir "default.cfg")
 Write-Host ""
 Write-Host "Done. Emulator path:" -ForegroundColor Green
 Write-Host "  $emu"
