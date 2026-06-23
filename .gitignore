@@ -20,6 +20,7 @@ res/*.h
 # Local toolchains and emulators downloaded by scripts
 .toolchain/
 .tools/
+.extenals/
 
 # Local environment overrides
 .env
