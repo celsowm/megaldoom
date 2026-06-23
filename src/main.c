@@ -6,23 +6,38 @@
 #include "draw.h"
 #include "trig1024_q8.h"
 
+#define DEBUG_BMP_SMOKE 0
+#define DEBUG_RENDER_BACKGROUND_ONLY 0
+#define DEBUG_RENDER_3D 1
+#define DEBUG_RENDER_ACTOR 0
+#define DEBUG_RENDER_HUD 0
+#define DEBUG_RENDER_WEAPON 0
+#define DEBUG_RENDER_HUD_TEXT 0
+#define DEBUG_RENDER_WALLS_ONLY 0
+#define DEBUG_RENDER_FIXED_WALLS 0
+#define DEBUG_LOCK_TEX_X 1
+
 static Player player = {
     TO_FP(3) + (FP_ONE / 2),
     TO_FP(3) + (FP_ONE / 2),
     0
 };
 
+#if DEBUG_RENDER_ACTOR || (DEBUG_RENDER_HUD && ENABLE_MINIMAP)
 static Actor imp = {
     TO_FP(9) + (FP_ONE / 2),
     TO_FP(7) + (FP_ONE / 2),
     TRUE
 };
+#endif
 
+#if DEBUG_RENDER_3D || DEBUG_RENDER_ACTOR
 static s16 g_depth[VIEW_COLS];
+#endif
 static s16 g_ray_rel[VIEW_COLS];
 static s16 g_ray_corr[VIEW_COLS];
-static s32 g_inv_abs_cos[ANGLE_FULL];
-static s32 g_inv_abs_sin[ANGLE_FULL];
+static u32 g_inv_abs_cos[ANGLE_FULL];
+static u32 g_inv_abs_sin[ANGLE_FULL];
 
 static u16 g_prev_joy = 0;
 static u16 g_frame = 0;
@@ -45,9 +60,15 @@ static inline s32 abs_s32(s32 v) {
     return (v < 0) ? -v : v;
 }
 
-static inline s32 safe_div_s32(s32 n, s32 d) {
-    if (d == 0) return 0x3fffffff;
-    return n / d;
+static inline u32 safe_div_u32(u32 n, u32 d) {
+    const u32 kMaxReciprocal = 1u << 16;
+    u32 v;
+
+    if (d == 0) return kMaxReciprocal;
+    v = n / d;
+    if (v < 1u) return 1u;
+    if (v > kMaxReciprocal) return kMaxReciprocal;
+    return v;
 }
 
 static void init_perf_tables(void) {
@@ -59,11 +80,11 @@ static void init_perf_tables(void) {
     for (u16 a = 0; a < ANGLE_FULL; a++) {
         s16 ca = cos_q8(a);
         s16 sa = sin_q8(a);
-        s32 abs_ca = abs_s16(ca);
-        s32 abs_sa = abs_s16(sa);
+        u32 abs_ca = (u32)abs_s16(ca);
+        u32 abs_sa = (u32)abs_s16(sa);
 
-        g_inv_abs_cos[a] = safe_div_s32(FP_ONE * FP_ONE, abs_ca);
-        g_inv_abs_sin[a] = safe_div_s32(FP_ONE * FP_ONE, abs_sa);
+        g_inv_abs_cos[a] = safe_div_u32((u32)(FP_ONE * FP_ONE), abs_ca);
+        g_inv_abs_sin[a] = safe_div_u32((u32)(FP_ONE * FP_ONE), abs_sa);
     }
 }
 
@@ -179,6 +200,7 @@ static void update_input(void) {
     g_prev_joy = joy;
 }
 
+#if DEBUG_RENDER_3D || DEBUG_RENDER_WALLS_ONLY
 static RayHit cast_ray(u16 ray_angle) {
     RayHit hit;
     ray_angle &= ANGLE_MASK;
@@ -188,14 +210,14 @@ static RayHit cast_ray(u16 ray_angle) {
     s16 map_x = (s16)(player.x >> FP_SHIFT);
     s16 map_y = (s16)(player.y >> FP_SHIFT);
 
-    s32 delta_x = g_inv_abs_cos[ray_angle];
-    s32 delta_y = g_inv_abs_sin[ray_angle];
-    s32 side_x;
-    s32 side_y;
+    u32 delta_x = g_inv_abs_cos[ray_angle];
+    u32 delta_y = g_inv_abs_sin[ray_angle];
+    u32 side_x;
+    u32 side_y;
     s16 step_x;
     s16 step_y;
     u8 side = 0;
-    s32 dist = RAY_MAX;
+    u32 dist = RAY_MAX;
     u8 tile = TILE_WALL;
 
     if (ray_dx == 0) {
@@ -203,10 +225,10 @@ static RayHit cast_ray(u16 ray_angle) {
         side_x = 0x3fffffff;
     } else if (ray_dx < 0) {
         step_x = -1;
-        side_x = ((player.x - ((s32)map_x << FP_SHIFT)) * delta_x) >> FP_SHIFT;
+        side_x = (((u32)(player.x - ((s32)map_x << FP_SHIFT))) * delta_x) >> FP_SHIFT;
     } else {
         step_x = 1;
-        side_x = (((((s32)map_x + 1) << FP_SHIFT) - player.x) * delta_x) >> FP_SHIFT;
+        side_x = (((u32)((((s32)map_x + 1) << FP_SHIFT) - player.x)) * delta_x) >> FP_SHIFT;
     }
 
     if (ray_dy == 0) {
@@ -214,10 +236,10 @@ static RayHit cast_ray(u16 ray_angle) {
         side_y = 0x3fffffff;
     } else if (ray_dy < 0) {
         step_y = -1;
-        side_y = ((player.y - ((s32)map_y << FP_SHIFT)) * delta_y) >> FP_SHIFT;
+        side_y = (((u32)(player.y - ((s32)map_y << FP_SHIFT))) * delta_y) >> FP_SHIFT;
     } else {
         step_y = 1;
-        side_y = (((((s32)map_y + 1) << FP_SHIFT) - player.y) * delta_y) >> FP_SHIFT;
+        side_y = (((u32)((((s32)map_y + 1) << FP_SHIFT) - player.y)) * delta_y) >> FP_SHIFT;
     }
 
     for (u8 i = 0; i < DDA_MAX_STEPS; i++) {
@@ -242,8 +264,10 @@ static RayHit cast_ray(u16 ray_angle) {
         dist = RAY_MAX;
     }
 
-    s32 hx = player.x + (((s32)ray_dx * dist) >> FP_SHIFT);
-    s32 hy = player.y + (((s32)ray_dy * dist) >> FP_SHIFT);
+    if (dist > RAY_MAX) dist = RAY_MAX;
+
+    s32 hx = player.x + ((((s32)ray_dx * (s32)dist)) >> FP_SHIFT);
+    s32 hy = player.y + ((((s32)ray_dy * (s32)dist)) >> FP_SHIFT);
     u8 tex_x = (u8)(((side == 0 ? hy : hx) & (FP_ONE - 1)) >> 2);
 
     if ((side == 0 && ray_dx > 0) || (side == 1 && ray_dy < 0)) {
@@ -255,9 +279,10 @@ static RayHit cast_ray(u16 ray_angle) {
     hit.tex_x = tex_x;
     hit.map_x = map_x;
     hit.map_y = map_y;
-    hit.dist = dist;
+    hit.dist = (s32)dist;
     return hit;
 }
+#endif
 
 static void render_background(void) {
     const s16 horizon = VIEW_Y + (VIEW_H / 2);
@@ -267,13 +292,6 @@ static void render_background(void) {
     draw_rect(VIEW_X, VIEW_Y + VIEW_H / 4, VIEW_W, VIEW_H / 4, C_CEIL_LIGHT);
     draw_rect(VIEW_X, horizon, VIEW_W, VIEW_H / 4, C_FLOOR_LIGHT);
     draw_rect(VIEW_X, horizon + VIEW_H / 4, VIEW_W, VIEW_H / 4, C_FLOOR_DARK);
-}
-
-static inline void draw_column4_unclipped(s16 sx, s16 y, u8 color) {
-    BMP_setPixelFast((u16)(sx + 0), (u16)y, color);
-    BMP_setPixelFast((u16)(sx + 1), (u16)y, color);
-    BMP_setPixelFast((u16)(sx + 2), (u16)y, color);
-    BMP_setPixelFast((u16)(sx + 3), (u16)y, color);
 }
 
 static void render_wall_column(s16 sx, s16 y0, s16 wall_h, const RayHit *hit, s32 corrected) {
@@ -295,7 +313,7 @@ static void render_wall_column(s16 sx, s16 y0, s16 wall_h, const RayHit *hit, s3
     for (s16 y = clip_y0; y <= clip_y1; y++) {
         u8 tex_y = (u8)((tex_acc >> 14) & 63);
         u8 color = wall_texel_color(hit->tile, hit->side, hit->tex_x, tex_y, corrected);
-        draw_column4_unclipped(sx, y, color);
+        draw_hline(sx, sx + COL_W - 1, y, color);
         tex_acc += tex_step;
     }
 
@@ -303,6 +321,7 @@ static void render_wall_column(s16 sx, s16 y0, s16 wall_h, const RayHit *hit, s3
     if (hit->side) draw_vline(sx, clip_y0, clip_y1, C_WALL_DARK);
 }
 
+#if DEBUG_RENDER_3D
 static void render_3d(void) {
     const s16 horizon = VIEW_Y + (VIEW_H / 2);
 
@@ -312,6 +331,9 @@ static void render_3d(void) {
         s16 rel = g_ray_rel[col];
         u16 ray_angle = (player.angle + rel) & ANGLE_MASK;
         RayHit hit = cast_ray(ray_angle);
+#if DEBUG_LOCK_TEX_X
+        hit.tex_x = 16;
+#endif
 
         // Fish-eye correction, now using a per-column precomputed cosine table.
         s32 corrected = ((s32)hit.dist * g_ray_corr[col]) >> FP_SHIFT;
@@ -333,7 +355,9 @@ static void render_3d(void) {
     draw_hline((VIEW_W / 2) - 3, (VIEW_W / 2) + 3, horizon, C_WHITE);
     draw_vline(VIEW_W / 2, horizon - 3, horizon + 3, C_WHITE);
 }
+#endif
 
+#if DEBUG_RENDER_ACTOR
 static void render_actor(const Actor *actor) {
     if (!actor->alive) return;
 
@@ -382,7 +406,9 @@ static void render_actor(const Actor *actor) {
         }
     }
 }
+#endif
 
+#if DEBUG_RENDER_WEAPON
 static void render_weapon(void) {
     s16 recoil = (s16)g_weapon_recoil;
     s16 yoff = recoil;
@@ -401,9 +427,10 @@ static void render_weapon(void) {
         draw_rect(124, 53, 8, 16, C_WHITE);
     }
 }
+#endif
 
+#if DEBUG_RENDER_HUD && ENABLE_MINIMAP
 static void render_minimap(void) {
-#if ENABLE_MINIMAP
     const s16 ox = 4;
     const s16 oy = HUD_Y + 5;
     const s16 cell = 3;
@@ -434,9 +461,10 @@ static void render_minimap(void) {
     s16 fx = px + (((s32)cos_q8(player.angle) * 6) >> FP_SHIFT);
     s16 fy = py + (((s32)sin_q8(player.angle) * 6) >> FP_SHIFT);
     draw_line(px, py, fx, fy, C_PLAYER);
-#endif
 }
+#endif
 
+#if DEBUG_BMP_SMOKE || DEBUG_RENDER_HUD_TEXT
 static const u8 *font5x7_rows(char ch) {
     static const u8 glyph_space[7] = {0, 0, 0, 0, 0, 0, 0};
     static const u8 glyph_dash[7]  = {0, 0, 0, 31, 0, 0, 0};
@@ -539,13 +567,17 @@ static void draw_text5x7(s16 x, s16 y, const char *text, u8 col) {
         x += 6;
     }
 }
+#endif
 
+#if DEBUG_RENDER_HUD
 static void render_hud(void) {
     draw_rect(0, HUD_Y, CANVAS_W, HUD_H, C_HUD_BG);
     draw_hline(0, CANVAS_W - 1, HUD_Y, C_HUD_LINE);
     render_minimap();
 }
+#endif
 
+#if DEBUG_RENDER_HUD_TEXT
 static void render_hud_text(void) {
     draw_text5x7(58, HUD_Y + 8, VERSION_STRING, C_WHITE);
     draw_text5x7(58, HUD_Y + 22, "ARROWS MOVE/TURN  A/D STRAFE", C_WHITE);
@@ -555,25 +587,62 @@ static void render_hud_text(void) {
         draw_text5x7(204, HUD_Y + 36, "DOOR", C_WHITE);
     }
 }
+#endif
 
 static void render_frame(void) {
-    BMP_waitWhileFlipRequestPending();
-
-    // No BMP_clear(): render_3d() and render_hud() fully cover the frame.
+    BMP_clear();
+#if DEBUG_BMP_SMOKE
+    draw_rect(0, 0, CANVAS_W, 40, C_CEIL_DARK);
+    draw_rect(0, 40, CANVAS_W, 40, C_WALL_MID);
+    draw_rect(0, 80, CANVAS_W, 40, C_FLOOR_LIGHT);
+    draw_rect(0, 120, CANVAS_W, 40, C_HUD_BG);
+    draw_rect_outline(16, 16, 224, 128, C_WHITE);
+    draw_text5x7(58, 72, "BMP SMOKE TEST", C_WHITE);
+#else
+#if DEBUG_RENDER_BACKGROUND_ONLY
+    render_background();
+#endif
+#if DEBUG_RENDER_3D
     render_3d();
+#endif
+#if DEBUG_RENDER_WALLS_ONLY
+    render_background();
+    for (u16 col = 0; col < VIEW_COLS; col++) {
+        s16 rel = g_ray_rel[col];
+        u16 ray_angle = (player.angle + rel) & ANGLE_MASK;
+        RayHit hit = cast_ray(ray_angle);
+        s32 corrected = ((s32)hit.dist * g_ray_corr[col]) >> FP_SHIFT;
+        if (corrected < 24) corrected = 24;
+        if (corrected > RAY_MAX) corrected = RAY_MAX;
+        s16 wall_h = (VIEW_H * 224) / (s16)corrected;
+        if (wall_h > VIEW_H * 2) wall_h = VIEW_H * 2;
+        if (wall_h < 2) wall_h = 2;
+        s16 y0 = (VIEW_Y + (VIEW_H / 2)) - (wall_h / 2);
+        s16 sx = VIEW_X + (col * COL_W);
+        render_wall_column(sx, y0, wall_h, &hit, corrected);
+    }
+#endif
+#if DEBUG_RENDER_ACTOR
     render_actor(&imp);
+#endif
+#if DEBUG_RENDER_HUD
     render_hud();
+#endif
+#if DEBUG_RENDER_WEAPON
     render_weapon();
+#endif
+#if DEBUG_RENDER_HUD_TEXT
     render_hud_text();
-
-    BMP_flip(TRUE);
+#endif
+#endif
 }
 
 int main(bool hardReset) {
     (void)hardReset;
 
-    VDP_setScreenWidth320();
-    VDP_setScreenHeight224();
+    VDP_setScreenWidth256();
+    VDP_setHInterrupt(0);
+    VDP_setHilightShadow(0);
 
     DMA_setBufferSize(2048);
     setup_palette();
@@ -581,15 +650,24 @@ int main(bool hardReset) {
     map_init();
     init_perf_tables();
 
-    // double buffer = TRUE, plane = BG_B, palette = 0, low priority.
-    BMP_init(TRUE, BG_B, 0, FALSE);
-    BMP_setBufferCopy(FALSE);
+    // Follow SGDK's bitmap samples: 256px mode on BG_A with asynchronous flips.
+    BMP_init(TRUE, BG_A, 0, FALSE);
+    BMP_setBufferCopy(TRUE);
+
+    // SGDK's BMP init leaves the software/VRAM buffers undefined. Prime both
+    // pages once so a later full-screen flip can never reveal stale data.
+    BMP_clear();
+    BMP_flip(FALSE);
+    BMP_clear();
+    BMP_flip(FALSE);
 
     while (TRUE) {
+        JOY_update();
         update_input();
+        BMP_waitWhileFlipRequestPending();
         render_frame();
+        BMP_flip(TRUE);
         g_frame++;
-        SYS_doVBlankProcess();
     }
 
     return 0;

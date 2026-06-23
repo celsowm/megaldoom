@@ -1,6 +1,8 @@
 param(
     [string]$RomPath = "",
     [string]$EmulatorPath = $env:EMULATOR,
+    [ValidateSet("Auto", "BlastEm", "ares")]
+    [string]$Emulator = "Auto",
     [switch]$NoBuild,
     [switch]$NoClean
 )
@@ -47,6 +49,28 @@ function Find-Rom {
     return $null
 }
 
+function Find-LocalEmulator([string]$Name) {
+    switch ($Name) {
+        "BlastEm" {
+            $path = Join-Path $Root ".tools\blastem\blastem.exe"
+            if (Test-Path $path) { return $path }
+        }
+        "ares" {
+            $path = Join-Path $Root ".tools\ares\ares.exe"
+            if (Test-Path $path) { return $path }
+        }
+        "Auto" {
+            $blastem = Find-LocalEmulator "BlastEm"
+            if ($blastem) { return $blastem }
+
+            $ares = Find-LocalEmulator "ares"
+            if ($ares) { return $ares }
+        }
+    }
+
+    return $null
+}
+
 if (-not $NoBuild) {
     if ($NoClean) {
         & (Join-Path $PSScriptRoot "build-windows.ps1") -NoClean
@@ -63,15 +87,14 @@ if (-not $RomPath -or -not (Test-Path $RomPath)) {
 }
 
 if (-not $EmulatorPath) {
-    $localEmu = Join-Path $Root ".tools\blastem\blastem.exe"
-    if (Test-Path $localEmu) { $EmulatorPath = $localEmu }
+    $EmulatorPath = Find-LocalEmulator $Emulator
 }
 
 $EmulatorPath = Resolve-LocalPath $EmulatorPath
 if (-not $EmulatorPath -or -not (Test-Path $EmulatorPath)) {
-    Write-Host "BlastEm was not found." -ForegroundColor Red
+    Write-Host "No emulator was found for selection '$Emulator'." -ForegroundColor Red
     Write-Host "Run: .\tools\download-emulator-windows.ps1"
-    Write-Host "Or set: `$env:EMULATOR=\"C:\tools\blastem\blastem.exe\""
+    Write-Host "Or set: `$env:EMULATOR=\"C:\path\to\emulator.exe\""
     exit 1
 }
 

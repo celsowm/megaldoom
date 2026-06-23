@@ -62,6 +62,12 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\tools\run-windows.ps1
 ```
 
+To test in the alternate emulator:
+
+```powershell
+.\tools\run-windows.ps1 -Emulator ares
+```
+
 Optional: build the SGDK library during setup:
 
 ```powershell
@@ -115,9 +121,9 @@ export EMULATOR=/opt/blastem/blastem
 
 ```powershell
 .\tools\setup-sgdk-windows.ps1 [-BuildLibrary] [-Force]
-.\tools\download-emulator-windows.ps1 [-Stable] [-Force]
+.\tools\download-emulator-windows.ps1 [-Emulator All|BlastEm|ares] [-Stable] [-Force]
 .\tools\build-windows.ps1 [-NoClean]
-.\tools\run-windows.ps1 [-NoBuild] [-NoClean] [-RomPath out\rom.bin]
+.\tools\run-windows.ps1 [-Emulator Auto|BlastEm|ares] [-NoBuild] [-NoClean] [-RomPath out\rom.bin]
 .\tools\clean-windows.ps1
 ```
 
@@ -142,6 +148,7 @@ NO_BUILD=1 ./tools/run-linux.sh
 ```text
 .toolchain/sgdk       downloaded SGDK
 .tools/blastem        downloaded BlastEm
+.tools/ares           downloaded ares
 out/                  SGDK build output
 ```
 
