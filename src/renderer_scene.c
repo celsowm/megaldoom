@@ -1,44 +1,13 @@
 #include "renderer_internal.h"
 #include "generated_assets.h"
 #include "generated_billboard_assets.h"
+#include "generated_hud_assets.h"
 
-static const u8 DOOR_TEXTURE[8][8] = {
-    {12, 13, 12, 13, 12, 13, 12, 13},
-    {13, 7, 13, 12, 13, 7, 13, 12},
-    {12, 13, 12, 13, 12, 13, 12, 13},
-    {13, 12, 13, 7, 13, 12, 13, 7},
-    {12, 13, 12, 13, 12, 13, 12, 13},
-    {13, 7, 13, 12, 13, 7, 13, 12},
-    {12, 13, 12, 13, 12, 13, 12, 13},
-    {13, 12, 13, 7, 13, 12, 13, 7},
-};
-
-static const u8 LOCKED_DOOR_TEXTURE[8][8] = {
-    {13, 12, 13, 12, 13, 12, 13, 12},
-    {13, 2, 13, 12, 13, 2, 13, 12},
-    {13, 12, 13, 11, 13, 12, 13, 11},
-    {12, 13, 12, 2, 12, 13, 12, 2},
-    {13, 12, 13, 11, 13, 12, 13, 11},
-    {13, 2, 13, 12, 13, 2, 13, 12},
-    {13, 12, 13, 12, 13, 12, 13, 12},
-    {12, 11, 12, 13, 12, 11, 12, 13},
-};
-
-static const u8 EXIT_SWITCH_TEXTURE[8][8] = {
-    {11, 11, 12, 12, 11, 11, 12, 12},
-    {11, 2, 12, 2, 11, 2, 12, 2},
-    {12, 12, 11, 11, 12, 12, 11, 11},
-    {12, 2, 11, 2, 12, 2, 11, 2},
-    {11, 11, 12, 12, 11, 11, 12, 12},
-    {11, 2, 12, 2, 11, 2, 12, 2},
-    {12, 12, 11, 11, 12, 12, 11, 11},
-    {12, 2, 11, 2, 12, 2, 11, 2},
-};
-
-static const u8 (*get_billboard_texture(u8 visual_id))[8] {
+static const u8 (*get_billboard_texture(u8 visual_id))[16] {
     switch (visual_id) {
         case BILLBOARD_VISUAL_DUMMY_DAMAGED:
         case BILLBOARD_VISUAL_DUMMY:
+            return FREEDOOM_BILLBOARD_ENEMY_TEXTURE;
         case BILLBOARD_VISUAL_DECOR_DAMAGED:
         case BILLBOARD_VISUAL_DECOR:
             return FREEDOOM_BILLBOARD_DECOR_TEXTURE;
@@ -70,42 +39,79 @@ static u8 remap_dummy_billboard_texel(u8 texel, bool damaged) {
     return (texel & 1) ? 10 : 11;
 }
 
+static u8 shade_texel(u8 texel) {
+    static const u8 SHADED_COLOR_MAP[16] = {0, 6, 2, 2, 3, 4, 5, 6, 8, 8, 9, 10, 12, 12, 14, 14};
+
+    return SHADED_COLOR_MAP[texel & 15];
+}
+
+static u8 sample_wall_texture(const RayColumn *column, u8 tex_y) {
+    u8 texel;
+
+    if (column->texture_id == 1) {
+        texel = FREEDOOM_DOOR_TEXTURE[tex_y][column->tex_x & 15];
+    } else if (column->texture_id == 2) {
+        texel = FREEDOOM_LOCKED_DOOR_TEXTURE[tex_y][column->tex_x & 15];
+    } else if (column->texture_id == 3) {
+        texel = FREEDOOM_SWITCH_TEXTURE[tex_y][column->tex_x & 15];
+    } else if (column->texture_id == 4) {
+        texel = FREEDOOM_WALL_BROWN_TEXTURE[tex_y][column->tex_x & 15];
+    } else if (column->texture_id == 5) {
+        texel = FREEDOOM_WALL_GRAY_TEXTURE[tex_y][column->tex_x & 15];
+    } else if (column->texture_id == 6) {
+        texel = FREEDOOM_WALL_METAL_TEXTURE[tex_y][column->tex_x & 15];
+    } else if (column->texture_id == 7) {
+        texel = FREEDOOM_WALL_BRICK_TEXTURE[tex_y][column->tex_x & 15];
+    } else if (column->texture_id == 8) {
+        texel = FREEDOOM_WALL_TECH_TEXTURE[tex_y][column->tex_x & 15];
+    } else {
+        texel = FREEDOOM_WALL_TEXTURE[tex_y][column->tex_x & 15];
+    }
+
+    if (column->shade && (texel != 0)) {
+        texel = shade_texel(texel);
+    }
+
+    return texel;
+}
+
 static u8 sample_column_color(const RayColumn *column, u16 y) {
-    const u8 bg = (y < (VIEW_TILE_H / 2)) ? 9 : 14;
+    const u8 bg = (y < (VIEW_PIXEL_H / 2)) ? 9 : 14;
     const u16 wall_h = column->height;
-    const u16 top = (u16)((VIEW_TILE_H - wall_h) / 2);
+    const u16 top = (u16)((VIEW_PIXEL_H - wall_h) / 2);
     const u16 bottom = (u16)(top + wall_h);
 
     if ((y < top) || (y >= bottom)) {
         return bg;
     }
 
-    const u8 (*texture)[8];
     const u8 *tex_y_table = g_wall_tex_y_by_height[wall_h];
     const u16 rel_y = (u16)(y - top);
-
-    if (column->color == 12) {
-        texture = DOOR_TEXTURE;
-    } else if (column->color == 13) {
-        texture = LOCKED_DOOR_TEXTURE;
-    } else if (column->color == 11) {
-        texture = EXIT_SWITCH_TEXTURE;
-    } else {
-        texture = FREEDOOM_WALL_TEXTURE;
-    }
-
-    return texture[tex_y_table[rel_y]][column->tex_x & 7];
+    const u8 tex_y = tex_y_table[rel_y];
+    return sample_wall_texture(column, tex_y);
 }
 
 static void build_raycast_tilemap(const RayColumn *columns) {
-    for (u16 y = 0; y < VIEW_TILE_H; y++) {
+    for (u16 tile_y = 0; tile_y < VIEW_TILE_H; tile_y++) {
         for (u16 tile_x = 0; tile_x < VIEW_TILE_W; tile_x++) {
+            const u16 tile_index = (u16)((tile_y * VIEW_TILE_W) + tile_x);
             const u16 left_col = (u16)(tile_x * 2);
             const u16 right_col = (u16)(left_col + 1);
-            const u8 left_color = sample_column_color(&columns[left_col], y);
-            const u8 right_color = sample_column_color(&columns[right_col], y);
 
-            set_view_pair_tile(tile_x, y, left_color, right_color);
+            for (u16 row = 0; row < 8; row++) {
+                const u16 pixel_y = (u16)((tile_y * 8) + row);
+                const u8 left_color = sample_column_color(&columns[left_col], pixel_y);
+                const u8 right_color = sample_column_color(&columns[right_col], pixel_y);
+
+                g_view_tiles[tile_index][row] = (((u32)(left_color & 0x0F)) << 28) |
+                                                 (((u32)(left_color & 0x0F)) << 24) |
+                                                 (((u32)(left_color & 0x0F)) << 20) |
+                                                 (((u32)(left_color & 0x0F)) << 16) |
+                                                 (((u32)(right_color & 0x0F)) << 12) |
+                                                 (((u32)(right_color & 0x0F)) << 8) |
+                                                 (((u32)(right_color & 0x0F)) << 4) |
+                                                 ((u32)(right_color & 0x0F));
+            }
         }
     }
 }
@@ -122,12 +128,12 @@ static void draw_billboard_spans(const RayColumn *columns, const BillboardSpan *
         }
 
         const s16 height = (s16)(span->bottom - span->top + 1);
-        const u8 (*texture)[8] = get_billboard_texture(span->visual_id);
+        const u8 (*texture)[16] = get_billboard_texture(span->visual_id);
 
         for (s16 y = span->top; y <= span->bottom; y++) {
-            if ((y >= 0) && (y < VIEW_TILE_H)) {
-                const u8 tex_y = (u8)(((y - span->top) * 8) / height);
-                u8 texel = texture[tex_y][span->tex_x & 7];
+            if ((y >= 0) && (y < VIEW_PIXEL_H)) {
+                const u8 tex_y = (u8)(((y - span->top) * 16) / height);
+                u8 texel = texture[tex_y][span->tex_x & 15];
 
                 if (span->visual_id == BILLBOARD_VISUAL_DECOR_DAMAGED) {
                     texel = remap_damaged_billboard_texel(texel);
@@ -148,38 +154,28 @@ static void draw_billboard_spans(const RayColumn *columns, const BillboardSpan *
 }
 
 static void draw_weapon_overlay(bool flash) {
-    for (u16 y = 8; y < VIEW_TILE_H; y++) {
-        for (u16 x = 13; x <= 18; x++) {
-            set_view_column_color(x, y, 2);
+    const u8 (*weapon)[FREEDOOM_WEAPON_W] = flash ? FREEDOOM_WEAPON_FIRE : FREEDOOM_WEAPON_IDLE;
+    const u16 bottom_y = FREEDOOM_WEAPON_DRAW_Y + FREEDOOM_WEAPON_DRAW_H;
+    const u16 right_x = FREEDOOM_WEAPON_DRAW_X + FREEDOOM_WEAPON_DRAW_W;
+
+    for (u16 y = FREEDOOM_WEAPON_DRAW_Y; y < bottom_y; y++) {
+        for (u16 x = FREEDOOM_WEAPON_DRAW_X; x < right_x; x++) {
+            const u8 texel = weapon[y][x];
+
+            if (texel != 0) {
+                set_view_column_color(x, y, texel);
+            }
         }
-    }
-
-    for (u16 y = 9; y < VIEW_TILE_H; y++) {
-        for (u16 x = 14; x <= 17; x++) {
-            set_view_column_color(x, y, 4);
-        }
-    }
-
-    for (u16 y = 8; y <= 10; y++) {
-        set_view_column_color(15, y, flash ? 11 : 7);
-        set_view_column_color(16, y, flash ? 11 : 7);
-    }
-
-    if (flash) {
-        set_view_column_color(14, 7, 11);
-        set_view_column_color(15, 7, 11);
-        set_view_column_color(16, 7, 11);
-        set_view_column_color(17, 7, 11);
     }
 }
 
 static void draw_damage_overlay(void) {
     for (u16 x = 0; x < RAY_VIEW_COLS; x++) {
         set_view_column_color(x, 0, 2);
-        set_view_column_color(x, (VIEW_TILE_H - 1), 2);
+        set_view_column_color(x, (VIEW_PIXEL_H - 1), 2);
     }
 
-    for (u16 y = 1; y < (VIEW_TILE_H - 1); y++) {
+    for (u16 y = 1; y < (VIEW_PIXEL_H - 1); y++) {
         set_view_column_color(0, y, 2);
         set_view_column_color(1, y, 2);
         set_view_column_color((RAY_VIEW_COLS - 2), y, 2);
@@ -191,19 +187,20 @@ static void draw_low_health_overlay(void) {
     for (u16 x = 4; x <= 8; x++) {
         set_view_column_color(x, 1, 11);
         set_view_column_color(x, 2, 11);
-        set_view_column_color(x, (VIEW_TILE_H - 3), 11);
-        set_view_column_color(x, (VIEW_TILE_H - 2), 11);
+        set_view_column_color(x, (VIEW_PIXEL_H - 3), 11);
+        set_view_column_color(x, (VIEW_PIXEL_H - 2), 11);
     }
 
     for (u16 x = (RAY_VIEW_COLS - 9); x <= (RAY_VIEW_COLS - 5); x++) {
         set_view_column_color(x, 1, 11);
         set_view_column_color(x, 2, 11);
-        set_view_column_color(x, (VIEW_TILE_H - 3), 11);
-        set_view_column_color(x, (VIEW_TILE_H - 2), 11);
+        set_view_column_color(x, (VIEW_PIXEL_H - 3), 11);
+        set_view_column_color(x, (VIEW_PIXEL_H - 2), 11);
     }
 }
 
 static void upload_view_tilemap(void) {
+    VDP_loadTileData((const u32 *)g_view_tiles, VIEW_TILE_BASE, VIEW_TILE_COUNT, DMA);
     VDP_setTileMapDataRect(BG_B,
                            g_view_tilemap,
                            VIEW_TILEMAP_X,
@@ -216,7 +213,7 @@ static void upload_view_tilemap(void) {
 
 static void clear_compass_tilemap(void) {
     for (u16 i = 0; i < (COMPASS_W * COMPASS_H); i++) {
-        g_compass_tilemap[i] = TILE_ATTR_FULL(PAL0, FALSE, FALSE, FALSE, VIEW_TILE_BASE);
+        g_compass_tilemap[i] = TILE_ATTR_FULL(PAL0, FALSE, FALSE, FALSE, PAIR_TILE_BASE);
     }
 }
 
@@ -226,7 +223,7 @@ static void set_compass_tile(s16 x, s16 y, u8 color) {
     }
 
     g_compass_tilemap[(y * COMPASS_W) + x] =
-        TILE_ATTR_FULL(PAL0, FALSE, FALSE, FALSE, VIEW_TILE_BASE + ((color & 0x0F) << 4) + (color & 0x0F));
+        TILE_ATTR_FULL(PAL0, FALSE, FALSE, FALSE, PAIR_TILE_BASE + ((color & 0x0F) << 4) + (color & 0x0F));
 }
 
 static void build_compass_tilemap(u16 angle) {

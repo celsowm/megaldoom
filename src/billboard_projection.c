@@ -10,8 +10,14 @@ static u16 billboard_project_one(const PlayerState *player,
         return 0;
     }
 
-    const s16 top = (s16)((BILLBOARD_VIEW_TILE_H / 2) - measure.half_w);
-    const s16 bottom = (s16)((BILLBOARD_VIEW_TILE_H / 2) + measure.half_w);
+    s16 half_h = (s16)(measure.half_w * 8);
+
+    if (half_h > 28) {
+        half_h = 28;
+    }
+
+    const s16 top = (s16)((BILLBOARD_VIEW_PIXEL_H / 2) - half_h);
+    const s16 bottom = (s16)((BILLBOARD_VIEW_PIXEL_H / 2) + half_h);
     const s16 left = (s16)(measure.center_col - measure.half_w);
     const s16 right = (s16)(measure.center_col + measure.half_w);
     const s16 width = (s16)(right - left + 1);
@@ -29,7 +35,7 @@ static u16 billboard_project_one(const PlayerState *player,
         spans[count].top = top;
         spans[count].bottom = bottom;
         spans[count].depth = (u16)measure.forward;
-        spans[count].tex_x = (u8)(((col - left) * 8) / width);
+        spans[count].tex_x = (u8)(((col - left) * 16) / width);
         spans[count].visual_id = billboard_get_object_visual_id(object, measure.type);
         count++;
     }

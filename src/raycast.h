@@ -3,7 +3,7 @@
 
 #include <genesis.h>
 
-#define RAY_VIEW_COLS 32
+#define RAY_VIEW_COLS 40
 
 typedef struct {
     s32 x;
@@ -11,11 +11,24 @@ typedef struct {
     u16 angle;
 } PlayerState;
 
+typedef enum {
+    RAY_TEXTURE_WALL = 0,
+    RAY_TEXTURE_DOOR = 1,
+    RAY_TEXTURE_LOCKED_DOOR = 2,
+    RAY_TEXTURE_EXIT = 3,
+    RAY_TEXTURE_WALL_BROWN = 4,
+    RAY_TEXTURE_WALL_GRAY = 5,
+    RAY_TEXTURE_WALL_METAL = 6,
+    RAY_TEXTURE_WALL_BRICK = 7,
+    RAY_TEXTURE_WALL_TECH = 8
+} RayTextureId;
+
 typedef struct {
     u16 height;
     u16 depth;
     u8 tex_x;
-    u8 color;
+    u8 texture_id;
+    u8 shade;
 } RayColumn;
 
 void raycast_init(void);

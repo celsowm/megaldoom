@@ -1,8 +1,9 @@
 #include "player_controller.h"
 #include "fixed_math.h"
 
-#define TURN_STEP 2
-#define MOVE_STEP 18
+#define TURN_STEP 3
+#define MOVE_STEP 30
+#define STRAFE_STEP 24
 
 u16 player_controller_update(PlayerState *player) {
     static u16 previous_joy = 0;
@@ -26,10 +27,10 @@ u16 player_controller_update(PlayerState *player) {
         move -= MOVE_STEP;
     }
     if ((joy & BUTTON_A) != 0) {
-        strafe -= MOVE_STEP;
+        strafe -= STRAFE_STEP;
     }
     if ((joy & BUTTON_C) != 0) {
-        strafe += MOVE_STEP;
+        strafe += STRAFE_STEP;
     }
 
     if ((move != 0) || (strafe != 0)) {

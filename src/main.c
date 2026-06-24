@@ -6,7 +6,6 @@
 #include "renderer.h"
 #include "world_map.h"
 
-#define COUNTER_UPDATE_MASK 0x0F
 #define SHOT_COOLDOWN_FRAMES 12
 #define WEAPON_FLASH_FRAMES 2
 #define PLAYER_DAMAGE_FLASH_FRAMES 6
@@ -19,6 +18,40 @@ static RayColumn g_ray_columns[RAY_VIEW_COLS];
 static u16 g_weapon_flash = 0;
 static u16 g_player_damage_flash = 0;
 static u16 g_player_invuln = 0;
+static RendererHudState g_hud;
+
+static u8 get_portrait_state(u16 player_health) {
+    if (g_player_damage_flash > 0) {
+        return 1;
+    }
+    if (player_health <= 1) {
+        return 2;
+    }
+
+    return 0;
+}
+
+static void sync_hud(u32 frame,
+                     u16 phase_index,
+                     u16 player_health,
+                     u16 shot_cooldown,
+                     DoorActionResult action_status,
+                     BillboardShotResult shot_status,
+                     bool level_cleared) {
+    g_hud.frame = frame;
+    g_hud.phase = (u16)((phase_index % 99) + 1);
+    g_hud.player_health = player_health;
+    g_hud.shot_cooldown = shot_cooldown;
+    g_hud.enemy_count = billboard_get_enemy_count();
+    g_hud.target_count = billboard_get_target_count();
+    g_hud.target_health = billboard_get_target_health();
+    g_hud.pickups = billboard_get_pickup_counts();
+    g_hud.last_pickup = billboard_get_last_pickup_kind();
+    g_hud.action_status = action_status;
+    g_hud.shot_status = shot_status;
+    g_hud.portrait_state = get_portrait_state(player_health);
+    g_hud.level_cleared = level_cleared;
+}
 
 static void render_current_view(u16 player_health) {
     raycast_cast_frame(&g_player, g_ray_columns);
@@ -39,17 +72,8 @@ static void reset_level(u16 phase_index, bool *level_cleared, u16 *shot_cooldown
     *frame = 0;
 
     renderer_draw_static_screen();
-    renderer_draw_enemy_count(billboard_get_enemy_count());
-    renderer_draw_player_health(*player_health);
-    renderer_draw_phase(phase_index);
-    renderer_draw_pickup_counter(billboard_get_pickup_counts());
-    renderer_draw_last_pickup(billboard_get_last_pickup_kind());
-    renderer_draw_action_status(DOOR_ACTION_NONE);
-    renderer_draw_goal_status(FALSE);
-    renderer_draw_shot_status(BILLBOARD_SHOT_NONE);
-    renderer_draw_shot_cooldown(0);
-    renderer_draw_target_count(billboard_get_target_count());
-    renderer_draw_target_health(billboard_get_target_health());
+    sync_hud(*frame, phase_index, *player_health, *shot_cooldown, DOOR_ACTION_NONE, BILLBOARD_SHOT_NONE, FALSE);
+    renderer_draw_hud(&g_hud);
 }
 
 int main(bool hard) {
@@ -70,10 +94,11 @@ int main(bool hard) {
 
     while (TRUE) {
         u16 control = 0;
+        DoorActionResult action_status = g_hud.action_status;
+        BillboardShotResult shot_status = g_hud.shot_status;
 
         if (shot_cooldown > 0) {
             shot_cooldown--;
-            renderer_draw_shot_cooldown(shot_cooldown);
         }
         if (g_weapon_flash > 0) {
             g_weapon_flash--;
@@ -100,8 +125,6 @@ int main(bool hard) {
             redraw = TRUE;
             if (billboard_collect_near(g_player.x, g_player.y)) {
                 redraw = TRUE;
-                renderer_draw_pickup_counter(billboard_get_pickup_counts());
-                renderer_draw_last_pickup(billboard_get_last_pickup_kind());
             }
         }
 
@@ -116,16 +139,14 @@ int main(bool hard) {
                 action = DOOR_ACTION_EXIT_LOCKED;
             }
 
-            renderer_draw_action_status(action);
+            action_status = action;
 
             if (action != DOOR_ACTION_NONE) {
                 if (consumed_key) {
                     billboard_consume_key();
-                    renderer_draw_pickup_counter(billboard_get_pickup_counts());
                 }
                 if (action == DOOR_ACTION_EXIT) {
                     level_cleared = TRUE;
-                    renderer_draw_goal_status(TRUE);
                 }
                 if (action != DOOR_ACTION_EXIT_LOCKED) {
                     redraw = TRUE;
@@ -140,10 +161,6 @@ int main(bool hard) {
                 shot = billboard_fire_center(&g_player, g_ray_columns[RAY_VIEW_COLS / 2].depth);
                 shot_cooldown = SHOT_COOLDOWN_FRAMES;
                 g_weapon_flash = WEAPON_FLASH_FRAMES;
-                renderer_draw_shot_cooldown(shot_cooldown);
-                renderer_draw_enemy_count(billboard_get_enemy_count());
-                renderer_draw_target_count(billboard_get_target_count());
-                renderer_draw_target_health(billboard_get_target_health());
                 redraw = TRUE;
 
                 if ((shot == BILLBOARD_SHOT_DAMAGE) || (shot == BILLBOARD_SHOT_KILL)) {
@@ -151,7 +168,7 @@ int main(bool hard) {
                 }
             }
 
-            renderer_draw_shot_status(shot);
+            shot_status = shot;
         }
 
         if (!level_cleared) {
@@ -172,19 +189,17 @@ int main(bool hard) {
                     player_health--;
                     g_player_damage_flash = PLAYER_DAMAGE_FLASH_FRAMES;
                     g_player_invuln = PLAYER_INVULN_FRAMES;
-                    renderer_draw_player_health(player_health);
                     redraw = TRUE;
                 }
             }
         }
 
+        sync_hud(frame, phase_index, player_health, shot_cooldown, action_status, shot_status, level_cleared);
+        renderer_draw_hud(&g_hud);
+
         if (redraw) {
             render_current_view(player_health);
             redraw = FALSE;
-        }
-
-        if ((frame & COUNTER_UPDATE_MASK) == 0) {
-            renderer_draw_frame_counter(frame);
         }
 
         VDP_waitVSync();

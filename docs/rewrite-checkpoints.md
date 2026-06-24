@@ -1202,7 +1202,7 @@ Expected visual result:
 Build validation:
 
 - `.\tools\build-windows.ps1`
-- Result: pending.
+- Result: passed with zero compiler warnings.
 
 Human validation:
 
@@ -1247,7 +1247,7 @@ Expected visual result:
 Build validation:
 
 - `.\tools\build-windows.ps1`
-- Result: pending.
+- Result: passed with zero compiler warnings.
 
 Human validation:
 
@@ -2315,3 +2315,464 @@ Human validation:
 - Confirm the subtitle shows `LOW HP WARNING`.
 - Drop to `HP 01` and confirm the warning overlay appears.
 - Take another hit attempt and confirm the normal damage flash still overrides that frame.
+
+## Gate 61: larger viewport
+
+Implementation status: ready for human validation.
+
+Scope:
+
+- Keep Gate 60 low HP warning, dummy wake/leash/recovery/last-seen/separation/reacquire/patrol/return, player push, player invulnerability, damage flash, shooting, pickups, doors, keys, clear-gated exit and phase loop.
+- Increase the raycast view from `16x12` tiles / `32` packed columns to `20x14` tiles / `40` packed columns.
+- Keep the same safe preloaded pair-tile renderer; do not reintroduce BMP, framebuffer upload or dynamic tile generation per frame.
+- Reposition the compass and compact debug HUD so BG_A text does not cover the larger 3D window.
+- Keep texture resolution at `8x8` for this gate; real `16x16` textures start in Gate 62.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 61`.
+- Subtitle shows `LARGER VIEWPORT`.
+- The 3D window is visibly larger: `160x112 px`.
+- The compass remains outside the 3D window on the left.
+- HUD/status text stays below the view instead of overlapping it.
+- Existing weapon flash, low HP warning, combat, pickups, doors, keys, exit gating and phase loop still work.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: passed with zero compiler warnings.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 61`.
+- Confirm the subtitle shows `LARGER VIEWPORT`.
+- Confirm the larger viewport is centered and stable.
+- Confirm FPS/VPS does not collapse compared with Gate 60.
+- Move, turn, strafe, shoot, take damage and check that HUD text does not cover the 3D view.
+
+## Gate 62: real 16x16 wall texture
+
+Implementation status: ready for human validation.
+
+Scope:
+
+- Keep Gate 61 larger viewport, low HP warning, dummy wake/leash/recovery/last-seen/separation/reacquire/patrol/return, player push, player invulnerability, damage flash, shooting, pickups, doors, keys, clear-gated exit and phase loop.
+- Increase wall texture sampling from `8x8` to `16x16`.
+- Keep billboard textures at `8x8` for this gate; only wall texturing changes.
+- Copy the Freedoom wall source into the repo at `res/freedoom/stonew1.png`.
+- Regenerate the versioned wall header from that in-repo asset.
+- Keep doors, locked doors and exit switch procedural for now.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 62`.
+- Subtitle shows `REAL 16X16 WALL`.
+- The larger `160x112 px` viewport from Gate 61 remains.
+- Wall texture should show more horizontal and vertical variation than the previous `8x8` sample.
+- Texture remains attached to walls while moving and turning.
+- Billboards, combat, doors, keys, pickups and phase loop still work as before.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: passed with zero compiler warnings.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 62`.
+- Confirm the subtitle shows `REAL 16X16 WALL`.
+- Move close to walls and confirm the texture has finer detail than Gate 61.
+- Turn and strafe while watching the wall to confirm the texture does not slide or tear.
+- Confirm the larger viewport, compass, HUD, billboards and combat remain stable.
+
+## Gate 63: multiple wall textures
+
+Implementation status: ready for human validation.
+
+Scope:
+
+- Keep Gate 62 real `16x16` wall texture, Gate 61 larger viewport, low HP warning, dummy wake/leash/recovery/last-seen/separation/reacquire/patrol/return, player push, player invulnerability, damage flash, shooting, pickups, doors, keys, clear-gated exit and phase loop.
+- Add explicit `texture_id` plus cheap `shade` metadata to `RayColumn`.
+- Convert and version three Freedoom `16x16` wall-family textures in the repo:
+  `res/freedoom/stonew1.png`, `res/freedoom/aqdoor01.png`, `res/freedoom/comp01_1.png`.
+- Use the base wall texture for normal walls, the metal door texture for doors, and the computer/switch texture for exit surfaces.
+- Keep locked door behavior by remapping the metal door texture instead of adding a fourth converted patch.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 63`.
+- Subtitle shows `MULTI WALL SET`.
+- Normal walls, doors and exit/switch surfaces now look visibly different from each other.
+- Side-hit walls remain slightly darker through cheap palette remapping.
+- Texture remains attached to walls while moving and turning.
+- Billboards, combat, doors, keys, pickups and phase loop still work as before.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: passed with zero compiler warnings.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 63`.
+- Confirm the subtitle shows `MULTI WALL SET`.
+- Look at a normal wall, a door and the exit/switch and confirm each uses a distinct visual family.
+- Open and close doors, unlock the locked door and confirm the textures stay coherent.
+- Strafe and turn near walls to confirm texture lock and cheap shading remain stable.
+
+## Gate 64: doom-style base HUD
+
+Implementation status: ready for human validation.
+
+Scope:
+
+- Keep Gate 63 multiple wall textures, Gate 62 real `16x16` wall texture, Gate 61 larger viewport, low HP warning, dummy wake/leash/recovery/last-seen/separation/reacquire/patrol/return, player push, player invulnerability, damage flash, shooting, pickups, doors, keys, clear-gated exit and phase loop.
+- Replace the scattered debug readout with a single lower status bar layout inspired by Doom's information density.
+- Consolidate HUD data into a single `RendererHudState` passed to the renderer instead of many tiny draw calls from `main`.
+- Keep the bar text-only for this gate; no face portrait and no new weapon art yet.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 64`.
+- Subtitle shows `DOOM HUD BASE`.
+- The bottom of the screen shows one coherent status band instead of scattered labels.
+- The bar includes compact values for `HP`, `AM`, `PH`, `EN`, `TG`, `KEY`, `BN`, `SHOT`, `USE`, `LAST`, `GOAL` and `FRAME`.
+- The 3D view remains unobstructed.
+- Combat, pickups, doors, keys and phase loop still work as before.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: passed with zero compiler warnings.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 64`.
+- Confirm the subtitle shows `DOOM HUD BASE`.
+- Confirm the lower HUD reads as one band and does not overlap the 3D viewport.
+- Shoot, pick up items, use doors and take damage; the values should update in place.
+
+## Gate 65: HUD portrait placeholder
+
+Implementation status: ready for human validation.
+
+Scope:
+
+- Keep Gate 64 doom-style base HUD, Gate 63 multiple wall textures, Gate 62 real `16x16` wall texture, Gate 61 larger viewport, low HP warning, dummy wake/leash/recovery/last-seen/separation/reacquire/patrol/return, player push, player invulnerability, damage flash, shooting, pickups, doors, keys, clear-gated exit and phase loop.
+- Add a simple central portrait placeholder inside the HUD bar.
+- Support three states only for now: normal, pain and critical.
+- Drive portrait state from the existing damage flash and low-health conditions.
+- Keep it text/ASCII-based for this gate; no dedicated art tiles yet.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 65`.
+- Subtitle shows `HUD PORTRAIT`.
+- A small face appears in the center of the HUD band.
+- At normal health it shows the neutral face.
+- Right after taking damage it switches to the pain face.
+- At critical health it switches to the critical face whenever damage flash is not overriding it.
+- The 3D view remains unobstructed and the rest of the HUD still updates correctly.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: passed with zero compiler warnings.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 65`.
+- Confirm the subtitle shows `HUD PORTRAIT`.
+- Confirm the portrait appears centered in the lower HUD.
+- Take damage and confirm the pain face appears.
+- Drop to critical HP and confirm the critical face appears outside the immediate hit flash window.
+
+## Gate 66: weapon overlay pass
+
+Implementation status: ready for human validation.
+
+Scope:
+
+- Keep Gate 65 HUD portrait placeholder, Gate 64 doom-style base HUD, Gate 63 multiple wall textures, Gate 62 real `16x16` wall texture, Gate 61 larger viewport, low HP warning, dummy wake/leash/recovery/last-seen/separation/reacquire/patrol/return, player push, player invulnerability, damage flash, shooting, pickups, doors, keys, clear-gated exit and phase loop.
+- Replace the crude weapon block overlay with a more readable central silhouette.
+- Keep the existing flash behavior, but make the muzzle flash sit above the barrel instead of flattening the whole shape.
+- Keep it renderer-only; no new gameplay, animation system or sprite hardware path yet.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 66`.
+- Subtitle shows `WEAPON PASS`.
+- The weapon at the bottom center reads more like a firearm silhouette than a rectangle.
+- The muzzle flash appears above the barrel when firing and does not erase the whole weapon body.
+- The HUD portrait and lower bar remain readable.
+- The 3D view remains unobstructed aside from the intended weapon overlay.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: passed with zero compiler warnings.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 66`.
+- Confirm the subtitle shows `WEAPON PASS`.
+- Confirm the bottom-center weapon shape is more recognizable than Gate 65.
+- Fire repeatedly and confirm the flash appears at the muzzle while the body of the weapon stays visible.
+
+## Gate 67: HUD panel backdrop
+
+Implementation status: ready for human validation.
+
+Scope:
+
+- Keep Gate 66 weapon overlay pass, Gate 65 HUD portrait placeholder, Gate 64 doom-style base HUD, Gate 63 multiple wall textures, Gate 62 real `16x16` wall texture, Gate 61 larger viewport, low HP warning, dummy wake/leash/recovery/last-seen/separation/reacquire/patrol/return, player push, player invulnerability, damage flash, shooting, pickups, doors, keys, clear-gated exit and phase loop.
+- Add a real lower HUD panel on `BG_B` behind the existing text/status bar.
+- Use the existing pair-color tile system only; add no BMP, no framebuffer path and no new tile upload class.
+- Keep the current HUD text/portrait layout, but place it over framed panel regions so it reads less like debug text.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 67`.
+- Subtitle shows `HUD PANEL`.
+- The lower HUD area has a visible framed backdrop instead of text floating on black.
+- The center portrait area reads like its own inset panel.
+- The 3D viewport and compass remain unchanged and unobstructed.
+- Weapon, portrait and HUD text remain readable over the panel.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: passed with zero compiler warnings.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 67`.
+- Confirm the subtitle shows `HUD PANEL`.
+- Confirm the lower bar now has a real panel/background look.
+- Confirm the center portrait sits inside its own inset region.
+- Confirm the viewport, compass, weapon and HUD text remain stable.
+
+## Gate 68: Freedoom visual pass
+
+Implementation status: ready for human validation.
+
+Scope:
+
+- Keep Gate 67 HUD panel fixes, Gate 66 weapon behavior, Gate 65 HUD portrait, Gate 64 HUD state, Gate 63 multiple wall textures, Gate 62 real `16x16` walls, Gate 61 larger viewport, combat, pickups, doors, keys, clear-gated exit and phase loop.
+- Replace the procedural HUD panel with converted Freedoom `stbar.png` tiles loaded into VRAM.
+- Replace the procedural weapon overlay with converted Freedoom first-person pistol frames `pisga0.png` and `pisgb0.png`.
+- Increase billboard textures from `8x8` to `16x16`, using copied Freedoom sprites for bonus, key, barrel/decor and enemy.
+- Keep all copied source PNGs versioned under `res/freedoom/`.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 68`.
+- Subtitle shows `FREEDOOM VISUAL PASS`.
+- The lower HUD reads as an actual game asset, not a procedurally drawn panel.
+- The pistol reads as a Freedoom first-person weapon frame and changes to the firing frame when shooting.
+- Bonus/key/decor/enemy billboards are visibly less blocky than Gate 67.
+- Raycast movement, doors, shots, pickups, damage and phase loop still work.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\convert-freedoom-assets.ps1`
+- Result: passed after switching weapon conversion from the small status/icon assets `smpisg0/smpisg1` to the actual first-person pistol sprites `pisga0/pisgb0`.
+- `.\tools\build-windows.ps1`
+- Result: passed with zero compiler warnings.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 68`.
+- Confirm the subtitle shows `FREEDOOM VISUAL PASS`.
+- Confirm the HUD background looks asset-based.
+- Fire repeatedly and confirm the weapon swaps between idle and fire frames.
+- Move near pickups, decor and enemy billboards and confirm they look sharper than before.
+
+## Gate 69: larger visual grid
+
+Implementation status: ready for human validation.
+
+Scope:
+
+- Keep Gate 68 Freedoom HUD, pistol, wall textures and billboard assets.
+- Increase the safe tile viewport from `20x14` tiles / `40x14` logical samples to `24x17` tiles / `48x17` logical samples.
+- Move the 3D viewport up and the HUD panel down so the larger scene does not overlap the status bar.
+- Generate the Freedoom pistol overlay as `48x17`, using `pisga0.png` idle and `pisgb0.png` fire.
+- Anchor the pistol at the bottom with transparent top rows so the hand/weapon no longer fills the full viewport height.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 69`.
+- The 3D view is visibly larger and wider than Gate 68.
+- The pistol still uses Freedoom first-person frames, but occupies only the lower part of the scene.
+- Walls and billboards have more horizontal samples, so motion should read less chunky.
+- HUD remains below the viewport and does not overlap the scene.
+
+Build validation:
+
+- `.\tools\convert-freedoom-assets.ps1`
+- Result: passed.
+- `.\tools\build-windows.ps1`
+- Result: passed with zero compiler warnings.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 69`.
+- Confirm the viewport is larger and stable.
+- Fire repeatedly and confirm the weapon remains anchored low instead of filling the whole viewport.
+- Confirm movement, doors, pickups, dummy AI, damage and phase loop still work.
+
+## Gate 70: pixel-height tile renderer
+
+Implementation status: ready for human validation.
+
+Scope:
+
+- Keep Gate 69 viewport size and Freedoom visual pass.
+- Replace the static pair-tile viewport with dynamic per-position viewport tiles.
+- Keep the horizontal cost controlled at `48` logical columns, but render `136` vertical pixel rows inside the tiles.
+- Change raycast wall height from tile rows to pixel rows.
+- Change billboards to project against the `136px` viewport height.
+- Regenerate the Freedoom pistol overlay as `48x136`, anchored to the bottom of the viewport.
+- Move the static color-pair tiles to their own VRAM range so compass/HUD helpers do not collide with dynamic viewport tiles.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 70`.
+- Vertical edges, wall heights and weapon silhouette are no longer made of huge 8px-tall blocks.
+- The pistol should look like a reduced Freedoom first-person weapon, not a full-height Atari block.
+- The scene may cost more VPS than Gate 69 because the viewport now uploads dynamic tile pixels each redraw.
+- No periodic corruption or tile collision with HUD/compass.
+
+Build validation:
+
+- `.\tools\convert-freedoom-assets.ps1`
+- Result: passed.
+- `.\tools\build-windows.ps1`
+- Result: passed with zero compiler warnings.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 70`.
+- Confirm the viewport is visually less blocky vertically.
+- Confirm the weapon is anchored low and no longer occupies the whole screen height.
+- Check FPS/VPS impact while moving and firing.
+- Confirm movement, doors, pickups, dummy AI, damage and phase loop still work.
+
+## Gate 71: performance recovery profile
+
+Implementation status: ready for human validation.
+
+Scope:
+
+- Keep Gate 70 pixel-height dynamic viewport, but reduce the active profile from `24x17` tiles / `48x136` samples to `20x15` tiles / `40x120` samples.
+- Keep dynamic per-position viewport tiles so vertical wall/weapon edges do not return to Gate 69-style `8px` blocks.
+- Reduce per-redraw tile upload from `408` dynamic viewport tiles to `300`.
+- Regenerate the Freedoom pistol overlay as `40x120`, with only an `18x54` useful draw rectangle anchored to the bottom.
+- Draw the weapon by iterating only the useful weapon rectangle, not the full viewport.
+- Recalibrate billboard projection to `40` columns / `120px` height and lower the max span budget.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 71`.
+- VPS is visibly better than Gate 70, targeting at least 30 VPS during movement.
+- Visual remains less vertically blocky than Gate 69.
+- Weapon stays low, smaller and more readable.
+- HUD remains below the viewport and does not overlap the scene.
+
+Build validation:
+
+- `.\tools\convert-freedoom-assets.ps1`
+- Result: passed.
+- `.\tools\build-windows.ps1`
+- Result: passed with zero compiler warnings.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 71`.
+- Confirm VPS improves compared with Gate 70 while moving and firing.
+- Confirm the view does not return to the huge vertical blocks from Gate 69.
+- Confirm movement, doors, pickups, dummy AI, damage and phase loop still work.
+
+## Gate 72: player feel tuning
+
+Implementation status: ready for human validation.
+
+Scope:
+
+- Keep Gate 71 performance/viewport profile unchanged.
+- Treat the reported `59.9 VPS` with slow movement as gameplay tuning, not renderer slowdown.
+- Increase player turn step from `2` to `3`.
+- Increase forward/back movement step from `18` to `30`.
+- Add a separate strafe step of `24` so A/C strafing improves without becoming as aggressive as forward movement.
+
+Expected visual result:
+
+- Screen still shows `MEGALDOOM REWRITE GATE 71`.
+- Emulator VPS can remain around `59.9`.
+- Held movement should advance through corridors noticeably faster than Gate 71.
+- Turning should feel more responsive without becoming uncontrollable.
+- Strafing should be usable but slightly slower than forward movement.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: passed with zero compiler warnings.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Hold D-pad up and confirm movement no longer crawls.
+- Hold left/right and confirm turning is responsive.
+- Test A/C strafe near walls and confirm collision remains stable.
+
+## Gate 73: Freedoom wall set
+
+Implementation status: ready for human validation.
+
+Scope:
+
+- Keep Gate 71 renderer/performance profile and Gate 72 movement tuning.
+- Replace single repeated wall use with multiple Freedoom-derived wall texture IDs.
+- Add Freedoom wall patches for stone, brown, gray, metal, brick and tech wall looks.
+- Add a separate Freedoom locked-door texture instead of palette remapping the normal door.
+- Update both phase maps to use wall variants across borders and internal walls.
+- Keep all wall textures converted to `16x16` indexed arrays in `src/generated_assets.h`.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 73`.
+- Corridors should show varied Freedoom wall materials instead of one repeated ugly wall.
+- Normal doors, locked doors and exit/switch surfaces should each read as distinct Freedoom assets.
+- Collision, doors, locked-door key flow, exit, pickups, shots, dummy AI and movement tuning remain unchanged.
+
+Build validation:
+
+- `.\tools\convert-freedoom-assets.ps1`
+- Result: passed.
+- `.\tools\build-windows.ps1`
+- Result: passed with zero compiler warnings.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 73`.
+- Walk around both phase layouts and confirm all visible walls are Freedoom-derived textures.
+- Confirm no old procedural/remapped wall look remains except palette quantization from the converter.
+- Confirm doors, locked doors and exit/switch still work.

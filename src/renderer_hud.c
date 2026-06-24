@@ -1,6 +1,17 @@
 #include "renderer_internal.h"
+#include "generated_hud_assets.h"
 
 static const char HEX_DIGITS[] = "0123456789ABCDEF";
+
+static void write_u16_2(u16 value, char *out) {
+    if (value > 99) {
+        value = 99;
+    }
+
+    out[0] = (char)('0' + (value / 10));
+    out[1] = (char)('0' + (value % 10));
+    out[2] = '\0';
+}
 
 static void write_hex_u32(u32 value, char *out) {
     for (u16 i = 0; i < 8; i++) {
@@ -10,169 +21,119 @@ static void write_hex_u32(u32 value, char *out) {
     out[8] = '\0';
 }
 
-void renderer_draw_static_screen(void) {
-    VDP_drawText(RENDERER_VERSION_TEXT, 7, 2);
-    VDP_drawText("LOW HP WARNING", 14, 4);
-    VDP_drawText("START USE  B FIRE", 8, 22);
-    VDP_drawText("PH 00", 17, 16);
-    VDP_drawText("ENMY 00", 14, 15);
-    VDP_drawText("HP 00", 23, 15);
-    VDP_drawText("SHOT ----", 14, 19);
-    VDP_drawText("COOL 00", 15, 18);
-    VDP_drawText("TGT 00 HP 00", 12, 17);
-    VDP_drawText("USE ----", 14, 21);
-    VDP_drawText("GOAL SEEK ", 14, 20);
-    VDP_drawText("BONUS 00 KEY 00", 11, 24);
-    VDP_drawText("LAST NONE", 13, 23);
-    VDP_drawText("FRAME", 13, 25);
-}
-
-void renderer_draw_frame_counter(u32 frame) {
-    char frame_text[9];
-
-    write_hex_u32(frame, frame_text);
-    VDP_drawText(frame_text, 19, 25);
-}
-
-void renderer_draw_pickup_counter(BillboardPickupCounts counts) {
-    char bonus_text[3];
-    char key_text[3];
-
-    if (counts.bonus > 99) {
-        counts.bonus = 99;
-    }
-    if (counts.key > 99) {
-        counts.key = 99;
-    }
-
-    bonus_text[0] = (char)('0' + (counts.bonus / 10));
-    bonus_text[1] = (char)('0' + (counts.bonus % 10));
-    bonus_text[2] = '\0';
-    key_text[0] = (char)('0' + (counts.key / 10));
-    key_text[1] = (char)('0' + (counts.key % 10));
-    key_text[2] = '\0';
-
-    VDP_drawText(bonus_text, 17, 24);
-    VDP_drawText(key_text, 24, 24);
-}
-
-void renderer_draw_last_pickup(BillboardPickupKind kind) {
-    const char *text = "NONE";
-
+static const char *last_pickup_text(BillboardPickupKind kind) {
     if (kind == BILLBOARD_PICKUP_BONUS) {
-        text = "BONUS";
-    } else if (kind == BILLBOARD_PICKUP_KEY) {
-        text = "KEY ";
+        return "BONUS";
+    }
+    if (kind == BILLBOARD_PICKUP_KEY) {
+        return "KEY  ";
     }
 
-    VDP_drawText(text, 18, 23);
+    return "NONE ";
 }
 
-void renderer_draw_action_status(DoorActionResult action) {
-    const char *text = "----";
-
+static const char *action_status_text(DoorActionResult action) {
     if (action == DOOR_ACTION_TOGGLED) {
-        text = "DOOR";
-    } else if (action == DOOR_ACTION_LOCKED) {
-        text = "LOCK";
-    } else if (action == DOOR_ACTION_UNLOCKED) {
-        text = "KEY!";
-    } else if (action == DOOR_ACTION_EXIT) {
-        text = "EXIT";
-    } else if (action == DOOR_ACTION_EXIT_LOCKED) {
-        text = "HUNT";
+        return "DOOR";
+    }
+    if (action == DOOR_ACTION_LOCKED) {
+        return "LOCK";
+    }
+    if (action == DOOR_ACTION_UNLOCKED) {
+        return "KEY!";
+    }
+    if (action == DOOR_ACTION_EXIT) {
+        return "EXIT";
+    }
+    if (action == DOOR_ACTION_EXIT_LOCKED) {
+        return "HUNT";
     }
 
-    VDP_drawText(text, 18, 21);
+    return "----";
 }
 
-void renderer_draw_goal_status(bool level_cleared) {
-    VDP_drawText(level_cleared ? "CLEAR" : "SEEK ", 19, 20);
-}
-
-void renderer_draw_shot_status(BillboardShotResult shot) {
-    const char *text = "MISS";
-
+static const char *shot_status_text(BillboardShotResult shot) {
     if (shot == BILLBOARD_SHOT_DAMAGE) {
-        text = "DMG ";
-    } else if (shot == BILLBOARD_SHOT_KILL) {
-        text = "KILL";
+        return "DMG ";
+    }
+    if (shot == BILLBOARD_SHOT_KILL) {
+        return "KILL";
     }
 
-    VDP_drawText(text, 19, 19);
+    return "MISS";
 }
 
-void renderer_draw_shot_cooldown(u16 frames_left) {
-    char text[3];
+static const char *portrait_line(u8 state, u16 line) {
+    static const char *NORMAL[3] = {" /-\\ ", "|o o|", " \\_/ "};
+    static const char *PAIN[3] = {" /-\\ ", "|x x|", " /_\\ "};
+    static const char *CRIT[3] = {" /-\\ ", "|o _|", " \\o/ "};
+    const char **portrait = NORMAL;
 
-    if (frames_left > 99) {
-        frames_left = 99;
+    if (state == 1) {
+        portrait = PAIN;
+    } else if (state == 2) {
+        portrait = CRIT;
     }
 
-    text[0] = (char)('0' + (frames_left / 10));
-    text[1] = (char)('0' + (frames_left % 10));
-    text[2] = '\0';
-    VDP_drawText(text, 20, 18);
+    return portrait[line];
 }
 
-void renderer_draw_enemy_count(u16 count) {
-    char text[3];
-
-    if (count > 99) {
-        count = 99;
+static void draw_hud_backdrop(void) {
+    for (u16 y = 0; y < FREEDOOM_HUD_TILE_H; y++) {
+        for (u16 x = 0; x < FREEDOOM_HUD_TILE_W; x++) {
+            const u16 tile_id = (u16)(HUD_TILE_BASE + (y * FREEDOOM_HUD_TILE_W) + x);
+            VDP_setTileMapXY(BG_B, TILE_ATTR_FULL(PAL0, FALSE, FALSE, FALSE, tile_id), (u16)(HUD_PANEL_X + x), (u16)(HUD_PANEL_Y + y));
+        }
     }
-
-    text[0] = (char)('0' + (count / 10));
-    text[1] = (char)('0' + (count % 10));
-    text[2] = '\0';
-    VDP_drawText(text, 19, 15);
 }
 
-void renderer_draw_player_health(u16 hp) {
-    char text[3];
-
-    if (hp > 99) {
-        hp = 99;
-    }
-
-    text[0] = (char)('0' + (hp / 10));
-    text[1] = (char)('0' + (hp % 10));
-    text[2] = '\0';
-    VDP_drawText(text, 26, 15);
+void renderer_draw_static_screen(void) {
+    draw_hud_backdrop();
+    VDP_drawText(RENDERER_VERSION_TEXT, 7, 1);
+    VDP_drawText("FREEDOOM VISUAL PASS", 10, 3);
+    VDP_drawText("HP 00  AM 00  PH 00  EN 00", 5, 22);
+    VDP_drawText("TG 00/00        KEY 00  BN 00", 5, 23);
+    VDP_drawText("SHOT ----       USE ----", 5, 24);
+    VDP_drawText("GOAL ----       LAST -----", 5, 25);
+    VDP_drawText("FRAME 00000000", 5, 26);
 }
 
-void renderer_draw_phase(u16 phase_index) {
-    char text[3];
-    const u16 phase = (u16)((phase_index % 99) + 1);
+void renderer_draw_hud(const RendererHudState *state) {
+    char text[9];
 
-    text[0] = (char)('0' + (phase / 10));
-    text[1] = (char)('0' + (phase % 10));
-    text[2] = '\0';
-    VDP_drawText(text, 20, 16);
-}
+    write_u16_2(state->player_health, text);
+    VDP_drawText(text, 8, 22);
 
-void renderer_draw_target_count(u16 count) {
-    char text[3];
+    write_u16_2(state->shot_cooldown, text);
+    VDP_drawText(text, 15, 22);
 
-    if (count > 99) {
-        count = 99;
-    }
+    write_u16_2(state->phase, text);
+    VDP_drawText(text, 22, 22);
 
-    text[0] = (char)('0' + (count / 10));
-    text[1] = (char)('0' + (count % 10));
-    text[2] = '\0';
-    VDP_drawText(text, 16, 17);
-}
+    write_u16_2(state->enemy_count, text);
+    VDP_drawText(text, 29, 22);
 
-void renderer_draw_target_health(u16 hp) {
-    char text[3];
+    write_u16_2(state->target_count, text);
+    VDP_drawText(text, 8, 23);
 
-    if (hp > 99) {
-        hp = 99;
-    }
+    write_u16_2(state->target_health, text);
+    VDP_drawText(text, 11, 23);
 
-    text[0] = (char)('0' + (hp / 10));
-    text[1] = (char)('0' + (hp % 10));
-    text[2] = '\0';
-    VDP_drawText(text, 22, 17);
+    write_u16_2(state->pickups.key, text);
+    VDP_drawText(text, 19, 23);
+
+    write_u16_2(state->pickups.bonus, text);
+    VDP_drawText(text, 26, 23);
+
+    VDP_drawText(portrait_line(state->portrait_state, 0), 16, 23);
+    VDP_drawText(portrait_line(state->portrait_state, 1), 16, 24);
+    VDP_drawText(portrait_line(state->portrait_state, 2), 16, 25);
+
+    VDP_drawText(shot_status_text(state->shot_status), 10, 24);
+    VDP_drawText(action_status_text(state->action_status), 26, 24);
+    VDP_drawText(last_pickup_text(state->last_pickup), 26, 25);
+    VDP_drawText(state->level_cleared ? "CLEAR" : "SEEK ", 10, 25);
+
+    write_hex_u32(state->frame, text);
+    VDP_drawText(text, 11, 26);
 }
