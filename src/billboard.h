@@ -4,7 +4,7 @@
 #include <genesis.h>
 #include "raycast.h"
 
-#define BILLBOARD_MAX_SPANS 72
+#define BILLBOARD_MAX_SPANS 192
 
 typedef enum {
     BILLBOARD_VISUAL_BONUS = 0,

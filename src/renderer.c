@@ -15,21 +15,21 @@ static void init_video(void) {
     VDP_setTextPlane(BG_A);
 
     PAL_setColor(0, RGB24_TO_VDPCOLOR(0x000000));
-    PAL_setColor(1, RGB24_TO_VDPCOLOR(0xE0E0E0));
-    PAL_setColor(2, RGB24_TO_VDPCOLOR(0x202020));
-    PAL_setColor(3, RGB24_TO_VDPCOLOR(0x404040));
-    PAL_setColor(4, RGB24_TO_VDPCOLOR(0x686868));
-    PAL_setColor(5, RGB24_TO_VDPCOLOR(0x909090));
-    PAL_setColor(6, RGB24_TO_VDPCOLOR(0xB8B8B8));
-    PAL_setColor(7, RGB24_TO_VDPCOLOR(0xE0E0E0));
-    PAL_setColor(8, RGB24_TO_VDPCOLOR(0x203050));
-    PAL_setColor(9, RGB24_TO_VDPCOLOR(0x3068A0));
-    PAL_setColor(10, RGB24_TO_VDPCOLOR(0x50A0D0));
-    PAL_setColor(11, RGB24_TO_VDPCOLOR(0xE0E070));
-    PAL_setColor(12, RGB24_TO_VDPCOLOR(0x904040));
-    PAL_setColor(13, RGB24_TO_VDPCOLOR(0xC06848));
-    PAL_setColor(14, RGB24_TO_VDPCOLOR(0x305020));
-    PAL_setColor(15, RGB24_TO_VDPCOLOR(0x507030));
+    PAL_setColor(1, RGB24_TO_VDPCOLOR(0xD8D8D8));
+    PAL_setColor(2, RGB24_TO_VDPCOLOR(0x181410));
+    PAL_setColor(3, RGB24_TO_VDPCOLOR(0x383030));
+    PAL_setColor(4, RGB24_TO_VDPCOLOR(0x585048));
+    PAL_setColor(5, RGB24_TO_VDPCOLOR(0x888078));
+    PAL_setColor(6, RGB24_TO_VDPCOLOR(0xB4ACA0));
+    PAL_setColor(7, RGB24_TO_VDPCOLOR(0xE8E0D0));
+    PAL_setColor(8, RGB24_TO_VDPCOLOR(0x301E10));
+    PAL_setColor(9, RGB24_TO_VDPCOLOR(0x4878A8));
+    PAL_setColor(10, RGB24_TO_VDPCOLOR(0x78502C));
+    PAL_setColor(11, RGB24_TO_VDPCOLOR(0xD8B048));
+    PAL_setColor(12, RGB24_TO_VDPCOLOR(0x982818));
+    PAL_setColor(13, RGB24_TO_VDPCOLOR(0xA86838));
+    PAL_setColor(14, RGB24_TO_VDPCOLOR(0x484038));
+    PAL_setColor(15, RGB24_TO_VDPCOLOR(0x4C6028));
 
     VDP_clearPlane(BG_A, TRUE);
     VDP_clearPlane(BG_B, TRUE);
@@ -98,21 +98,17 @@ void set_view_pair_tile(u16 x, u16 y, u8 left_color, u8 right_color) {
 }
 
 void set_view_column_color(u16 column, u16 y, u8 color) {
-    const u16 tile_x = (u16)(column / 2);
+    const u16 tile_x = (u16)(column >> 3);
     const u16 tile_y = (u16)(y / 8);
     const u16 row_y = (u16)(y & 7);
     const u16 map_index = (u16)(tile_y * VIEW_TILE_W + tile_x);
-    const u32 row = g_view_tiles[map_index][row_y];
-    u8 left_color = (u8)((row >> 28) & 0x0F);
-    u8 right_color = (u8)((row >> 12) & 0x0F);
+    const u16 shift = (u16)((7 - (column & 7)) * 4);
+    u32 row = g_view_tiles[map_index][row_y];
 
-    if ((column & 1) == 0) {
-        left_color = color;
-    } else {
-        right_color = color;
-    }
+    row &= ~((u32)0x0F << shift);
+    row |= ((u32)(color & 0x0F)) << shift;
 
-    g_view_tiles[map_index][row_y] = make_pair_tile_row(left_color, right_color);
+    g_view_tiles[map_index][row_y] = row;
 }
 
 void renderer_set_bg_pair_tile(u16 x, u16 y, u8 left_color, u8 right_color) {

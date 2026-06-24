@@ -69,11 +69,11 @@ bool billboard_measure_object(const PlayerState *player, const BillboardObject *
     measure->type = type;
     measure->forward = forward;
     measure->side = side;
-    measure->center_col = (s16)((BILLBOARD_VIEW_COLS / 2) + ((side * 20) / forward));
-    measure->half_w = (s16)(type->scale / forward);
+    measure->center_col = (s16)((BILLBOARD_VIEW_COLS / 2) + ((side * 80) / forward));
+    measure->half_w = (s16)((type->scale * 4) / forward);
 
-    if (measure->half_w > 3) {
-        measure->half_w = 3;
+    if (measure->half_w > 12) {
+        measure->half_w = 12;
     }
 
     return TRUE;

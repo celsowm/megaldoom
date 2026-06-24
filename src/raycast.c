@@ -165,6 +165,8 @@ void player_init(PlayerState *player, u16 phase_index) {
     player->angle = PLAYER_START_ANGLE_BY_PHASE[phase];
 }
 
+#define PLAYER_MOVE_SUBSTEP 48
+
 void player_try_move(PlayerState *player, s16 forward, s16 strafe) {
     const s16 dir_x = fx_cos(player->angle);
     const s16 dir_y = fx_sin(player->angle);
@@ -172,15 +174,26 @@ void player_try_move(PlayerState *player, s16 forward, s16 strafe) {
     const s16 side_y = fx_sin((u16)(player->angle + ANGLE_90));
     const s32 dx = (((s32)dir_x * forward) + ((s32)side_x * strafe)) >> FX_SHIFT;
     const s32 dy = (((s32)dir_y * forward) + ((s32)side_y * strafe)) >> FX_SHIFT;
-    const s32 next_x = player->x + dx;
-    const s32 next_y = player->y + dy;
+    const s32 abs_x = (dx < 0) ? -dx : dx;
+    const s32 abs_y = (dy < 0) ? -dy : dy;
+    const s32 span = (abs_x > abs_y) ? abs_x : abs_y;
+    // Split a large displacement into sub-steps so collision is sampled along the path
+    // instead of only at the endpoint (prevents tunnelling through walls at low fps).
+    s16 steps = (s16)((span / PLAYER_MOVE_SUBSTEP) + 1);
+    const s32 step_x = dx / steps;
+    const s32 step_y = dy / steps;
 
-    if (!is_blocked_at(next_x, player->y)) {
-        player->x = next_x;
-    }
+    while (steps-- > 0) {
+        const s32 next_x = player->x + step_x;
+        const s32 next_y = player->y + step_y;
 
-    if (!is_blocked_at(player->x, next_y)) {
-        player->y = next_y;
+        if (!is_blocked_at(next_x, player->y)) {
+            player->x = next_x;
+        }
+
+        if (!is_blocked_at(player->x, next_y)) {
+            player->y = next_y;
+        }
     }
 }
 
@@ -198,7 +211,9 @@ void player_apply_world_push(PlayerState *player, s32 dx, s32 dy) {
 }
 
 void raycast_cast_frame(const PlayerState *player, RayColumn *columns) {
-    for (u16 col = 0; col < RAY_VIEW_COLS; col++) {
+    // Cast one ray every RAY_COL_STRIDE columns and replicate it across the gap; the
+    // 68000 can't afford one DDA + textured column per screen pixel at 60fps.
+    for (u16 col = 0; col < RAY_VIEW_COLS; col += RAY_COL_STRIDE) {
         const u16 ray_angle = (u16)(player->angle + g_ray_offsets[col]);
         u8 texture_id;
         u8 shade;
@@ -224,5 +239,9 @@ void raycast_cast_frame(const PlayerState *player, RayColumn *columns) {
         columns[col].tex_x = tex_x;
         columns[col].texture_id = texture_id;
         columns[col].shade = shade;
+
+        for (u16 k = 1; k < RAY_COL_STRIDE; k++) {
+            columns[col + k] = columns[col];
+        }
     }
 }

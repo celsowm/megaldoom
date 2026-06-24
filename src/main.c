@@ -12,6 +12,10 @@
 #define PLAYER_INVULN_FRAMES 24
 #define PLAYER_HIT_PUSH_STEP (FX_ONE / 4)
 #define PLAYER_MAX_HEALTH 3
+// Locked frame cadence: every iteration lasts this many vblanks (1 = 60fps, 2 = 30fps).
+// A steady cadence is what makes movement feel natural; raise to 2 if the render can't
+// reliably finish within one frame at the current RAY_COL_STRIDE.
+#define TARGET_FRAME_VSYNCS 1
 
 static PlayerState g_player;
 static RayColumn g_ray_columns[RAY_VIEW_COLS];
@@ -83,6 +87,7 @@ int main(bool hard) {
     u16 phase_index = 0;
     u16 player_health = PLAYER_MAX_HEALTH;
     u16 shot_cooldown = 0;
+    u32 prev_vtimer = vtimer;
 
     (void)hard;
 
@@ -96,6 +101,17 @@ int main(bool hard) {
         u16 control = 0;
         DoorActionResult action_status = g_hud.action_status;
         BillboardShotResult shot_status = g_hud.shot_status;
+        // Real vblanks elapsed since last iteration: keeps movement time-based even if
+        // the render overruns a frame. Clamped so a long stall can't produce a huge jump.
+        const u32 cur_vtimer = vtimer;
+        u16 elapsed_frames = (u16)(cur_vtimer - prev_vtimer);
+
+        prev_vtimer = cur_vtimer;
+        if (elapsed_frames < 1) {
+            elapsed_frames = 1;
+        } else if (elapsed_frames > 4) {
+            elapsed_frames = 4;
+        }
 
         if (shot_cooldown > 0) {
             shot_cooldown--;
@@ -114,7 +130,7 @@ int main(bool hard) {
 
         JOY_update();
         if (!level_cleared) {
-            control = player_controller_update(&g_player);
+            control = player_controller_update(&g_player, elapsed_frames);
         } else if ((JOY_readJoypad(JOY_1) & BUTTON_START) != 0) {
             phase_index = (u16)((phase_index + 1) & 1);
             reset_level(phase_index, &level_cleared, &shot_cooldown, &player_health, &frame);
@@ -202,7 +218,11 @@ int main(bool hard) {
             redraw = FALSE;
         }
 
-        VDP_waitVSync();
+        // Pad to a fixed cadence so each visual frame is shown for the same duration,
+        // keeping motion uniform instead of stuttering between 60 and 30fps.
+        do {
+            VDP_waitVSync();
+        } while ((u16)(vtimer - cur_vtimer) < TARGET_FRAME_VSYNCS);
         frame++;
     }
 

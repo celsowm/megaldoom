@@ -95,22 +95,23 @@ static void build_raycast_tilemap(const RayColumn *columns) {
     for (u16 tile_y = 0; tile_y < VIEW_TILE_H; tile_y++) {
         for (u16 tile_x = 0; tile_x < VIEW_TILE_W; tile_x++) {
             const u16 tile_index = (u16)((tile_y * VIEW_TILE_W) + tile_x);
-            const u16 left_col = (u16)(tile_x * 2);
-            const u16 right_col = (u16)(left_col + 1);
+            const u16 base_col = (u16)(tile_x * 8);
 
             for (u16 row = 0; row < 8; row++) {
                 const u16 pixel_y = (u16)((tile_y * 8) + row);
-                const u8 left_color = sample_column_color(&columns[left_col], pixel_y);
-                const u8 right_color = sample_column_color(&columns[right_col], pixel_y);
+                u32 packed = 0;
 
-                g_view_tiles[tile_index][row] = (((u32)(left_color & 0x0F)) << 28) |
-                                                 (((u32)(left_color & 0x0F)) << 24) |
-                                                 (((u32)(left_color & 0x0F)) << 20) |
-                                                 (((u32)(left_color & 0x0F)) << 16) |
-                                                 (((u32)(right_color & 0x0F)) << 12) |
-                                                 (((u32)(right_color & 0x0F)) << 8) |
-                                                 (((u32)(right_color & 0x0F)) << 4) |
-                                                 ((u32)(right_color & 0x0F));
+                // Sample one color per RAY_COL_STRIDE pixels and replicate it, matching
+                // the columns produced by raycast_cast_frame.
+                for (u16 px = 0; px < 8; px += RAY_COL_STRIDE) {
+                    const u8 color = (u8)(sample_column_color(&columns[base_col + px], pixel_y) & 0x0F);
+
+                    for (u16 k = 0; k < RAY_COL_STRIDE; k++) {
+                        packed = (packed << 4) | color;
+                    }
+                }
+
+                g_view_tiles[tile_index][row] = packed;
             }
         }
     }
@@ -169,29 +170,33 @@ static void draw_weapon_overlay(bool flash) {
     }
 }
 
+#define DAMAGE_BORDER_PX 8
+
 static void draw_damage_overlay(void) {
     for (u16 x = 0; x < RAY_VIEW_COLS; x++) {
-        set_view_column_color(x, 0, 2);
-        set_view_column_color(x, (VIEW_PIXEL_H - 1), 2);
+        for (u16 t = 0; t < 3; t++) {
+            set_view_column_color(x, t, 2);
+            set_view_column_color(x, (VIEW_PIXEL_H - 1 - t), 2);
+        }
     }
 
-    for (u16 y = 1; y < (VIEW_PIXEL_H - 1); y++) {
-        set_view_column_color(0, y, 2);
-        set_view_column_color(1, y, 2);
-        set_view_column_color((RAY_VIEW_COLS - 2), y, 2);
-        set_view_column_color((RAY_VIEW_COLS - 1), y, 2);
+    for (u16 y = 0; y < VIEW_PIXEL_H; y++) {
+        for (u16 t = 0; t < DAMAGE_BORDER_PX; t++) {
+            set_view_column_color(t, y, 2);
+            set_view_column_color((RAY_VIEW_COLS - 1 - t), y, 2);
+        }
     }
 }
 
 static void draw_low_health_overlay(void) {
-    for (u16 x = 4; x <= 8; x++) {
+    for (u16 x = 16; x <= 32; x++) {
         set_view_column_color(x, 1, 11);
         set_view_column_color(x, 2, 11);
         set_view_column_color(x, (VIEW_PIXEL_H - 3), 11);
         set_view_column_color(x, (VIEW_PIXEL_H - 2), 11);
     }
 
-    for (u16 x = (RAY_VIEW_COLS - 9); x <= (RAY_VIEW_COLS - 5); x++) {
+    for (u16 x = (RAY_VIEW_COLS - 33); x <= (RAY_VIEW_COLS - 17); x++) {
         set_view_column_color(x, 1, 11);
         set_view_column_color(x, 2, 11);
         set_view_column_color(x, (VIEW_PIXEL_H - 3), 11);

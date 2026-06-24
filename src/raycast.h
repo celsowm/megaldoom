@@ -3,7 +3,11 @@
 
 #include <genesis.h>
 
-#define RAY_VIEW_COLS 40
+#define RAY_VIEW_COLS 160
+// Horizontal render granularity: cast/sample one wall column every N pixels and
+// duplicate across the gap. 1 = full 1px detail (heaviest), 2 = 2px (~80 cols),
+// 4 = 4px (~40 cols, original cost). Must divide 8. Lower = sharper but slower.
+#define RAY_COL_STRIDE 4
 
 typedef struct {
     s32 x;

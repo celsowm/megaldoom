@@ -10,7 +10,7 @@ static u16 billboard_project_one(const PlayerState *player,
         return 0;
     }
 
-    s16 half_h = (s16)(measure.half_w * 8);
+    s16 half_h = (s16)(measure.half_w * 2);
 
     if (half_h > 28) {
         half_h = 28;
