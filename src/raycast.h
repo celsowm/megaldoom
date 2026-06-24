@@ -19,8 +19,9 @@ typedef struct {
 } RayColumn;
 
 void raycast_init(void);
-void player_init(PlayerState *player);
+void player_init(PlayerState *player, u16 phase_index);
 void player_try_move(PlayerState *player, s16 forward, s16 strafe);
+void player_apply_world_push(PlayerState *player, s32 dx, s32 dy);
 void raycast_cast_frame(const PlayerState *player, RayColumn *columns);
 
 #endif

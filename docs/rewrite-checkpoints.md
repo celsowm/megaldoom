@@ -1055,7 +1055,7 @@ Human validation:
 
 ## Gate 29: converted decor billboard asset
 
-Implementation status: ready for human validation.
+Implementation status: accepted by human validation.
 
 Scope:
 
@@ -1093,3 +1093,1225 @@ Human validation:
 - Confirm they still disappear and increment `PICKUPS`.
 - Confirm distance scaling, transparency, wall/door occlusion and near-over-far draw order still work.
 - Confirm movement, doors and collision still work.
+- Accepted by human validation.
+
+## Gate 30: pickup counters by type
+
+Implementation status: accepted by human validation.
+
+Scope:
+
+- Keep Gate 29 movement, doors, decor asset, pickup counter, collectible rules, depth sorting and wall occlusion.
+- Track collected bonus and key pickups separately.
+- Replace the single pickup counter text with per-type debug counters.
+- Keep decorative billboards excluded from the counters.
+- Add no inventory behavior, score category beyond type counts, animation, AI, hardware sprite system or dynamic allocation.
+
+Expected visual result:
+
+- HUD/debug text shows `BONUS 00 KEY 00` at startup.
+- Collecting a bonus increments only the bonus counter.
+- Collecting a key increments only the key counter.
+- Walking into the decorative billboard still does not remove it and does not change either counter.
+- Existing distance scaling, transparency, wall/door occlusion and near-over-far drawing remain.
+- Doors, movement and collision still work.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: passed with zero compiler warnings.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 30`.
+- Confirm the HUD/debug text shows `BONUS 00 KEY 00` at startup.
+- Collect a bonus pickup and confirm only `BONUS` increments.
+- Collect a key pickup and confirm only `KEY` increments.
+- Walk into the decorative billboard and confirm neither counter changes.
+- Confirm distance scaling, transparency, wall/door occlusion and near-over-far draw order still work.
+- Confirm movement, doors and collision still work.
+- Accepted by human validation.
+
+## Gate 31: last collected pickup type
+
+Implementation status: accepted by human validation.
+
+Scope:
+
+- Keep Gate 30 movement, doors, decor asset, per-type counters, collectible rules, depth sorting and wall occlusion.
+- Track the last collectible pickup type acquired.
+- Show the last pickup type in a small debug HUD text.
+- Keep decorative billboards excluded from the last-pickup state.
+- Add no inventory behavior, key usage, animation, AI, hardware sprite system or dynamic allocation.
+
+Expected visual result:
+
+- HUD/debug text shows `LAST NONE` at startup.
+- Collecting a bonus changes the label to `LAST BONUS`.
+- Collecting a key changes the label to `LAST KEY`.
+- Walking into the decorative billboard does not change the last-pickup label.
+- Existing per-type counters, distance scaling, transparency, wall/door occlusion and near-over-far drawing remain.
+- Doors, movement and collision still work.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: passed with zero compiler warnings.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 31`.
+- Confirm the HUD/debug text shows `LAST NONE` at startup.
+- Collect a bonus pickup and confirm the label changes to `LAST BONUS`.
+- Collect a key pickup and confirm the label changes to `LAST KEY`.
+- Walk into the decorative billboard and confirm the label does not change.
+- Confirm per-type counters, distance scaling, transparency, wall/door occlusion and near-over-far draw order still work.
+- Confirm movement, doors and collision still work.
+- Accepted by human validation.
+
+## Gate 32: locked door requires key
+
+Implementation status: accepted by human validation.
+
+Scope:
+
+- Keep Gate 31 movement, billboard pickups, last-pickup HUD, decor asset, per-type counters, collectible rules, depth sorting and wall occlusion.
+- Add a locked door tile type distinct from the normal door tile.
+- Require at least one collected key before a locked door can open or close.
+- Keep normal doors working without any key.
+- Do not consume the key yet.
+- Add a distinct debug-facing locked-door wall texture.
+- Add no inventory menu, sound, animation, enemy logic, hardware sprite system or dynamic allocation.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 32`.
+- Subtitle shows `LOCKED DOOR`.
+- One door in the map uses a different texture from the normal door.
+- Pressing use on the locked door without a collected key does nothing.
+- After collecting a key, pressing use on the locked door opens and closes it.
+- Normal doors still open and close without requiring any key.
+- Last-pickup label, bonus/key counters, billboard scaling, transparency, wall/door occlusion and near-over-far draw order remain stable.
+- Movement and collision still work.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: pending.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 32`.
+- Find the locked door with the alternate texture.
+- Before collecting a key, face the locked door and press use; confirm it does not open.
+- Confirm a normal door still opens without any key.
+- Collect a key pickup and confirm `KEY` increments and `LAST KEY` appears.
+- Return to the locked door and confirm use now opens and closes it.
+- Confirm the key count is not consumed yet.
+- Confirm bonus/key counters, last-pickup label, billboard scaling, transparency, wall/door occlusion and near-over-far draw order still work.
+- Confirm movement and collision still work.
+- Accepted by human validation.
+
+## Gate 33: key is consumed when unlocking
+
+Implementation status: accepted by human validation.
+
+Scope:
+
+- Keep Gate 32 movement, locked door requirement, billboard pickups, last-pickup HUD, decor asset, per-type counters, collectible rules, depth sorting and wall occlusion.
+- Consume one held key when the player unlocks a locked door for the first time.
+- After unlock, convert that door to normal door behavior so later open/close does not consume another key.
+- Keep normal doors working without any key.
+- Keep bonus count and last-pickup label behavior unchanged.
+- Add no inventory menu, sound, animation, enemy logic, hardware sprite system or dynamic allocation.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 33`.
+- Subtitle shows `KEY UNLOCK`.
+- Before collecting a key, the locked door still does nothing.
+- After collecting one key, unlocking the locked door spends that key immediately.
+- The `KEY` HUD value decreases by one after unlock.
+- Once unlocked, that same door behaves like a normal door and can open/close again without another key.
+- Normal doors still open and close without any key.
+- Bonus counter, last-pickup label, billboard scaling, transparency, wall/door occlusion and near-over-far draw order remain stable.
+- Movement and collision still work.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: pending.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 33`.
+- Confirm the subtitle shows `KEY UNLOCK`.
+- Find the locked door with the alternate texture.
+- Before collecting a key, face the locked door and press use; confirm it does not open.
+- Collect one key pickup and confirm `KEY` increments and `LAST KEY` appears.
+- Return to the locked door and press use; confirm the door unlocks/opens and `KEY` decreases by one.
+- Press use on that same door again and confirm it now behaves like a normal door without spending another key.
+- Confirm a normal non-locked door still opens without any key.
+- Confirm bonus counter, last-pickup label, billboard scaling, transparency, wall/door occlusion and near-over-far draw order still work.
+- Confirm movement and collision still work.
+- Accepted by human validation.
+
+## Gate 34: use feedback HUD
+
+Implementation status: accepted by human validation.
+
+Scope:
+
+- Keep Gate 33 movement, locked-door unlock/consumption, billboard pickups, last-pickup HUD, decor asset, per-type counters, collectible rules, depth sorting and wall occlusion.
+- Change door interaction to return an explicit action result instead of a plain boolean.
+- Show a small debug HUD feedback line for the last use action.
+- Distinguish at least normal door toggle, locked-without-key, and successful key unlock.
+- Keep the feedback persistent; no timeout logic in this gate.
+- Add no inventory menu, sound, animation, enemy logic, hardware sprite system or dynamic allocation.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 34`.
+- Subtitle shows `USE FEEDBACK`.
+- HUD shows `USE ----` at startup.
+- Using a normal door changes the feedback to `USE DOOR`.
+- Trying a locked door without key changes the feedback to `USE LOCK`.
+- Unlocking a locked door with a key changes the feedback to `USE KEY!`.
+- Key consumption from Gate 33 still works.
+- Bonus counter, last-pickup label, billboard scaling, transparency, wall/door occlusion and near-over-far draw order remain stable.
+- Movement and collision still work.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: pending.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 34`.
+- Confirm the subtitle shows `USE FEEDBACK`.
+- Confirm the HUD shows `USE ----` at startup.
+- Use a normal door and confirm the HUD changes to `USE DOOR`.
+- Face a locked door without key and confirm the HUD changes to `USE LOCK`.
+- Collect a key, unlock the locked door, and confirm the HUD changes to `USE KEY!`.
+- Confirm the `KEY` counter still decreases by one on unlock.
+- Confirm that unlocked door still behaves like a normal door afterward.
+- Confirm bonus counter, last-pickup label, billboard scaling, transparency, wall/door occlusion and near-over-far draw order still work.
+- Confirm movement and collision still work.
+- Accepted by human validation.
+
+## Gate 35: exit switch objective
+
+Implementation status: accepted by human validation.
+
+Scope:
+
+- Keep Gate 34 movement, locked-door unlock/consumption, billboard pickups, use feedback HUD, decor asset, per-type counters, collectible rules, depth sorting and wall occlusion.
+- Add a visible exit switch tile in the map.
+- Trigger a simple level-clear state when the player uses the exit switch.
+- Show a small goal-status HUD line with seek/clear state.
+- Freeze further movement after level clear for unambiguous validation.
+- Add no next-level transition, inventory menu, sound, animation, enemy logic, hardware sprite system or dynamic allocation.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 35`.
+- Subtitle shows `EXIT SWITCH`.
+- HUD shows `GOAL SEEK` at startup.
+- A distinct switch-like wall tile is visible in the map.
+- Using the switch changes the use HUD to `USE EXIT`.
+- Using the switch changes the goal HUD to `GOAL CLEAR`.
+- After clear, movement input no longer changes the scene.
+- Existing key unlock flow still works.
+- Bonus counter, last-pickup label, billboard scaling, transparency, wall/door occlusion and near-over-far draw order remain stable.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: pending.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 35`.
+- Confirm the subtitle shows `EXIT SWITCH`.
+- Confirm the HUD shows `GOAL SEEK` at startup.
+- Find the distinct exit switch tile in the map.
+- Use the locked-door path as before if needed to reach the switch.
+- Face the switch and press use; confirm the HUD changes to `USE EXIT`.
+- Confirm the goal line changes to `GOAL CLEAR`.
+- Confirm movement input no longer changes the scene after clear.
+- Confirm the key/door flow from earlier gates still works before clear.
+- Confirm bonus counter, last-pickup label, billboard scaling, transparency, wall/door occlusion and near-over-far draw order still work.
+- Accepted by human validation.
+
+## Gate 36: hitscan target shot
+
+Implementation status: accepted by human validation.
+
+Scope:
+
+- Keep Gate 35 movement, exit switch objective, locked-door unlock/consumption, billboard pickups, use feedback HUD, decor asset, per-type counters, collectible rules, depth sorting and wall occlusion.
+- Split `use` and `fire` onto separate buttons.
+- Add a minimal hitscan shot using the center ray depth as wall occlusion.
+- Allow the shot to remove only the decorative target billboard for this gate.
+- Show a small debug HUD line for the last shot result.
+- Add no weapon sprite, ammo, sound, animation, enemy logic, damage system, hardware sprite system or dynamic allocation.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 36`.
+- Subtitle shows `HITSCAN TARGET`.
+- HUD shows `SHOT ----` at startup.
+- Controls text shows `START USE  B FIRE`.
+- Pressing `B` with no decor target in the crosshair changes the HUD to `SHOT MISS`.
+- Pressing `B` with the decor billboard centered and not occluded changes the HUD to `SHOT HIT`.
+- On hit, the decor billboard disappears.
+- Pickups are not removed by shooting in this gate.
+- Existing key/door/exit flow still works, now using `START` for use.
+- Bonus counter, last-pickup label, billboard scaling, transparency, wall/door occlusion and near-over-far draw order remain stable.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: pending.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 36`.
+- Confirm the subtitle shows `HITSCAN TARGET`.
+- Confirm the HUD shows `SHOT ----` at startup.
+- Confirm the controls text shows `START USE  B FIRE`.
+- Press `B` while not aiming at the decor billboard and confirm the HUD changes to `SHOT MISS`.
+- Aim at the decor billboard and press `B`; confirm the HUD changes to `SHOT HIT`.
+- Confirm the decor billboard disappears after a hit.
+- Confirm bonus and key pickups are still collected by proximity, not removed by shooting.
+- Confirm locked door and exit switch still work through `START`.
+- Confirm bonus counter, last-pickup label, billboard scaling, transparency, wall/door occlusion and near-over-far draw order still work.
+- Accepted by human validation.
+
+## Gate 37: shot cooldown HUD
+
+Implementation status: accepted by human validation.
+
+Scope:
+
+- Keep Gate 36 movement, exit switch objective, locked-door unlock/consumption, billboard pickups, hitscan shot, use feedback HUD, decor asset, per-type counters, collectible rules, depth sorting and wall occlusion.
+- Add a fixed cooldown after each shot.
+- Block repeated firing while cooldown is active.
+- Show the cooldown value in a small debug HUD line.
+- Keep the current hit/miss shot status line.
+- Add no weapon sprite, ammo, sound, animation, enemy logic, damage system, hardware sprite system or dynamic allocation.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 37`.
+- Subtitle shows `SHOT COOLDOWN`.
+- HUD shows `COOL 00` at startup.
+- Pressing `B` fires once and changes `COOL` to a non-zero value.
+- The cooldown value counts back down to `00`.
+- Pressing `B` repeatedly during cooldown does not remove a second target.
+- Once `COOL 00` returns, firing works again.
+- Existing `SHOT HIT` and `SHOT MISS` feedback still works.
+- Existing key/door/exit flow still works through `START`.
+- Bonus counter, last-pickup label, billboard scaling, transparency, wall/door occlusion and near-over-far draw order remain stable.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: pending.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 37`.
+- Confirm the subtitle shows `SHOT COOLDOWN`.
+- Confirm the HUD shows `COOL 00` at startup.
+- Press `B` once and confirm `COOL` jumps above `00`.
+- Confirm the cooldown number counts back down to `00`.
+- While cooldown is above `00`, press `B` repeatedly and confirm no second shot effect happens.
+- At `COOL 00`, shoot again and confirm firing works normally.
+- Confirm `SHOT HIT` and `SHOT MISS` still behave as before.
+- Confirm locked door and exit switch still work through `START`.
+- Confirm bonus counter, last-pickup label, billboard scaling, transparency, wall/door occlusion and near-over-far draw order still work.
+- Accepted by human validation.
+
+## Gate 38: visible weapon flash
+
+Implementation status: accepted by human validation.
+
+Scope:
+
+- Keep Gate 37 movement, exit switch objective, locked-door unlock/consumption, billboard pickups, hitscan shot, shot cooldown HUD, use feedback HUD, decor asset, per-type counters, collectible rules, depth sorting and wall occlusion.
+- Add a simple screen-space weapon overlay at the bottom of the view.
+- Add a short muzzle flash when a shot is actually fired.
+- Keep the weapon visual procedural; add no sprite asset pipeline in this gate.
+- Add no ammo, sound, animation beyond the brief flash timer, enemy logic, damage system, hardware sprite system or dynamic allocation.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 38`.
+- Subtitle shows `WEAPON FLASH`.
+- A simple weapon shape is visible at the bottom center of the 3D view.
+- Pressing `B` when cooldown is `00` briefly brightens the weapon muzzle area.
+- The flash disappears automatically after a short moment.
+- Pressing `B` during cooldown does not retrigger the flash.
+- Existing cooldown HUD, `SHOT HIT`/`SHOT MISS`, key/door/exit flow and pickups still work.
+- Bonus counter, last-pickup label, billboard scaling, transparency, wall/door occlusion and near-over-far draw order remain stable.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: pending.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 38`.
+- Confirm the subtitle shows `WEAPON FLASH`.
+- Confirm a weapon shape is visible at the bottom center of the view.
+- Press `B` at `COOL 00` and confirm the muzzle area flashes briefly.
+- Confirm the flash disappears automatically.
+- Press `B` during cooldown and confirm the flash does not retrigger.
+- Confirm `SHOT HIT` and `SHOT MISS` still behave as before.
+- Confirm locked door and exit switch still work through `START`.
+- Confirm bonus counter, last-pickup label, billboard scaling, transparency, wall/door occlusion and near-over-far draw order still work.
+- Accepted by human validation.
+
+## Gate 39: two-hit target
+
+Implementation status: accepted by human validation.
+
+Scope:
+
+- Keep Gate 38 movement, exit switch objective, locked-door unlock/consumption, billboard pickups, hitscan shot, shot cooldown HUD, visible weapon flash, use feedback HUD, decor asset, per-type counters, collectible rules, depth sorting and wall occlusion.
+- Give the decor target two hit points.
+- Keep the target present after the first hit.
+- Change the target visual on the damaged state.
+- Show the target HP in a small debug HUD line.
+- Add no ammo, sound, enemy logic, damage to player, hardware sprite system or dynamic allocation.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 39`.
+- Subtitle shows `TARGET 2 HIT`.
+- HUD shows `TARGET 02` at startup.
+- First valid shot on the target changes the shot label to `SHOT DMG`.
+- After the first hit, `TARGET` drops to `01` and the target remains visible with a damaged-looking recolor.
+- Second valid shot changes the shot label to `SHOT KILL`.
+- After the second hit, `TARGET` drops to `00` and the target disappears.
+- Existing weapon flash, cooldown HUD, key/door/exit flow and pickups still work.
+- Bonus counter, last-pickup label, billboard scaling, transparency, wall/door occlusion and near-over-far draw order remain stable.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: pending.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 39`.
+- Confirm the subtitle shows `TARGET 2 HIT`.
+- Confirm the HUD shows `TARGET 02` at startup.
+- Hit the decor target once and confirm `SHOT DMG`.
+- Confirm `TARGET` changes to `01`.
+- Confirm the target remains visible after the first hit and appears recolored/damaged.
+- Wait for cooldown and hit the same target again; confirm `SHOT KILL`.
+- Confirm `TARGET` changes to `00`.
+- Confirm the target disappears after the second hit.
+- Confirm locked door and exit switch still work through `START`.
+- Confirm bonus counter, last-pickup label, billboard scaling, transparency, wall/door occlusion and near-over-far draw order still work.
+- Accepted by human validation.
+
+## Gate 40: multiple targets
+
+Implementation status: accepted by human validation.
+
+Scope:
+
+- Keep Gate 39 movement, exit switch objective, locked-door unlock/consumption, billboard pickups, two-hit target logic, hitscan shot, shot cooldown HUD, visible weapon flash, use feedback HUD, per-type counters, collectible rules, depth sorting and wall occlusion.
+- Add a second destructible decor target.
+- Track remaining target count in the HUD.
+- Keep per-target HP behavior from Gate 39.
+- Add no ammo, sound, enemy AI, damage to player, hardware sprite system or dynamic allocation.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 40`.
+- Subtitle shows `MULTI TARGET`.
+- HUD shows `TGT 02 HP 02` at startup.
+- Killing one target changes the target count to `TGT 01`.
+- The remaining target still has its own HP flow and can show `HP 02` then `HP 01`.
+- After killing both targets, the HUD reaches `TGT 00 HP 00`.
+- Existing weapon flash, cooldown HUD, key/door/exit flow and pickups still work.
+- Bonus counter, last-pickup label, billboard scaling, transparency, wall/door occlusion and near-over-far draw order remain stable.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: pending.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 40`.
+- Confirm the subtitle shows `MULTI TARGET`.
+- Confirm the HUD shows `TGT 02 HP 02` at startup.
+- Kill one target fully and confirm the HUD changes to `TGT 01`.
+- Confirm the remaining target can still be damaged and killed in two shots.
+- Confirm the HUD eventually reaches `TGT 00 HP 00` after both kills.
+- Confirm `SHOT DMG` and `SHOT KILL` still behave correctly.
+- Confirm locked door and exit switch still work through `START`.
+- Confirm bonus counter, last-pickup label, billboard scaling, transparency, wall/door occlusion and near-over-far draw order still work.
+- Accepted by human validation.
+
+## Gate 41: exit requires all targets
+
+Implementation status: accepted by human validation.
+
+Scope:
+
+- Keep Gate 40 movement, multiple destructible targets, exit switch objective, locked-door unlock/consumption, billboard pickups, hitscan shot, shot cooldown HUD, visible weapon flash, use feedback HUD, per-type counters, collectible rules, depth sorting and wall occlusion.
+- Require all destructible targets to be cleared before the exit switch can finish the level.
+- Reuse the existing target-count HUD to signal progress.
+- Add a distinct use-feedback state when the player tries the exit too early.
+- Add no ammo, sound, enemy AI, damage to player, hardware sprite system or dynamic allocation.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 41`.
+- Subtitle shows `CLEAR EXIT`.
+- Before all targets are dead, using the exit switch changes the use HUD to `USE HUNT`.
+- Before all targets are dead, the goal does not change to `CLEAR`.
+- After all targets are dead and the HUD shows `TGT 00`, using the exit switch changes the use HUD to `USE EXIT`.
+- After all targets are dead, the goal changes to `GOAL CLEAR`.
+- Existing weapon flash, cooldown HUD, key/door flow and pickups still work.
+- Bonus counter, last-pickup label, billboard scaling, transparency, wall/door occlusion and near-over-far draw order remain stable.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: pending.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 41`.
+- Confirm the subtitle shows `CLEAR EXIT`.
+- Before killing all targets, use the exit switch and confirm the use HUD changes to `USE HUNT`.
+- Confirm the goal does not change to `GOAL CLEAR` yet.
+- Kill all targets until the HUD shows `TGT 00 HP 00`.
+- Use the exit switch again and confirm the use HUD changes to `USE EXIT`.
+- Confirm the goal changes to `GOAL CLEAR`.
+- Confirm locked door still works through `START`.
+- Confirm bonus counter, last-pickup label, billboard scaling, transparency, wall/door occlusion and near-over-far draw order still work.
+- Accepted by human validation.
+
+## Gate 42: restart level after clear
+
+Implementation status: accepted by human validation.
+
+Scope:
+
+- Keep Gate 41 movement, clear-gated exit, multiple destructible targets, locked-door unlock/consumption, billboard pickups, hitscan shot, shot cooldown HUD, visible weapon flash, use feedback HUD, per-type counters, collectible rules, depth sorting and wall occlusion.
+- Allow the player to restart the current level after reaching `GOAL CLEAR`.
+- Reset player position, doors, targets, pickups, HUD counters and temporary combat state.
+- Keep restart input on `START`, which already becomes free once the level is cleared and movement is frozen.
+- Add no phase selection, save system, enemy AI, hardware sprite system or dynamic allocation.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 42`.
+- Subtitle shows `LEVEL RESET`.
+- After clearing the level, pressing `START` resets the whole stage.
+- After reset, the HUD returns to startup values such as `GOAL SEEK`, `TGT 02 HP 02`, `COOL 00`, `SHOT MISS`/default and pickup counters at zero.
+- The player view returns to the initial spawn position.
+- Locked door, targets and pickups reappear in their initial states.
+- Existing key/door/shot/cooldown/exit flow still works after the reset.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: pending.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 42`.
+- Confirm the subtitle shows `LEVEL RESET`.
+- Finish the level until the HUD shows `GOAL CLEAR`.
+- Press `START` after clear and confirm the whole stage resets.
+- Confirm the HUD returns to `GOAL SEEK` and `TGT 02 HP 02`.
+- Confirm the player is back at the initial spawn position.
+- Confirm the locked door, targets and pickups are restored.
+- Confirm the level can be played and cleared again from the reset state.
+- Accepted by human validation.
+
+## Gate 43: phase loop
+
+Implementation status: accepted by human validation.
+
+Scope:
+
+- Keep Gate 42 movement, reset-after-clear flow, clear-gated exit, multiple destructible targets, locked-door unlock/consumption, billboard pickups, hitscan shot, shot cooldown HUD, visible weapon flash, use feedback HUD, per-type counters, collectible rules, depth sorting and wall occlusion.
+- Add a second playable phase with its own map layout, spawn point and object placement.
+- Show the current phase in a small debug HUD line.
+- After clearing a phase, pressing `START` advances to the next phase instead of reloading the same one.
+- Loop back to phase 1 after clearing phase 2.
+- Add no enemy AI, save system, hardware sprite system or dynamic allocation.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 43`.
+- Subtitle shows `PHASE LOOP`.
+- HUD shows `PH 01` at startup.
+- After clearing phase 1 and pressing `START`, the game loads a visibly different phase and the HUD shows `PH 02`.
+- Phase 2 starts from a different spawn position and uses a different map/object arrangement.
+- After clearing phase 2 and pressing `START`, the game loops back to phase 1 and the HUD shows `PH 01`.
+- Existing weapon flash, cooldown HUD, key/door flow, target gating and pickups still work in both phases.
+- Bonus counter, last-pickup label, billboard scaling, transparency, wall/door occlusion and near-over-far draw order remain stable.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: pending.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 43`.
+- Confirm the subtitle shows `PHASE LOOP`.
+- Confirm the HUD shows `PH 01` at startup.
+- Clear phase 1 and press `START`; confirm the HUD changes to `PH 02`.
+- Confirm phase 2 has a different spawn position and visibly different target/map arrangement.
+- Clear phase 2 and press `START`; confirm the HUD returns to `PH 01`.
+- Confirm the key/door/exit/shot/target loop still works in both phases.
+- Accepted by human validation.
+
+## Gate 44: dummy enemy
+
+Implementation status: ready for human validation.
+
+Scope:
+
+- Keep Gate 43 movement, phase loop, clear-gated exit, multiple destructible targets, locked-door unlock/consumption, billboard pickups, hitscan shot, shot cooldown HUD, visible weapon flash, use feedback HUD, per-type counters, collectible rules, depth sorting and wall occlusion.
+- Add one static dummy enemy per phase.
+- Give the dummy its own billboard visual recolor and a larger HP pool than decor targets.
+- Show dummy count in a small debug HUD line.
+- Count the dummy toward the existing target-clear requirement.
+- Add no enemy movement, return fire, pathfinding, sound, hardware sprite system or dynamic allocation.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 44`.
+- Subtitle shows `DUMMY ENEMY`.
+- HUD shows `ENMY 01` at startup.
+- A dummy enemy billboard appears with a distinct color treatment from the decor targets.
+- Hitting the dummy damages it over multiple shots instead of removing it immediately.
+- Killing the dummy changes the HUD to `ENMY 00`.
+- Because the dummy is targetable, the exit still requires killing it before the level can be cleared.
+- Existing weapon flash, cooldown HUD, key/door flow, phase loop and pickups still work.
+- Bonus counter, last-pickup label, billboard scaling, transparency, wall/door occlusion and near-over-far draw order remain stable.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: pending.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 44`.
+- Confirm the subtitle shows `DUMMY ENEMY`.
+- Confirm the HUD shows `ENMY 01` at startup.
+- Find the dummy enemy billboard and confirm it looks distinct from decor targets.
+- Shoot the dummy and confirm it survives more than one hit.
+- Kill the dummy and confirm the HUD changes to `ENMY 00`.
+- Confirm the exit still requires killing all targets including the dummy.
+- Confirm the phase loop still works after clearing the level.
+
+## Gate 45: dummy chase and contact attack
+
+Implementation status: ready for human validation.
+
+Scope:
+
+- Keep Gate 44 phase loop, clear-gated exit, multiple destructible targets, locked-door unlock/consumption, billboard pickups, hitscan shot, shot cooldown HUD, visible weapon flash, use feedback HUD, per-type counters, collectible rules, depth sorting and wall occlusion.
+- Give the dummy a simple chase step toward the player when inside a short range.
+- Add a simple contact attack with a fixed cooldown.
+- Show player HP in a small debug HUD line.
+- Reset the current phase when player HP reaches zero.
+- Keep the dummy logic grid-simple: no pathfinding, no projectile attack, no sound, no hardware sprite system and no dynamic allocation.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 45`.
+- Subtitle shows `DUMMY CHASE`.
+- HUD shows `ENMY 01` and `HP 03` at startup.
+- When the player comes near the dummy, it starts moving in simple steps toward the player.
+- When the dummy reaches close contact, player HP drops with a visible cooldown between hits.
+- If the dummy drains all HP, the current phase resets to its initial state.
+- Existing weapon flash, cooldown HUD, key/door flow, target gating and pickups still work.
+- Bonus counter, last-pickup label, billboard scaling, transparency, wall/door occlusion and near-over-far draw order remain stable.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: pending.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 45`.
+- Confirm the subtitle shows `DUMMY CHASE`.
+- Confirm the HUD shows `HP 03` at startup.
+- Approach the dummy and confirm it starts moving toward the player.
+- Let the dummy touch the player and confirm HP drops, but not every single frame.
+- Let HP reach zero and confirm the current phase resets.
+- Confirm the dummy can still be shot and killed normally.
+- Confirm the exit still requires killing all targets including the dummy.
+
+## Gate 46: player damage flash
+
+Implementation status: ready for human validation.
+
+Scope:
+
+- Keep Gate 45 dummy chase, contact attack, phase loop, clear-gated exit, locked-door unlock/consumption, billboard pickups, hitscan shot, shot cooldown HUD, visible weapon flash, use feedback HUD, per-type counters, collectible rules, depth sorting and wall occlusion.
+- Add a brief visual hit flash on the 3D view when the player takes damage.
+- Reuse the existing player HP flow; add no armor, healing, sound, screen shake, projectile attack, hardware sprite system or dynamic allocation.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 46`.
+- Subtitle shows `PLAYER HIT FLASH`.
+- HUD still shows `HP 03` at startup.
+- When the dummy lands a hit, the 3D view briefly flashes with a visible red damage frame.
+- The flash fades automatically after a short moment.
+- HP drain, death reset, shooting, pickups, keys, exit gating and phase loop still work.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: pending.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 46`.
+- Confirm the subtitle shows `PLAYER HIT FLASH`.
+- Let the dummy hit the player and confirm the red flash appears on the 3D view.
+- Confirm the flash disappears automatically after a short time.
+- Confirm repeated hits retrigger the flash.
+- Confirm HP still drops correctly and the phase still resets at zero HP.
+
+## Gate 47: dummy hit pushback
+
+Implementation status: ready for human validation.
+
+Scope:
+
+- Keep Gate 46 player damage flash, dummy chase/contact attack, phase loop, clear-gated exit, locked-door unlock/consumption, billboard pickups, hitscan shot, shot cooldown HUD, visible weapon flash, use feedback HUD, per-type counters, collectible rules, depth sorting and wall occlusion.
+- When the dummy takes a shot, apply a simple pushback away from the player if the space is free.
+- Briefly pause dummy chase immediately after a hit so the pushback is readable.
+- Add no ragdoll, animation set, pathfinding, projectile logic, sound, hardware sprite system or dynamic allocation.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 47`.
+- Subtitle shows `DUMMY HIT PUSH`.
+- Shooting a dummy should still reduce its HP as before.
+- On a valid hit, the dummy should visibly step backward away from the player when space allows.
+- Right after the hit, the dummy should not instantly re-stick to the player on the very next frame.
+- Existing player damage flash, HP drain, death reset, shooting, pickups, keys, exit gating and phase loop still work.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: pending.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 47`.
+- Confirm the subtitle shows `DUMMY HIT PUSH`.
+- Approach a dummy and shoot it at close or medium range.
+- Confirm the dummy is pushed backward on hit when there is open space.
+- Confirm the dummy still dies after the expected number of hits.
+- Confirm the dummy resumes chasing after the short pause.
+
+## Gate 48: dummy line of sight
+
+Implementation status: ready for human validation.
+
+Scope:
+
+- Keep Gate 47 dummy hit pushback, player damage flash, dummy chase/contact attack, phase loop, clear-gated exit, locked-door unlock/consumption, billboard pickups, hitscan shot, shot cooldown HUD, visible weapon flash, use feedback HUD, per-type counters, collectible rules, depth sorting and wall occlusion.
+- Gate dummy chase and contact attack behind a simple world-space line-of-sight check.
+- Closed walls and doors should block dummy aggro.
+- Add no hearing system, pathfinding around corners, projectile logic, sound, hardware sprite system or dynamic allocation.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 48`.
+- Subtitle shows `DUMMY LOS`.
+- If the player is visible in open space, the dummy still chases and attacks as before.
+- If a wall or closed door is between the player and the dummy, it should stop chasing and stop dealing contact damage through the obstruction.
+- Existing hit pushback, player damage flash, HP drain, death reset, shooting, pickups, keys, exit gating and phase loop still work.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: pending.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 48`.
+- Confirm the subtitle shows `DUMMY LOS`.
+- Stand in open sight of the dummy and confirm it still chases.
+- Put a wall or closed door between the player and the dummy and confirm it stops chasing.
+- Re-open the line of sight and confirm it resumes normal behavior.
+
+## Gate 49: multiple dummies
+
+Implementation status: ready for human validation.
+
+Scope:
+
+- Keep Gate 48 dummy line of sight, hit pushback, player damage flash, dummy chase/contact attack, phase loop, clear-gated exit, locked-door unlock/consumption, billboard pickups, hitscan shot, shot cooldown HUD, visible weapon flash, use feedback HUD, per-type counters, collectible rules, depth sorting and wall occlusion.
+- Add a second dummy enemy to each phase.
+- Increase the billboard span budget so multiple active enemies do not get clipped out of the renderer too early.
+- Reuse the existing enemy count, target gating and damage systems.
+- Add no new enemy type, no pathfinding, no projectile logic, no sound, no hardware sprite system and no dynamic allocation.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 49`.
+- Subtitle shows `MULTI DUMMY`.
+- HUD should now start with `ENMY 02` in each phase.
+- Two dummies can be found, damaged, pushed back and killed independently.
+- Both dummies count toward the existing target-clear requirement and can both chase/attack when they have line of sight.
+- Existing player damage flash, HP drain, death reset, shooting, pickups, keys, exit gating and phase loop still work.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: pending.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 49`.
+- Confirm the subtitle shows `MULTI DUMMY`.
+- Confirm the HUD starts with `ENMY 02`.
+- Find both dummies in the phase and confirm both can chase and attack.
+- Shoot one dummy and confirm only that one takes damage/pushback.
+- Kill both and confirm `ENMY 00`.
+- Confirm the exit still requires killing all targets including both dummies.
+
+## Gate 50: player invulnerability window
+
+Implementation status: ready for human validation.
+
+Scope:
+
+- Keep Gate 49 multiple dummies, dummy line of sight, hit pushback, player damage flash, dummy chase/contact attack, phase loop, clear-gated exit, locked-door unlock/consumption, billboard pickups, hitscan shot, shot cooldown HUD, visible weapon flash, use feedback HUD, per-type counters, collectible rules, depth sorting and wall occlusion.
+- After the player takes contact damage, add a short invulnerability window.
+- During that window, further enemy contact should not drain additional HP.
+- Keep the existing HP, reset and damage-flash behavior.
+- Add no dodge move, armor system, healing item, knockback-on-player, sound, hardware sprite system or dynamic allocation.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 50`.
+- Subtitle shows `PLAYER I-FRAME`.
+- When one or more dummies touch the player, HP should drop by only one step, then pause before another valid hit can land.
+- The existing damage flash still appears on the accepted hit.
+- With two dummies crowding the player, HP should not melt instantly in consecutive frames.
+- Death reset, shooting, pickups, keys, exit gating and phase loop still work.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: pending.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 50`.
+- Confirm the subtitle shows `PLAYER I-FRAME`.
+- Let one dummy hit the player and confirm HP drops by one.
+- Stay in contact and confirm HP does not keep dropping every immediate frame.
+- Let two dummies crowd the player and confirm the same protection still holds.
+- Confirm another hit can land again after the short protection window ends.
+
+## Gate 51: dummy return to guard
+
+Implementation status: ready for human validation.
+
+Scope:
+
+- Keep Gate 50 player invulnerability window, multiple dummies, dummy line of sight, hit pushback, player damage flash, dummy chase/contact attack, phase loop, clear-gated exit, locked-door unlock/consumption, billboard pickups, hitscan shot, shot cooldown HUD, visible weapon flash, use feedback HUD, per-type counters, collectible rules, depth sorting and wall occlusion.
+- Store a simple guard position for each dummy.
+- When the dummy loses sight of the player, make it walk back toward its guard position.
+- Keep the return behavior grid-simple: no pathfinding around complex obstructions, no animation system, no sound and no dynamic allocation.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 51`.
+- Subtitle shows `DUMMY RETURN`.
+- A dummy that chases away from its starting position should walk back after losing line of sight or after the player leaves chase range.
+- Once back near its original spot, it should stop there.
+- Existing chase, attack, hit pushback, player i-frame, damage flash, death reset, shooting, pickups, keys, exit gating and phase loop still work.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: pending.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 51`.
+- Confirm the subtitle shows `DUMMY RETURN`.
+- Pull a dummy away from its start position.
+- Break line of sight or leave chase range and confirm it walks back.
+- Confirm it settles near its original guard position.
+
+## Gate 52: player hit knockback
+
+Implementation status: ready for human validation.
+
+Scope:
+
+- Keep Gate 51 dummy return to guard, player invulnerability window, multiple dummies, dummy line of sight, hit pushback, player damage flash, dummy chase/contact attack, phase loop, clear-gated exit, locked-door unlock/consumption, billboard pickups, hitscan shot, shot cooldown HUD, visible weapon flash, use feedback HUD, per-type counters, collectible rules, depth sorting and wall occlusion.
+- On an accepted dummy hit, apply a small knockback to the player away from the attacker.
+- Reuse existing collision so the player does not get pushed through walls.
+- Add no stun state, no player attack cancel, no sound, no sprite animation and no dynamic allocation.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 52`.
+- Subtitle shows `PLAYER PUSH`.
+- When a dummy lands a hit, the player view jolts backward a small step if space allows.
+- The push should respect walls and doors instead of clipping through them.
+- Existing i-frame, damage flash, death reset, dummy return/chase, shooting, pickups, keys, exit gating and phase loop still work.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: pending.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 52`.
+- Confirm the subtitle shows `PLAYER PUSH`.
+- Let a dummy hit the player and confirm the camera is pushed back slightly.
+- Confirm the push does not pass through a nearby wall or closed door.
+- Confirm repeated accepted hits still combine correctly with the existing invulnerability window.
+
+## Gate 53: dummy guard patrol
+
+Implementation status: ready for human validation.
+
+Scope:
+
+- Keep Gate 52 player hit knockback, dummy return to guard, player invulnerability window, multiple dummies, dummy line of sight, hit pushback, player damage flash, dummy chase/contact attack, phase loop, clear-gated exit, locked-door unlock/consumption, billboard pickups, hitscan shot, shot cooldown HUD, visible weapon flash, use feedback HUD, per-type counters, collectible rules, depth sorting and wall occlusion.
+- Add a very short patrol around each dummy's guard position when it is idle.
+- Keep patrol constrained to a tiny axis-aligned path near home.
+- Preserve existing chase and return behavior when the player is seen or lost.
+- Add no pathfinding, no animation set, no sound, no dynamic allocation.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 53`.
+- Subtitle shows `DUMMY PATROL`.
+- An idle dummy should drift back and forth near its guard position.
+- Once the dummy sees the player, it should leave patrol and chase as before.
+- After losing the player, it should return home and resume the short patrol.
+- Existing player push, i-frame, damage flash, death reset, shooting, pickups, keys, exit gating and phase loop still work.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: pending.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 53`.
+- Confirm the subtitle shows `DUMMY PATROL`.
+- Watch an idle dummy and confirm it patrols in a short local path.
+- Get spotted and confirm it stops patrolling and chases.
+- Break line of sight, let it return, and confirm patrol resumes.
+
+## Gate 54: dummy reacquire delay
+
+Implementation status: ready for human validation.
+
+Scope:
+
+- Keep Gate 53 dummy guard patrol, player hit knockback, dummy return to guard, player invulnerability window, multiple dummies, dummy line of sight, hit pushback, player damage flash, dummy chase/contact attack, phase loop, clear-gated exit, locked-door unlock/consumption, billboard pickups, hitscan shot, shot cooldown HUD, visible weapon flash, use feedback HUD, per-type counters, collectible rules, depth sorting and wall occlusion.
+- Add a short spotting delay when a dummy newly reacquires line of sight to the player.
+- During that brief alert window, the dummy may chase but should not land contact damage yet.
+- Reset the delay when line of sight is fully lost.
+- Add no alert animation, no sound, no pathfinding and no dynamic allocation.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 54`.
+- Subtitle shows `DUMMY SPOT DELAY`.
+- A dummy that freshly sees the player should not damage instantly on the same reacquire moment.
+- After the short delay, normal contact damage resumes.
+- Breaking line of sight and reappearing should trigger the delay again.
+- Existing patrol, return, player push, i-frame, damage flash, death reset, shooting, pickups, keys, exit gating and phase loop still work.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: pending.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 54`.
+- Confirm the subtitle shows `DUMMY SPOT DELAY`.
+- Peek into dummy line of sight at close range and confirm it does not hit instantly.
+- Stay exposed a moment longer and confirm it can then hit normally.
+- Break line of sight and reacquire again; confirm the delay repeats.
+
+## Gate 55: dummy separation
+
+Implementation status: ready for human validation.
+
+Scope:
+
+- Keep Gate 54 dummy reacquire delay, dummy guard patrol, player hit knockback, dummy return to guard, player invulnerability window, multiple dummies, dummy line of sight, hit pushback, player damage flash, dummy chase/contact attack, phase loop, clear-gated exit, locked-door unlock/consumption, billboard pickups, hitscan shot, shot cooldown HUD, visible weapon flash, use feedback HUD, per-type counters, collectible rules, depth sorting and wall occlusion.
+- Add a simple pairwise separation step so active dummies do not stack on top of each other as easily.
+- Keep the resolution small and local; respect wall collision.
+- Add no pathfinding, no flocking system, no animation set, no sound and no dynamic allocation.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 55`.
+- Subtitle shows `DUMMY SEPARATION`.
+- When two dummies converge on the player, they should avoid occupying the exact same spot and should spread a little.
+- The separation should not push them through walls or closed doors.
+- Existing reacquire delay, patrol, return, player push, i-frame, damage flash, death reset, shooting, pickups, keys, exit gating and phase loop still work.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: pending.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 55`.
+- Confirm the subtitle shows `DUMMY SEPARATION`.
+- Lure two dummies together and confirm they do not fully stack.
+- Confirm the separation still respects nearby walls and doors.
+
+## Gate 56: dummy last seen pursuit
+
+Implementation status: ready for human validation.
+
+Scope:
+
+- Keep Gate 55 dummy separation, dummy reacquire delay, dummy guard patrol, player hit knockback, dummy return to guard, player invulnerability window, multiple dummies, dummy line of sight, hit pushback, player damage flash, dummy chase/contact attack, phase loop, clear-gated exit, locked-door unlock/consumption, billboard pickups, hitscan shot, shot cooldown HUD, visible weapon flash, use feedback HUD, per-type counters, collectible rules, depth sorting and wall occlusion.
+- Store a simple last-seen player position for each dummy while it has line of sight.
+- After losing sight, make the dummy first walk toward that last-seen point before giving up and returning home.
+- Keep the behavior simple and grid-like; add no pathfinding around complex corners, no sound and no dynamic allocation.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 56`.
+- Subtitle shows `DUMMY LAST SEEN`.
+- If the player breaks line of sight after being seen, the dummy should continue toward the last place it saw the player.
+- If the player is no longer found there, the dummy should then return home and eventually resume patrol.
+- Existing separation, reacquire delay, patrol, return, player push, i-frame, damage flash, death reset, shooting, pickups, keys, exit gating and phase loop still work.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: pending.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 56`.
+- Confirm the subtitle shows `DUMMY LAST SEEN`.
+- Let a dummy see the player, then break line of sight around a corner.
+- Confirm it walks to the last seen spot first.
+- Confirm that after failing to find the player there, it returns home and resumes patrol.
+
+## Gate 57: dummy post-hit recovery
+
+Implementation status: ready for human validation.
+
+Scope:
+
+- Keep Gate 56 dummy last seen pursuit, dummy separation, dummy reacquire delay, dummy guard patrol, player hit knockback, dummy return to guard, player invulnerability window, multiple dummies, dummy line of sight, hit pushback, player damage flash, dummy chase/contact attack, phase loop, clear-gated exit, locked-door unlock/consumption, billboard pickups, hitscan shot, shot cooldown HUD, visible weapon flash, use feedback HUD, per-type counters, collectible rules, depth sorting and wall occlusion.
+- After a dummy lands a valid hit, add a short recovery pause before it resumes movement pressure.
+- Keep the existing attack cooldown and player i-frame; this recovery is additional dummy-side pacing.
+- Add no new animation set, no sound, no pathfinding and no dynamic allocation.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 57`.
+- Subtitle shows `DUMMY RECOVERY`.
+- After hitting the player, a dummy should hesitate briefly instead of immediately continuing full movement pressure.
+- In groups, this should make dummy pressure feel slightly more staggered and readable.
+- Existing last-seen pursuit, separation, reacquire delay, patrol, return, player push, i-frame, damage flash, death reset, shooting, pickups, keys, exit gating and phase loop still work.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: pending.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 57`.
+- Confirm the subtitle shows `DUMMY RECOVERY`.
+- Let a dummy hit the player and confirm it pauses briefly before resuming pressure.
+- Confirm repeated attacks still work after the recovery and existing cooldown windows.
+- Confirm the behavior still works when two dummies are active.
+
+## Gate 58: dummy leash range
+
+Implementation status: ready for human validation.
+
+Scope:
+
+- Keep Gate 57 dummy post-hit recovery, dummy last seen pursuit, dummy separation, dummy reacquire delay, dummy guard patrol, player hit knockback, dummy return to guard, player invulnerability window, multiple dummies, dummy line of sight, hit pushback, player damage flash, dummy chase/contact attack, phase loop, clear-gated exit, locked-door unlock/consumption, billboard pickups, hitscan shot, shot cooldown HUD, visible weapon flash, use feedback HUD, per-type counters, collectible rules, depth sorting and wall occlusion.
+- Add a simple leash limit from each dummy's guard position.
+- If a dummy is dragged too far from home, it should break off and head back instead of chasing forever.
+- Keep the leash grid-simple; add no pathfinding, no sound and no dynamic allocation.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 58`.
+- Subtitle shows `DUMMY LEASH`.
+- A dummy can still chase the player normally near its home area.
+- If pulled too far away, it should stop extending the chase and bias back toward home.
+- Existing recovery, last-seen pursuit, separation, patrol, return, player push, i-frame, damage flash, death reset, shooting, pickups, keys, exit gating and phase loop still work.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: pending.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 58`.
+- Confirm the subtitle shows `DUMMY LEASH`.
+- Lure a dummy away from its home area.
+- Confirm that after enough distance it stops extending the chase and heads back.
+- Confirm normal close-range chase still works near its guard region.
+
+## Gate 59: dummy wake range
+
+Implementation status: ready for human validation.
+
+Scope:
+
+- Keep Gate 58 dummy leash range, dummy post-hit recovery, dummy last seen pursuit, dummy separation, dummy reacquire delay, dummy guard patrol, player hit knockback, dummy return to guard, player invulnerability window, multiple dummies, dummy line of sight, hit pushback, player damage flash, dummy chase/contact attack, phase loop, clear-gated exit, locked-door unlock/consumption, billboard pickups, hitscan shot, shot cooldown HUD, visible weapon flash, use feedback HUD, per-type counters, collectible rules, depth sorting and wall occlusion.
+- Add a simple wake radius for each dummy.
+- Outside that radius, the dummy should stay in local idle behavior instead of trying to acquire the player.
+- Once the player enters the wake range, normal LOS, chase and combat logic can start.
+- Add no sound, no dynamic allocation and no new pathfinding.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 59`.
+- Subtitle shows `DUMMY WAKE`.
+- From far enough away, a dummy should remain in local patrol/guard behavior and not aggro yet.
+- After entering the wake radius, the dummy should begin normal perception, chase and attack behavior.
+- Existing leash, recovery, last-seen pursuit, separation, patrol, return, player push, i-frame, damage flash, death reset, shooting, pickups, keys, exit gating and phase loop still work.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: pending.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 59`.
+- Confirm the subtitle shows `DUMMY WAKE`.
+- Observe a dummy from outside the wake range and confirm it does not aggro yet.
+- Move closer until inside the wake range and confirm normal chase begins.
+
+## Gate 60: low HP warning
+
+Implementation status: ready for human validation.
+
+Scope:
+
+- Keep Gate 59 dummy wake range, dummy leash range, dummy post-hit recovery, dummy last seen pursuit, dummy separation, dummy reacquire delay, dummy guard patrol, player hit knockback, dummy return to guard, player invulnerability window, multiple dummies, dummy line of sight, hit pushback, player damage flash, dummy chase/contact attack, phase loop, clear-gated exit, locked-door unlock/consumption, billboard pickups, hitscan shot, shot cooldown HUD, visible weapon flash, use feedback HUD, per-type counters, collectible rules, depth sorting and wall occlusion.
+- Add a subtle low-health warning overlay when the player is at critical HP.
+- Keep it renderer-only; add no healing system, no audio warning and no gameplay rule change.
+
+Expected visual result:
+
+- Screen title shows `MEGALDOOM REWRITE GATE 60`.
+- Subtitle shows `LOW HP WARNING`.
+- At `HP 03` or `HP 02`, the view behaves as before.
+- At `HP 01`, the 3D view shows a visible warning accent even when the damage flash is not currently active.
+- The existing hit flash should still override the low-health warning momentarily when damage lands.
+- Combat, reset, pickups, keys, exit gating and phase loop still work as before.
+- No random noise, full-screen corruption or periodic one-second breakage.
+
+Build validation:
+
+- `.\tools\build-windows.ps1`
+- Result: pending.
+
+Human validation:
+
+- Run in BlastEm and ares.
+- Confirm the screen shows `MEGALDOOM REWRITE GATE 60`.
+- Confirm the subtitle shows `LOW HP WARNING`.
+- Drop to `HP 01` and confirm the warning overlay appears.
+- Take another hit attempt and confirm the normal damage flash still overrides that frame.

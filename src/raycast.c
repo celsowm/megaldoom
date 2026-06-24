@@ -2,13 +2,25 @@
 #include "fixed_math.h"
 #include "world_map.h"
 
-#define PLAYER_START_X (3 * FX_ONE + (FX_ONE / 2))
-#define PLAYER_START_Y (3 * FX_ONE + (FX_ONE / 2))
-#define PLAYER_START_ANGLE 0
 #define PLAYER_RADIUS 32
 #define FOV_ANGLE 48
 #define RAY_VIEW_TILE_H 12
 #define DDA_MAX_STEPS 16
+
+static const s32 PLAYER_START_X_BY_PHASE[2] = {
+    3 * FX_ONE + (FX_ONE / 2),
+    1 * FX_ONE + (FX_ONE / 2),
+};
+
+static const s32 PLAYER_START_Y_BY_PHASE[2] = {
+    3 * FX_ONE + (FX_ONE / 2),
+    1 * FX_ONE + (FX_ONE / 2),
+};
+
+static const u16 PLAYER_START_ANGLE_BY_PHASE[2] = {
+    0,
+    ANGLE_90,
+};
 
 static s16 g_ray_offsets[RAY_VIEW_COLS];
 static u16 g_ray_corrections[RAY_VIEW_COLS];
@@ -97,7 +109,15 @@ static u16 cast_single_ray(const PlayerState *player, u16 angle, u8 *hit_color, 
             const u16 wall_coord = (side == 0) ? (u16)(hit_y & (WORLD_CELL_SIZE - 1)) : (u16)(hit_x & (WORLD_CELL_SIZE - 1));
 
             *tex_x = (u8)(wall_coord >> 5);
-            *hit_color = (tile == WORLD_TILE_DOOR) ? 12 : ((side == 0) ? 4 : 5);
+            if (tile == WORLD_TILE_DOOR) {
+                *hit_color = 12;
+            } else if (tile == WORLD_TILE_LOCKED_DOOR) {
+                *hit_color = 13;
+            } else if (tile == WORLD_TILE_EXIT_SWITCH) {
+                *hit_color = 11;
+            } else {
+                *hit_color = (side == 0) ? 4 : 5;
+            }
             return (dist == 0) ? 1 : dist;
         }
     }
@@ -126,10 +146,12 @@ void raycast_init(void) {
     }
 }
 
-void player_init(PlayerState *player) {
-    player->x = PLAYER_START_X;
-    player->y = PLAYER_START_Y;
-    player->angle = PLAYER_START_ANGLE;
+void player_init(PlayerState *player, u16 phase_index) {
+    const u16 phase = (u16)(phase_index & 1);
+
+    player->x = PLAYER_START_X_BY_PHASE[phase];
+    player->y = PLAYER_START_Y_BY_PHASE[phase];
+    player->angle = PLAYER_START_ANGLE_BY_PHASE[phase];
 }
 
 void player_try_move(PlayerState *player, s16 forward, s16 strafe) {
@@ -139,6 +161,19 @@ void player_try_move(PlayerState *player, s16 forward, s16 strafe) {
     const s16 side_y = fx_sin((u16)(player->angle + ANGLE_90));
     const s32 dx = (((s32)dir_x * forward) + ((s32)side_x * strafe)) >> FX_SHIFT;
     const s32 dy = (((s32)dir_y * forward) + ((s32)side_y * strafe)) >> FX_SHIFT;
+    const s32 next_x = player->x + dx;
+    const s32 next_y = player->y + dy;
+
+    if (!is_blocked_at(next_x, player->y)) {
+        player->x = next_x;
+    }
+
+    if (!is_blocked_at(player->x, next_y)) {
+        player->y = next_y;
+    }
+}
+
+void player_apply_world_push(PlayerState *player, s32 dx, s32 dy) {
     const s32 next_x = player->x + dx;
     const s32 next_y = player->y + dy;
 

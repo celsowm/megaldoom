@@ -1,22 +1,38 @@
 #include "world_map.h"
 
-static const u8 INITIAL_WORLD_MAP[WORLD_MAP_H][WORLD_MAP_W] = {
-    {1, 1, 1, 1, 1, 1, 1, 1},
-    {1, 0, 0, 0, 0, 0, 2, 1},
-    {1, 0, 0, 0, 1, 0, 0, 1},
-    {1, 0, 0, 0, 1, 0, 0, 1},
-    {1, 0, 1, 0, 0, 0, 0, 1},
-    {1, 0, 1, 0, 0, 2, 0, 1},
-    {1, 0, 0, 0, 0, 0, 0, 1},
-    {1, 1, 1, 1, 1, 1, 1, 1},
+static const u8 INITIAL_WORLD_MAPS[2][WORLD_MAP_H][WORLD_MAP_W] = {
+    {
+        {1, 1, 1, 1, 1, 1, 1, 1},
+        {1, 0, 0, 0, 0, 4, 3, 1},
+        {1, 0, 0, 0, 1, 0, 0, 1},
+        {1, 0, 0, 0, 1, 0, 0, 1},
+        {1, 0, 1, 0, 0, 0, 0, 1},
+        {1, 0, 1, 0, 0, 2, 0, 1},
+        {1, 0, 0, 0, 0, 0, 0, 1},
+        {1, 1, 1, 1, 1, 1, 1, 1},
+    },
+    {
+        {1, 1, 1, 1, 1, 1, 1, 1},
+        {1, 0, 0, 0, 0, 0, 4, 1},
+        {1, 0, 1, 1, 0, 1, 0, 1},
+        {1, 0, 0, 0, 0, 1, 0, 1},
+        {1, 3, 1, 0, 0, 0, 0, 1},
+        {1, 0, 1, 0, 1, 0, 0, 1},
+        {1, 0, 0, 0, 1, 2, 0, 1},
+        {1, 1, 1, 1, 1, 1, 1, 1},
+    }
 };
 
 static u8 g_world_map[WORLD_MAP_H][WORLD_MAP_W];
+static u8 g_world_map_origin[WORLD_MAP_H][WORLD_MAP_W];
 
-void world_map_init(void) {
+void world_map_init(u16 phase_index) {
+    const u16 phase = (u16)(phase_index & 1);
+
     for (u16 y = 0; y < WORLD_MAP_H; y++) {
         for (u16 x = 0; x < WORLD_MAP_W; x++) {
-            g_world_map[y][x] = INITIAL_WORLD_MAP[y][x];
+            g_world_map[y][x] = INITIAL_WORLD_MAPS[phase][y][x];
+            g_world_map_origin[y][x] = INITIAL_WORLD_MAPS[phase][y][x];
         }
     }
 }
@@ -33,9 +49,13 @@ bool world_map_is_solid(s16 cell_x, s16 cell_y) {
     return world_map_get_tile(cell_x, cell_y) != WORLD_TILE_EMPTY;
 }
 
-bool world_map_toggle_door_in_front(s32 x, s32 y, u16 angle) {
+DoorActionResult world_map_toggle_door_in_front(s32 x, s32 y, u16 angle, bool has_key, bool *consumed_key) {
     const s16 dir_x = fx_cos(angle);
     const s16 dir_y = fx_sin(angle);
+
+    if (consumed_key != NULL) {
+        *consumed_key = FALSE;
+    }
 
     for (s32 dist = FX_ONE / 2; dist <= FX_ONE * 2; dist += FX_ONE / 2) {
         const s32 probe_x = x + (((s32)dir_x * dist) >> FX_SHIFT);
@@ -47,12 +67,35 @@ bool world_map_toggle_door_in_front(s32 x, s32 y, u16 angle) {
             continue;
         }
 
-        if (INITIAL_WORLD_MAP[cell_y][cell_x] == WORLD_TILE_DOOR) {
+        if (g_world_map_origin[cell_y][cell_x] == WORLD_TILE_DOOR) {
             g_world_map[cell_y][cell_x] =
                 (g_world_map[cell_y][cell_x] == WORLD_TILE_DOOR) ? WORLD_TILE_EMPTY : WORLD_TILE_DOOR;
-            return TRUE;
+            return DOOR_ACTION_TOGGLED;
+        }
+
+        if (g_world_map_origin[cell_y][cell_x] == WORLD_TILE_EXIT_SWITCH) {
+            return DOOR_ACTION_EXIT;
+        }
+
+        if (g_world_map_origin[cell_y][cell_x] == WORLD_TILE_LOCKED_DOOR) {
+            if (!has_key) {
+                return DOOR_ACTION_LOCKED;
+            }
+
+            if (g_world_map[cell_y][cell_x] == WORLD_TILE_LOCKED_DOOR) {
+                g_world_map_origin[cell_y][cell_x] = WORLD_TILE_DOOR;
+                g_world_map[cell_y][cell_x] = WORLD_TILE_EMPTY;
+                if (consumed_key != NULL) {
+                    *consumed_key = TRUE;
+                }
+                return DOOR_ACTION_UNLOCKED;
+            } else {
+                g_world_map[cell_y][cell_x] =
+                    (g_world_map[cell_y][cell_x] == WORLD_TILE_DOOR) ? WORLD_TILE_EMPTY : WORLD_TILE_DOOR;
+                return DOOR_ACTION_TOGGLED;
+            }
         }
     }
 
-    return FALSE;
+    return DOOR_ACTION_NONE;
 }

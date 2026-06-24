@@ -37,8 +37,12 @@ u16 player_controller_update(PlayerState *player) {
         result |= PLAYER_CONTROL_CHANGED;
     }
 
-    if (((joy & BUTTON_B) != 0) && ((previous_joy & BUTTON_B) == 0)) {
+    if (((joy & BUTTON_START) != 0) && ((previous_joy & BUTTON_START) == 0)) {
         result |= PLAYER_CONTROL_USE;
+    }
+
+    if (((joy & BUTTON_B) != 0) && ((previous_joy & BUTTON_B) == 0)) {
+        result |= PLAYER_CONTROL_FIRE;
     }
 
     previous_joy = joy;
