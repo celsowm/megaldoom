@@ -3,7 +3,7 @@
 
 #include <genesis.h>
 
-#define RAY_VIEW_COLS 16
+#define RAY_VIEW_COLS 32
 
 typedef struct {
     s32 x;
@@ -13,6 +13,7 @@ typedef struct {
 
 typedef struct {
     u16 height;
+    u16 depth;
     u8 tex_x;
     u8 color;
 } RayColumn;

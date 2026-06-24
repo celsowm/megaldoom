@@ -28,3 +28,27 @@ Usage policy:
 - Conversion script: `tools/convert-freedoom-assets.ps1`
 - Output format: 8x8 palette-index texture using the current 16-color prototype palette.
 - Source commit: `d14dbbee3b6fbfb2c11cdb65eb61216e86d4ee85`
+
+### FREEDOOM_BILLBOARD_BONUS_TEXTURE
+
+- Source: `.extenals/freedoom/sprites/bon1a0.png`
+- Generated file: `src/generated_billboard_assets.h`
+- Conversion script: `tools/convert-freedoom-assets.ps1 -BillboardOnly`
+- Output format: 8x8 palette-index texture using palette index 0 as transparent.
+- Source commit: `d14dbbee3b6fbfb2c11cdb65eb61216e86d4ee85`
+
+### FREEDOOM_BILLBOARD_KEY_TEXTURE
+
+- Source: `.extenals/freedoom/sprites/bkeya0.png`
+- Generated file: `src/generated_billboard_assets.h`
+- Conversion script: `tools/convert-freedoom-assets.ps1 -BillboardOnly`
+- Output format: 8x8 palette-index texture using palette index 0 as transparent.
+- Source commit: `d14dbbee3b6fbfb2c11cdb65eb61216e86d4ee85`
+
+### FREEDOOM_BILLBOARD_DECOR_TEXTURE
+
+- Source: `.extenals/freedoom/sprites/bar1a0.png`
+- Generated file: `src/generated_billboard_assets.h`
+- Conversion script: `tools/convert-freedoom-assets.ps1 -BillboardOnly`
+- Output format: 8x8 palette-index texture using palette index 0 as transparent.
+- Source commit: `d14dbbee3b6fbfb2c11cdb65eb61216e86d4ee85`

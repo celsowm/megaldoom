@@ -4,6 +4,9 @@
 #include <genesis.h>
 #include "raycast.h"
 
-bool player_controller_update(PlayerState *player);
+#define PLAYER_CONTROL_CHANGED 0x0001
+#define PLAYER_CONTROL_USE 0x0002
+
+u16 player_controller_update(PlayerState *player);
 
 #endif
