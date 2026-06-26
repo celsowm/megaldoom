@@ -1,15 +1,15 @@
 #include "player_controller.h"
 #include "fixed_math.h"
 
-#define TURN_STEP 6
-#define MOVE_STEP 90
-#define STRAFE_STEP 72
+#define TURN_STEP 3
+#define MOVE_STEP 30
+#define STRAFE_STEP 24
 
 u16 player_controller_update(PlayerState *player, u16 elapsed_frames) {
     static u16 previous_joy = 0;
     const u16 joy = JOY_readJoypad(JOY_1);
-    // Scale per-frame steps by the number of vblanks elapsed since the last update so
-    // movement speed stays constant even when the render loop drops below 60fps.
+    // Scale per-frame steps by the caller-provided simulation cadence. Keep this
+    // stable to avoid converting occasional render delays into visible camera jumps.
     const s16 turn = (s16)(TURN_STEP * elapsed_frames);
     const s16 move_step = (s16)(MOVE_STEP * elapsed_frames);
     const s16 strafe_step = (s16)(STRAFE_STEP * elapsed_frames);

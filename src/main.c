@@ -101,8 +101,8 @@ int main(bool hard) {
         u16 control = 0;
         DoorActionResult action_status = g_hud.action_status;
         BillboardShotResult shot_status = g_hud.shot_status;
-        // Real vblanks elapsed since last iteration: keeps movement time-based even if
-        // the render overruns a frame. Clamped so a long stall can't produce a huge jump.
+        // Real vblanks elapsed since last iteration. Keep it clamped for future diagnostics,
+        // but do not feed render stalls back into player control as visible camera jumps.
         const u32 cur_vtimer = vtimer;
         u16 elapsed_frames = (u16)(cur_vtimer - prev_vtimer);
 
@@ -112,6 +112,7 @@ int main(bool hard) {
         } else if (elapsed_frames > 4) {
             elapsed_frames = 4;
         }
+        (void)elapsed_frames;
 
         if (shot_cooldown > 0) {
             shot_cooldown--;
@@ -130,7 +131,7 @@ int main(bool hard) {
 
         JOY_update();
         if (!level_cleared) {
-            control = player_controller_update(&g_player, elapsed_frames);
+            control = player_controller_update(&g_player, TARGET_FRAME_VSYNCS);
         } else if ((JOY_readJoypad(JOY_1) & BUTTON_START) != 0) {
             phase_index = (u16)((phase_index + 1) & 1);
             reset_level(phase_index, &level_cleared, &shot_cooldown, &player_health, &frame);
