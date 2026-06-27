@@ -17,6 +17,12 @@
 // reliably finish within one frame at the current RAY_COL_STRIDE.
 #define TARGET_FRAME_VSYNCS 1
 
+// Perf diagnostics overlay (FPS + CPU load + frame-load cursor). Set to 0 (or
+// build with -DDEBUG_PERF=0) for clean release builds.
+#ifndef DEBUG_PERF
+#define DEBUG_PERF 1
+#endif
+
 static PlayerState g_player;
 static RayColumn g_ray_columns[RAY_VIEW_COLS];
 static u16 g_weapon_flash = 0;
@@ -96,6 +102,11 @@ int main(bool hard) {
     raycast_init();
     renderer_init();
     reset_level(phase_index, &level_cleared, &shot_cooldown, &player_health, &frame);
+
+#if DEBUG_PERF
+    // Scanline cursor (sprite 0): top = 0% load, bottom = 100% load, averaged.
+    SYS_showFrameLoad(TRUE);
+#endif
 
     while (TRUE) {
         u16 control = 0;
@@ -213,6 +224,14 @@ int main(bool hard) {
 
         sync_hud(frame, phase_index, player_health, shot_cooldown, action_status, shot_status, level_cleared);
         renderer_draw_hud(&g_hud);
+
+#if DEBUG_PERF
+        // Once per iteration (SYS_getFPS counts calls/sec). Row 0 of BG_A is free.
+        // Clear first so a shrinking number (e.g. "426%" -> "25%") leaves no junk.
+        VDP_clearText(0, 0, 20);
+        VDP_showFPS(FALSE, 1, 0);
+        VDP_showCPULoad(10, 0);
+#endif
 
         if (redraw) {
             render_current_view(player_health);

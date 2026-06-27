@@ -86,6 +86,18 @@ static void init_view_tilemap(void) {
             g_view_tilemap[index] = TILE_ATTR_FULL(PAL0, FALSE, FALSE, FALSE, VIEW_TILE_BASE + index);
         }
     }
+
+    // The view tilemap is static (each cell points at a fixed tile index); only the
+    // tile pixel data changes per frame. Upload the map once here so the per-frame
+    // path can skip the redundant CPU tilemap copy.
+    VDP_setTileMapDataRect(BG_B,
+                           g_view_tilemap,
+                           VIEW_TILEMAP_X,
+                           VIEW_TILEMAP_Y,
+                           VIEW_TILE_W,
+                           VIEW_TILE_H,
+                           VIEW_TILE_W,
+                           CPU);
 }
 
 void set_view_pair_tile(u16 x, u16 y, u8 left_color, u8 right_color) {
