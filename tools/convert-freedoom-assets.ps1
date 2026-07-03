@@ -124,14 +124,38 @@ $palette = @(
     @(0x4C, 0x60, 0x28)
 )
 
-function Get-NearestPaletteIndex([System.Drawing.Color]$Color) {
+# Dedicated 16-colour palette for the Doom-guy portrait (rendered on PAL2). The
+# shared world palette turns skin gold; this ramp keeps proper flesh/brown/red
+# tones. Index 1 is the recessed-slot fill so the block blends into the bar.
+# Keep in sync with the PAL2 load in renderer.c (emitted as FREEDOOM_FACE_PALETTE).
+$facePalette = @(
+    @(0x00, 0x00, 0x00),
+    @(0x38, 0x30, 0x30),
+    @(0x18, 0x10, 0x0C),
+    @(0x40, 0x28, 0x18),
+    @(0x60, 0x3C, 0x24),
+    @(0x88, 0x54, 0x30),
+    @(0xB0, 0x74, 0x48),
+    @(0xD8, 0x9C, 0x68),
+    @(0xF0, 0xC8, 0x98),
+    @(0x60, 0x20, 0x18),
+    @(0x98, 0x28, 0x18),
+    @(0x30, 0x20, 0x14),
+    @(0x58, 0x3C, 0x24),
+    @(0xC0, 0xC0, 0xB8),
+    @(0x80, 0x78, 0x70),
+    @(0xF0, 0xE8, 0xD8)
+)
+$FacePaletteFillIndex = 1
+
+function Get-NearestIndexInPalette([System.Drawing.Color]$Color, $Palette) {
     $bestIndex = 0
     $bestDistance = [int]::MaxValue
 
-    for ($i = 0; $i -lt $palette.Count; $i++) {
-        $dr = [int]$Color.R - $palette[$i][0]
-        $dg = [int]$Color.G - $palette[$i][1]
-        $db = [int]$Color.B - $palette[$i][2]
+    for ($i = 0; $i -lt $Palette.Count; $i++) {
+        $dr = [int]$Color.R - $Palette[$i][0]
+        $dg = [int]$Color.G - $Palette[$i][1]
+        $db = [int]$Color.B - $Palette[$i][2]
         $distance = ($dr * $dr) + ($dg * $dg) + ($db * $db)
 
         if ($distance -lt $bestDistance) {
@@ -141,6 +165,10 @@ function Get-NearestPaletteIndex([System.Drawing.Color]$Color) {
     }
 
     return $bestIndex
+}
+
+function Get-NearestPaletteIndex([System.Drawing.Color]$Color) {
+    return Get-NearestIndexInPalette $Color $palette
 }
 
 function Convert-Image([string]$Path, [int]$Width, [int]$Height, [bool]$UseAlphaTransparency) {
@@ -211,7 +239,9 @@ function Convert-ImageTiles([string]$Path, [int]$Width, [int]$Height) {
 }
 
 function Get-WeaponPaletteIndex([System.Drawing.Color]$Color, [bool]$FireFrame) {
-    if (($Color.A -lt 128) -or (($Color.R -lt 12) -and ($Color.G -lt 12) -and ($Color.B -lt 12))) {
+    # Transparency is decided ONLY by alpha. Dark opaque pixels (the pistol's
+    # metal/shadow) must stay solid, otherwise the gun renders see-through.
+    if ($Color.A -lt 128) {
         return 0
     }
 
@@ -219,9 +249,11 @@ function Get-WeaponPaletteIndex([System.Drawing.Color]$Color, [bool]$FireFrame) 
         return 11
     }
 
+    # Warm/skin-dominant (the pistol hand). Map to BROWN tones (13 lit, 10 shadow),
+    # never to the saturated red index 12 - a shadowed hand was turning red.
     if (($Color.R -gt $Color.G + 24) -and ($Color.R -gt $Color.B + 32)) {
         if ($Color.R -gt 160) { return 13 }
-        return 12
+        return 10
     }
 
     if (($Color.B -gt $Color.R + 12) -and ($Color.B -gt $Color.G + 8)) {
@@ -333,20 +365,37 @@ function Convert-HudTiles([string]$Path) {
     return $tiles
 }
 
-# Doom-guy face (STFST*). Packs the sprite into a 24x32 (3x4 tile) block so it
+# Doom-guy face (STF*). Packs each sprite into a 24x32 (3x4 tile) block so it
 # drops straight into the recessed face slot of the status bar. The sprite is
-# top-aligned; rows below it are filled with the slot's recessed panel colour
-# (palette index 3). Unlike Convert-HudTiles this keeps skin/red/brown indices
-# (no luminance desaturation) so the portrait does not turn grey.
+# CENTERED in the block; surrounding pixels are filled with the slot's recessed
+# panel colour (palette index 3). Unlike Convert-HudTiles this keeps
+# skin/red/brown indices (no luminance desaturation) so the portrait stays
+# coloured. Convert-FaceFrame bakes one sprite -> 12 tile strings.
 $FaceTileW = 3
 $FaceTileH = 4
-$FaceBgIndex = 3
+$FaceBgIndex = $FacePaletteFillIndex
 
-function Convert-FaceTiles([string]$Path) {
+# Animated portrait frames. Order MUST match the index #defines emitted below and
+# the compute_face_frame() selector in renderer_hud.c:
+#   15x STFST{bracket}{dir}  bracket 0..4 (high->low HP), dir 0=right 1=centre 2=left
+#    5x STFOUCH{bracket}     pain grimace per HP bracket
+#    1x STFDEAD0             dead
+$FaceGraphicsDir = "res\originaldoom\graphics"
+$FaceFrameNames = New-Object System.Collections.Generic.List[string]
+for ($b = 0; $b -lt 5; $b++) {
+    for ($d = 0; $d -lt 3; $d++) { $FaceFrameNames.Add("STFST$b$d") }
+}
+for ($b = 0; $b -lt 5; $b++) { $FaceFrameNames.Add("STFOUCH$b") }
+$FaceFrameNames.Add("STFDEAD0")
+
+function Convert-FaceFrame([string]$Path) {
     $image = [System.Drawing.Bitmap]::new($Path)
     $tiles = New-Object System.Collections.Generic.List[string]
     $blockW = $FaceTileW * 8
     $blockH = $FaceTileH * 8
+    # Centre the sprite inside the 24x32 block (clamped so it never starts < 0).
+    $offsetX = [Math]::Max(0, [int](($blockW - $image.Width) / 2))
+    $offsetY = [Math]::Max(0, [int](($blockH - $image.Height) / 2))
 
     try {
         for ($tileY = 0; $tileY -lt $FaceTileH; $tileY++) {
@@ -360,11 +409,14 @@ function Convert-FaceTiles([string]$Path) {
                         $x = ($tileX * 8) + $col
                         $y = ($tileY * 8) + $row
                         $index = $FaceBgIndex
+                        $srcX = $x - $offsetX
+                        $srcY = $y - $offsetY
 
-                        if (($x -lt $image.Width) -and ($y -lt $image.Height)) {
-                            $pixel = $image.GetPixel($x, $y)
+                        if (($srcX -ge 0) -and ($srcY -ge 0) -and
+                            ($srcX -lt $image.Width) -and ($srcY -lt $image.Height)) {
+                            $pixel = $image.GetPixel($srcX, $srcY)
                             if ($pixel.A -ge 128) {
-                                $index = Get-NearestPaletteIndex $pixel
+                                $index = Get-NearestIndexInPalette $pixel $facePalette
                             }
                         }
 
@@ -384,6 +436,20 @@ function Convert-FaceTiles([string]$Path) {
     return $tiles
 }
 
+function Convert-FaceFrames() {
+    $allTiles = New-Object System.Collections.Generic.List[string]
+    foreach ($name in $FaceFrameNames) {
+        $framePath = Join-Path $Root (Join-Path $FaceGraphicsDir "$name.png")
+        if (-not (Test-Path $framePath)) {
+            throw "Face frame source not found: $framePath"
+        }
+        foreach ($tile in (Convert-FaceFrame $framePath)) {
+            $allTiles.Add($tile)
+        }
+    }
+    return $allTiles
+}
+
 $wallRows = Convert-Image $SourcePath 16 16 $false
 $wallBrownRows = Convert-Image $WallBrownSourcePath 16 16 $false
 $wallGrayRows = Convert-Image $WallGraySourcePath 16 16 $false
@@ -396,7 +462,11 @@ $switchRows = Convert-Image $SwitchSourcePath 16 16 $false
 $weaponIdleRows = Convert-WeaponOverlay $WeaponIdleSourcePath $false
 $weaponFireRows = Convert-WeaponOverlay $WeaponFireSourcePath $true
 $hudTiles = Convert-HudTiles $HudSourcePath
-$faceTiles = Convert-FaceTiles $FaceSourcePath
+$faceTiles = Convert-FaceFrames
+$faceFrameCount = $FaceFrameNames.Count
+$facePaletteRgb = ($facePalette | ForEach-Object {
+    "0x{0:X2}{1:X2}{2:X2}" -f $_[0], $_[1], $_[2]
+}) -join ", "
 $billboardRows = Convert-Image $BillboardSourcePath 16 16 $true
 $billboardKeyRows = Convert-Image $BillboardKeySourcePath 16 16 $true
 $billboardDecorRows = Convert-Image $BillboardDecorSourcePath 16 16 $true
@@ -474,19 +544,35 @@ $hudContent = @"
 #define FREEDOOM_WEAPON_DRAW_H $WeaponDrawH
 #define FREEDOOM_FACE_TILE_W $FaceTileW
 #define FREEDOOM_FACE_TILE_H $FaceTileH
-#define FREEDOOM_FACE_TILE_COUNT $($FaceTileW * $FaceTileH)
+#define FREEDOOM_FACE_FRAME_TILES $($FaceTileW * $FaceTileH)
+#define FREEDOOM_FACE_FRAME_COUNT $faceFrameCount
+#define FREEDOOM_FACE_TILE_COUNT $($FaceTileW * $FaceTileH * $faceFrameCount)
+
+// Portrait frame indices (order matches the baker's frame list and
+// compute_face_frame() in renderer_hud.c). Bracket 0 = high HP, 4 = low HP.
+// FACE_FRAME_ST(bracket, dir): dir 0 = look right, 1 = centre, 2 = look left.
+#define FACE_FRAME_ST(bracket, dir) (((bracket) * 3) + (dir))
+#define FACE_FRAME_OUCH(bracket)    (15 + (bracket))
+#define FACE_FRAME_DEAD             20
 
 // Generated by tools/convert-freedoom-assets.ps1.
 // HUD source: $relativeHudSource
 // Weapon idle source: $relativeWeaponIdleSource
 // Weapon fire source: $relativeWeaponFireSource
-// Face source: $relativeFaceSource
+// Face source: $relativeFaceSource (animated set baked from res/originaldoom/graphics/STF*.png)
 // Generated at: $generatedAt
 static const u32 FREEDOOM_HUD_TILES[FREEDOOM_HUD_TILE_COUNT][8] = {
 $($hudTiles -join ",`r`n")
 };
 
-// Doom-guy portrait for the status-bar face slot (3x4 tiles, top-aligned).
+// Dedicated 16-colour palette for the portrait (load into PAL2). Skin/brown/red
+// ramp so the face does not turn gold under the shared world palette. Index 1 is
+// the recessed-slot fill. Values are 0xRRGGBB; pass through RGB24_TO_VDPCOLOR.
+static const u32 FREEDOOM_FACE_PALETTE[16] = { $facePaletteRgb };
+
+// Doom-guy animated portrait: $faceFrameCount frames x $($FaceTileW * $FaceTileH) tiles, laid out
+// consecutively. Frame f occupies tiles [f*12 .. f*12+11]; centred in a 3x4 block.
+// Rendered with PAL2 (FREEDOOM_FACE_PALETTE).
 static const u32 FREEDOOM_FACE_TILES[FREEDOOM_FACE_TILE_COUNT][8] = {
 $($faceTiles -join ",`r`n")
 };

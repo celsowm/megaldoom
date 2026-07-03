@@ -40,24 +40,59 @@ static void draw_hud_backdrop(void) {
     }
 }
 
-static void draw_hud_face(void) {
-    // Blit the 3x4-tile Doom-guy portrait over the recessed face slot of the bar.
+// Remembers which portrait frame is currently on the tilemap so the per-frame
+// path only rewrites the 12 face tiles when the expression actually changes.
+static u16 s_last_face_frame = 0xFFFF;
+
+static void draw_hud_face(u16 frame_index) {
+    if (frame_index == s_last_face_frame) {
+        return;
+    }
+    s_last_face_frame = frame_index;
+
+    // Each portrait frame is a consecutive 3x4-tile block inside FREEDOOM_FACE_TILES.
+    const u16 base = (u16)(FACE_TILE_BASE + (frame_index * FREEDOOM_FACE_FRAME_TILES));
     for (u16 y = 0; y < FREEDOOM_FACE_TILE_H; y++) {
         for (u16 x = 0; x < FREEDOOM_FACE_TILE_W; x++) {
-            const u16 tile_id = (u16)(FACE_TILE_BASE + (y * FREEDOOM_FACE_TILE_W) + x);
+            const u16 tile_id = (u16)(base + (y * FREEDOOM_FACE_TILE_W) + x);
             VDP_setTileMapXY(BG_B,
-                             TILE_ATTR_FULL(PAL0, FALSE, FALSE, FALSE, tile_id),
+                             TILE_ATTR_FULL(PAL2, FALSE, FALSE, FALSE, tile_id),
                              (u16)(HUD_FACE_TILE_X + x),
                              (u16)(HUD_FACE_TILE_Y + y));
         }
     }
 }
 
+// Pick the portrait expression: dead -> pain -> HP bracket with an idle glance
+// cycle. Bracket 0 = high HP .. 4 = near death, derived from health percent.
+static u16 compute_face_frame(const RendererHudState *state) {
+    u16 hp = state->health_percent;
+    if (hp > 100) {
+        hp = 100;
+    }
+    u16 bracket = (u16)((100 - hp) / 20);
+    if (bracket > 4) {
+        bracket = 4;
+    }
+
+    if (hp == 0) {
+        return (u16)FACE_FRAME_DEAD;
+    }
+    if (state->portrait_state == 1) {
+        // Just took damage: grimace for this HP bracket.
+        return (u16)FACE_FRAME_OUCH(bracket);
+    }
+
+    // Idle: glance around now and then (mostly forward), like the original HUD.
+    static const u8 dir_table[4] = {1, 0, 1, 2};
+    const u16 dir = dir_table[(state->frame >> 4) & 3];
+    return (u16)FACE_FRAME_ST(bracket, dir);
+}
+
 void renderer_draw_static_screen(void) {
     draw_hud_backdrop();
-    draw_hud_face();
-    VDP_drawText(RENDERER_VERSION_TEXT, 7, 1);
-    VDP_drawText("FREEDOOM VISUAL PASS", 10, 3);
+    s_last_face_frame = 0xFFFF;
+    draw_hud_face((u16)FACE_FRAME_ST(0, 1));
 }
 
 void renderer_draw_hud(const RendererHudState *state) {
@@ -81,4 +116,6 @@ void renderer_draw_hud(const RendererHudState *state) {
     VDP_drawText(text, HUD_ARMOR_X, HUD_NUM_ROW);
 
     VDP_setTextPalette(PAL0);
+
+    draw_hud_face(compute_face_frame(state));
 }

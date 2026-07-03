@@ -308,8 +308,9 @@ def _looks_like_picture(wad, lump):
 def decode_picture(wad, lump, palette):
     """Decode a Doom column-format picture lump into an RGBA PIL Image.
 
-    Colour index 0 is treated as transparent.  Returns None if the lump cannot
-    be decoded (e.g. zero width/height or corrupt column data).
+    Transparency comes from areas no post covers (they keep alpha 0); every
+    pixel inside a post is opaque. Returns None if the lump cannot be decoded
+    (e.g. zero width/height or corrupt column data).
     """
     data = wad.data
     base = lump.filepos
@@ -362,8 +363,12 @@ def decode_picture(wad, lump, palette):
                 if top_delta + i < height:
                     color_index = data[cursor]
                     r, g, b = palette[color_index]
-                    alpha = 0 if color_index == 0 else 255
-                    px[x, top_delta + i] = (r, g, b, alpha)
+                    # Every pixel INSIDE a post is opaque, even colour index 0
+                    # (a real black in Doom's palette). Transparency comes only
+                    # from areas no post covers, which keep the canvas's alpha 0.
+                    # Keying index 0 as transparent punched holes through dark
+                    # sprite pixels (e.g. the pistol glove, face outlines).
+                    px[x, top_delta + i] = (r, g, b, 255)
                 cursor += 1
             # Skip the trailing unused padding byte.
             cursor += 1

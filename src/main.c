@@ -5,6 +5,7 @@
 #include "raycast.h"
 #include "renderer.h"
 #include "world_map.h"
+#include "resources.h"
 
 #define SHOT_COOLDOWN_FRAMES 12
 #define WEAPON_FLASH_FRAMES 2
@@ -22,7 +23,7 @@
 // Perf diagnostics overlay (FPS + CPU load + frame-load cursor). Set to 0 (or
 // build with -DDEBUG_PERF=0) for clean release builds.
 #ifndef DEBUG_PERF
-#define DEBUG_PERF 1
+#define DEBUG_PERF 0
 #endif
 
 static PlayerState g_player;
@@ -105,6 +106,14 @@ int main(bool hard) {
     fx_init_tables();
     raycast_init();
     renderer_init();
+
+    // Sound: load the XGM2 Z80 driver and start background music. XGM2 has
+    // reinforced DMA contention protection, important given MegalDoom's heavy
+    // vblank tile-upload DMA. The VGM is converted to XGM2 by rescomp at build
+    // time (see res/resources.res).
+    Z80_loadDriver(Z80_DRIVER_XGM2, TRUE);
+    XGM2_play(test_music);
+
     reset_level(phase_index, &level_cleared, &shot_cooldown, &player_health, &frame);
 
 #if DEBUG_PERF
