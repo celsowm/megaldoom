@@ -3,19 +3,29 @@
 #include "generated_billboard_assets.h"
 #include "generated_hud_assets.h"
 
-static const u8 (*get_billboard_texture(u8 visual_id))[16] {
+// Flat billboard-texture descriptor. Storing the pixels as a plain const u8* (a
+// [rows][cols] array decays cleanly) lets one draw loop sample sprites of any size:
+// the enemy is 24x48, every other billboard stays 16x16. Index as pixels[y*w + x].
+typedef struct {
+    const u8 *pixels;
+    u8 w;
+    u8 h;
+} BillboardTex;
+
+static BillboardTex get_billboard_texture(u8 visual_id) {
     switch (visual_id) {
         case BILLBOARD_VISUAL_DUMMY_DAMAGED:
         case BILLBOARD_VISUAL_DUMMY:
-            return FREEDOOM_BILLBOARD_ENEMY_TEXTURE;
+            return (BillboardTex){(const u8 *)FREEDOOM_BILLBOARD_ENEMY_TEXTURE,
+                                  FREEDOOM_BILLBOARD_ENEMY_W, FREEDOOM_BILLBOARD_ENEMY_H};
         case BILLBOARD_VISUAL_DECOR_DAMAGED:
         case BILLBOARD_VISUAL_DECOR:
-            return FREEDOOM_BILLBOARD_DECOR_TEXTURE;
+            return (BillboardTex){(const u8 *)FREEDOOM_BILLBOARD_DECOR_TEXTURE, 16, 16};
         case BILLBOARD_VISUAL_KEY:
-            return FREEDOOM_BILLBOARD_KEY_TEXTURE;
+            return (BillboardTex){(const u8 *)FREEDOOM_BILLBOARD_KEY_TEXTURE, 16, 16};
         case BILLBOARD_VISUAL_BONUS:
         default:
-            return FREEDOOM_BILLBOARD_BONUS_TEXTURE;
+            return (BillboardTex){(const u8 *)FREEDOOM_BILLBOARD_BONUS_TEXTURE, 16, 16};
     }
 }
 
@@ -27,16 +37,15 @@ static u8 remap_damaged_billboard_texel(u8 texel) {
     return (texel & 1) ? 12 : 13;
 }
 
-static u8 remap_dummy_billboard_texel(u8 texel, bool damaged) {
+// Damaged-hit flash for the enemy: shift toward red so a shot reads clearly. The
+// healthy enemy is drawn with its real converted colors (no remap) so it looks
+// like an actual Freedoom soldier instead of a flat yellow blob.
+static u8 remap_damaged_dummy_texel(u8 texel) {
     if (texel == 0) {
         return 0;
     }
 
-    if (damaged) {
-        return (texel & 1) ? 12 : 2;
-    }
-
-    return (texel & 1) ? 10 : 11;
+    return (texel & 1) ? 12 : 2;
 }
 
 static u8 shade_texel(u8 texel) {
@@ -116,12 +125,10 @@ static u8 remap_billboard_texel(u8 visual_id, u8 texel) {
     if (visual_id == BILLBOARD_VISUAL_DECOR_DAMAGED) {
         return remap_damaged_billboard_texel(texel);
     }
-    if (visual_id == BILLBOARD_VISUAL_DUMMY) {
-        return remap_dummy_billboard_texel(texel, FALSE);
-    }
     if (visual_id == BILLBOARD_VISUAL_DUMMY_DAMAGED) {
-        return remap_dummy_billboard_texel(texel, TRUE);
+        return remap_damaged_dummy_texel(texel);
     }
+    // Healthy enemy (BILLBOARD_VISUAL_DUMMY) and all others: real colors, unchanged.
     return texel;
 }
 
@@ -167,11 +174,15 @@ static void draw_billboard_spans(const RayColumn *columns, const BillboardSpan *
         }
 
         const s16 height = (s16)(span->bottom - span->top + 1);
-        const u8 (*texture)[16] = get_billboard_texture(span->visual_id);
-        const u8 tex_x = (u8)(span->tex_x & 15);
-        // Reuse the precomputed (rel_y * 16 / h) table to avoid a per-pixel divide.
-        // It only covers h in [1, VIEW_PIXEL_H]; taller spans fall back to a divide.
-        const bool use_table = (height >= 1) && (height <= VIEW_PIXEL_H);
+        const BillboardTex tex = get_billboard_texture(span->visual_id);
+        // span->tex_x is a 0-255 normalized horizontal fraction (projection is
+        // sprite-size-agnostic); scale it back to this sprite's real width here.
+        const u8 tex_x = (u8)(((u16)span->tex_x * tex.w) >> 8);
+        // Reuse the precomputed (rel_y * 16 / h) table to avoid a per-pixel divide,
+        // but only for 16-tall sprites (it bakes in the 16); taller sprites (enemy)
+        // and h outside [1, VIEW_PIXEL_H] fall back to a divide. Enemies are sparse,
+        // so these divides stay off the wall hot path.
+        const bool use_table = (tex.h == 16) && (height >= 1) && (height <= VIEW_PIXEL_H);
         const u8 *ty_table = use_table ? g_wall_tex_y_by_height[height] : NULL;
 
         const u16 col = (u16)span->column;
@@ -198,8 +209,8 @@ static void draw_billboard_spans(const RayColumn *columns, const BillboardSpan *
 
             for (; y < stop; y++) {
                 const s16 rel_y = (s16)((s16)y - span->top);
-                const u8 tex_y = use_table ? ty_table[rel_y] : (u8)((rel_y * 16) / height);
-                const u8 texel = remap_billboard_texel(span->visual_id, texture[tex_y][tex_x]);
+                const u8 tex_y = use_table ? ty_table[rel_y] : (u8)((rel_y * tex.h) / height);
+                const u8 texel = remap_billboard_texel(span->visual_id, tex.pixels[(tex_y * tex.w) + tex_x]);
 
                 if (texel != 0) {
                     const u16 row_y = (u16)(y & 7);

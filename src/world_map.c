@@ -2,14 +2,17 @@
 
 static const u8 INITIAL_WORLD_MAPS[2][WORLD_MAP_H][WORLD_MAP_W] = {
     {
-        {5, 6, 7, 8, 9, 6, 5, 8},
-        {5, 0, 0, 0, 0, 4, 3, 8},
-        {6, 0, 0, 0, 7, 0, 0, 9},
-        {7, 0, 0, 0, 6, 0, 0, 5},
-        {8, 0, 5, 0, 0, 0, 0, 6},
-        {9, 0, 8, 0, 0, 2, 0, 7},
-        {6, 0, 0, 0, 0, 0, 0, 5},
-        {8, 5, 6, 7, 8, 9, 6, 5},
+        // Cenario 1 estilo E1M1: base cinza (6) coesa com acentos de painel
+        // metalico claro (7); sem a textura laranja. Portas (2), porta trancada (3)
+        // e switch de saida (4) preservados.
+        {6, 6, 7, 6, 6, 6, 7, 6},
+        {6, 0, 0, 0, 0, 4, 3, 6},
+        {7, 0, 0, 0, 7, 0, 0, 6},
+        {6, 0, 0, 0, 6, 0, 0, 7},
+        {6, 0, 7, 0, 0, 0, 0, 6},
+        {6, 0, 7, 0, 0, 2, 0, 6},
+        {7, 0, 0, 0, 0, 0, 0, 6},
+        {6, 7, 6, 6, 6, 7, 6, 6},
     },
     {
         {6, 5, 8, 9, 7, 6, 5, 8},

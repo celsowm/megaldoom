@@ -17,7 +17,7 @@
 // HUD source: res/freedoom/stbar.png
 // Weapon idle source: res/freedoom/pisga0.png
 // Weapon fire source: res/freedoom/pisgb0.png
-// Generated at: 2026-06-24T16:57:32-03:00
+// Generated at: 2026-07-03T01:34:46-03:00
 static const u32 FREEDOOM_HUD_TILES[FREEDOOM_HUD_TILE_COUNT][8] = {
     {0x33333333, 0x33333333, 0x33333333, 0x33333333, 0x33333333, 0x33333333, 0x33333333, 0x33333333},
     {0x33333333, 0x33333333, 0x33333333, 0x33333333, 0x33333333, 0x33333333, 0x33333333, 0x33333333},

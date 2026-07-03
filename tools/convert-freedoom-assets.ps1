@@ -15,6 +15,8 @@ param(
     [string]$BillboardKeyPath = "res\freedoom\bkeya0.png",
     [string]$BillboardDecorPath = "res\freedoom\bar1a0.png",
     [string]$BillboardEnemyPath = "res\freedoom\possa1.png",
+    [int]$BillboardEnemyW = 24,
+    [int]$BillboardEnemyH = 48,
     [switch]$BillboardOnly
 )
 
@@ -341,7 +343,7 @@ $hudTiles = Convert-HudTiles $HudSourcePath
 $billboardRows = Convert-Image $BillboardSourcePath 16 16 $true
 $billboardKeyRows = Convert-Image $BillboardKeySourcePath 16 16 $true
 $billboardDecorRows = Convert-Image $BillboardDecorSourcePath 16 16 $true
-$billboardEnemyRows = Convert-Image $BillboardEnemySourcePath 16 16 $true
+$billboardEnemyRows = Convert-Image $BillboardEnemySourcePath $BillboardEnemyW $BillboardEnemyH $true
 $relativeSource = $TexturePath.Replace("\", "/")
 $relativeWallBrownSource = $WallBrownTexturePath.Replace("\", "/")
 $relativeWallGraySource = $WallGrayTexturePath.Replace("\", "/")
@@ -385,7 +387,10 @@ static const u8 FREEDOOM_BILLBOARD_DECOR_TEXTURE[16][16] = {
 $($billboardDecorRows -join ",`r`n")
 };
 
-static const u8 FREEDOOM_BILLBOARD_ENEMY_TEXTURE[16][16] = {
+#define FREEDOOM_BILLBOARD_ENEMY_W $BillboardEnemyW
+#define FREEDOOM_BILLBOARD_ENEMY_H $BillboardEnemyH
+
+static const u8 FREEDOOM_BILLBOARD_ENEMY_TEXTURE[$BillboardEnemyH][$BillboardEnemyW] = {
 $($billboardEnemyRows -join ",`r`n")
 };
 

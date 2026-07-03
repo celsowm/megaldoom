@@ -35,7 +35,16 @@ static u16 billboard_project_one(const PlayerState *player,
         spans[count].top = top;
         spans[count].bottom = bottom;
         spans[count].depth = (u16)measure.forward;
-        spans[count].tex_x = (u8)(((col - left) * 16) / width);
+        // Store x as a 0-255 fraction of the sprite width so the renderer can scale
+        // it to any texture size (16-wide items, 24-wide enemy) without projection
+        // needing to know sprite dimensions.
+        {
+            s16 frac = (s16)(((col - left) * 256) / width);
+            if (frac > 255) {
+                frac = 255;
+            }
+            spans[count].tex_x = (u8)frac;
+        }
         spans[count].visual_id = billboard_get_object_visual_id(object, measure.type);
         count++;
     }
