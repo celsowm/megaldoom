@@ -3,10 +3,14 @@
 
 #define TURN_STEP 3
 // Translation uses velocity ramps for inertia instead of instant on/off.
-#define MOVE_MAX 30
-#define STRAFE_MAX 24
-#define MOVE_ACCEL 6  // per frame, ramping up toward the target speed
-#define MOVE_DECEL 8  // per frame, ramping down when released or reversing
+// Values doubled from the original 60fps-tuned speeds (30/24/6/8) because the
+// locked cadence is now TARGET_FRAME_VSYNCS=2 (30fps): player_try_move runs once
+// per iteration regardless of vsync count, so half the iterations/sec means half
+// the real-world speed unless compensated here.
+#define MOVE_MAX 120
+#define STRAFE_MAX 96
+#define MOVE_ACCEL 24 // per frame, ramping up toward the target speed
+#define MOVE_DECEL 32 // per frame, ramping down when released or reversing
 
 // Move `vel` toward `target` by at most `accel` (ramp up) or `decel` (ramp down).
 static s16 approach_velocity(s16 vel, s16 target, s16 accel, s16 decel) {

@@ -34,5 +34,6 @@ extern u8 g_wall_tex_y_by_height[VIEW_PIXEL_H + 1][VIEW_PIXEL_H];
 void set_view_pair_tile(u16 x, u16 y, u8 left_color, u8 right_color);
 void set_view_column_color(u16 column, u16 y, u8 color);
 void renderer_set_bg_pair_tile(u16 x, u16 y, u8 left_color, u8 right_color);
+void renderer_scene_init(void);
 
 #endif

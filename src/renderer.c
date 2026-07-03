@@ -135,4 +135,5 @@ void renderer_init(void) {
     init_hud_tiles();
     init_wall_sampling_table();
     init_view_tilemap();
+    renderer_scene_init();
 }

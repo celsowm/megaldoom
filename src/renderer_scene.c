@@ -65,6 +65,20 @@ static const u32 REP4[16] = {
     0x8888, 0x9999, 0xAAAA, 0xBBBB, 0xCCCC, 0xDDDD, 0xEEEE, 0xFFFF,
 };
 
+// Pre-shaded copy of every wall texture (side hits use these), so the per-pixel
+// wall loop never branches on shade or calls shade_texel(). Built once at init.
+static u8 g_wall_tex_shaded[9][16][16];
+
+void renderer_scene_init(void) {
+    for (u16 t = 0; t < 9; t++) {
+        for (u16 row = 0; row < 16; row++) {
+            for (u16 col = 0; col < 16; col++) {
+                g_wall_tex_shaded[t][row][col] = shade_texel(WALL_TEX[t][row][col]);
+            }
+        }
+    }
+}
+
 // Build a full vertical color strip for one ray column, resolving the texture
 // pointer and shade flag once (instead of per pixel). The wall is centered, so
 // everything above it is sky (y < VIEW_PIXEL_H/2) and below it is floor.
@@ -72,7 +86,11 @@ static void build_column_strip(const RayColumn *column, u8 *strip) {
     const u16 wall_h = column->height;
     const u16 top = (u16)((VIEW_PIXEL_H - wall_h) / 2);
     const u16 bottom = (u16)(top + wall_h);
-    const u8 (*tex)[16] = WALL_TEX[(column->texture_id <= 8) ? column->texture_id : 0];
+    const u8 tid = (u8)((column->texture_id <= 8) ? column->texture_id : 0);
+    // Side walls sample a pre-shaded copy so the inner loop stays branch-free and
+    // never calls shade_texel() per pixel. shade_texel(0) == 0, so transparency is
+    // preserved by the table.
+    const u8 (*tex)[16] = column->shade ? g_wall_tex_shaded[tid] : WALL_TEX[tid];
     const u8 *ty_table = g_wall_tex_y_by_height[wall_h];
     const u8 tex_x = (u8)(column->tex_x & 15);
     u16 y = 0;
@@ -81,15 +99,8 @@ static void build_column_strip(const RayColumn *column, u8 *strip) {
         strip[y] = 9; // sky
     }
 
-    if (column->shade) {
-        for (; y < bottom; y++) {
-            const u8 texel = tex[ty_table[y - top]][tex_x];
-            strip[y] = (texel != 0) ? (u8)(shade_texel(texel) & 0x0F) : 0;
-        }
-    } else {
-        for (; y < bottom; y++) {
-            strip[y] = (u8)(tex[ty_table[y - top]][tex_x] & 0x0F);
-        }
+    for (; y < bottom; y++) {
+        strip[y] = (u8)(tex[ty_table[y - top]][tex_x] & 0x0F);
     }
 
     for (; y < VIEW_PIXEL_H; y++) {
@@ -199,17 +210,34 @@ static void draw_billboard_spans(const RayColumn *columns, const BillboardSpan *
     }
 }
 
+// Same tile-walk strategy as draw_billboard_spans: for each screen column the
+// tile_x/shift/keep_mask are constant, and the tile-row base address is computed
+// once per 8-row band (not per pixel), avoiding the per-pixel divide + RMW that
+// the old set_view_column_color path did over all ~72x54 weapon pixels.
 static void draw_weapon_overlay(bool flash) {
     const u8 (*weapon)[FREEDOOM_WEAPON_W] = flash ? FREEDOOM_WEAPON_FIRE : FREEDOOM_WEAPON_IDLE;
     const u16 bottom_y = FREEDOOM_WEAPON_DRAW_Y + FREEDOOM_WEAPON_DRAW_H;
     const u16 right_x = FREEDOOM_WEAPON_DRAW_X + FREEDOOM_WEAPON_DRAW_W;
 
-    for (u16 y = FREEDOOM_WEAPON_DRAW_Y; y < bottom_y; y++) {
-        for (u16 x = FREEDOOM_WEAPON_DRAW_X; x < right_x; x++) {
-            const u8 texel = weapon[y][x];
+    for (u16 x = FREEDOOM_WEAPON_DRAW_X; x < right_x; x++) {
+        const u16 tile_x = (u16)(x >> 3);
+        const u16 shift = (u16)((7 - (x & 7)) * 4);
+        const u32 keep_mask = ~((u32)0x0F << shift);
+        u16 y = FREEDOOM_WEAPON_DRAW_Y;
 
-            if (texel != 0) {
-                set_view_column_color(x, y, texel);
+        while (y < bottom_y) {
+            const u16 tile_y = (u16)(y >> 3);
+            u32 *tile = g_view_tiles[(tile_y * VIEW_TILE_W) + tile_x]; // multiply once per band
+            const u16 next_tile_y = (u16)((tile_y + 1) * 8);
+            const u16 stop = (next_tile_y < bottom_y) ? next_tile_y : bottom_y;
+
+            for (; y < stop; y++) {
+                const u8 texel = weapon[y][x];
+
+                if (texel != 0) {
+                    const u16 row_y = (u16)(y & 7);
+                    tile[row_y] = (tile[row_y] & keep_mask) | ((u32)(texel & 0x0F) << shift);
+                }
             }
         }
     }
@@ -312,7 +340,13 @@ void renderer_render_scene(const RayColumn *columns,
     } else if (low_health_warning) {
         draw_low_health_overlay();
     }
-    upload_view_tilemap();
     build_compass_tilemap(player->angle);
+}
+
+// Push the frame built by renderer_render_scene to VRAM. Call this right after a
+// VDP_waitVSync so the ~9.6KB view-tile DMA runs at the fast vblank rate instead
+// of stalling the CPU mid active-display (its old call site).
+void renderer_upload_scene(void) {
+    upload_view_tilemap();
     upload_compass_tilemap();
 }

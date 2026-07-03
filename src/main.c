@@ -12,10 +12,12 @@
 #define PLAYER_INVULN_FRAMES 24
 #define PLAYER_HIT_PUSH_STEP (FX_ONE / 4)
 #define PLAYER_MAX_HEALTH 3
-// Locked frame cadence: every iteration lasts this many vblanks (1 = 60fps, 2 = 30fps).
-// A steady cadence is what makes movement feel natural; raise to 2 if the render can't
-// reliably finish within one frame at the current RAY_COL_STRIDE.
-#define TARGET_FRAME_VSYNCS 1
+// Locked frame cadence: every iteration lasts this many vblanks (1 = 60fps, 2 = 30fps,
+// 3 = 20fps). A steady cadence is what makes movement feel uniform; the lock only pays
+// off when a redraw reliably finishes within this many vblanks. Tune from the DEBUG_PERF
+// CPU-load% while moving (turn right + go north): load under ~95% -> 1 holds 60; under
+// ~185% -> 2 holds 30; otherwise 3 holds a rock-steady 20. Default 2 targets 30fps.
+#define TARGET_FRAME_VSYNCS 2
 
 // Perf diagnostics overlay (FPS + CPU load + frame-load cursor). Set to 0 (or
 // build with -DDEBUG_PERF=0) for clean release builds.
@@ -89,6 +91,7 @@ static void reset_level(u16 phase_index, bool *level_cleared, u16 *shot_cooldown
 int main(bool hard) {
     u32 frame = 0;
     bool redraw = TRUE;
+    bool pending_upload = FALSE;
     bool level_cleared = FALSE;
     u16 phase_index = 0;
     u16 player_health = PLAYER_MAX_HEALTH;
@@ -236,13 +239,22 @@ int main(bool hard) {
         if (redraw) {
             render_current_view(player_health);
             redraw = FALSE;
+            pending_upload = TRUE;
         }
 
-        // Pad to a fixed cadence so each visual frame is shown for the same duration,
-        // keeping motion uniform instead of stuttering between 60 and 30fps.
-        do {
+        // Enter vblank first, then push the freshly built frame to VRAM so the
+        // ~9.6KB view-tile DMA runs at the fast vblank rate instead of stalling
+        // the CPU mid active-display. Then pad to a fixed cadence so each visual
+        // frame is shown for the same duration, keeping motion uniform instead of
+        // stuttering between 60 and 30fps.
+        VDP_waitVSync();
+        if (pending_upload) {
+            renderer_upload_scene();
+            pending_upload = FALSE;
+        }
+        while ((u16)(vtimer - cur_vtimer) < TARGET_FRAME_VSYNCS) {
             VDP_waitVSync();
-        } while ((u16)(vtimer - cur_vtimer) < TARGET_FRAME_VSYNCS);
+        }
         frame++;
     }
 

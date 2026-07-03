@@ -30,5 +30,6 @@ void renderer_render_scene(const RayColumn *columns,
                            bool weapon_flash,
                            bool damage_flash,
                            bool low_health_warning);
+void renderer_upload_scene(void);
 
 #endif
