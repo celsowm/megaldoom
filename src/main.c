@@ -107,10 +107,11 @@ int main(bool hard) {
     raycast_init();
     renderer_init();
 
-    // Sound: load the XGM2 Z80 driver and start background music. XGM2 has
-    // reinforced DMA contention protection, important given MegalDoom's heavy
-    // vblank tile-upload DMA. The VGM is converted to XGM2 by rescomp at build
-    // time (see res/resources.res).
+    // Sound: load the XGM2 Z80 driver and start background music (the E1M1
+    // theme, converted from Doom's MUS by tools/midi2vgm). XGM2 has reinforced
+    // DMA contention protection, important given MegalDoom's heavy vblank
+    // tile-upload DMA. The VGM is converted to XGM2 by rescomp at build time
+    // (see res/resources.res).
     Z80_loadDriver(Z80_DRIVER_XGM2, TRUE);
     XGM2_play(test_music);
 

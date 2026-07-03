@@ -78,6 +78,14 @@ def cmd_wait_n(n):
     remaining = n
     while remaining > 0:
         chunk = min(remaining, 65535)
+        result += cmd_wait_n(chunk)
+        remaining -= chunk
+    return bytes(result)
+
+
+def cmd_end():
+    """End of sound data: 0x66."""
+    return bytes([CMD_END])
 
 
 # -- VGM Writer -------------------------------------------------------------- #
@@ -166,6 +174,10 @@ class VgmWriter:
 
         return bytes(header) + bytes(data)
 
+    @property
+    def total_samples(self):
+        return self._total_samples
+
     @staticmethod
     def _time_to_byte_offset(events, target_time):
         """Find the byte offset in the data stream for a given sample time."""
@@ -186,17 +198,3 @@ def write_vgm(path, vgm_bytes):
     """Write VGM bytes to a file."""
     with open(path, "wb") as f:
         f.write(vgm_bytes)
-
-
-    @property
-    def total_samples(self):
-        return self._total_samples
-
-        result += cmd_wait_n(chunk)
-        remaining -= chunk
-    return bytes(result)
-
-
-def cmd_end():
-    """End of sound data: 0x66."""
-    return bytes([CMD_END])
