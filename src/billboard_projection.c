@@ -46,6 +46,7 @@ static u16 billboard_project_one(const PlayerState *player,
             spans[count].tex_x = (u8)frac;
         }
         spans[count].visual_id = billboard_get_object_visual_id(object, measure.type);
+        spans[count].frame = billboard_get_object_frame(object);
         count++;
     }
 

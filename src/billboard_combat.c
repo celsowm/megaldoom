@@ -45,7 +45,7 @@ u16 billboard_get_target_count(void) {
         const BillboardObject *object = &g_billboards[i];
         const BillboardType *type = billboard_get_type(object->type_id);
 
-        if (object->active && type->targetable) {
+        if (object->active && type->targetable && (object->life_state == ENEMY_ALIVE)) {
             count++;
         }
     }
@@ -58,7 +58,7 @@ u16 billboard_get_target_health(void) {
         const BillboardObject *object = &g_billboards[i];
         const BillboardType *type = billboard_get_type(object->type_id);
 
-        if (object->active && type->targetable) {
+        if (object->active && type->targetable && (object->life_state == ENEMY_ALIVE)) {
             return object->hp;
         }
     }
@@ -78,6 +78,10 @@ BillboardShotResult billboard_fire_center(const PlayerState *player, u16 wall_de
             continue;
         }
         if (!measure.type->targetable) {
+            continue;
+        }
+        // A dying/dead enemy is a corpse: not a valid target anymore.
+        if ((object->type_id == BILLBOARD_TYPE_DUMMY) && (object->life_state != ENEMY_ALIVE)) {
             continue;
         }
         if (measure.forward >= wall_depth) {
@@ -103,6 +107,16 @@ BillboardShotResult billboard_fire_center(const PlayerState *player, u16 wall_de
     if (best_object->hp > 1) {
         best_object->hp--;
         return BILLBOARD_SHOT_DAMAGE;
+    }
+
+    // Enemies play a death animation and leave a corpse instead of vanishing;
+    // other targetable billboards (decor) still just deactivate on kill.
+    if (best_object->type_id == BILLBOARD_TYPE_DUMMY) {
+        best_object->hp = 0;
+        best_object->life_state = ENEMY_DYING;
+        best_object->death_index = 0;
+        best_object->death_timer = ENEMY_DEATH_HOLD;
+        return BILLBOARD_SHOT_KILL;
     }
 
     best_object->active = FALSE;

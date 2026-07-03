@@ -12,12 +12,14 @@ typedef struct {
     u8 h;
 } BillboardTex;
 
-static BillboardTex get_billboard_texture(u8 visual_id) {
+static BillboardTex get_billboard_texture(u8 visual_id, u8 frame) {
     switch (visual_id) {
         case BILLBOARD_VISUAL_DUMMY_DAMAGED:
-        case BILLBOARD_VISUAL_DUMMY:
-            return (BillboardTex){(const u8 *)FREEDOOM_BILLBOARD_ENEMY_TEXTURE,
+        case BILLBOARD_VISUAL_DUMMY: {
+            const u8 f = (frame < FREEDOOM_BILLBOARD_ENEMY_FRAME_COUNT) ? frame : 0;
+            return (BillboardTex){(const u8 *)FREEDOOM_BILLBOARD_ENEMY_FRAMES[f],
                                   FREEDOOM_BILLBOARD_ENEMY_W, FREEDOOM_BILLBOARD_ENEMY_H};
+        }
         case BILLBOARD_VISUAL_DECOR_DAMAGED:
         case BILLBOARD_VISUAL_DECOR:
             return (BillboardTex){(const u8 *)FREEDOOM_BILLBOARD_DECOR_TEXTURE, 16, 16};
@@ -174,7 +176,7 @@ static void draw_billboard_spans(const RayColumn *columns, const BillboardSpan *
         }
 
         const s16 height = (s16)(span->bottom - span->top + 1);
-        const BillboardTex tex = get_billboard_texture(span->visual_id);
+        const BillboardTex tex = get_billboard_texture(span->visual_id, span->frame);
         // span->tex_x is a 0-255 normalized horizontal fraction (projection is
         // sprite-size-agnostic); scale it back to this sprite's real width here.
         const u8 tex_x = (u8)(((u16)span->tex_x * tex.w) >> 8);

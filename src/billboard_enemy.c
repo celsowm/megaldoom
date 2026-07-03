@@ -103,6 +103,9 @@ static bool separate_dummies(BillboardObject *left, BillboardObject *right) {
     if ((left->type_id != BILLBOARD_TYPE_DUMMY) || (right->type_id != BILLBOARD_TYPE_DUMMY)) {
         return FALSE;
     }
+    if ((left->life_state != ENEMY_ALIVE) || (right->life_state != ENEMY_ALIVE)) {
+        return FALSE;
+    }
     if ((dist_sq == 0) || (dist_sq > DUMMY_SEPARATION_RANGE_SQ)) {
         return FALSE;
     }
@@ -121,7 +124,7 @@ static bool separate_dummies(BillboardObject *left, BillboardObject *right) {
     return moved;
 }
 
-static bool update_dummy(BillboardObject *object, const PlayerState *player, u16 *hits) {
+static bool update_dummy_alive(BillboardObject *object, const PlayerState *player, u16 *hits) {
     const s32 player_dx = player->x - object->x;
     const s32 player_dy = player->y - object->y;
     const s32 player_dist_sq = (player_dx * player_dx) + (player_dy * player_dy);
@@ -144,6 +147,25 @@ static bool update_dummy(BillboardObject *object, const PlayerState *player, u16
     if (object->spot_cooldown > 0) {
         object->spot_cooldown--;
     }
+    if (object->attack_anim > 0) {
+        object->attack_anim--;
+    }
+
+    // Walk cadence: free-run the leg cycle while engaged (independent of the
+    // discrete move_cooldown steps so it looks smooth, not once-per-hop). The
+    // attack pose overrides the walk pose while attack_anim is active. Idle/asleep
+    // enemies hold the rest pose.
+    if (awake && (object->attack_anim == 0)) {
+        if (object->anim_timer == 0) {
+            object->anim_frame = (u8)((object->anim_frame + 1) & (ENEMY_WALK_FRAME_COUNT - 1));
+            object->anim_timer = ENEMY_WALK_HOLD;
+        } else {
+            object->anim_timer--;
+        }
+    } else if (!awake) {
+        object->anim_frame = 0;
+        object->anim_timer = 0;
+    }
 
     if (awake && visible) {
         if (!object->saw_player) {
@@ -162,6 +184,7 @@ static bool update_dummy(BillboardObject *object, const PlayerState *player, u16
         (object->attack_cooldown == 0)) {
         object->attack_cooldown = DUMMY_ATTACK_COOLDOWN;
         object->move_cooldown = DUMMY_ATTACK_RECOVERY_FRAMES;
+        object->attack_anim = ENEMY_ATTACK_ANIM_FRAMES;
         (*hits)++;
         return FALSE;
     }
@@ -214,6 +237,43 @@ static bool update_dummy(BillboardObject *object, const PlayerState *player, u16
 
     if (moved) {
         object->move_cooldown = DUMMY_MOVE_INTERVAL;
+    }
+
+    return moved;
+}
+
+// Step the death sequence one frame; holds on the final pose (corpse) once done.
+static void advance_death(BillboardObject *object) {
+    if (object->life_state == ENEMY_DEAD) {
+        return;
+    }
+    if (object->death_timer > 0) {
+        object->death_timer--;
+        return;
+    }
+    if ((object->death_index + 1) < ENEMY_DEATH_FRAME_COUNT) {
+        object->death_index++;
+        object->death_timer = ENEMY_DEATH_HOLD;
+    } else {
+        object->life_state = ENEMY_DEAD;
+    }
+}
+
+// Wrapper over the live AI / death animation. Returns TRUE when the enemy moved
+// OR its visible pose changed, so main.c redraws (reuses the .moved -> redraw path).
+static bool update_dummy(BillboardObject *object, const PlayerState *player, u16 *hits) {
+    const u8 prev_frame = billboard_get_object_frame(object);
+    bool moved;
+
+    if (object->life_state != ENEMY_ALIVE) {
+        advance_death(object);
+        moved = FALSE;
+    } else {
+        moved = update_dummy_alive(object, player, hits);
+    }
+
+    if (billboard_get_object_frame(object) != prev_frame) {
+        return TRUE;
     }
 
     return moved;

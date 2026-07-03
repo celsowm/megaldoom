@@ -44,6 +44,23 @@
 #define DUMMY_LAST_SEEN_RANGE (FX_ONE / 8)
 #define DUMMY_LAST_SEEN_RANGE_SQ (DUMMY_LAST_SEEN_RANGE * DUMMY_LAST_SEEN_RANGE)
 
+// Enemy life state (BillboardObject.life_state).
+#define ENEMY_ALIVE 0
+#define ENEMY_DYING 1
+#define ENEMY_DEAD 2
+
+// Enemy sprite pose indices into FREEDOOM_BILLBOARD_ENEMY_FRAMES: 0..3 walk,
+// 4 attack, 5..9 death (last = persistent corpse).
+#define ENEMY_WALK_FRAME_COUNT 4
+#define ENEMY_ATTACK_FRAME_INDEX 4
+#define ENEMY_DEATH_FRAME_BASE 5
+#define ENEMY_DEATH_FRAME_COUNT 5
+
+// Animation cadence (frames at the locked 30fps): ~4 tics/pose like Doom.
+#define ENEMY_WALK_HOLD 4
+#define ENEMY_DEATH_HOLD 5
+#define ENEMY_ATTACK_ANIM_FRAMES 10
+
 typedef struct {
     u8 visual_id;
     u8 damaged_visual_id;
@@ -71,6 +88,12 @@ typedef struct {
     s32 last_seen_x;
     s32 last_seen_y;
     bool has_last_seen;
+    u8 life_state;
+    u8 anim_frame;
+    u8 anim_timer;
+    u8 death_index;
+    u8 death_timer;
+    u8 attack_anim;
 } BillboardObject;
 
 typedef struct {
@@ -89,6 +112,7 @@ extern BillboardPickupKind g_last_pickup_kind;
 
 const BillboardType *billboard_get_type(u8 type_id);
 u8 billboard_get_object_visual_id(const BillboardObject *object, const BillboardType *type);
+u8 billboard_get_object_frame(const BillboardObject *object);
 bool billboard_measure_object(const PlayerState *player, const BillboardObject *object, BillboardMeasure *measure);
 
 #endif

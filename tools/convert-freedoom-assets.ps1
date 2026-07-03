@@ -470,7 +470,22 @@ $facePaletteRgb = ($facePalette | ForEach-Object {
 $billboardRows = Convert-Image $BillboardSourcePath 16 16 $true
 $billboardKeyRows = Convert-Image $BillboardKeySourcePath 16 16 $true
 $billboardDecorRows = Convert-Image $BillboardDecorSourcePath 16 16 $true
-$billboardEnemyRows = Convert-Image $BillboardEnemySourcePath $BillboardEnemyW $BillboardEnemyH $true
+# Enemy (zombieman) animation frames, all scaled into the same 24x48 box.
+# Order MUST match the pose indices in src/billboard_internal.h:
+#   0..3 walk (POSSA1..D1), 4 attack (POSSF1), 5..9 death (POSSH0..L0, L0 = corpse).
+$EnemyFrameNames = @("POSSA1", "POSSB1", "POSSC1", "POSSD1", "POSSF1",
+                     "POSSH0", "POSSI0", "POSSJ0", "POSSK0", "POSSL0")
+$EnemySpritesDir = "res\originaldoom\sprites"
+$enemyFrameBlocks = New-Object System.Collections.Generic.List[string]
+foreach ($name in $EnemyFrameNames) {
+    $enemyFramePath = Join-Path $Root (Join-Path $EnemySpritesDir "$name.png")
+    if (-not (Test-Path $enemyFramePath)) {
+        throw "Enemy frame source not found: $enemyFramePath"
+    }
+    $enemyFrameRows = Convert-Image $enemyFramePath $BillboardEnemyW $BillboardEnemyH $true
+    $enemyFrameBlocks.Add("    {" + "`r`n" + ($enemyFrameRows -join ",`r`n") + "`r`n    }")
+}
+$enemyFrameCount = $EnemyFrameNames.Count
 $relativeSource = $TexturePath.Replace("\", "/")
 $relativeWallBrownSource = $WallBrownTexturePath.Replace("\", "/")
 $relativeWallGraySource = $WallGrayTexturePath.Replace("\", "/")
@@ -500,7 +515,7 @@ $billboardContent = @"
 // Bonus billboard source: $relativeBillboardSource
 // Key billboard source: $relativeBillboardKeySource
 // Decor billboard source: $relativeBillboardDecorSource
-// Enemy billboard source: $relativeBillboardEnemySource
+// Enemy billboard frames: $($EnemyFrameNames -join ", ") (from $EnemySpritesDir)
 // Generated at: $generatedAt
 // Palette index 0 is transparent for billboard rendering.
 static const u8 FREEDOOM_BILLBOARD_BONUS_TEXTURE[16][16] = {
@@ -517,10 +532,15 @@ $($billboardDecorRows -join ",`r`n")
 
 #define FREEDOOM_BILLBOARD_ENEMY_W $BillboardEnemyW
 #define FREEDOOM_BILLBOARD_ENEMY_H $BillboardEnemyH
+#define FREEDOOM_BILLBOARD_ENEMY_FRAME_COUNT $enemyFrameCount
 
-static const u8 FREEDOOM_BILLBOARD_ENEMY_TEXTURE[$BillboardEnemyH][$BillboardEnemyW] = {
-$($billboardEnemyRows -join ",`r`n")
+// Enemy poses indexed by frame: 0..3 walk, 4 attack, 5..9 death (9 = corpse).
+static const u8 FREEDOOM_BILLBOARD_ENEMY_FRAMES[FREEDOOM_BILLBOARD_ENEMY_FRAME_COUNT][$BillboardEnemyH][$BillboardEnemyW] = {
+$($enemyFrameBlocks -join ",`r`n")
 };
+
+// Back-compat alias: frame 0 is the standing/idle pose (POSSA1).
+#define FREEDOOM_BILLBOARD_ENEMY_TEXTURE FREEDOOM_BILLBOARD_ENEMY_FRAMES[0]
 
 #endif
 "@

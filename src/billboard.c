@@ -9,22 +9,22 @@ static const BillboardType BILLBOARD_TYPES[] = {
 
 const BillboardObject INITIAL_BILLBOARDS[BILLBOARD_PHASE_COUNT][BILLBOARD_OBJECT_COUNT] = {
     {
-        {5 * FX_ONE + (FX_ONE / 2), 2 * FX_ONE + (FX_ONE / 2), 0, 1, TRUE, 0, 0, 0, 0, 0, FALSE, FALSE, 0, 0, 0, FALSE},
-        {2 * FX_ONE + (FX_ONE / 2), 5 * FX_ONE + (FX_ONE / 2), 1, 1, TRUE, 0, 0, 0, 0, 0, FALSE, FALSE, 0, 0, 0, FALSE},
-        {6 * FX_ONE + (FX_ONE / 2), 6 * FX_ONE + (FX_ONE / 2), 0, 1, TRUE, 0, 0, 0, 0, 0, FALSE, FALSE, 0, 0, 0, FALSE},
-        {4 * FX_ONE + (FX_ONE / 2), 5 * FX_ONE + (FX_ONE / 2), 2, 2, TRUE, 0, 0, 0, 0, 0, FALSE, FALSE, 0, 0, 0, FALSE},
-        {6 * FX_ONE + (FX_ONE / 2), 4 * FX_ONE + (FX_ONE / 2), 2, 2, TRUE, 0, 0, 0, 0, 0, FALSE, FALSE, 0, 0, 0, FALSE},
-        {3 * FX_ONE + (FX_ONE / 2), 6 * FX_ONE + (FX_ONE / 2), 3, 3, TRUE, 0, 0, 0, 0, 0, FALSE, FALSE, 0, 0, 0, FALSE},
-        {5 * FX_ONE + (FX_ONE / 2), 3 * FX_ONE + (FX_ONE / 2), 3, 3, TRUE, 0, 0, 0, 0, 0, FALSE, FALSE, 0, 0, 0, FALSE},
+        {5 * FX_ONE + (FX_ONE / 2), 2 * FX_ONE + (FX_ONE / 2), 0, 1, TRUE, 0, 0, 0, 0, 0, FALSE, FALSE, 0, 0, 0, FALSE, 0, 0, 0, 0, 0, 0},
+        {2 * FX_ONE + (FX_ONE / 2), 5 * FX_ONE + (FX_ONE / 2), 1, 1, TRUE, 0, 0, 0, 0, 0, FALSE, FALSE, 0, 0, 0, FALSE, 0, 0, 0, 0, 0, 0},
+        {6 * FX_ONE + (FX_ONE / 2), 6 * FX_ONE + (FX_ONE / 2), 0, 1, TRUE, 0, 0, 0, 0, 0, FALSE, FALSE, 0, 0, 0, FALSE, 0, 0, 0, 0, 0, 0},
+        {4 * FX_ONE + (FX_ONE / 2), 5 * FX_ONE + (FX_ONE / 2), 2, 2, TRUE, 0, 0, 0, 0, 0, FALSE, FALSE, 0, 0, 0, FALSE, 0, 0, 0, 0, 0, 0},
+        {6 * FX_ONE + (FX_ONE / 2), 4 * FX_ONE + (FX_ONE / 2), 2, 2, TRUE, 0, 0, 0, 0, 0, FALSE, FALSE, 0, 0, 0, FALSE, 0, 0, 0, 0, 0, 0},
+        {3 * FX_ONE + (FX_ONE / 2), 6 * FX_ONE + (FX_ONE / 2), 3, 3, TRUE, 0, 0, 0, 0, 0, FALSE, FALSE, 0, 0, 0, FALSE, 0, 0, 0, 0, 0, 0},
+        {5 * FX_ONE + (FX_ONE / 2), 3 * FX_ONE + (FX_ONE / 2), 3, 3, TRUE, 0, 0, 0, 0, 0, FALSE, FALSE, 0, 0, 0, FALSE, 0, 0, 0, 0, 0, 0},
     },
     {
-        {1 * FX_ONE + (FX_ONE / 2), 6 * FX_ONE + (FX_ONE / 2), 0, 1, TRUE, 0, 0, 0, 0, 0, FALSE, FALSE, 0, 0, 0, FALSE},
-        {5 * FX_ONE + (FX_ONE / 2), 5 * FX_ONE + (FX_ONE / 2), 1, 1, TRUE, 0, 0, 0, 0, 0, FALSE, FALSE, 0, 0, 0, FALSE},
-        {6 * FX_ONE + (FX_ONE / 2), 2 * FX_ONE + (FX_ONE / 2), 0, 1, TRUE, 0, 0, 0, 0, 0, FALSE, FALSE, 0, 0, 0, FALSE},
-        {2 * FX_ONE + (FX_ONE / 2), 2 * FX_ONE + (FX_ONE / 2), 2, 2, TRUE, 0, 0, 0, 0, 0, FALSE, FALSE, 0, 0, 0, FALSE},
-        {4 * FX_ONE + (FX_ONE / 2), 6 * FX_ONE + (FX_ONE / 2), 2, 2, TRUE, 0, 0, 0, 0, 0, FALSE, FALSE, 0, 0, 0, FALSE},
-        {6 * FX_ONE + (FX_ONE / 2), 3 * FX_ONE + (FX_ONE / 2), 3, 3, TRUE, 0, 0, 0, 0, 0, FALSE, FALSE, 0, 0, 0, FALSE},
-        {3 * FX_ONE + (FX_ONE / 2), 4 * FX_ONE + (FX_ONE / 2), 3, 3, TRUE, 0, 0, 0, 0, 0, FALSE, FALSE, 0, 0, 0, FALSE},
+        {1 * FX_ONE + (FX_ONE / 2), 6 * FX_ONE + (FX_ONE / 2), 0, 1, TRUE, 0, 0, 0, 0, 0, FALSE, FALSE, 0, 0, 0, FALSE, 0, 0, 0, 0, 0, 0},
+        {5 * FX_ONE + (FX_ONE / 2), 5 * FX_ONE + (FX_ONE / 2), 1, 1, TRUE, 0, 0, 0, 0, 0, FALSE, FALSE, 0, 0, 0, FALSE, 0, 0, 0, 0, 0, 0},
+        {6 * FX_ONE + (FX_ONE / 2), 2 * FX_ONE + (FX_ONE / 2), 0, 1, TRUE, 0, 0, 0, 0, 0, FALSE, FALSE, 0, 0, 0, FALSE, 0, 0, 0, 0, 0, 0},
+        {2 * FX_ONE + (FX_ONE / 2), 2 * FX_ONE + (FX_ONE / 2), 2, 2, TRUE, 0, 0, 0, 0, 0, FALSE, FALSE, 0, 0, 0, FALSE, 0, 0, 0, 0, 0, 0},
+        {4 * FX_ONE + (FX_ONE / 2), 6 * FX_ONE + (FX_ONE / 2), 2, 2, TRUE, 0, 0, 0, 0, 0, FALSE, FALSE, 0, 0, 0, FALSE, 0, 0, 0, 0, 0, 0},
+        {6 * FX_ONE + (FX_ONE / 2), 3 * FX_ONE + (FX_ONE / 2), 3, 3, TRUE, 0, 0, 0, 0, 0, FALSE, FALSE, 0, 0, 0, FALSE, 0, 0, 0, 0, 0, 0},
+        {3 * FX_ONE + (FX_ONE / 2), 4 * FX_ONE + (FX_ONE / 2), 3, 3, TRUE, 0, 0, 0, 0, 0, FALSE, FALSE, 0, 0, 0, FALSE, 0, 0, 0, 0, 0, 0},
     }
 };
 
@@ -42,11 +42,38 @@ const BillboardType *billboard_get_type(u8 type_id) {
 }
 
 u8 billboard_get_object_visual_id(const BillboardObject *object, const BillboardType *type) {
+    // Dying/dead enemies use the death poses at real colors: no red damage tint.
+    if ((object->type_id == BILLBOARD_TYPE_DUMMY) && (object->life_state != ENEMY_ALIVE)) {
+        return type->visual_id;
+    }
     if (object->hp < type->hit_points) {
         return type->damaged_visual_id;
     }
 
     return type->visual_id;
+}
+
+// Resolve the sprite pose index carried to the renderer. Only enemies animate;
+// every other billboard is single-frame (index 0). Priority: death > attack > walk.
+u8 billboard_get_object_frame(const BillboardObject *object) {
+    if (object->type_id != BILLBOARD_TYPE_DUMMY) {
+        return 0;
+    }
+
+    if (object->life_state != ENEMY_ALIVE) {
+        u8 index = object->death_index;
+
+        if (index >= ENEMY_DEATH_FRAME_COUNT) {
+            index = (u8)(ENEMY_DEATH_FRAME_COUNT - 1);
+        }
+        return (u8)(ENEMY_DEATH_FRAME_BASE + index);
+    }
+
+    if (object->attack_anim > 0) {
+        return ENEMY_ATTACK_FRAME_INDEX;
+    }
+
+    return (u8)(object->anim_frame & (ENEMY_WALK_FRAME_COUNT - 1));
 }
 
 bool billboard_measure_object(const PlayerState *player, const BillboardObject *object, BillboardMeasure *measure) {
@@ -163,7 +190,7 @@ u16 billboard_get_enemy_count(void) {
     for (u16 i = 0; i < BILLBOARD_OBJECT_COUNT; i++) {
         const BillboardObject *object = &g_billboards[i];
 
-        if (object->active && (object->type_id == BILLBOARD_TYPE_DUMMY)) {
+        if (object->active && (object->type_id == BILLBOARD_TYPE_DUMMY) && (object->life_state == ENEMY_ALIVE)) {
             count++;
         }
     }

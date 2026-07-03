@@ -22,6 +22,7 @@ typedef struct {
     u16 depth;
     u8 tex_x;
     u8 visual_id;
+    u8 frame;
 } BillboardSpan;
 
 typedef struct {

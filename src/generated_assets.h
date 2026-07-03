@@ -13,7 +13,7 @@
 // Door source: res/originaldoom/textures/DOOR3.png
 // Locked door source: res/originaldoom/textures/BIGDOOR2.png
 // Switch source: res/originaldoom/textures/SW1COMP.png
-// Generated at: 2026-07-03T13:14:32-03:00
+// Generated at: 2026-07-03T14:40:56-03:00
 static const u8 FREEDOOM_WALL_TEXTURE[16][16] = {
     {4, 4, 5, 14, 14, 4, 4, 4, 4, 4, 4, 4, 5, 4, 4, 4},
     {4, 4, 4, 14, 4, 4, 4, 4, 4, 4, 5, 4, 4, 4, 4, 4},
