@@ -16,6 +16,11 @@ res/*.h
 *.srec
 *.iso
 *.cue
+*.WAD
+
+# WAD-extracted original Doom PNGs (copyrighted source material, not for commit)
+res/originaldoom/
+tools/__pycache__/
 
 # Local toolchains and emulators downloaded by scripts
 .toolchain/

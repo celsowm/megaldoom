@@ -1,20 +1,21 @@
 param(
-    [string]$TexturePath = "res\freedoom\stonew1.png",
-    [string]$WallBrownTexturePath = "res\freedoom\brown1.png",
-    [string]$WallGrayTexturePath = "res\freedoom\graywide.png",
-    [string]$WallMetalTexturePath = "res\freedoom\shawn02.png",
-    [string]$WallBrickTexturePath = "res\freedoom\brbrick.png",
-    [string]$WallTechTexturePath = "res\freedoom\bigwall.png",
-    [string]$DoorTexturePath = "res\freedoom\aqdoor01.png",
-    [string]$LockedDoorTexturePath = "res\freedoom\aqdoor02.png",
-    [string]$SwitchTexturePath = "res\freedoom\comp01_1.png",
-    [string]$HudPath = "res\freedoom\stbar.png",
-    [string]$WeaponIdlePath = "res\freedoom\pisga0.png",
-    [string]$WeaponFirePath = "res\freedoom\pisgb0.png",
-    [string]$BillboardPath = "res\freedoom\bon1a0.png",
-    [string]$BillboardKeyPath = "res\freedoom\bkeya0.png",
-    [string]$BillboardDecorPath = "res\freedoom\bar1a0.png",
-    [string]$BillboardEnemyPath = "res\freedoom\possa1.png",
+    [string]$TexturePath = "res\originaldoom\textures\STONE.png",
+    [string]$WallBrownTexturePath = "res\originaldoom\textures\BROWN1.png",
+    [string]$WallGrayTexturePath = "res\originaldoom\textures\GRAY7.png",
+    [string]$WallMetalTexturePath = "res\originaldoom\textures\METAL1.png",
+    [string]$WallBrickTexturePath = "res\originaldoom\textures\STONE2.png",
+    [string]$WallTechTexturePath = "res\originaldoom\textures\TEKWALL4.png",
+    [string]$DoorTexturePath = "res\originaldoom\textures\DOOR3.png",
+    [string]$LockedDoorTexturePath = "res\originaldoom\textures\BIGDOOR2.png",
+    [string]$SwitchTexturePath = "res\originaldoom\textures\SW1COMP.png",
+    [string]$HudPath = "res\originaldoom\graphics\STBAR.png",
+    [string]$WeaponIdlePath = "res\originaldoom\sprites\PISGA0.png",
+    [string]$WeaponFirePath = "res\originaldoom\sprites\PISGB0.png",
+    [string]$FacePath = "res\originaldoom\graphics\STFST01.png",
+    [string]$BillboardPath = "res\originaldoom\sprites\BON1A0.png",
+    [string]$BillboardKeyPath = "res\originaldoom\sprites\BKEYA0.png",
+    [string]$BillboardDecorPath = "res\originaldoom\sprites\BAR1A0.png",
+    [string]$BillboardEnemyPath = "res\originaldoom\sprites\POSSA1.png",
     [int]$BillboardEnemyW = 24,
     [int]$BillboardEnemyH = 48,
     [switch]$BillboardOnly
@@ -35,6 +36,7 @@ $SwitchSourcePath = Join-Path $Root $SwitchTexturePath
 $HudSourcePath = Join-Path $Root $HudPath
 $WeaponIdleSourcePath = Join-Path $Root $WeaponIdlePath
 $WeaponFireSourcePath = Join-Path $Root $WeaponFirePath
+$FaceSourcePath = Join-Path $Root $FacePath
 $BillboardSourcePath = Join-Path $Root $BillboardPath
 $BillboardKeySourcePath = Join-Path $Root $BillboardKeyPath
 $BillboardDecorSourcePath = Join-Path $Root $BillboardDecorPath
@@ -84,6 +86,9 @@ if (-not (Test-Path $WeaponIdleSourcePath)) {
 }
 if (-not (Test-Path $WeaponFireSourcePath)) {
     throw "Weapon fire source not found: $WeaponFireSourcePath"
+}
+if (-not (Test-Path $FaceSourcePath)) {
+    throw "Face source not found: $FaceSourcePath"
 }
 if (-not (Test-Path $BillboardSourcePath)) {
     throw "Billboard source not found: $BillboardSourcePath"
@@ -328,6 +333,57 @@ function Convert-HudTiles([string]$Path) {
     return $tiles
 }
 
+# Doom-guy face (STFST*). Packs the sprite into a 24x32 (3x4 tile) block so it
+# drops straight into the recessed face slot of the status bar. The sprite is
+# top-aligned; rows below it are filled with the slot's recessed panel colour
+# (palette index 3). Unlike Convert-HudTiles this keeps skin/red/brown indices
+# (no luminance desaturation) so the portrait does not turn grey.
+$FaceTileW = 3
+$FaceTileH = 4
+$FaceBgIndex = 3
+
+function Convert-FaceTiles([string]$Path) {
+    $image = [System.Drawing.Bitmap]::new($Path)
+    $tiles = New-Object System.Collections.Generic.List[string]
+    $blockW = $FaceTileW * 8
+    $blockH = $FaceTileH * 8
+
+    try {
+        for ($tileY = 0; $tileY -lt $FaceTileH; $tileY++) {
+            for ($tileX = 0; $tileX -lt $FaceTileW; $tileX++) {
+                $rows = New-Object System.Collections.Generic.List[string]
+
+                for ($row = 0; $row -lt 8; $row++) {
+                    $packed = [uint32]0
+
+                    for ($col = 0; $col -lt 8; $col++) {
+                        $x = ($tileX * 8) + $col
+                        $y = ($tileY * 8) + $row
+                        $index = $FaceBgIndex
+
+                        if (($x -lt $image.Width) -and ($y -lt $image.Height)) {
+                            $pixel = $image.GetPixel($x, $y)
+                            if ($pixel.A -ge 128) {
+                                $index = Get-NearestPaletteIndex $pixel
+                            }
+                        }
+
+                        $packed = ($packed -shl 4) -bor ($index -band 0x0F)
+                    }
+
+                    $rows.Add(("0x{0:X8}" -f $packed))
+                }
+
+                $tiles.Add("    {" + ($rows -join ", ") + "}")
+            }
+        }
+    } finally {
+        $image.Dispose()
+    }
+
+    return $tiles
+}
+
 $wallRows = Convert-Image $SourcePath 16 16 $false
 $wallBrownRows = Convert-Image $WallBrownSourcePath 16 16 $false
 $wallGrayRows = Convert-Image $WallGraySourcePath 16 16 $false
@@ -340,6 +396,7 @@ $switchRows = Convert-Image $SwitchSourcePath 16 16 $false
 $weaponIdleRows = Convert-WeaponOverlay $WeaponIdleSourcePath $false
 $weaponFireRows = Convert-WeaponOverlay $WeaponFireSourcePath $true
 $hudTiles = Convert-HudTiles $HudSourcePath
+$faceTiles = Convert-FaceTiles $FaceSourcePath
 $billboardRows = Convert-Image $BillboardSourcePath 16 16 $true
 $billboardKeyRows = Convert-Image $BillboardKeySourcePath 16 16 $true
 $billboardDecorRows = Convert-Image $BillboardDecorSourcePath 16 16 $true
@@ -356,6 +413,7 @@ $relativeSwitchSource = $SwitchTexturePath.Replace("\", "/")
 $relativeHudSource = $HudPath.Replace("\", "/")
 $relativeWeaponIdleSource = $WeaponIdlePath.Replace("\", "/")
 $relativeWeaponFireSource = $WeaponFirePath.Replace("\", "/")
+$relativeFaceSource = $FacePath.Replace("\", "/")
 $relativeBillboardSource = $BillboardPath.Replace("\", "/")
 $relativeBillboardKeySource = $BillboardKeyPath.Replace("\", "/")
 $relativeBillboardDecorSource = $BillboardDecorPath.Replace("\", "/")
@@ -414,14 +472,23 @@ $hudContent = @"
 #define FREEDOOM_WEAPON_DRAW_Y $WeaponDrawY
 #define FREEDOOM_WEAPON_DRAW_W $WeaponDrawW
 #define FREEDOOM_WEAPON_DRAW_H $WeaponDrawH
+#define FREEDOOM_FACE_TILE_W $FaceTileW
+#define FREEDOOM_FACE_TILE_H $FaceTileH
+#define FREEDOOM_FACE_TILE_COUNT $($FaceTileW * $FaceTileH)
 
 // Generated by tools/convert-freedoom-assets.ps1.
 // HUD source: $relativeHudSource
 // Weapon idle source: $relativeWeaponIdleSource
 // Weapon fire source: $relativeWeaponFireSource
+// Face source: $relativeFaceSource
 // Generated at: $generatedAt
 static const u32 FREEDOOM_HUD_TILES[FREEDOOM_HUD_TILE_COUNT][8] = {
 $($hudTiles -join ",`r`n")
+};
+
+// Doom-guy portrait for the status-bar face slot (3x4 tiles, top-aligned).
+static const u32 FREEDOOM_FACE_TILES[FREEDOOM_FACE_TILE_COUNT][8] = {
+$($faceTiles -join ",`r`n")
 };
 
 static const u8 FREEDOOM_WEAPON_IDLE[FREEDOOM_WEAPON_H][FREEDOOM_WEAPON_W] = {

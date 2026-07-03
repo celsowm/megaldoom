@@ -14,6 +14,7 @@
 #define PAIR_TILE_BASE (VIEW_TILE_BASE + VIEW_DYNAMIC_TILE_COUNT)
 #define PAIR_TILE_COUNT 256
 #define HUD_TILE_BASE (PAIR_TILE_BASE + PAIR_TILE_COUNT)
+#define FACE_TILE_BASE (HUD_TILE_BASE + FREEDOOM_HUD_TILE_COUNT)
 #define VIEW_TILEMAP_X 10
 #define VIEW_TILEMAP_Y 5
 #define COMPASS_X 3
@@ -24,6 +25,11 @@
 #define HUD_PANEL_Y 21
 #define HUD_PANEL_W 32
 #define HUD_PANEL_H 7
+
+// Doom-guy portrait sits in the recessed face slot at the centre of the status
+// bar (panel tile columns ~14-17). 3x4 tiles, top of the recessed interior.
+#define HUD_FACE_TILE_X (HUD_PANEL_X + 15)
+#define HUD_FACE_TILE_Y (HUD_PANEL_Y + 1)
 
 extern u32 g_pair_tiles[PAIR_TILE_COUNT][8];
 extern u32 g_view_tiles[VIEW_TILE_COUNT][8];

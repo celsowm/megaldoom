@@ -53,6 +53,7 @@ static void sync_hud(u32 frame,
     g_hud.frame = frame;
     g_hud.phase = (u16)((phase_index % 99) + 1);
     g_hud.player_health = player_health;
+    g_hud.health_percent = (u16)((player_health * 100u) / PLAYER_MAX_HEALTH);
     g_hud.shot_cooldown = shot_cooldown;
     g_hud.enemy_count = billboard_get_enemy_count();
     g_hud.target_count = billboard_get_target_count();

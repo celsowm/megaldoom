@@ -31,6 +31,9 @@ static void init_video(void) {
     PAL_setColor(14, RGB24_TO_VDPCOLOR(0x484038));
     PAL_setColor(15, RGB24_TO_VDPCOLOR(0x4C6028));
 
+    // Palette line 1, foreground slot (index 15): Doom-red status-bar numerals.
+    PAL_setColor(31, RGB24_TO_VDPCOLOR(0xF04028));
+
     VDP_clearPlane(BG_A, TRUE);
     VDP_clearPlane(BG_B, TRUE);
     VDP_setBackgroundColor(0);
@@ -69,6 +72,7 @@ static void init_pair_tiles(void) {
 
 static void init_hud_tiles(void) {
     VDP_loadTileData((const u32 *)FREEDOOM_HUD_TILES, HUD_TILE_BASE, FREEDOOM_HUD_TILE_COUNT, DMA);
+    VDP_loadTileData((const u32 *)FREEDOOM_FACE_TILES, FACE_TILE_BASE, FREEDOOM_FACE_TILE_COUNT, DMA);
 }
 
 static void init_wall_sampling_table(void) {
