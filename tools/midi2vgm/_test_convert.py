@@ -22,7 +22,7 @@ with open(vgm_path, "rb") as f:
 print("Magic: %s" % d[:4])
 ver = struct.unpack_from("<I", d, 8)[0]
 sn = struct.unpack_from("<I", d, 0x0C)[0]
-ym = struct.unpack_from("<I", d, 0x30)[0]
+ym = struct.unpack_from("<I", d, 0x2C)[0]
 doff = struct.unpack_from("<I", d, 0x34)[0]
 total = struct.unpack_from("<I", d, 0x18)[0]
 rate = struct.unpack_from("<I", d, 0x24)[0]

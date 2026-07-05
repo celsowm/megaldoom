@@ -80,6 +80,68 @@ static const u32 REP4[16] = {
 // wall loop never branches on shade or calls shade_texel(). Built once at init.
 static u8 g_wall_tex_shaded[9][16][16];
 
+// Precomposed weapon overlay: the weapon bitmap is static per variant (idle /
+// fire), so instead of re-testing ~72x54 pixels every redraw we bake, once at
+// init, one (dst, clear_mask, value) op per affected tile-row. Drawing then
+// becomes a handful of hundred u32 read-modify-writes: dst = (dst & ~clear) | val.
+// Result is byte-identical to the old per-pixel loop (each nibble is written by
+// exactly one weapon pixel; transparent pixels leave clear/val bits at 0).
+// Stored as a struct-of-arrays to keep .bss tiny (MD has only 64KB RAM shared by
+// heap + stack): a u16 flat index into g_view_tiles[][] plus the packed weapon
+// nibbles. clear_mask is NOT stored - it is derived at draw time (see below),
+// which is exact because weapon texels are 4bpp palette indices 1..15, so every
+// opaque pixel leaves a nonzero nibble in value.
+//
+// Theoretical max = affected tile span (10 x 8 tiles) * 8 rows; assets currently
+// use 331 (idle) / 277 (fire). The builder guards against overflow.
+#define WEAPON_MAX_ROW_OPS 384
+static u16 g_weapon_dst[2][WEAPON_MAX_ROW_OPS];   // flat u32 index into g_view_tiles
+static u32 g_weapon_value[2][WEAPON_MAX_ROW_OPS]; // weapon nibbles at their shifts
+static u16 g_weapon_op_count[2];
+
+static void build_weapon_overlay_ops(void) {
+    const u16 bottom_y = FREEDOOM_WEAPON_DRAW_Y + FREEDOOM_WEAPON_DRAW_H;
+    const u16 right_x = FREEDOOM_WEAPON_DRAW_X + FREEDOOM_WEAPON_DRAW_W;
+    const u16 tx_start = (u16)(FREEDOOM_WEAPON_DRAW_X >> 3);
+    const u16 tx_end = (u16)((right_x - 1) >> 3);
+
+    for (u16 v = 0; v < 2; v++) {
+        const u8 (*weapon)[FREEDOOM_WEAPON_W] = v ? FREEDOOM_WEAPON_FIRE : FREEDOOM_WEAPON_IDLE;
+        u16 count = 0;
+
+        for (u16 y = FREEDOOM_WEAPON_DRAW_Y; y < bottom_y; y++) {
+            const u16 tile_y = (u16)(y >> 3);
+            const u16 row_y = (u16)(y & 7);
+
+            for (u16 tile_x = tx_start; tile_x <= tx_end; tile_x++) {
+                const u16 x0 = (u16)(tile_x * 8);
+                const u16 x_begin = (x0 > FREEDOOM_WEAPON_DRAW_X) ? x0 : (u16)FREEDOOM_WEAPON_DRAW_X;
+                const u16 x_stop = ((x0 + 8) < right_x) ? (u16)(x0 + 8) : right_x;
+                u32 clear_mask = 0;
+                u32 value = 0;
+
+                for (u16 x = x_begin; x < x_stop; x++) {
+                    const u8 texel = weapon[y][x];
+                    if (texel != 0) {
+                        const u16 shift = (u16)((7 - (x & 7)) * 4);
+                        clear_mask |= (u32)0x0F << shift;
+                        value |= (u32)(texel & 0x0F) << shift;
+                    }
+                }
+
+                if ((clear_mask != 0) && (count < WEAPON_MAX_ROW_OPS)) {
+                    const u16 tile_index = (u16)((tile_y * VIEW_TILE_W) + tile_x);
+                    g_weapon_dst[v][count] = (u16)((tile_index * 8u) + row_y);
+                    g_weapon_value[v][count] = value;
+                    count++;
+                }
+            }
+        }
+
+        g_weapon_op_count[v] = count;
+    }
+}
+
 void renderer_scene_init(void) {
     for (u16 t = 0; t < 9; t++) {
         for (u16 row = 0; row < 16; row++) {
@@ -88,6 +150,8 @@ void renderer_scene_init(void) {
             }
         }
     }
+
+    build_weapon_overlay_ops();
 }
 
 // Build a full vertical color strip for one ray column, resolving the texture
@@ -180,12 +244,20 @@ static void draw_billboard_spans(const RayColumn *columns, const BillboardSpan *
         // span->tex_x is a 0-255 normalized horizontal fraction (projection is
         // sprite-size-agnostic); scale it back to this sprite's real width here.
         const u8 tex_x = (u8)(((u16)span->tex_x * tex.w) >> 8);
-        // Reuse the precomputed (rel_y * 16 / h) table to avoid a per-pixel divide,
-        // but only for 16-tall sprites (it bakes in the 16); taller sprites (enemy)
-        // and h outside [1, VIEW_PIXEL_H] fall back to a divide. Enemies are sparse,
-        // so these divides stay off the wall hot path.
+        // Reuse the precomputed (rel_y * 16 / h) table for 16-tall sprites (it bakes
+        // in the 16). Taller sprites (the enemy) use an exact Bresenham DDA below so
+        // the inner loop never does a per-pixel multiply+divide, yet stays
+        // byte-identical to (rel_y * tex.h) / height.
         const bool use_table = (tex.h == 16) && (height >= 1) && (height <= VIEW_PIXEL_H);
         const u8 *ty_table = use_table ? g_wall_tex_y_by_height[height] : NULL;
+
+        // Collapse the per-pixel colour remap into a 16-entry LUT resolved once per
+        // span, so the inner loop does one table lookup instead of a branch. Every
+        // remap maps 0 -> 0, so lut[0] == 0 preserves transparency.
+        u8 lut[16];
+        for (u16 c = 0; c < 16; c++) {
+            lut[c] = remap_billboard_texel(span->visual_id, (u8)c);
+        }
 
         const u16 col = (u16)span->column;
         const u16 tile_x = (u16)(col >> 3);
@@ -201,7 +273,20 @@ static void draw_billboard_spans(const RayColumn *columns, const BillboardSpan *
             y1 = VIEW_PIXEL_H - 1;
         }
 
+        // DDA state for the non-table path: exact floor(rel_y * tex.h / height),
+        // advanced by add/compare per pixel (no divide). Seeded from the first
+        // visible row (rel_y_start) when the span is clipped at the top.
+        const s16 rel_y_start = (s16)((s16)y0 - span->top);
+        u16 tex_y = 0;
+        u16 err = 0;
+        if (!use_table) {
+            const s32 num = (s32)rel_y_start * tex.h;
+            tex_y = (u16)(num / height);
+            err = (u16)(num % height);
+        }
+
         u16 y = (u16)y0;
+        u16 rel_y = (u16)rel_y_start;
         const u16 y_end = (u16)(y1 + 1);
         while (y < y_end) {
             const u16 tile_y = (u16)(y >> 3);
@@ -209,50 +294,49 @@ static void draw_billboard_spans(const RayColumn *columns, const BillboardSpan *
             const u16 next_tile_y = (u16)((tile_y + 1) * 8);
             const u16 stop = (next_tile_y < y_end) ? next_tile_y : y_end;
 
-            for (; y < stop; y++) {
-                const s16 rel_y = (s16)((s16)y - span->top);
-                const u8 tex_y = use_table ? ty_table[rel_y] : (u8)((rel_y * tex.h) / height);
-                const u8 texel = remap_billboard_texel(span->visual_id, tex.pixels[(tex_y * tex.w) + tex_x]);
+            for (; y < stop; y++, rel_y++) {
+                u16 ty;
+                if (use_table) {
+                    ty = ty_table[rel_y];
+                } else {
+                    ty = tex_y;
+                    err = (u16)(err + tex.h);
+                    while (err >= (u16)height) {
+                        err = (u16)(err - (u16)height);
+                        tex_y++;
+                    }
+                }
+
+                const u8 texel = lut[tex.pixels[(ty * tex.w) + tex_x] & 0x0F];
 
                 if (texel != 0) {
                     const u16 row_y = (u16)(y & 7);
-                    tile[row_y] = (tile[row_y] & keep_mask) | ((u32)(texel & 0x0F) << shift);
+                    tile[row_y] = (tile[row_y] & keep_mask) | ((u32)texel << shift);
                 }
             }
         }
     }
 }
 
-// Same tile-walk strategy as draw_billboard_spans: for each screen column the
-// tile_x/shift/keep_mask are constant, and the tile-row base address is computed
-// once per 8-row band (not per pixel), avoiding the per-pixel divide + RMW that
-// the old set_view_column_color path did over all ~72x54 weapon pixels.
+// Draw the static weapon overlay from its precomposed per-tile-row ops (built
+// once in build_weapon_overlay_ops). Each op is a single u32 read-modify-write,
+// so an idle frame costs a few hundred RMWs instead of ~72x54 per-pixel tests.
 static void draw_weapon_overlay(bool flash) {
-    const u8 (*weapon)[FREEDOOM_WEAPON_W] = flash ? FREEDOOM_WEAPON_FIRE : FREEDOOM_WEAPON_IDLE;
-    const u16 bottom_y = FREEDOOM_WEAPON_DRAW_Y + FREEDOOM_WEAPON_DRAW_H;
-    const u16 right_x = FREEDOOM_WEAPON_DRAW_X + FREEDOOM_WEAPON_DRAW_W;
+    const u16 v = flash ? 1 : 0;
+    const u16 *dst_idx = g_weapon_dst[v];
+    const u32 *values = g_weapon_value[v];
+    const u16 count = g_weapon_op_count[v];
+    u32 *base = &g_view_tiles[0][0];
 
-    for (u16 x = FREEDOOM_WEAPON_DRAW_X; x < right_x; x++) {
-        const u16 tile_x = (u16)(x >> 3);
-        const u16 shift = (u16)((7 - (x & 7)) * 4);
-        const u32 keep_mask = ~((u32)0x0F << shift);
-        u16 y = FREEDOOM_WEAPON_DRAW_Y;
-
-        while (y < bottom_y) {
-            const u16 tile_y = (u16)(y >> 3);
-            u32 *tile = g_view_tiles[(tile_y * VIEW_TILE_W) + tile_x]; // multiply once per band
-            const u16 next_tile_y = (u16)((tile_y + 1) * 8);
-            const u16 stop = (next_tile_y < bottom_y) ? next_tile_y : bottom_y;
-
-            for (; y < stop; y++) {
-                const u8 texel = weapon[y][x];
-
-                if (texel != 0) {
-                    const u16 row_y = (u16)(y & 7);
-                    tile[row_y] = (tile[row_y] & keep_mask) | ((u32)(texel & 0x0F) << shift);
-                }
-            }
-        }
+    for (u16 i = 0; i < count; i++) {
+        const u32 val = values[i];
+        // Rebuild clear_mask: set every nibble of val that has any bit -> 0x0F.
+        // t marks nonzero nibbles (low bit each); (t<<4)-t expands 0x1 -> 0xF per
+        // nibble with no cross-nibble carry (0xF < 0x10). Exact for 4bpp texels.
+        const u32 t = (val | (val >> 1) | (val >> 2) | (val >> 3)) & 0x11111111u;
+        const u32 clear_mask = (t << 4) - t;
+        u32 *dst = base + dst_idx[i];
+        *dst = (*dst & ~clear_mask) | val;
     }
 }
 

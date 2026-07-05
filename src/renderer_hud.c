@@ -89,33 +89,65 @@ static u16 compute_face_frame(const RendererHudState *state) {
     return (u16)FACE_FRAME_ST(bracket, dir);
 }
 
+// Cached copies of the four HUD numbers last written to the tilemap, so the
+// per-frame path only issues VDP_drawText (slow per-tile VRAM writes) for values
+// that actually changed. Sentinel 0xFFFF forces a full repaint after a reset.
+static u16 s_last_ammo = 0xFFFF;
+static u16 s_last_health = 0xFFFF;
+static u16 s_last_frags = 0xFFFF;
+static u16 s_last_armor = 0xFFFF;
+
 void renderer_draw_static_screen(void) {
     draw_hud_backdrop();
     s_last_face_frame = 0xFFFF;
+    s_last_ammo = 0xFFFF;
+    s_last_health = 0xFFFF;
+    s_last_frags = 0xFFFF;
+    s_last_armor = 0xFFFF;
     draw_hud_face((u16)FACE_FRAME_ST(0, 1));
 }
 
 void renderer_draw_hud(const RendererHudState *state) {
     char text[4];
+    const u16 armor = (u16)(state->pickups.key + state->pickups.bonus);
+    const bool numbers_changed = (state->shot_cooldown != s_last_ammo) ||
+                                 (state->health_percent != s_last_health) ||
+                                 (state->enemy_count != s_last_frags) ||
+                                 (armor != s_last_armor);
 
     // Doom-red numerals (palette line 1, foreground index 15) so they read
     // clearly against the grey metal bar. Restore the default text palette
-    // afterwards so other on-screen text stays as-is.
-    VDP_setTextPalette(PAL1);
+    // afterwards so other on-screen text stays as-is. Only touch VRAM for the
+    // numbers that changed since the last frame.
+    if (numbers_changed) {
+        VDP_setTextPalette(PAL1);
 
-    write_u16_2(state->shot_cooldown, text);
-    VDP_drawText(text, HUD_AMMO_X, HUD_NUM_ROW);
+        if (state->shot_cooldown != s_last_ammo) {
+            write_u16_2(state->shot_cooldown, text);
+            VDP_drawText(text, HUD_AMMO_X, HUD_NUM_ROW);
+            s_last_ammo = state->shot_cooldown;
+        }
 
-    write_u16_3(state->health_percent, text);
-    VDP_drawText(text, HUD_HEALTH_X, HUD_NUM_ROW);
+        if (state->health_percent != s_last_health) {
+            write_u16_3(state->health_percent, text);
+            VDP_drawText(text, HUD_HEALTH_X, HUD_NUM_ROW);
+            s_last_health = state->health_percent;
+        }
 
-    write_u16_2(state->enemy_count, text);
-    VDP_drawText(text, HUD_FRAGS_X, HUD_NUM_ROW);
+        if (state->enemy_count != s_last_frags) {
+            write_u16_2(state->enemy_count, text);
+            VDP_drawText(text, HUD_FRAGS_X, HUD_NUM_ROW);
+            s_last_frags = state->enemy_count;
+        }
 
-    write_u16_2((u16)(state->pickups.key + state->pickups.bonus), text);
-    VDP_drawText(text, HUD_ARMOR_X, HUD_NUM_ROW);
+        if (armor != s_last_armor) {
+            write_u16_2(armor, text);
+            VDP_drawText(text, HUD_ARMOR_X, HUD_NUM_ROW);
+            s_last_armor = armor;
+        }
 
-    VDP_setTextPalette(PAL0);
+        VDP_setTextPalette(PAL0);
+    }
 
     draw_hud_face(compute_face_frame(state));
 }

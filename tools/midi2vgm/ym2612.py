@@ -20,9 +20,10 @@ Key register summary:
     0xB0-0xB2   Feedback / Algorithm (channels 0-2 on their port)
     0xB4-0xB6   Stereo L/R + AMS/PMS (channels 0-2 on their port)
 
-Frequency formula:
-    FNUM = (f * 2^(19 + block)) / YM2612_clock
-    Choose block so that 1 <= FNUM <= 2047 (maximise FNUM for resolution).
+Frequency formula (OPN2):
+    freq = FNUM * (clock / 144) * 2^(block-1) / 2^20
+    => FNUM = freq * 144 * 2^20 / (clock * 2^(block-1))
+    Choose the smallest block so that FNUM <= 2047 (maximise resolution).
 """
 
 import math
@@ -72,27 +73,29 @@ def note_to_fnum(midi_note, clock=YM2612_CLOCK):
 
 
 def freq_to_fnum(freq, clock=YM2612_CLOCK):
-    """Convert a frequency in Hz to (FNUM, block) for the YM2612."""
+    """Convert a frequency in Hz to (FNUM, block) for the YM2612.
+
+    The YM2612 (OPN2) note relation is:
+        freq = FNUM * (clock / 144) * 2^(block-1) / 2^20
+    which inverts to:
+        FNUM = freq * 144 * 2^20 / (clock * 2^(block-1))
+    FNUM therefore *decreases* as block (octave) increases. We pick the
+    smallest block that keeps FNUM within the 11-bit range (<= 2047), which
+    maximises frequency resolution. (Verified: 440 Hz -> FNUM 1083, block 4.)
+    """
     if freq <= 0:
         return 0, 0
-    # FNUM = freq * 2^(19 + block) / clock
-    # We want the largest block where FNUM <= 2047.
-    # block_max = log2(2047 * clock / freq) - 19
-    block = int(math.floor(math.log2(2047.0 * clock / freq) - 19))
-    if block < 0:
-        block = 0
-    if block > 7:
-        block = 7
-    fnum = int(round(freq * (2 ** (19 + block)) / clock))
-    if fnum > 2047:
+    # Block-0 basis: 2^(block-1) with block=0 is 0.5, so multiply by 2.
+    fnum = freq * 144.0 * (1 << 20) / clock * 2.0
+    block = 0
+    while fnum > 2047.0 and block < 7:
+        fnum /= 2.0
         block += 1
-        if block > 7:
-            block = 7
-        fnum = int(round(freq * (2 ** (19 + block)) / clock))
-        if fnum > 2047:
-            fnum = 2047
+    fnum = int(round(fnum))
     if fnum < 0:
         fnum = 0
+    if fnum > 2047:
+        fnum = 2047
     return fnum, block
 
 

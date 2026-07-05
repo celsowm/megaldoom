@@ -43,6 +43,11 @@ S1, S3, S2, S4 = 0, 1, 2, 3
 ALGORITHM_DUAL_2OP = 4
 CARRIER_OFFSETS = (S2, S4)
 
+# YM2612 algorithm 7: all four operators in parallel (every operator is a
+# carrier). Used for OPL "additive" (connection=1) voices where the two
+# operators sound side by side instead of one modulating the other.
+ALGORITHM_ALL_CARRIERS = 7
+
 # Default patch (used when a GENMIDI voice cannot be translated).
 DEFAULT_OP = {"mul": 1, "dt": 0, "tl": 32, "ar": 31, "dr": 0, "sr": 0,
               "sl": 0, "rr": 8, "am": 0, "rs": 0, "ssg": 0}
@@ -161,8 +166,9 @@ def _opl_op_to_ym(op, is_carrier):
         "ar": _widen_rate(op.ar),
         "dr": _widen_rate(op.dr),
         # OPL EG-type bit: set = sustained (hold at sustain level, no 2nd decay);
-        # clear = percussive (keep decaying). Map to YM2612 D2R (SR) accordingly.
-        "sr": 0 if op.eg_sustain else _widen_rate(op.dr),
+        # clear = percussive (after decaying to SL, keep decaying at RR while the
+        # key is held). Map the percussive second-decay to YM2612 D2R using RR.
+        "sr": 0 if op.eg_sustain else _widen_rate(op.rr),
         "sl": op.sl & 0x0F,
         "rr": op.rr & 0x0F,
         "am": op.am & 0x01,
@@ -185,21 +191,41 @@ def opl_to_patch(instr, stereo=0xC0):
     """Translate a GenMidiInstrument into a YM2612 patch dict.
 
     operators[] is ordered [S1, S3, S2, S4] to match ym2612.write_instrument().
-    voice1 -> S1(mod)/S2(car); voice2 -> S3(mod)/S4(car) for double-voice
-    instruments, otherwise S3/S4 are silenced.
+
+    voice1 occupies the S1/S2 pair, voice2 the S3/S4 pair (double-voice only).
+    The OPL "connection" bit selects the routing:
+      * connection 0 (FM):       modulator -> carrier  (algorithm 4 stack)
+      * connection 1 (additive): both operators are carriers (algorithm 7)
+    A voice1 additive connection forces algorithm 7 for the whole patch, so the
+    second voice is then mapped as parallel carriers too.
     """
     v1 = instr.voice1
     operators = [None, None, None, None]
-    operators[S1] = _opl_op_to_ym(v1.modulator, is_carrier=False)
-    operators[S2] = _opl_op_to_ym(v1.carrier, is_carrier=True)
+
+    if v1.connection == 0:
+        algorithm = ALGORITHM_DUAL_2OP
+        operators[S1] = _opl_op_to_ym(v1.modulator, is_carrier=False)
+        operators[S2] = _opl_op_to_ym(v1.carrier, is_carrier=True)
+    else:
+        # Additive: both OPL operators sound in parallel (both carriers).
+        algorithm = ALGORITHM_ALL_CARRIERS
+        operators[S1] = _opl_op_to_ym(v1.modulator, is_carrier=True)
+        operators[S2] = _opl_op_to_ym(v1.carrier, is_carrier=True)
 
     if instr.double_voice:
         v2 = instr.voice2
-        operators[S3] = _opl_op_to_ym(v2.modulator, is_carrier=False)
+        # With algorithm 7 the S3/S4 pair is also parallel carriers; with
+        # algorithm 4 it is a second FM stack (S3 modulates S4).
+        mod_is_carrier = (algorithm == ALGORITHM_ALL_CARRIERS)
+        operators[S3] = _opl_op_to_ym(v2.modulator, is_carrier=mod_is_carrier)
         operators[S4] = _opl_op_to_ym(v2.carrier, is_carrier=True)
-        # Small detune on the second stack for a natural chorus/thickening.
-        operators[S3]["dt"] = 1
-        operators[S4]["dt"] = 1
+        # Chorus detune of the second voice: DMX offsets its frequency index by
+        # ((fine_tuning / 2) - 64)/32 semitones. We approximate the direction
+        # with the YM2612 detune field (1..3 = sharp, 5..7 = flat).
+        detune = (instr.fine_tuning // 2) - 64
+        dt_val = 1 if detune >= 0 else 5
+        operators[S3]["dt"] = dt_val
+        operators[S4]["dt"] = dt_val
         feedback = v1.feedback
     else:
         operators[S3] = _silent_op()
@@ -207,7 +233,7 @@ def opl_to_patch(instr, stereo=0xC0):
         feedback = v1.feedback
 
     return {
-        "algorithm": ALGORITHM_DUAL_2OP,
+        "algorithm": algorithm,
         "feedback": feedback & 0x07,
         "stereo": stereo,
         "operators": operators,

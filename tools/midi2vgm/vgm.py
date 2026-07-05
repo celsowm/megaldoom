@@ -165,12 +165,11 @@ class VgmWriter:
         struct.pack_into("<I", header, 0x24, rate)
         struct.pack_into("<H", header, 0x28, SN76489_FEEDBACK)
         struct.pack_into("<H", header, 0x2A, SN76489_SR_WIDTH)
+        # 0x2C: YM2612 clock (0x30 is the YM2151 field and must stay 0).
         ym_clock = YM2612_CLOCK_NTSC if self.ntsc else YM2612_CLOCK_PAL
-        struct.pack_into("<I", header, 0x30, ym_clock)
+        struct.pack_into("<I", header, 0x2C, ym_clock)
         # 0x34: data offset (relative to 0x34) — where xgm2tool reads it.
         struct.pack_into("<I", header, 0x34, VGM_DATA_OFFSET_VALUE)
-        # 0x38: standard VGM data offset (relative to 0x38) for spec compliance.
-        struct.pack_into("<I", header, 0x38, 0x08)
 
         return bytes(header) + bytes(data)
 

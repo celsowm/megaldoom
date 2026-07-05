@@ -78,6 +78,7 @@ class Voice:
         self.fm_chan = fm_chan
         self.midi_channel = None    # MIDI channel currently owning this voice
         self.note = -1              # MIDI note currently sounding
+        self.note_offset = 0        # instrument transpose of the resident patch
         self.age = 0                # allocation order (for LRU stealing)
         self.resident_program = -1  # GM program of the patch loaded on the chip
         self.resident_stereo = -1   # stereo bits last written
@@ -143,6 +144,14 @@ class VoicePool:
         self.voices = [Voice(i) for i in range(NUM_VOICES)]
         self._clock = 0
 
+    def _write_freq(self, time, voice, note, pitch_bend):
+        """Emit a frequency write for a voice from its note, resident instrument
+        transpose and the current pitch bend (kept as a continuous value)."""
+        bend = (pitch_bend - 8192) / 8192.0 * PITCH_BEND_SEMITONES
+        adjusted = note + voice.note_offset + bend
+        fnum, block = note_to_fnum(adjusted)
+        self.writer.add_commands(time, write_frequency(voice.fm_chan, fnum, block))
+
     def _pick(self, program):
         """Choose a voice for a new note. Prefer a free voice already holding
         the requested patch, then any free voice, then steal the oldest."""
@@ -176,10 +185,8 @@ class VoicePool:
             voice.resident_stereo = stereo
 
         # Pitch: MIDI note + instrument transpose + pitch bend (semitones).
-        bend = (state.pitch_bend - 8192) / 8192.0 * PITCH_BEND_SEMITONES
-        adjusted = note + patch.get("note_offset", 0) + bend
-        fnum, block = note_to_fnum(int(round(adjusted)))
-        self.writer.add_commands(time, write_frequency(voice.fm_chan, fnum, block))
+        voice.note_offset = patch.get("note_offset", 0)
+        self._write_freq(time, voice, note, state.pitch_bend)
 
         # Velocity / volume / expression -> carrier attenuation.
         tl_adj = _carrier_tl_adjust(state.volume, state.expression, velocity)
@@ -202,6 +209,13 @@ class VoicePool:
                 voice.midi_channel = None
                 voice.note = -1
                 return
+
+    def bend(self, time, channel):
+        """Re-apply a channel's pitch bend to all voices it currently owns."""
+        pitch_bend = self.states[channel].pitch_bend
+        for voice in self.voices:
+            if voice.midi_channel == channel and voice.note >= 0:
+                self._write_freq(time, voice, voice.note, pitch_bend)
 
     def repan(self, time, channel):
         """Re-apply a channel's pan to all voices it currently owns."""
@@ -250,6 +264,8 @@ def convert_midi_to_vgm(midi_data, ntsc=True, loop=True):
 
         elif ev.kind == "pitch_bend" and state:
             state.pitch_bend = ev.data["value"]
+            if ev.channel != DRUM_CHANNEL:
+                pool.bend(time, ev.channel)
 
         elif ev.kind == "note_on":
             note, vel = ev.data["note"], ev.data["velocity"]
