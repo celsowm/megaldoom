@@ -13,6 +13,13 @@
 // Runtime open state per seg (only door segs are ever set open).
 static bool g_seg_open[BSP_MAX_SEGS];
 
+// Collision and line-of-sight scan all bsp_seg_count segs; on the 68000 the real
+// cost is the per-seg s32 multiplies in seg_point_dist2 / cross3. We reject
+// far-away segs first with a few cheap compares against the seg's AABB (min/max of
+// its two vertices), computed inline from the vertex table — no multiply, and no
+// extra RAM (MD has only 64KB, so a per-seg bbox array is too costly). Almost every
+// seg is far from any given query and rejects here.
+
 void bsp_map_reset(u16 phase_index) {
     (void)phase_index;
     for (u16 i = 0; i < bsp_seg_count; i++) {
@@ -64,7 +71,20 @@ bool bsp_circle_blocked(s32 x, s32 y, s32 radius) {
         if (g_seg_open[i]) {
             continue;
         }
-        if (seg_point_dist2(&bsp_segs[i], x, y) < r2) {
+        const BspSeg *s = &bsp_segs[i];
+        const BspVertex *a = &bsp_vertices[s->v1];
+        const BspVertex *b = &bsp_vertices[s->v2];
+        // Broad-phase: skip segs whose AABB (expanded by radius) can't contain the
+        // point. Cheap compares, no multiply — rejects almost all 388 segs.
+        const s16 minx = (a->x < b->x) ? a->x : b->x;
+        const s16 maxx = (a->x > b->x) ? a->x : b->x;
+        const s16 miny = (a->y < b->y) ? a->y : b->y;
+        const s16 maxy = (a->y > b->y) ? a->y : b->y;
+        if ((x + radius < minx) || (x - radius > maxx) ||
+            (y + radius < miny) || (y - radius > maxy)) {
+            continue;
+        }
+        if (seg_point_dist2(s, x, y) < r2) {
             return TRUE;
         }
     }
@@ -76,12 +96,28 @@ static s32 cross3(s32 ax, s32 ay, s32 bx, s32 by, s32 cx, s32 cy) {
 }
 
 bool bsp_segment_hits_wall(s32 x0, s32 y0, s32 x1, s32 y1) {
+    // Ray AABB, used to reject non-overlapping segs before the 4 cross3 multiplies.
+    const s32 ray_minx = (x0 < x1) ? x0 : x1;
+    const s32 ray_maxx = (x0 > x1) ? x0 : x1;
+    const s32 ray_miny = (y0 < y1) ? y0 : y1;
+    const s32 ray_maxy = (y0 > y1) ? y0 : y1;
+
     for (u16 i = 0; i < bsp_seg_count; i++) {
         if (g_seg_open[i]) {
             continue;
         }
         const BspVertex *a = &bsp_vertices[bsp_segs[i].v1];
         const BspVertex *b = &bsp_vertices[bsp_segs[i].v2];
+        // Broad-phase: if the ray AABB and seg AABB don't overlap, no crossing.
+        // Seg AABB computed inline from the vertices (no extra RAM).
+        const s16 seg_minx = (a->x < b->x) ? a->x : b->x;
+        const s16 seg_maxx = (a->x > b->x) ? a->x : b->x;
+        const s16 seg_miny = (a->y < b->y) ? a->y : b->y;
+        const s16 seg_maxy = (a->y > b->y) ? a->y : b->y;
+        if ((ray_maxx < seg_minx) || (ray_minx > seg_maxx) ||
+            (ray_maxy < seg_miny) || (ray_miny > seg_maxy)) {
+            continue;
+        }
         const s32 d1 = cross3(x0, y0, x1, y1, a->x, a->y);
         const s32 d2 = cross3(x0, y0, x1, y1, b->x, b->y);
         const s32 d3 = cross3(a->x, a->y, b->x, b->y, x0, y0);

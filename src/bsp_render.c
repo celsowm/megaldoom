@@ -93,12 +93,16 @@ static void draw_seg(u16 seg_index) {
         xL = xb; xR = xa; depthL = depthB; depthR = depthA; uL = uB; uR = uA;
     }
 
-    const s32 span = xR - xL;
+    const s32 span = xR - xL; // > 0 (xa != xb guarded above, ordered xL < xR)
     // Perspective-correct interpolation is linear in 1/depth and u/depth.
     const s32 invzL = BSP_INV_SCALE / depthL;
     const s32 invzR = BSP_INV_SCALE / depthR;
     const s32 uzL = uL * invzL;
     const s32 uzR = uR * invzR;
+    // Reciprocal of the span, Q8, computed once per seg so the inner loop's
+    // horizontal fraction is a multiply instead of a per-column divide. Matches
+    // the old ((x-xL)<<8)/span to within the reciprocal's truncation.
+    const s32 inv_span = ((s32)FX_ONE << FX_SHIFT) / span;
 
     const u8 tid = seg->texture_id;
     const u8 shade = (seg->ny != 0) ? 1 : 0; // N/S walls use the shaded copy
@@ -122,7 +126,7 @@ static void draw_seg(u16 seg_index) {
             continue;
         }
 
-        const s32 sfix = ((x - xL) << FX_SHIFT) / span; // 0..256 across span
+        const s32 sfix = (((x - xL) * inv_span) >> FX_SHIFT); // 0..256 across span
         const s32 invz = invzL + (((invzR - invzL) * sfix) >> FX_SHIFT);
         if (invz <= 0) {
             continue;
@@ -135,7 +139,10 @@ static void draw_seg(u16 seg_index) {
         }
         const s32 u_col = uz / invz;
 
-        s32 height = ((s32)BSP_VIEW_PIXEL_H * FX_ONE) / depth_col;
+        // height = BSP_VIEW_PIXEL_H*FX_ONE / depth_col, but depth_col = INV_SCALE/invz,
+        // so fold to a multiply+shift and skip a divide. invz > 0 here (guarded), and
+        // BSP_VIEW_PIXEL_H*FX_ONE*invz (<= ~31M) fits in s32.
+        s32 height = ((s32)BSP_VIEW_PIXEL_H * FX_ONE * invz) >> 14; // BSP_INV_SCALE == 1<<14
         if (height < 1) {
             height = 1;
         } else if (height > BSP_VIEW_PIXEL_H) {
@@ -180,7 +187,8 @@ static void render_node(u16 child) {
 }
 
 void bsp_init(void) {
-    // Nothing to precompute yet; kept for symmetry with raycast_init().
+    // Nothing to precompute; the collision/LOS broad-phase computes seg AABBs
+    // inline from the vertex table (no per-seg RAM on the 64KB MD).
 }
 
 void bsp_cast_frame(const PlayerState *player, RayColumn *columns) {

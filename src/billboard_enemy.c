@@ -3,8 +3,30 @@
 
 #define ENEMY_RADIUS 24
 
+// Line-of-sight is the one heavy (full-map seg scan) call an awake enemy makes
+// every frame; movement collision is already gated behind move_cooldown. Refresh
+// each enemy's LOS only every ENEMY_LOS_REFRESH frames, staggered by index so the
+// scans spread across frames instead of all landing on one. Enemy reactions lag by
+// at most this many frames, which is imperceptible at the ~4-tic AI cadence.
+#define ENEMY_LOS_REFRESH 3
+static bool s_los_cache[BILLBOARD_OBJECT_COUNT];
+static u16 s_ai_tick;
+
 static bool has_line_of_sight(const BillboardObject *object, const PlayerState *player) {
     return !bsp_segment_hits_wall(object->x, object->y, player->x, player->y);
+}
+
+// Awake-gated, throttled line-of-sight: recompute (and cache) only on this enemy's
+// scheduled frame, otherwise reuse the cached result. Asleep enemies never consult
+// LOS, so skip the scan entirely for them.
+static bool resolve_visible(u16 index, bool awake, const BillboardObject *object, const PlayerState *player) {
+    if (!awake) {
+        return FALSE;
+    }
+    if (((s_ai_tick + index) % ENEMY_LOS_REFRESH) == 0) {
+        s_los_cache[index] = has_line_of_sight(object, player);
+    }
+    return s_los_cache[index];
 }
 
 static s16 get_step_toward(s32 delta) {
@@ -105,7 +127,7 @@ static bool separate_dummies(BillboardObject *left, BillboardObject *right) {
     return moved;
 }
 
-static bool update_dummy_alive(BillboardObject *object, const PlayerState *player, u16 *hits) {
+static bool update_dummy_alive(u16 index, BillboardObject *object, const PlayerState *player, u16 *hits) {
     const s32 player_dx = player->x - object->x;
     const s32 player_dy = player->y - object->y;
     const s32 player_dist_sq = (player_dx * player_dx) + (player_dy * player_dy);
@@ -116,7 +138,9 @@ static bool update_dummy_alive(BillboardObject *object, const PlayerState *playe
     const s32 seen_dy = object->last_seen_y - object->y;
     const s32 seen_dist_sq = (seen_dx * seen_dx) + (seen_dy * seen_dy);
     const bool awake = (player_dist_sq <= DUMMY_WAKE_RANGE_SQ) || object->has_last_seen;
-    const bool visible = has_line_of_sight(object, player);
+    // Throttled, awake-gated line-of-sight (see resolve_visible). `visible` is only
+    // read under `awake` branches below.
+    const bool visible = resolve_visible(index, awake, object, player);
     bool moved = FALSE;
 
     if (object->move_cooldown > 0) {
@@ -242,7 +266,7 @@ static void advance_death(BillboardObject *object) {
 
 // Wrapper over the live AI / death animation. Returns TRUE when the enemy moved
 // OR its visible pose changed, so main.c redraws (reuses the .moved -> redraw path).
-static bool update_dummy(BillboardObject *object, const PlayerState *player, u16 *hits) {
+static bool update_dummy(u16 index, BillboardObject *object, const PlayerState *player, u16 *hits) {
     const u8 prev_frame = billboard_get_object_frame(object);
     bool moved;
 
@@ -250,7 +274,7 @@ static bool update_dummy(BillboardObject *object, const PlayerState *player, u16
         advance_death(object);
         moved = FALSE;
     } else {
-        moved = update_dummy_alive(object, player, hits);
+        moved = update_dummy_alive(index, object, player, hits);
     }
 
     if (billboard_get_object_frame(object) != prev_frame) {
@@ -264,6 +288,8 @@ BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player) {
     BillboardEnemyUpdate update = {FALSE, 0, 0, 0};
     s32 best_hit_dist = 0x7FFFFFFF;
 
+    s_ai_tick++; // advances the staggered line-of-sight refresh schedule
+
     for (u16 i = 0; i < BILLBOARD_OBJECT_COUNT; i++) {
         BillboardObject *object = &g_billboards[i];
         const s32 dx = player->x - object->x;
@@ -275,7 +301,7 @@ BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player) {
             continue;
         }
 
-        if (update_dummy(object, player, &update.hits)) {
+        if (update_dummy(i, object, player, &update.hits)) {
             update.moved = TRUE;
         }
 

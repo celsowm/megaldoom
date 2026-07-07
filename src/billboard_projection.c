@@ -53,34 +53,51 @@ static u16 billboard_project_one(const PlayerState *player,
     return count;
 }
 
-static void sort_spans_far_to_near(BillboardSpan *spans, u16 count) {
-    if (count < 2) {
-        return;
-    }
-
-    for (u16 pass = 0; pass < (count - 1); pass++) {
-        for (u16 i = 0; i < (count - 1 - pass); i++) {
-            if (spans[i].depth < spans[i + 1].depth) {
-                const BillboardSpan tmp = spans[i];
-                spans[i] = spans[i + 1];
-                spans[i + 1] = tmp;
-            }
-        }
-    }
-}
-
 u16 billboard_project_scene(const PlayerState *player, BillboardSpan *spans, u16 max_spans) {
-    u16 count = 0;
+    // Depth ordering is a per-object property, so sort the (<= 7) visible objects
+    // once here instead of bubble-sorting the ~150 per-column spans they expand
+    // into (the old O(spans^2) pass). Emitting objects far -> near means the nearer
+    // object's span is written last and overwrites in any shared column — the same
+    // visual result the span sort produced.
+    struct {
+        u8 index;
+        s32 forward;
+    } order[BILLBOARD_OBJECT_COUNT];
+    u16 visible = 0;
 
     for (u16 i = 0; i < BILLBOARD_OBJECT_COUNT; i++) {
+        BillboardMeasure measure;
+
+        if (!billboard_measure_object(player, &g_billboards[i], &measure)) {
+            continue;
+        }
+        order[visible].index = (u8)i;
+        order[visible].forward = measure.forward;
+        visible++;
+    }
+
+    // Insertion sort, far (large forward) -> near (small forward). n <= 7.
+    for (u16 a = 1; a < visible; a++) {
+        const u8 idx = order[a].index;
+        const s32 fwd = order[a].forward;
+        s16 b = (s16)(a - 1);
+
+        while ((b >= 0) && (order[b].forward < fwd)) {
+            order[b + 1] = order[b];
+            b--;
+        }
+        order[b + 1].index = idx;
+        order[b + 1].forward = fwd;
+    }
+
+    u16 count = 0;
+    for (u16 k = 0; k < visible; k++) {
         if (count >= max_spans) {
             break;
         }
-
-        count = (u16)(count + billboard_project_one(player, &g_billboards[i], &spans[count], (u16)(max_spans - count)));
+        count = (u16)(count + billboard_project_one(player, &g_billboards[order[k].index], &spans[count],
+                                                    (u16)(max_spans - count)));
     }
-
-    sort_spans_far_to_near(spans, count);
 
     return count;
 }

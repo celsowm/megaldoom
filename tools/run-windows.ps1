@@ -4,7 +4,8 @@ param(
     [ValidateSet("Auto", "BlastEm", "ares")]
     [string]$Emulator = "Auto",
     [switch]$NoBuild,
-    [switch]$NoClean
+    [switch]$NoClean,
+    [switch]$DebugPerf
 )
 
 $ErrorActionPreference = "Stop"
@@ -72,11 +73,10 @@ function Find-LocalEmulator([string]$Name) {
 }
 
 if (-not $NoBuild) {
-    if ($NoClean) {
-        & (Join-Path $PSScriptRoot "build-windows.ps1") -NoClean
-    } else {
-        & (Join-Path $PSScriptRoot "build-windows.ps1")
-    }
+    $buildArgs = @()
+    if ($NoClean) { $buildArgs += "-NoClean" }
+    if ($DebugPerf) { $buildArgs += "-DebugPerf" }
+    & (Join-Path $PSScriptRoot "build-windows.ps1") @buildArgs
 }
 
 $RomPath = Resolve-LocalPath $RomPath

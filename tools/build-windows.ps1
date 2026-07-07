@@ -1,6 +1,7 @@
 param(
     [string]$GdkPath = $env:GDK,
-    [switch]$NoClean
+    [switch]$NoClean,
+    [switch]$DebugPerf
 )
 
 $ErrorActionPreference = "Stop"
@@ -30,6 +31,26 @@ if (-not $GdkPath -or -not (Test-Path (Join-Path $GdkPath "makefile.gen"))) {
 $env:GDK = $GdkPath
 $Make = Join-Path $GdkPath "bin\make.exe"
 if (-not (Test-Path $Make)) { $Make = "make" }
+
+# SGDK's makefile.gen folds $(EXTRA_FLAGS) into every compile's CFLAGS but never
+# assigns it itself, so it falls through to this environment variable. Object
+# files carry no record of which flags built them, so a define toggle must force
+# a full rebuild or stale .o files silently keep the old behavior.
+if ($DebugPerf) {
+    $env:EXTRA_FLAGS = "-DDEBUG_PERF=1"
+    if ($NoClean) {
+        Write-Host "-DebugPerf forces a clean rebuild (object files don't track compiler flags); ignoring -NoClean." -ForegroundColor Yellow
+        $NoClean = $false
+    }
+} elseif ($env:EXTRA_FLAGS -eq "-DDEBUG_PERF=1") {
+    # Previous invocation in this shell left DEBUG_PERF on; drop it so a plain
+    # rebuild doesn't silently keep the perf overlay.
+    Remove-Item Env:\EXTRA_FLAGS
+    if ($NoClean) {
+        Write-Host "Clearing a stale DEBUG_PERF build forces a clean rebuild; ignoring -NoClean." -ForegroundColor Yellow
+        $NoClean = $false
+    }
+}
 
 Push-Location $Root
 try {
