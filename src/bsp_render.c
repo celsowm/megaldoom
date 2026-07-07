@@ -102,6 +102,15 @@ static void draw_seg(u16 seg_index) {
 
     const u8 tid = seg->texture_id;
     const u8 shade = (seg->ny != 0) ? 1 : 0; // N/S walls use the shaded copy
+    // Per-texture horizontal repeat: the 16-texel-wide texture must span one full
+    // period of the source Doom texture (Doom maps 1 texel == 1 world unit), so it
+    // repeats every source_width world units instead of a fixed 256. ushift =
+    // log2(source_width / 16). Indexed by texture_id; order matches WALL_TEX[] in
+    // renderer_scene.c / the converter's wall list:
+    //   0 STONE(256) 1 DOOR3(64) 2 BIGDOOR2(128) 3 SW1COMP(64) 4 BROWN1(128)
+    //   5 GRAY7(256) 6 METAL1(64) 7 STONE2(128) 8 TEKWALL4(128)
+    static const u8 WALL_TEX_USHIFT[9] = {4, 2, 3, 2, 3, 4, 2, 3, 3};
+    const u8 ushift = WALL_TEX_USHIFT[(tid < 9) ? tid : 0];
 
     s32 x0 = xL;
     s32 x1 = xR - 1;
@@ -136,7 +145,7 @@ static void draw_seg(u16 seg_index) {
         RayColumn *col = &g_columns[x];
         col->height = (u16)height;
         col->depth = (u16)depth_col;
-        col->tex_x = (u8)((u_col >> 4) & 15);
+        col->tex_x = (u8)((u_col >> ushift) & 15);
         col->texture_id = tid;
         col->shade = shade;
 

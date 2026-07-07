@@ -51,7 +51,10 @@ static u8 remap_damaged_dummy_texel(u8 texel) {
 }
 
 static u8 shade_texel(u8 texel) {
-    static const u8 SHADED_COLOR_MAP[16] = {0, 6, 2, 2, 3, 4, 5, 6, 8, 8, 9, 10, 12, 12, 14, 14};
+    // Maps each palette colour to a darker variant for shaded (N/S) walls. Index 10
+    // (brown) must darken to 8 (dark brown), NOT 9 (blue) — that typo turned every
+    // shaded brown wall sky-blue.
+    static const u8 SHADED_COLOR_MAP[16] = {0, 6, 2, 2, 3, 4, 5, 6, 8, 8, 8, 10, 12, 12, 14, 14};
 
     return SHADED_COLOR_MAP[texel & 15];
 }

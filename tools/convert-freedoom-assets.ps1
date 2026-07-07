@@ -172,6 +172,11 @@ function Get-NearestPaletteIndex([System.Drawing.Color]$Color) {
 }
 
 function Convert-Image([string]$Path, [int]$Width, [int]$Height, [bool]$UseAlphaTransparency) {
+    # Area/box downscale: each output texel is the AVERAGE of the full source
+    # rectangle it covers, then quantized to the palette. Point sampling (grabbing
+    # a single source pixel) aliased high-frequency Doom textures into random-looking
+    # texels; averaging first preserves the texture's overall structure so a 128x128
+    # STONE/BROWN reads as a real (if low-res) wall instead of static.
     $image = [System.Drawing.Bitmap]::new($Path)
     $rows = New-Object System.Collections.Generic.List[string]
 
@@ -179,16 +184,57 @@ function Convert-Image([string]$Path, [int]$Width, [int]$Height, [bool]$UseAlpha
         for ($y = 0; $y -lt $Height; $y++) {
             $values = New-Object System.Collections.Generic.List[string]
 
+            # Floor (not [int], which rounds) and clamp the start so upscaling small
+            # sprites can never push the source rect past the image edge (empty rect
+            # -> divide-by-zero).
+            $sy0 = [Math]::Min($image.Height - 1, [int][Math]::Floor(($y * $image.Height) / $Height))
+            $sy1 = [int][Math]::Floor((($y + 1) * $image.Height) / $Height)
+            if ($sy1 -le $sy0) { $sy1 = $sy0 + 1 }
+            if ($sy1 -gt $image.Height) { $sy1 = $image.Height }
+
             for ($x = 0; $x -lt $Width; $x++) {
-                $srcX = [Math]::Min($image.Width - 1, [int](($x * $image.Width) / $Width))
-                $srcY = [Math]::Min($image.Height - 1, [int](($y * $image.Height) / $Height))
-                $pixel = $image.GetPixel($srcX, $srcY)
+                $sx0 = [Math]::Min($image.Width - 1, [int][Math]::Floor(($x * $image.Width) / $Width))
+                $sx1 = [int][Math]::Floor((($x + 1) * $image.Width) / $Width)
+                if ($sx1 -le $sx0) { $sx1 = $sx0 + 1 }
+                if ($sx1 -gt $image.Width) { $sx1 = $image.Width }
+
+                $sumR = 0; $sumG = 0; $sumB = 0; $sumA = 0; $count = 0
+                $opR = 0; $opG = 0; $opB = 0; $opCount = 0
+
+                for ($sy = $sy0; $sy -lt $sy1; $sy++) {
+                    for ($sx = $sx0; $sx -lt $sx1; $sx++) {
+                        $p = $image.GetPixel($sx, $sy)
+                        $sumR += $p.R; $sumG += $p.G; $sumB += $p.B; $sumA += $p.A
+                        $count++
+                        if ($p.A -ge 128) {
+                            $opR += $p.R; $opG += $p.G; $opB += $p.B; $opCount++
+                        }
+                    }
+                }
+
                 $index = 0
 
-                if ((-not $UseAlphaTransparency) -or ($pixel.A -ge 128)) {
-                    $index = Get-NearestPaletteIndex $pixel
-                    if ($UseAlphaTransparency -and ($index -eq 0)) {
-                        $index = 2
+                if (-not $UseAlphaTransparency) {
+                    $avg = [System.Drawing.Color]::FromArgb(
+                        [int]($sumR / $count), [int]($sumG / $count), [int]($sumB / $count))
+                    $index = Get-NearestPaletteIndex $avg
+                } else {
+                    # Sprites: a texel is transparent only when the covered area is
+                    # mostly transparent. Otherwise average the OPAQUE pixels so edge
+                    # texels are not darkened toward black by transparent neighbours.
+                    $avgA = $sumA / $count
+                    if ($avgA -ge 128) {
+                        if ($opCount -gt 0) {
+                            $avg = [System.Drawing.Color]::FromArgb(
+                                [int]($opR / $opCount), [int]($opG / $opCount), [int]($opB / $opCount))
+                        } else {
+                            $avg = [System.Drawing.Color]::FromArgb(
+                                [int]($sumR / $count), [int]($sumG / $count), [int]($sumB / $count))
+                        }
+                        $index = Get-NearestPaletteIndex $avg
+                        if ($index -eq 0) {
+                            $index = 2
+                        }
                     }
                 }
 
