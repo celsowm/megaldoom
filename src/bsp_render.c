@@ -26,6 +26,25 @@ static s32 abs_s32(s32 v) {
     return (v < 0) ? -v : v;
 }
 
+// Source Doom texture width (px) per texture_id; order matches WALL_TEX[] in
+// renderer_scene.c and the converter's wall list:
+//   0 STONE 1 DOOR3 2 BIGDOOR2 3 SW1COMP 4 BROWN1 5 GRAY7 6 METAL1 7 STONE2 8 TEKWALL4
+static const u16 WALL_TEX_SRC_WIDTH[RAY_TEXTURE_COUNT] = {
+    256, 64, 128, 64, 128, 256, 64, 128, 128};
+
+// Horizontal repeat shift = log2(source_width / WALL_TEX_DIM). Both operands are
+// powers of two, so this is an exact integer log2 of their ratio. Assumes the
+// source is at least WALL_TEX_DIM wide (true for every wall texture: min 64).
+static u8 wall_tex_ushift(u8 tid) {
+    u16 ratio = (u16)(WALL_TEX_SRC_WIDTH[tid] / WALL_TEX_DIM);
+    u8 shift = 0;
+    while (ratio > 1) {
+        ratio = (u16)(ratio >> 1);
+        shift++;
+    }
+    return shift;
+}
+
 // Draw one one-sided wall segment into the RayColumn buffer, respecting the
 // solid-column occlusion buffer. Uniform full-height wall. Open doors are
 // skipped (rendered as a passable gap).
@@ -106,15 +125,12 @@ static void draw_seg(u16 seg_index) {
 
     const u8 tid = seg->texture_id;
     const u8 shade = (seg->ny != 0) ? 1 : 0; // N/S walls use the shaded copy
-    // Per-texture horizontal repeat: the 16-texel-wide texture must span one full
+    // Per-texture horizontal repeat: the WALL_TEX_DIM-wide texture must span one full
     // period of the source Doom texture (Doom maps 1 texel == 1 world unit), so it
-    // repeats every source_width world units instead of a fixed 256. ushift =
-    // log2(source_width / 16). Indexed by texture_id; order matches WALL_TEX[] in
-    // renderer_scene.c / the converter's wall list:
-    //   0 STONE(256) 1 DOOR3(64) 2 BIGDOOR2(128) 3 SW1COMP(64) 4 BROWN1(128)
-    //   5 GRAY7(256) 6 METAL1(64) 7 STONE2(128) 8 TEKWALL4(128)
-    static const u8 WALL_TEX_USHIFT[9] = {4, 2, 3, 2, 3, 4, 2, 3, 3};
-    const u8 ushift = WALL_TEX_USHIFT[(tid < 9) ? tid : 0];
+    // repeats every source_width world units instead of a fixed 256. The shift is
+    // log2(source_width / WALL_TEX_DIM), derived here from the source widths so it
+    // tracks WALL_TEX_DIM automatically instead of being a hand-baked table.
+    const u8 ushift = wall_tex_ushift((tid < RAY_TEXTURE_COUNT) ? tid : 0);
 
     s32 x0 = xL;
     s32 x1 = xR - 1;
@@ -152,7 +168,7 @@ static void draw_seg(u16 seg_index) {
         RayColumn *col = &g_columns[x];
         col->height = (u16)height;
         col->depth = (u16)depth_col;
-        col->tex_x = (u8)((u_col >> ushift) & 15);
+        col->tex_x = (u8)((u_col >> ushift) & WALL_TEX_DIM_MASK);
         col->texture_id = tid;
         col->shade = shade;
 

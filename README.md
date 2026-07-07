@@ -123,9 +123,26 @@ export EMULATOR=/opt/blastem/blastem
 .\tools\setup-sgdk-windows.ps1 [-BuildLibrary] [-Force]
 .\tools\download-emulator-windows.ps1 [-Emulator All|BlastEm|ares] [-Stable] [-Force]
 .\tools\build-windows.ps1 [-NoClean]
+.\tools\test-windows.ps1 [-NoBuild] [-NoClean]
+.\tools\check-rom.ps1
 .\tools\run-windows.ps1 [-Emulator Auto|BlastEm|ares] [-NoBuild] [-NoClean] [-RomPath out\rom.bin]
 .\tools\clean-windows.ps1
 ```
+
+If you have Node installed, `package.json` wraps the common ones so they feel like
+any Node project: `npm run build`, `npm run test`, `npm run check`, `npm run play`,
+`npm run assets`.
+
+### Guardrails (`npm run test` / `tools\test-windows.ps1`)
+
+`test-windows.ps1` builds the ROM and then runs `check-rom.ps1`, which fails the
+build on problems that otherwise only surface at runtime in the emulator. The main
+one is the **work-RAM budget**: the Mega Drive has 64 KB of work RAM shared by
+static data (`.data` + `.bss`), the stack and SGDK's heap. Oversized static data
+starves the heap and SGDK panics `not enough memory to reset VDP` at boot. The
+check reads section sizes from `size.exe` and errors when too little RAM is left
+free. Prefer `const` data (it lives in cartridge ROM, not work RAM) and avoid large
+mutable globals. Run it before committing or launching BlastEm.
 
 ### Linux
 

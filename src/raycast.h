@@ -9,6 +9,20 @@
 // 4 = 4px (~40 cols, original cost). Must divide 8. Lower = sharper but slower.
 #define RAY_COL_STRIDE 4
 
+// Wall/door/switch textures are WALL_TEX_DIM x WALL_TEX_DIM palette-index texels
+// (see generated_assets.h). This is the single source of truth for the wall
+// texture size; every consumer derives from it:
+//   - RayColumn.tex_x and the vertical sampler wrap with WALL_TEX_DIM_MASK
+//     (so WALL_TEX_DIM MUST stay a power of two),
+//   - bsp_render.c derives each seg's horizontal ushift from it,
+//   - renderer.c builds the x-WALL_TEX_DIM vertical sampling table from it,
+//   - the generated arrays are declared [WALL_TEX_DIM][WALL_TEX_DIM].
+// To change it: set this macro AND $WallDim in tools/convert-freedoom-assets.ps1
+// to the same power-of-two value, then regenerate. A mismatch fails to compile
+// (wrong number of array initializers), so the two can't silently drift.
+#define WALL_TEX_DIM 32
+#define WALL_TEX_DIM_MASK (WALL_TEX_DIM - 1)
+
 typedef struct {
     s32 x;
     s32 y;
@@ -26,6 +40,10 @@ typedef enum {
     RAY_TEXTURE_WALL_BRICK = 7,
     RAY_TEXTURE_WALL_TECH = 8
 } RayTextureId;
+
+// Number of distinct wall textures (RayTextureId 0..8); sizes the WALL_TEX table,
+// the pre-shaded copies and the source-width table, all keyed by texture_id.
+#define RAY_TEXTURE_COUNT 9
 
 typedef struct {
     u16 height;

@@ -30,7 +30,7 @@
 // Weapon idle source: res/originaldoom/sprites/PISGA0.png
 // Weapon fire source: res/originaldoom/sprites/PISGB0.png
 // Face source: res/originaldoom/graphics/STFST01.png (animated set baked from res/originaldoom/graphics/STF*.png)
-// Generated at: 2026-07-07T15:38:29-03:00
+// Generated at: 2026-07-07T20:40:37-03:00
 static const u32 FREEDOOM_HUD_TILES[FREEDOOM_HUD_TILE_COUNT][8] = {
     {0x33333333, 0x33333333, 0x33333333, 0x33333333, 0x33333333, 0x33333333, 0x33333333, 0x33333333},
     {0x33333333, 0x33333333, 0x33333333, 0x33333333, 0x33333333, 0x33333333, 0x33333333, 0x33333333},

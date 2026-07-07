@@ -82,9 +82,12 @@ static void init_hud_tiles(void) {
 }
 
 static void init_wall_sampling_table(void) {
+    // Maps a wall pixel row -> texel row for the WALL_TEX_DIM-tall wall textures.
+    // Only walls use this table now; billboards sample via their own exact DDA (they
+    // are 16/48 tall, not WALL_TEX_DIM), so this bakes the wall height unconditionally.
     for (u16 height = 1; height <= VIEW_PIXEL_H; height++) {
         for (u16 rel_y = 0; rel_y < VIEW_PIXEL_H; rel_y++) {
-            g_wall_tex_y_by_height[height][rel_y] = (u8)((rel_y * 16) / height);
+            g_wall_tex_y_by_height[height][rel_y] = (u8)((rel_y * WALL_TEX_DIM) / height);
         }
     }
 }

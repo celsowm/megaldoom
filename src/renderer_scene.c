@@ -50,18 +50,19 @@ static u8 remap_damaged_dummy_texel(u8 texel) {
     return (texel & 1) ? 12 : 2;
 }
 
-static u8 shade_texel(u8 texel) {
-    // Maps each palette colour to a darker variant for shaded (N/S) walls. Index 10
-    // (brown) must darken to 8 (dark brown), NOT 9 (blue) — that typo turned every
-    // shaded brown wall sky-blue.
-    static const u8 SHADED_COLOR_MAP[16] = {0, 6, 2, 2, 3, 4, 5, 6, 8, 8, 8, 10, 12, 12, 14, 14};
-
-    return SHADED_COLOR_MAP[texel & 15];
-}
+// Per-colour remap applied to shaded (N/S) wall texels: each palette colour maps
+// to a darker variant. Index 10 (brown) must darken to 8 (dark brown), NOT 9 (blue)
+// — that typo once turned every shaded brown wall sky-blue. WALL_SHADE_MAP is
+// selected per column in build_column_strip; WALL_IDENT_MAP (colour -> itself) is
+// its unshaded counterpart, so the inner loop applies one LUT either way without a
+// branch. Shading on the fly here instead of pre-baking a [RAY_TEXTURE_COUNT]
+// [WALL_TEX_DIM][WALL_TEX_DIM] copy keeps ~9 KB out of the MD's 64 KB work RAM.
+static const u8 WALL_SHADE_MAP[16] = {0, 6, 2, 2, 3, 4, 5, 6, 8, 8, 8, 10, 12, 12, 14, 14};
+static const u8 WALL_IDENT_MAP[16] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
 
 // Wall texture lookup indexed by texture_id, replacing the per-pixel 8-way branch.
 // Order matches the original sample_wall_texture chain (id 0 == default wall).
-static const u8 (*const WALL_TEX[9])[16] = {
+static const u8 (*const WALL_TEX[RAY_TEXTURE_COUNT])[WALL_TEX_DIM] = {
     FREEDOOM_WALL_TEXTURE,        // 0
     FREEDOOM_DOOR_TEXTURE,        // 1
     FREEDOOM_LOCKED_DOOR_TEXTURE, // 2
@@ -78,10 +79,6 @@ static const u32 REP4[16] = {
     0x0000, 0x1111, 0x2222, 0x3333, 0x4444, 0x5555, 0x6666, 0x7777,
     0x8888, 0x9999, 0xAAAA, 0xBBBB, 0xCCCC, 0xDDDD, 0xEEEE, 0xFFFF,
 };
-
-// Pre-shaded copy of every wall texture (side hits use these), so the per-pixel
-// wall loop never branches on shade or calls shade_texel(). Built once at init.
-static u8 g_wall_tex_shaded[9][16][16];
 
 // Precomposed weapon overlay: the weapon bitmap is static per variant (idle /
 // fire), so instead of re-testing ~72x54 pixels every redraw we bake, once at
@@ -146,14 +143,6 @@ static void build_weapon_overlay_ops(void) {
 }
 
 void renderer_scene_init(void) {
-    for (u16 t = 0; t < 9; t++) {
-        for (u16 row = 0; row < 16; row++) {
-            for (u16 col = 0; col < 16; col++) {
-                g_wall_tex_shaded[t][row][col] = shade_texel(WALL_TEX[t][row][col]);
-            }
-        }
-    }
-
     build_weapon_overlay_ops();
 }
 
@@ -164,13 +153,14 @@ static void build_column_strip(const RayColumn *column, u8 *strip) {
     const u16 wall_h = column->height;
     const u16 top = (u16)((VIEW_PIXEL_H - wall_h) / 2);
     const u16 bottom = (u16)(top + wall_h);
-    const u8 tid = (u8)((column->texture_id <= 8) ? column->texture_id : 0);
-    // Side walls sample a pre-shaded copy so the inner loop stays branch-free and
-    // never calls shade_texel() per pixel. shade_texel(0) == 0, so transparency is
-    // preserved by the table.
-    const u8 (*tex)[16] = column->shade ? g_wall_tex_shaded[tid] : WALL_TEX[tid];
+    const u8 tid = (u8)((column->texture_id < RAY_TEXTURE_COUNT) ? column->texture_id : 0);
+    const u8 (*tex)[WALL_TEX_DIM] = WALL_TEX[tid];
+    // Side walls (N/S) darken every texel through WALL_SHADE_MAP; front walls use the
+    // identity map. Selecting the LUT once per column keeps the inner loop branch-free
+    // and, since map[0] == 0, preserves transparency without a pre-shaded RAM copy.
+    const u8 *shade_map = column->shade ? WALL_SHADE_MAP : WALL_IDENT_MAP;
     const u8 *ty_table = g_wall_tex_y_by_height[wall_h];
-    const u8 tex_x = (u8)(column->tex_x & 15);
+    const u8 tex_x = (u8)(column->tex_x & WALL_TEX_DIM_MASK);
     u16 y = 0;
 
     for (; y < top; y++) {
@@ -178,7 +168,7 @@ static void build_column_strip(const RayColumn *column, u8 *strip) {
     }
 
     for (; y < bottom; y++) {
-        strip[y] = (u8)(tex[ty_table[y - top]][tex_x] & 0x0F);
+        strip[y] = shade_map[tex[ty_table[y - top]][tex_x] & 0x0F];
     }
 
     for (; y < VIEW_PIXEL_H; y++) {
@@ -247,12 +237,11 @@ static void draw_billboard_spans(const RayColumn *columns, const BillboardSpan *
         // span->tex_x is a 0-255 normalized horizontal fraction (projection is
         // sprite-size-agnostic); scale it back to this sprite's real width here.
         const u8 tex_x = (u8)(((u16)span->tex_x * tex.w) >> 8);
-        // Reuse the precomputed (rel_y * 16 / h) table for 16-tall sprites (it bakes
-        // in the 16). Taller sprites (the enemy) use an exact Bresenham DDA below so
-        // the inner loop never does a per-pixel multiply+divide, yet stays
-        // byte-identical to (rel_y * tex.h) / height.
-        const bool use_table = (tex.h == 16) && (height >= 1) && (height <= VIEW_PIXEL_H);
-        const u8 *ty_table = use_table ? g_wall_tex_y_by_height[height] : NULL;
+        // All billboards use the exact Bresenham DDA below (floor(rel_y*tex.h/height),
+        // advanced by add/compare per pixel, no per-pixel divide). The shared wall
+        // sampling table now bakes the 32-texel wall height, so it can no longer be
+        // borrowed for the 16-tall sprites; the DDA is byte-identical to what the
+        // 16-tall table path produced.
 
         // Collapse the per-pixel colour remap into a 16-entry LUT resolved once per
         // span, so the inner loop does one table lookup instead of a branch. Every
@@ -276,20 +265,19 @@ static void draw_billboard_spans(const RayColumn *columns, const BillboardSpan *
             y1 = VIEW_PIXEL_H - 1;
         }
 
-        // DDA state for the non-table path: exact floor(rel_y * tex.h / height),
-        // advanced by add/compare per pixel (no divide). Seeded from the first
-        // visible row (rel_y_start) when the span is clipped at the top.
+        // DDA state: exact floor(rel_y * tex.h / height), advanced by add/compare per
+        // pixel (no divide). Seeded from the first visible row (rel_y_start) when the
+        // span is clipped at the top.
         const s16 rel_y_start = (s16)((s16)y0 - span->top);
-        u16 tex_y = 0;
-        u16 err = 0;
-        if (!use_table) {
+        u16 tex_y;
+        u16 err;
+        {
             const s32 num = (s32)rel_y_start * tex.h;
             tex_y = (u16)(num / height);
             err = (u16)(num % height);
         }
 
         u16 y = (u16)y0;
-        u16 rel_y = (u16)rel_y_start;
         const u16 y_end = (u16)(y1 + 1);
         while (y < y_end) {
             const u16 tile_y = (u16)(y >> 3);
@@ -297,17 +285,12 @@ static void draw_billboard_spans(const RayColumn *columns, const BillboardSpan *
             const u16 next_tile_y = (u16)((tile_y + 1) * 8);
             const u16 stop = (next_tile_y < y_end) ? next_tile_y : y_end;
 
-            for (; y < stop; y++, rel_y++) {
-                u16 ty;
-                if (use_table) {
-                    ty = ty_table[rel_y];
-                } else {
-                    ty = tex_y;
-                    err = (u16)(err + tex.h);
-                    while (err >= (u16)height) {
-                        err = (u16)(err - (u16)height);
-                        tex_y++;
-                    }
+            for (; y < stop; y++) {
+                const u16 ty = tex_y;
+                err = (u16)(err + tex.h);
+                while (err >= (u16)height) {
+                    err = (u16)(err - (u16)height);
+                    tex_y++;
                 }
 
                 const u8 texel = lut[tex.pixels[(ty * tex.w) + tex_x] & 0x0F];

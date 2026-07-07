@@ -58,6 +58,15 @@ try {
         & $Make -f Makefile clean
     }
     & $Make -f Makefile
+    $buildExit = $LASTEXITCODE
 } finally {
     Pop-Location
+}
+
+# make is a native exe, so a non-zero exit does NOT trip $ErrorActionPreference.
+# Surface it explicitly so callers (test-windows.ps1 / CI) can't mistake a failed
+# compile for success.
+if ($buildExit -ne 0) {
+    Write-Host "Build failed (make exit code $buildExit)." -ForegroundColor Red
+    exit $buildExit
 }

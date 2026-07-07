@@ -1,0 +1,13 @@
+{
+  "name": "megaldoom",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Mega Drive / Genesis Doom-like (SGDK). npm scripts are thin wrappers over the PowerShell tooling in tools/ so `npm run build|test|play` work like any Node project.",
+  "scripts": {
+    "build": "pwsh -NoProfile -File tools/build-windows.ps1",
+    "test": "pwsh -NoProfile -File tools/test-windows.ps1",
+    "check": "pwsh -NoProfile -File tools/check-rom.ps1",
+    "assets": "pwsh -NoProfile -File tools/convert-freedoom-assets.ps1",
+    "play": "pwsh -NoProfile -File tools/run-windows.ps1"
+  }
+}

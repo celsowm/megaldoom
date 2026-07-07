@@ -8,7 +8,7 @@
 // Key billboard source: res/originaldoom/sprites/BKEYA0.png
 // Decor billboard source: res/originaldoom/sprites/BAR1A0.png
 // Enemy billboard frames: POSSA1, POSSB1, POSSC1, POSSD1, POSSF1, POSSH0, POSSI0, POSSJ0, POSSK0, POSSL0 (from res\originaldoom\sprites)
-// Generated at: 2026-07-07T15:38:29-03:00
+// Generated at: 2026-07-07T20:40:37-03:00
 // Palette index 0 is transparent for billboard rendering.
 static const u8 FREEDOOM_BILLBOARD_BONUS_TEXTURE[16][16] = {
     {0, 0, 0, 0, 0, 0, 0, 2, 3, 3, 0, 0, 0, 0, 0, 0},

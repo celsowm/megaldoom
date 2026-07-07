@@ -162,15 +162,16 @@ def nearest_index(r, g, b):
     return int(np.argmin((d * d).sum(axis=1)))
 
 
-def convert_to_md(img, width, height, use_alpha):
-    """Return a (indices HxW, has_alpha) tuple replicating Convert-Image.
+def _box_average(img, width, height, use_alpha):
+    """Box-average each output texel -> (rgb float [H,W,3], opaque bool [H,W]).
 
-    Area-average each output texel's source rectangle, then quantize. For alpha
-    assets a texel is transparent only if its covered area is mostly transparent;
-    otherwise the opaque pixels are averaged."""
+    Mirrors Convert-Image's area-average + alpha decision: a texel is transparent
+    only when its covered area is mostly transparent, otherwise the opaque source
+    pixels are averaged (so edge texels are not darkened toward black)."""
     src = np.asarray(img.convert("RGBA"), dtype=np.int32)
     ih, iw = src.shape[:2]
-    out = np.zeros((height, width), dtype=np.uint8)
+    rgb = np.zeros((height, width, 3), dtype=np.float64)
+    opaque = np.ones((height, width), dtype=bool)
 
     for y in range(height):
         sy0 = min(ih - 1, (y * ih) // height)
@@ -189,24 +190,40 @@ def convert_to_md(img, width, height, use_alpha):
             block = src[sy0:sy1, sx0:sx1].reshape(-1, 4)
             alpha = block[:, 3]
 
-            # PowerShell's [int] cast rounds half-to-even; np.rint matches it so the
-            # preview is byte-identical to the generated .h tables.
-            def avg(pool):
-                return (int(np.rint(pool[:, 0].mean())),
-                        int(np.rint(pool[:, 1].mean())),
-                        int(np.rint(pool[:, 2].mean())))
-
-            if not use_alpha:
-                out[y, x] = nearest_index(*avg(block))
+            if use_alpha and alpha.mean() < 128:  # raw mean, matches PS converter
+                opaque[y, x] = False
                 continue
 
-            if alpha.mean() >= 128:  # raw mean compare, matches the PS converter
-                opaque = block[alpha >= 128]
-                idx = nearest_index(*avg(opaque if len(opaque) else block))
-                out[y, x] = 2 if idx == 0 else idx
+            if use_alpha:
+                pool = block[alpha >= 128]
+                if len(pool) == 0:
+                    pool = block
             else:
-                out[y, x] = 0  # transparent
+                pool = block
+            rgb[y, x] = pool[:, :3].mean(axis=0)
 
+    return rgb, opaque
+
+
+def convert_to_md(img, width, height, use_alpha):
+    """Return a (indices HxW, has_alpha) tuple replicating Convert-Image.
+
+    Area-average each output texel's source rectangle, then quantize to the game
+    palette. For alpha assets a texel is transparent only when its covered area is
+    mostly transparent; otherwise the opaque source pixels are averaged."""
+    rgb, opaque = _box_average(img, width, height, use_alpha)
+    out = np.zeros((height, width), dtype=np.uint8)
+
+    for y in range(height):
+        for x in range(width):
+            if use_alpha and not opaque[y, x]:
+                out[y, x] = 0
+                continue
+            # PowerShell's [int] cast rounds half-to-even; np.rint matches it so the
+            # preview stays byte-identical to the generated .h tables.
+            r, g, b = (int(np.rint(v)) for v in rgb[y, x])
+            idx = nearest_index(r, g, b)
+            out[y, x] = 2 if (use_alpha and idx == 0) else idx
     return out, use_alpha
 
 
