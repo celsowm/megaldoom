@@ -3,8 +3,8 @@
 
 #include <genesis.h>
 #include "billboard.h"
+#include "bsp_map.h"
 #include "raycast.h"
-#include "world_map.h"
 
 typedef struct {
     u32 frame;

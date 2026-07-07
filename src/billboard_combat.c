@@ -1,11 +1,10 @@
 #include "billboard_internal.h"
-#include "world_map.h"
+#include "bsp_map.h"
+
+#define ENEMY_RADIUS 24
 
 static bool is_position_blocked(s32 x, s32 y) {
-    const s16 cell_x = (s16)(x / WORLD_CELL_SIZE);
-    const s16 cell_y = (s16)(y / WORLD_CELL_SIZE);
-
-    return world_map_is_solid(cell_x, cell_y);
+    return bsp_circle_blocked(x, y, ENEMY_RADIUS);
 }
 
 static void push_dummy_on_hit(BillboardObject *object, const PlayerState *player) {

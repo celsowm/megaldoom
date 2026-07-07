@@ -1,10 +1,11 @@
 #include <genesis.h>
 #include "billboard.h"
+#include "bsp_map.h"
+#include "bsp_render.h"
 #include "fixed_math.h"
 #include "player_controller.h"
 #include "raycast.h"
 #include "renderer.h"
-#include "world_map.h"
 #include "resources.h"
 
 #define SHOT_COOLDOWN_FRAMES 12
@@ -68,13 +69,13 @@ static void sync_hud(u32 frame,
 }
 
 static void render_current_view(u16 player_health) {
-    raycast_cast_frame(&g_player, g_ray_columns);
+    bsp_cast_frame(&g_player, g_ray_columns);
     renderer_render_scene(
         g_ray_columns, &g_player, g_weapon_flash > 0, g_player_damage_flash > 0, (bool)(player_health <= 1));
 }
 
 static void reset_level(u16 phase_index, bool *level_cleared, u16 *shot_cooldown, u16 *player_health, u32 *frame) {
-    world_map_init(phase_index);
+    bsp_map_reset(phase_index);
     billboard_init(phase_index);
     player_init(&g_player, phase_index);
     g_weapon_flash = 0;
@@ -104,7 +105,7 @@ int main(bool hard) {
 
     JOY_init();
     fx_init_tables();
-    raycast_init();
+    bsp_init();
     renderer_init();
 
     // Sound: load the XGM2 Z80 driver and start background music (the E1M1
@@ -175,7 +176,7 @@ int main(bool hard) {
             const u16 target_count = billboard_get_target_count();
             bool consumed_key = FALSE;
             DoorActionResult action =
-                world_map_toggle_door_in_front(g_player.x, g_player.y, g_player.angle, has_key, &consumed_key);
+                bsp_use_in_front(g_player.x, g_player.y, g_player.angle, has_key, &consumed_key);
 
             if ((action == DOOR_ACTION_EXIT) && (target_count > 0)) {
                 action = DOOR_ACTION_EXIT_LOCKED;

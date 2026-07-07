@@ -1,26 +1,10 @@
 #include "billboard_internal.h"
-#include "world_map.h"
+#include "bsp_map.h"
+
+#define ENEMY_RADIUS 24
 
 static bool has_line_of_sight(const BillboardObject *object, const PlayerState *player) {
-    const s32 dx = player->x - object->x;
-    const s32 dy = player->y - object->y;
-    const s32 adx = (dx < 0) ? -dx : dx;
-    const s32 ady = (dy < 0) ? -dy : dy;
-    const s32 max_delta = (adx > ady) ? adx : ady;
-    const s32 steps = (max_delta / (FX_ONE / 4)) + 1;
-
-    for (s32 i = 1; i < steps; i++) {
-        const s32 sample_x = object->x + ((dx * i) / steps);
-        const s32 sample_y = object->y + ((dy * i) / steps);
-        const s16 cell_x = (s16)(sample_x / WORLD_CELL_SIZE);
-        const s16 cell_y = (s16)(sample_y / WORLD_CELL_SIZE);
-
-        if (world_map_is_solid(cell_x, cell_y)) {
-            return FALSE;
-        }
-    }
-
-    return TRUE;
+    return !bsp_segment_hits_wall(object->x, object->y, player->x, player->y);
 }
 
 static s16 get_step_toward(s32 delta) {
@@ -35,10 +19,7 @@ static s16 get_step_toward(s32 delta) {
 }
 
 static bool is_position_blocked(s32 x, s32 y) {
-    const s16 cell_x = (s16)(x / WORLD_CELL_SIZE);
-    const s16 cell_y = (s16)(y / WORLD_CELL_SIZE);
-
-    return world_map_is_solid(cell_x, cell_y);
+    return bsp_circle_blocked(x, y, ENEMY_RADIUS);
 }
 
 static bool try_move_dummy(BillboardObject *object, s16 step_x, s16 step_y) {
