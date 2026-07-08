@@ -7,7 +7,7 @@
 // Horizontal render granularity: cast/sample one wall column every N pixels and
 // duplicate across the gap. 1 = full 1px detail (heaviest), 2 = 2px (~80 cols),
 // 4 = 4px (~40 cols, original cost). Must divide 8. Lower = sharper but slower.
-#define RAY_COL_STRIDE 4
+#define RAY_COL_STRIDE 2
 
 // Wall/door/switch textures are WALL_TEX_DIM x WALL_TEX_DIM palette-index texels
 // (see generated_assets.h). This is the single source of truth for the wall

@@ -97,7 +97,69 @@ static u16 s_last_health = 0xFFFF;
 static u16 s_last_frags = 0xFFFF;
 static u16 s_last_armor = 0xFFFF;
 
+// Screen is 320x224 = 40x28 tiles (VDP_setScreenWidth320 / Height224 in renderer.c).
+#define SCREEN_TILE_W 40
+#define SCREEN_TILE_H 28
+
+// Viewport window bounds, in tiles, derived from the view tilemap placement.
+#define VIEW_TX0 VIEW_TILEMAP_X
+#define VIEW_TY0 VIEW_TILEMAP_Y
+#define VIEW_TX1 (VIEW_TILEMAP_X + VIEW_TILE_W - 1)
+#define VIEW_TY1 (VIEW_TILEMAP_Y + VIEW_TILE_H - 1)
+
+// Bezel colours (PAL0 indices, see renderer.c init_video): a dark panel base with a
+// light top/left highlight and dark bottom/right shadow for a recessed-window look.
+#define BEZEL_FILL 3
+#define BEZEL_LIGHT 6
+#define BEZEL_SHADOW 2
+
+static void bezel_solid(u16 x, u16 y, u8 color) {
+    renderer_set_bg_pair_tile(x, y, color, color);
+}
+
+// Fill the black margins around the 3D window with a framed panel so the small
+// viewport reads as intentional instead of floating in empty space. Static: painted
+// once per level reset onto BG_B, never touched per frame. Skips the live view
+// window (its tilemap was uploaded once at init) and the HUD panel columns
+// (draw_hud_backdrop paints those). The compass is re-uploaded on top each frame.
+static void renderer_draw_bezel(void) {
+    // Panel base for everything above the HUD, minus the view window itself.
+    for (u16 y = 0; y < HUD_PANEL_Y; y++) {
+        for (u16 x = 0; x < SCREEN_TILE_W; x++) {
+            if ((x >= VIEW_TX0) && (x <= VIEW_TX1) && (y >= VIEW_TY0) && (y <= VIEW_TY1)) {
+                continue;
+            }
+            bezel_solid(x, y, BEZEL_FILL);
+        }
+    }
+
+    // Frame the sides of the HUD (columns outside its 32-wide panel).
+    for (u16 y = HUD_PANEL_Y; y < SCREEN_TILE_H; y++) {
+        for (u16 x = 0; x < HUD_PANEL_X; x++) {
+            bezel_solid(x, y, BEZEL_FILL);
+        }
+        for (u16 x = (HUD_PANEL_X + HUD_PANEL_W); x < SCREEN_TILE_W; x++) {
+            bezel_solid(x, y, BEZEL_FILL);
+        }
+    }
+
+    // Beveled ring just outside the window: light top/left, dark bottom/right.
+    const u16 fx0 = VIEW_TX0 - 1;
+    const u16 fx1 = VIEW_TX1 + 1;
+    const u16 fy0 = VIEW_TY0 - 1;
+    const u16 fy1 = VIEW_TY1 + 1;
+    for (u16 x = fx0; x <= fx1; x++) {
+        bezel_solid(x, fy0, BEZEL_LIGHT);
+        bezel_solid(x, fy1, BEZEL_SHADOW);
+    }
+    for (u16 y = fy0; y <= fy1; y++) {
+        bezel_solid(fx0, y, BEZEL_LIGHT);
+        bezel_solid(fx1, y, BEZEL_SHADOW);
+    }
+}
+
 void renderer_draw_static_screen(void) {
+    renderer_draw_bezel();
     draw_hud_backdrop();
     s_last_face_frame = 0xFFFF;
     s_last_ammo = 0xFFFF;

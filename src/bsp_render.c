@@ -145,6 +145,13 @@ static void draw_seg(u16 seg_index) {
     if (x0 < 0) x0 = 0;
     if (x1 > RAY_VIEW_COLS - 1) x1 = RAY_VIEW_COLS - 1;
 
+    // depth carried to the in-between (non-sampled) columns for billboard occlusion.
+    // Only wall columns on a RAY_COL_STRIDE boundary are ever read for height/texture
+    // by build_raycast_tilemap; the columns between them contribute nothing to the
+    // wall image, so their depth just needs to be close enough (<= STRIDE-1 px off)
+    // for billboard-vs-wall occlusion. Carrying the last boundary depth avoids a
+    // per-column divide entirely on those columns.
+    s32 carry_depth = 0x7FFF;
     for (s32 x = x0; x <= x1; x++) {
         if (g_col_solid[x]) {
             continue;
@@ -156,21 +163,14 @@ static void draw_seg(u16 seg_index) {
             continue;
         }
 
-        s32 depth_col = BSP_INV_SCALE / invz;
-        if (depth_col < 1) {
-            depth_col = 1;
-        }
-
         RayColumn *col = &g_columns[x];
-        // depth is written for every filled column: billboard occlusion
-        // (draw_billboard_spans) samples it at arbitrary columns.
-        col->depth = (u16)depth_col;
 
-        // The renderer only samples wall columns at RAY_COL_STRIDE boundaries
-        // (build_raycast_tilemap reads columns tile_x*8 and tile_x*8+4); the
-        // height/texture fields of the in-between columns are never read. Skip
-        // their extra divide (u_col), the height multiply and the field stores.
         if ((x & (RAY_COL_STRIDE - 1)) == 0) {
+            s32 depth_col = BSP_INV_SCALE / invz;
+            if (depth_col < 1) {
+                depth_col = 1;
+            }
+
             const s32 uz = uzL + (((uzR - uzL) * sfix) >> FX_SHIFT);
             const s32 u_col = uz / invz;
 
@@ -185,9 +185,13 @@ static void draw_seg(u16 seg_index) {
             }
 
             col->height = (u16)height;
+            col->depth = (u16)depth_col;
             col->tex_x = (u8)((u_col >> ushift) & WALL_TEX_DIM_MASK);
             col->texture_id = tid;
             col->shade = shade;
+            carry_depth = depth_col;
+        } else {
+            col->depth = (u16)carry_depth;
         }
 
         g_col_solid[x] = TRUE;

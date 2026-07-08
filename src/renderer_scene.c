@@ -50,15 +50,36 @@ static u8 remap_damaged_dummy_texel(u8 texel) {
     return (texel & 1) ? 12 : 2;
 }
 
-// Per-colour remap applied to shaded (N/S) wall texels: each palette colour maps
-// to a darker variant. Index 10 (brown) must darken to 8 (dark brown), NOT 9 (blue)
-// — that typo once turned every shaded brown wall sky-blue. WALL_SHADE_MAP is
-// selected per column in build_column_strip; WALL_IDENT_MAP (colour -> itself) is
-// its unshaded counterpart, so the inner loop applies one LUT either way without a
-// branch. Shading on the fly here instead of pre-baking a [RAY_TEXTURE_COUNT]
-// [WALL_TEX_DIM][WALL_TEX_DIM] copy keeps ~9 KB out of the MD's 64 KB work RAM.
+// Per-colour remap that darkens each wall texel by one step. Index 10 (brown) must
+// darken to 8 (dark brown), NOT 9 (blue) — that typo once turned every shaded brown
+// wall sky-blue. This is the single darkening step; the fog LUTs below apply it 0..N
+// times per column, so shading on the fly keeps a pre-baked [RAY_TEXTURE_COUNT]
+// [WALL_TEX_DIM][WALL_TEX_DIM] copy (~9 KB) out of the MD's 64 KB work RAM.
 static const u8 WALL_SHADE_MAP[16] = {0, 6, 2, 2, 3, 4, 5, 6, 8, 8, 8, 10, 12, 12, 14, 14};
-static const u8 WALL_IDENT_MAP[16] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
+
+// Distance fog: walls are darkened in discrete steps the farther they are, giving
+// the scene depth instead of a flat full-bright look. Level 0 is the identity map
+// (nearest); each higher level applies WALL_SHADE_MAP once more, reusing that same
+// hand-verified darkening ramp (so colour 10 brown still darkens to 8, never to
+// blue). The LUTs are built once in renderer_scene_init from WALL_SHADE_MAP, then
+// selected per column by depth in build_column_strip. N/S ("shade") walls just add
+// one extra level, replacing the old two-map branch.
+#define SHADE_LEVELS 4
+// depth (world units) >> FOG_SHIFT picks the base fog level. Tuned so mid-room
+// walls sit around level 1-2 and distant walls saturate at the darkest level.
+#define FOG_SHIFT 9
+static u8 g_shade_luts[SHADE_LEVELS][16];
+
+static void build_shade_luts(void) {
+    for (u16 c = 0; c < 16; c++) {
+        g_shade_luts[0][c] = (u8)c; // level 0 == identity (WALL_IDENT_MAP)
+    }
+    for (u16 level = 1; level < SHADE_LEVELS; level++) {
+        for (u16 c = 0; c < 16; c++) {
+            g_shade_luts[level][c] = WALL_SHADE_MAP[g_shade_luts[level - 1][c] & 0x0F];
+        }
+    }
+}
 
 // Wall texture lookup indexed by texture_id, replacing the per-pixel 8-way branch.
 // Order matches the original sample_wall_texture chain (id 0 == default wall).
@@ -74,11 +95,20 @@ static const u8 (*const WALL_TEX[RAY_TEXTURE_COUNT])[WALL_TEX_DIM] = {
     FREEDOOM_WALL_TECH_TEXTURE,   // 8
 };
 
-// REP4[c] == c * 0x1111: a 4-bit color replicated across 4 nibbles (4 pixels).
+// Pixel-replication table for the active stride (guarded so the unused one isn't
+// compiled): REP4[c] == c*0x1111 spreads a colour across 4px (stride 4); REP2[c] ==
+// c*0x11 spreads it across 2px (stride 2, four cast columns per 8px tile).
+#if RAY_COL_STRIDE == 4
 static const u32 REP4[16] = {
     0x0000, 0x1111, 0x2222, 0x3333, 0x4444, 0x5555, 0x6666, 0x7777,
     0x8888, 0x9999, 0xAAAA, 0xBBBB, 0xCCCC, 0xDDDD, 0xEEEE, 0xFFFF,
 };
+#else /* RAY_COL_STRIDE == 2 */
+static const u32 REP2[16] = {
+    0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+    0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF,
+};
+#endif
 
 // Precomposed weapon overlay: the weapon bitmap is static per variant (idle /
 // fire), so instead of re-testing ~72x54 pixels every redraw we bake, once at
@@ -144,6 +174,7 @@ static void build_weapon_overlay_ops(void) {
 
 void renderer_scene_init(void) {
     build_weapon_overlay_ops();
+    build_shade_luts();
 }
 
 // Build a full vertical color strip for one ray column, resolving the texture
@@ -155,10 +186,15 @@ static void build_column_strip(const RayColumn *column, u8 *strip) {
     const u16 bottom = (u16)(top + wall_h);
     const u8 tid = (u8)((column->texture_id < RAY_TEXTURE_COUNT) ? column->texture_id : 0);
     const u8 (*tex)[WALL_TEX_DIM] = WALL_TEX[tid];
-    // Side walls (N/S) darken every texel through WALL_SHADE_MAP; front walls use the
-    // identity map. Selecting the LUT once per column keeps the inner loop branch-free
-    // and, since map[0] == 0, preserves transparency without a pre-shaded RAM copy.
-    const u8 *shade_map = column->shade ? WALL_SHADE_MAP : WALL_IDENT_MAP;
+    // Distance fog + side shading fold into one LUT selection per column: the fog
+    // level grows with depth, and N/S ("shade") walls add one extra darkening step.
+    // g_shade_luts[0] is the identity, so near front walls are unshaded; every level
+    // maps 0 -> 0, preserving transparency, and the inner loop stays branch-free.
+    u16 fog_level = (u16)(column->depth >> FOG_SHIFT) + (column->shade ? 1u : 0u);
+    if (fog_level > (SHADE_LEVELS - 1)) {
+        fog_level = SHADE_LEVELS - 1;
+    }
+    const u8 *shade_map = g_shade_luts[fog_level];
     const u8 *ty_table = g_wall_tex_y_by_height[wall_h];
     const u8 tex_x = (u8)(column->tex_x & WALL_TEX_DIM_MASK);
     u16 y = 0;
@@ -176,8 +212,8 @@ static void build_column_strip(const RayColumn *column, u8 *strip) {
     }
 }
 
-#if RAY_COL_STRIDE != 4
-#error "build_raycast_tilemap packs 2 strided columns per 8px tile; assumes RAY_COL_STRIDE == 4"
+#if (RAY_COL_STRIDE != 4) && (RAY_COL_STRIDE != 2)
+#error "build_raycast_tilemap only implements the RAY_COL_STRIDE == 4 and == 2 packers"
 #endif
 
 static u8 remap_billboard_texel(u8 visual_id, u8 texel) {
@@ -191,6 +227,7 @@ static u8 remap_billboard_texel(u8 visual_id, u8 texel) {
     return texel;
 }
 
+#if RAY_COL_STRIDE == 4
 static void build_raycast_tilemap(const RayColumn *columns) {
     u8 strip_a[VIEW_PIXEL_H];
     u8 strip_b[VIEW_PIXEL_H];
@@ -214,6 +251,36 @@ static void build_raycast_tilemap(const RayColumn *columns) {
         }
     }
 }
+#else /* RAY_COL_STRIDE == 2 */
+static void build_raycast_tilemap(const RayColumn *columns) {
+    u8 strip_a[VIEW_PIXEL_H];
+    u8 strip_b[VIEW_PIXEL_H];
+    u8 strip_c[VIEW_PIXEL_H];
+    u8 strip_d[VIEW_PIXEL_H];
+
+    // Each 8px-wide tile column maps to four cast columns (px 0, 2, 4, 6), each
+    // replicated 2x -> twice the horizontal detail of the stride-4 packer at the
+    // same tile count / DMA cost. Pack MSB-first: px0,1 in the top nibbles.
+    for (u16 tile_x = 0; tile_x < VIEW_TILE_W; tile_x++) {
+        const u16 base_col = (u16)(tile_x * 8);
+        build_column_strip(&columns[base_col], strip_a);
+        build_column_strip(&columns[base_col + 2], strip_b);
+        build_column_strip(&columns[base_col + 4], strip_c);
+        build_column_strip(&columns[base_col + 6], strip_d);
+
+        for (u16 tile_y = 0; tile_y < VIEW_TILE_H; tile_y++) {
+            const u16 tile_index = (u16)((tile_y * VIEW_TILE_W) + tile_x);
+            u16 pixel_y = (u16)(tile_y * 8);
+
+            for (u16 row = 0; row < 8; row++, pixel_y++) {
+                g_view_tiles[tile_index][row] =
+                    (REP2[strip_a[pixel_y]] << 24) | (REP2[strip_b[pixel_y]] << 16) |
+                    (REP2[strip_c[pixel_y]] << 8) | REP2[strip_d[pixel_y]];
+            }
+        }
+    }
+}
+#endif
 
 // Draw the one-column billboard spans on top of the packed wall tiles. This is
 // O(visible billboard pixels): cheap for scattered sprites (turning) yet bounded
