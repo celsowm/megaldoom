@@ -2,6 +2,14 @@
 #include "bsp_map.h"
 #include "fixed_math.h"
 
+// draw_seg only computes the height/texture fields at columns on a RAY_COL_STRIDE
+// boundary, matching the columns build_raycast_tilemap actually samples. That
+// relies on the stride being a power of two (the (x & (STRIDE-1)) test) and on
+// the renderer sampling at multiples of it (enforced there by RAY_COL_STRIDE==4).
+#if (RAY_COL_STRIDE & (RAY_COL_STRIDE - 1)) != 0
+#error "draw_seg's strided-column optimization requires RAY_COL_STRIDE to be a power of two"
+#endif
+
 // --- Projection constants ---------------------------------------------------
 // View is RAY_VIEW_COLS (160) px wide; center column is 80. PROJ is tuned so the
 // horizontal field of view matches the raycaster's 48 degrees:
@@ -147,30 +155,40 @@ static void draw_seg(u16 seg_index) {
         if (invz <= 0) {
             continue;
         }
-        const s32 uz = uzL + (((uzR - uzL) * sfix) >> FX_SHIFT);
 
         s32 depth_col = BSP_INV_SCALE / invz;
         if (depth_col < 1) {
             depth_col = 1;
         }
-        const s32 u_col = uz / invz;
-
-        // height = BSP_VIEW_PIXEL_H*FX_ONE / depth_col, but depth_col = INV_SCALE/invz,
-        // so fold to a multiply+shift and skip a divide. invz > 0 here (guarded), and
-        // BSP_VIEW_PIXEL_H*FX_ONE*invz (<= ~31M) fits in s32.
-        s32 height = ((s32)BSP_VIEW_PIXEL_H * FX_ONE * invz) >> 14; // BSP_INV_SCALE == 1<<14
-        if (height < 1) {
-            height = 1;
-        } else if (height > BSP_VIEW_PIXEL_H) {
-            height = BSP_VIEW_PIXEL_H;
-        }
 
         RayColumn *col = &g_columns[x];
-        col->height = (u16)height;
+        // depth is written for every filled column: billboard occlusion
+        // (draw_billboard_spans) samples it at arbitrary columns.
         col->depth = (u16)depth_col;
-        col->tex_x = (u8)((u_col >> ushift) & WALL_TEX_DIM_MASK);
-        col->texture_id = tid;
-        col->shade = shade;
+
+        // The renderer only samples wall columns at RAY_COL_STRIDE boundaries
+        // (build_raycast_tilemap reads columns tile_x*8 and tile_x*8+4); the
+        // height/texture fields of the in-between columns are never read. Skip
+        // their extra divide (u_col), the height multiply and the field stores.
+        if ((x & (RAY_COL_STRIDE - 1)) == 0) {
+            const s32 uz = uzL + (((uzR - uzL) * sfix) >> FX_SHIFT);
+            const s32 u_col = uz / invz;
+
+            // height = BSP_VIEW_PIXEL_H*FX_ONE / depth_col, but depth_col = INV_SCALE/invz,
+            // so fold to a multiply+shift and skip a divide. invz > 0 here (guarded), and
+            // BSP_VIEW_PIXEL_H*FX_ONE*invz (<= ~31M) fits in s32.
+            s32 height = ((s32)BSP_VIEW_PIXEL_H * FX_ONE * invz) >> 14; // BSP_INV_SCALE == 1<<14
+            if (height < 1) {
+                height = 1;
+            } else if (height > BSP_VIEW_PIXEL_H) {
+                height = BSP_VIEW_PIXEL_H;
+            }
+
+            col->height = (u16)height;
+            col->tex_x = (u8)((u_col >> ushift) & WALL_TEX_DIM_MASK);
+            col->texture_id = tid;
+            col->shade = shade;
+        }
 
         g_col_solid[x] = TRUE;
         g_solid_count++;
