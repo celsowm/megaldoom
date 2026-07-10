@@ -24,6 +24,9 @@ res/originaldoom/
 # via tools/extract-mus.py + tools/midi2vgm/mus2midi.py; derived from WAD)
 res/music/mus/
 res/music/*.mid
+# Doom DS* sound-effect lumps extracted to WAV (regenerable via
+# tools/extract-sfx.py; copyrighted material derived from WAD)
+res/sound/
 tools/__pycache__/
 __pycache__/
 

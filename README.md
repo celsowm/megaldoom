@@ -19,6 +19,7 @@ This version still uses SGDK's software `BMP` engine so the early milestones can
 - Placeholder billboard enemy with depth-buffer occlusion.
 - Placeholder pistol with recoil.
 - HUD and minimap.
+- XGM2 background music (E1M1) and Doom PCM sound effects: pistol gunshot, enemy pain/death, player pain/death, door move and item pickup.
 
 ## New in 0.0.4
 
@@ -40,7 +41,6 @@ This version still uses SGDK's software `BMP` engine so the early milestones can
 - Real enemy AI.
 - Hardware sprite weapon/enemies.
 - Tilemap/VDP optimized renderer.
-- Sound.
 
 ## Controls
 

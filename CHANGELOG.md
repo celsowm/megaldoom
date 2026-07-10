@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Added Doom sound effects through the XGM2 PCM driver: pistol gunshot, enemy pain/death, player pain/death, door move and item pickup.
+- Added `tools/extract-sfx.py` to extract Doom `DS*` DMX sound lumps from `DOOM1.WAD` into `res/sound/*.wav` (mirrors the existing MUS music extractor).
+- Declared XGM2 PCM SFX resources in `res/resources.res`; triggered with `XGM2_playPCM(..)` on PCM channels 2/3 so music (channel 1) is never interrupted.
+
 ## 0.0.4
 
 - Renamed the project to MegalDoom.

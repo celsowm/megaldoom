@@ -126,7 +126,10 @@ int main(bool hard) {
     // theme, converted from Doom's MUS by tools/midi2vgm). XGM2 has reinforced
     // DMA contention protection, important given MegalDoom's heavy vblank
     // tile-upload DMA. The VGM is converted to XGM2 by rescomp at build time
-    // (see res/resources.res).
+    // (see res/resources.res). Sound effects (gunshots, pain, doors, pickups)
+    // are Doom DS* lumps extracted by tools/extract-sfx.py into res/sound/*.wav
+    // and converted by rescomp to XGM2 PCM samples, triggered below with
+    // XGM2_playPCM(..) on PCM channels 2/3 (channel 1 stays free for music).
     Z80_loadDriver(Z80_DRIVER_XGM2, TRUE);
     XGM2_play(test_music);
 
@@ -184,6 +187,7 @@ int main(bool hard) {
             overlay_dirty = TRUE;
             if (billboard_collect_near(g_player.x, g_player.y)) {
                 overlay_dirty = TRUE;
+                XGM2_playPCM(sfx_pickup, sizeof(sfx_pickup), SOUND_PCM_CH2);
             }
         }
 
@@ -211,6 +215,11 @@ int main(bool hard) {
                     base_dirty = TRUE;
                     overlay_dirty = TRUE;
                 }
+                // Door / platform move sound on PCM channel 3. A toggle or a
+                // key-unlock moves the door; a locked bump stays silent.
+                if ((action == DOOR_ACTION_TOGGLED) || (action == DOOR_ACTION_UNLOCKED)) {
+                    XGM2_playPCM(sfx_door, sizeof(sfx_door), SOUND_PCM_CH3);
+                }
             }
         }
 
@@ -222,6 +231,16 @@ int main(bool hard) {
                 shot_cooldown = SHOT_COOLDOWN_FRAMES;
                 g_weapon_flash = WEAPON_FLASH_FRAMES;
                 overlay_dirty = TRUE;
+
+                // Pistol gunshot on PCM channel 2 (channel 1 is reserved for
+                // music PCM). Connected-hit SFX go on channel 3 so the gunshot
+                // and the enemy reaction never cancel each other out.
+                XGM2_playPCM(sfx_pistol, sizeof(sfx_pistol), SOUND_PCM_CH2);
+                if (shot == BILLBOARD_SHOT_DAMAGE) {
+                    XGM2_playPCM(sfx_enemy_pain, sizeof(sfx_enemy_pain), SOUND_PCM_CH3);
+                } else if (shot == BILLBOARD_SHOT_KILL) {
+                    XGM2_playPCM(sfx_enemy_death, sizeof(sfx_enemy_death), SOUND_PCM_CH3);
+                }
 
                 if ((shot == BILLBOARD_SHOT_DAMAGE) || (shot == BILLBOARD_SHOT_KILL)) {
                     overlay_dirty = TRUE;
@@ -240,6 +259,7 @@ int main(bool hard) {
 
             if ((enemy_update.hits > 0) && (g_player_invuln == 0)) {
                 if (player_health <= 1) {
+                    XGM2_playPCM(sfx_player_death, sizeof(sfx_player_death), SOUND_PCM_CH2);
                     reset_level(phase_index, &level_cleared, &shot_cooldown, &player_health, &frame);
                     base_dirty = TRUE;
                     overlay_dirty = TRUE;
@@ -251,6 +271,7 @@ int main(bool hard) {
                     g_player_damage_flash = PLAYER_DAMAGE_FLASH_FRAMES;
                     g_player_invuln = PLAYER_INVULN_FRAMES;
                     overlay_dirty = TRUE;
+                    XGM2_playPCM(sfx_player_pain, sizeof(sfx_player_pain), SOUND_PCM_CH2);
                 }
             }
         }
