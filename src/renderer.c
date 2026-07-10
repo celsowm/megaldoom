@@ -9,6 +9,15 @@ u16 g_compass_tilemap[COMPASS_W * COMPASS_H];
 u32 g_view_bank_dirty_bits[VIEW_BANK_COUNT][VIEW_DIRTY_WORD_COUNT];
 u16 g_view_bank_dirty_count[VIEW_BANK_COUNT];
 u16 g_view_vram_bank;
+#if DEBUG_PERF
+// Distinct-tile-modified accounting for the perf overlay. Deduplicated per
+// frame via g_frame_modified_bits; renderer_mark_tile_dirty sets a bit the
+// first time a tile is dirtied this frame.
+static u32 g_frame_modified_bits[VIEW_DIRTY_WORD_COUNT];
+static u16 g_frame_modified_count;
+static u16 s_debug_total_vblanks;
+#endif
+
 
 static u16 s_view_bank_tilemaps[VIEW_BANK_COUNT][VIEW_TILE_COUNT];
 
@@ -127,6 +136,15 @@ void renderer_mark_tile_dirty(u16 tile_index) {
             g_view_bank_dirty_count[bank]++;
         }
     }
+#if DEBUG_PERF
+    // Count each distinct tile once per frame regardless of how many banks are
+    // marked stale — this is the CPU-side "tiles modified" figure, separate
+    // from the per-bank "tiles uploaded" figure tracked in the uploader.
+    if ((g_frame_modified_bits[word] & mask) == 0) {
+        g_frame_modified_bits[word] |= mask;
+        g_frame_modified_count++;
+    }
+#endif
 }
 
 void set_view_pair_tile(u16 x, u16 y, u8 left_color, u8 right_color) {
@@ -167,3 +185,21 @@ void renderer_init(void) {
     init_view_tilemap();
     renderer_scene_init();
 }
+
+#if DEBUG_PERF
+void renderer_reset_frame_modified(void) {
+    for (u16 i = 0; i < VIEW_DIRTY_WORD_COUNT; i++) {
+        g_frame_modified_bits[i] = 0;
+    }
+    g_frame_modified_count = 0;
+}
+
+u16 renderer_get_frame_modified_count(void) {
+    return g_frame_modified_count;
+}
+
+void renderer_debug_set_total_vblanks(u16 vblanks) {
+    s_debug_total_vblanks = vblanks;
+}
+#endif
+

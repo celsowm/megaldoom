@@ -55,11 +55,15 @@ static u16 g_bsp_dbg_nodes_visited;
 static u16 g_bsp_dbg_boxes_rejected_cheap;
 static u16 g_bsp_dbg_boxes_projected;
 static u16 g_bsp_dbg_near_fallbacks;
+static u16 g_bsp_dbg_segments_tested;
+static u16 g_bsp_dbg_segments_drawn;
 #define BSP_DBG_INC(c) (g_bsp_dbg_##c)++
 #define BSP_DBG_RESET() do { g_bsp_dbg_nodes_visited = 0; \
         g_bsp_dbg_boxes_rejected_cheap = 0; \
         g_bsp_dbg_boxes_projected = 0; \
-        g_bsp_dbg_near_fallbacks = 0; } while (0)
+        g_bsp_dbg_near_fallbacks = 0; \
+        g_bsp_dbg_segments_tested = 0; \
+        g_bsp_dbg_segments_drawn = 0; } while (0)
 #else
 #define BSP_DBG_INC(c) ((void)0)
 #define BSP_DBG_RESET() ((void)0)
@@ -151,6 +155,8 @@ static void draw_seg(u16 seg_index) {
     if (bsp_seg_is_open(seg_index)) {
         return;
     }
+
+    BSP_DBG_INC(segments_tested);
 
     const BspSeg *seg = &bsp_segs[seg_index];
     const BspVertex *a = &bsp_vertices[seg->v1];
@@ -248,6 +254,7 @@ static void draw_seg(u16 seg_index) {
         return;
     }
 
+    bool drew_any = FALSE;
     for (u16 sample = first_sample; sample <= last_sample; sample++) {
         if (g_sample_solid[sample]) {
             continue;
@@ -290,6 +297,10 @@ static void draw_seg(u16 seg_index) {
         col->shade = shade;
 
         mark_sample_solid(sample);
+        drew_any = TRUE;
+    }
+    if (drew_any) {
+        BSP_DBG_INC(segments_drawn);
     }
 }
 
@@ -485,4 +496,6 @@ u16 bsp_get_debug_nodes_visited(void) { return g_bsp_dbg_nodes_visited; }
 u16 bsp_get_debug_boxes_rejected_cheap(void) { return g_bsp_dbg_boxes_rejected_cheap; }
 u16 bsp_get_debug_boxes_projected(void) { return g_bsp_dbg_boxes_projected; }
 u16 bsp_get_debug_near_fallbacks(void) { return g_bsp_dbg_near_fallbacks; }
+u16 bsp_get_debug_segments_tested(void) { return g_bsp_dbg_segments_tested; }
+u16 bsp_get_debug_segments_drawn(void) { return g_bsp_dbg_segments_drawn; }
 #endif

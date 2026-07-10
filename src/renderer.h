@@ -38,6 +38,9 @@ void renderer_upload_scene(void);
 
 #if DEBUG_PERF
 void renderer_debug_set_cast_subticks(u32 subticks);
+// Total VBlanks consumed by the whole main-loop iteration (captured at the end
+// of the iteration in main.c; displayed one frame late by the perf overlay).
+void renderer_debug_set_total_vblanks(u16 vblanks);
 #endif
 
 #endif

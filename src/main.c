@@ -307,6 +307,12 @@ int main(bool hard) {
         while ((u16)(vtimer - cur_vtimer) < TARGET_FRAME_VSYNCS) {
             VDP_waitVSync();
         }
+#if DEBUG_PERF
+        // Total VBlanks consumed by this iteration (target = TARGET_FRAME_VSYNCS,
+        // but a frame that spilled past its deadline shows the real cost here).
+        // Recorded one iteration ahead of the perf overlay's read.
+        renderer_debug_set_total_vblanks((u16)(vtimer - cur_vtimer));
+#endif
         frame++;
     }
 

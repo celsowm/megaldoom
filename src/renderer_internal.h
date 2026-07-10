@@ -51,4 +51,13 @@ void renderer_set_bg_pair_tile(u16 x, u16 y, u8 left_color, u8 right_color);
 void renderer_set_view_vram_bank(u16 bank);
 void renderer_scene_init(void);
 
+#if DEBUG_PERF
+// Per-frame "tiles modified" tracker: counts distinct view tiles whose CPU-side
+// buffer changed this frame (deduplicated), independent of which VRAM bank the
+// DMA targets. Reset at the start of renderer_render_scene.
+void renderer_reset_frame_modified(void);
+u16 renderer_get_frame_modified_count(void);
+#endif
+
+
 #endif

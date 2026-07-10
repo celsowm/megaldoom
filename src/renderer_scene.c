@@ -58,8 +58,18 @@ static bool s_debug_upload_full;
 static bool s_debug_upload_swap;
 static u32 s_debug_cast_subticks;
 static u32 s_debug_pack_subticks;
+static u32 s_debug_billboard_subticks;
+static u32 s_debug_weapon_overlay_subticks;
 static u32 s_debug_overlay_subticks;
-static u32 s_debug_upload_subticks;
+// Upload cost decomposition: prepare = CPU time issuing DMA (run-walk +
+// VDP_loadTileData); dma_wait = time blocked inside VDP_waitDMACompletion();
+// awaited_vblanks = VDP_waitVSync() calls inside the uploader. The total
+// upload "time" is never collapsed into one metric so CPU vs DMA vs
+// deliberately-awaited VBlanks stay separable.
+static u32 s_debug_upload_prepare_subticks;
+static u32 s_debug_dma_wait_subticks;
+static u16 s_debug_awaited_vblanks_in_upload;
+static u16 s_debug_total_vblanks;
 #endif
 
 #if DEBUG_PERF
@@ -640,30 +650,53 @@ static u16 count_view_bank_dirty_runs(u16 bank) {
 }
 
 static void load_view_tile_run(u16 vram_base, u16 first, u16 count) {
+#if DEBUG_PERF
+    const u32 issue_start = getSubTick();
+#endif
     VDP_loadTileData((const u32 *)&g_view_tiles[first][0],
                      (u16)(vram_base + first),
                      count,
                      DMA);
 #if DEBUG_PERF
+    s_debug_upload_prepare_subticks += getSubTick() - issue_start;
     s_debug_upload_tiles = (u16)(s_debug_upload_tiles + count);
     s_debug_upload_runs++;
 #endif
 }
 
+#if DEBUG_PERF
+// Wrap the blocking DMA-completion / VBlank waits so CPU time spent issuing
+// DMA, time spent blocked inside VDP_waitDMACompletion(), and VBlanks
+// deliberately awaited by the uploader are accounted separately. Patch 5 will
+// remove the internal VDP_waitVSync() calls; until then this measures them.
+static void dbg_wait_dma(void) {
+    const u32 t = getSubTick();
+    VDP_waitDMACompletion();
+    s_debug_dma_wait_subticks += getSubTick() - t;
+}
+static void dbg_wait_vsync_upload(void) {
+    VDP_waitVSync();
+    s_debug_awaited_vblanks_in_upload++;
+}
+#else
+#define dbg_wait_dma()            VDP_waitDMACompletion()
+#define dbg_wait_vsync_upload()   VDP_waitVSync()
+#endif
+
 static void upload_full_view_bank(u16 vram_base, bool split_across_vblanks) {
     if (!split_across_vblanks) {
         load_view_tile_run(vram_base, 0, VIEW_TILE_COUNT);
-        VDP_waitDMACompletion();
+        dbg_wait_dma();
         return;
     }
 
     load_view_tile_run(vram_base, 0, VIEW_DMA_TILES_PER_VBLANK);
-    VDP_waitDMACompletion();
-    VDP_waitVSync();
+    dbg_wait_dma();
+    dbg_wait_vsync_upload();
     load_view_tile_run(vram_base,
                        VIEW_DMA_TILES_PER_VBLANK,
                        (u16)(VIEW_TILE_COUNT - VIEW_DMA_TILES_PER_VBLANK));
-    VDP_waitDMACompletion();
+    dbg_wait_dma();
 }
 
 static void upload_partial_view_bank(u16 bank,
@@ -686,8 +719,8 @@ static void upload_partial_view_bank(u16 bank,
         while (remaining > 0) {
             if (split_across_vblanks &&
                 (batch_tiles == VIEW_DMA_TILES_PER_VBLANK)) {
-                VDP_waitDMACompletion();
-                VDP_waitVSync();
+                dbg_wait_dma();
+                dbg_wait_vsync_upload();
                 batch_tiles = 0;
             }
 
@@ -707,7 +740,7 @@ static void upload_partial_view_bank(u16 bank,
         }
     }
 
-    VDP_waitDMACompletion();
+    dbg_wait_dma();
 }
 
 static bool upload_view_bank(u16 bank, bool split_across_vblanks) {
@@ -865,6 +898,7 @@ void renderer_render_scene(const RayColumn *columns,
                            bool low_health_warning) {
 #if DEBUG_PERF
     u32 stage_start = getSubTick();
+    renderer_reset_frame_modified();
 #endif
     ProjectedBillboard objects[BILLBOARD_MAX_PROJECTED_OBJECTS];
     const u16 object_count = billboard_project_scene(player, objects, BILLBOARD_MAX_PROJECTED_OBJECTS);
@@ -906,7 +940,15 @@ void renderer_render_scene(const RayColumn *columns,
     }
 
     clear_overlay_bits();
+#if DEBUG_PERF
+    const u32 overlay_stage = getSubTick();
+    const u32 bb_start = overlay_stage;
+#endif
     draw_projected_billboards(columns, objects, object_count);
+#if DEBUG_PERF
+    s_debug_billboard_subticks = getSubTick() - bb_start;
+    const u32 wpn_start = getSubTick();
+#endif
     draw_weapon_overlay(weapon_flash);
     if (damage_flash) {
         draw_overlay_ops(MEGALDOOM_DAMAGE_OVERLAY_OPS, MEGALDOOM_OVERLAY_OP_COUNT[0]);
@@ -916,7 +958,8 @@ void renderer_render_scene(const RayColumn *columns,
     build_compass_tilemap(player->angle);
     finish_overlay_bits();
 #if DEBUG_PERF
-    s_debug_overlay_subticks = getSubTick() - stage_start;
+    s_debug_weapon_overlay_subticks = getSubTick() - wpn_start;
+    s_debug_overlay_subticks = getSubTick() - overlay_stage;
 #endif
 }
 
@@ -925,48 +968,67 @@ void renderer_render_scene(const RayColumn *columns,
 // of stalling the CPU mid active-display (its old call site).
 #if DEBUG_PERF
 static void draw_upload_debug_stats(void) {
-    char text[40];
-    const char upload_mode = (s_debug_upload_dirty_tiles == 0) ?
-                                 'N' : (s_debug_upload_full ? 'F' : 'P');
-    const char bank_mode = s_debug_upload_swap ? 'S' : 'I';
+    char text[44];
 
-    sprintf(text,
-            "D%03u U%03u R%02u B%u %c%c",
+    // Row 1 — VBlank cadence (the key 2-vs-3 VBlank indicator). V = total
+    // VBlanks consumed by the last iteration (set one frame late from main.c);
+    // Vup = VBlanks deliberately awaited inside the uploader (Patch 5 drives
+    // this to 0). mode = size [N]one/[P]artial/[F]ull + bank [A]ctive/[I]nactive.
+    const char size_c = (s_debug_upload_dirty_tiles == 0) ? 'N'
+                        : (s_debug_upload_full ? 'F' : 'P');
+    const char bank_c = s_debug_upload_swap ? 'I' : 'A';
+    sprintf(text, "V=%u Vup=%u %c-%c",
+            (unsigned int)s_debug_total_vblanks,
+            (unsigned int)s_debug_awaited_vblanks_in_upload,
+            size_c, bank_c);
+    VDP_drawTextFill(text, 0, 1, 24);
+
+    // Row 2 — CPU cost before the first VBlank, decomposed (subticks).
+    // C=cast, P=pack, B=billboard, W=weapon+damage/low-health overlays.
+    sprintf(text, "C=%04lu P=%04lu B=%04lu W=%04lu",
+            (unsigned long)s_debug_cast_subticks,
+            (unsigned long)s_debug_pack_subticks,
+            (unsigned long)s_debug_billboard_subticks,
+            (unsigned long)s_debug_weapon_overlay_subticks);
+    VDP_drawTextFill(text, 0, 2, 32);
+
+    // Row 3 — DMA work. D=dirty tiles, U=uploaded tiles, R=DMA runs,
+    // M=tiles modified (distinct CPU writes this frame), Up=DMA-issue CPU
+    // subticks, Ud=time blocked in VDP_waitDMACompletion().
+    sprintf(text, "D=%03u U=%03u R=%02u M=%03u Up=%04lu Ud=%04lu",
             (unsigned int)s_debug_upload_dirty_tiles,
             (unsigned int)s_debug_upload_tiles,
             (unsigned int)s_debug_upload_runs,
-            (unsigned int)s_debug_upload_bank,
-            upload_mode,
-            bank_mode);
-    VDP_drawTextFill(text, 0, 1, 24);
-    sprintf(text,
-            "C%04lu P%04lu O%04lu U%04lu",
-            (unsigned long)s_debug_cast_subticks,
-            (unsigned long)s_debug_pack_subticks,
-            (unsigned long)s_debug_overlay_subticks,
-            (unsigned long)s_debug_upload_subticks);
-    VDP_drawTextFill(text, 0, 2, 32);
-    // TEMPORARY: BSP frustum-precheck instrumentation. N=nodes visited,
-    // R=cheap rejects (half-plane, no division), P=boxes projected (4 divs),
-    // F=near-plane fallbacks (expanded to whole view).
-    sprintf(text,
-            "N%03u R%03u P%03u F%03u",
+            (unsigned int)renderer_get_frame_modified_count(),
+            (unsigned long)s_debug_upload_prepare_subticks,
+            (unsigned long)s_debug_dma_wait_subticks);
+    VDP_drawTextFill(text, 0, 3, 40);
+
+    // Row 4 — BSP traversal. N=nodes visited, R=cheap rejects (half-plane,
+    // no division), P=boxes projected (4 divs), F=near-plane fallbacks,
+    // S=segs tested/drawn.
+    sprintf(text, "N=%03u R=%03u P=%03u F=%03u S=%03u/%03u",
             (unsigned int)bsp_get_debug_nodes_visited(),
             (unsigned int)bsp_get_debug_boxes_rejected_cheap(),
             (unsigned int)bsp_get_debug_boxes_projected(),
-            (unsigned int)bsp_get_debug_near_fallbacks());
-    VDP_drawTextFill(text, 0, 3, 24);
+            (unsigned int)bsp_get_debug_near_fallbacks(),
+            (unsigned int)bsp_get_debug_segments_tested(),
+            (unsigned int)bsp_get_debug_segments_drawn());
+    VDP_drawTextFill(text, 0, 4, 40);
 }
 #endif
 
 void renderer_upload_scene(void) {
 #if DEBUG_PERF
-    const u32 upload_start = getSubTick();
+    // Reset the upload cost accumulators so each iteration's numbers are
+    // independent. (dirty_tiles/full/swap are set inside upload_view_bank.)
+    s_debug_upload_prepare_subticks = 0;
+    s_debug_dma_wait_subticks = 0;
+    s_debug_awaited_vblanks_in_upload = 0;
 #endif
     upload_view_tilemap();
     upload_compass_tilemap();
 #if DEBUG_PERF
-    s_debug_upload_subticks = getSubTick() - upload_start;
     draw_upload_debug_stats();
 #endif
 }
