@@ -55,6 +55,16 @@ static u16 s_debug_upload_runs;
 static u16 s_debug_upload_bank;
 static bool s_debug_upload_full;
 static bool s_debug_upload_swap;
+static u32 s_debug_cast_subticks;
+static u32 s_debug_pack_subticks;
+static u32 s_debug_overlay_subticks;
+static u32 s_debug_upload_subticks;
+#endif
+
+#if DEBUG_PERF
+void renderer_debug_set_cast_subticks(u32 subticks) {
+    s_debug_cast_subticks = subticks;
+}
 #endif
 
 void renderer_mark_overlay_tile(u16 tile_index) {
@@ -100,11 +110,6 @@ static const u32 REP4[16] = {
     0x0000, 0x1111, 0x2222, 0x3333, 0x4444, 0x5555, 0x6666, 0x7777,
     0x8888, 0x9999, 0xAAAA, 0xBBBB, 0xCCCC, 0xDDDD, 0xEEEE, 0xFFFF,
 };
-
-static u32 pack_flat_row(u8 color) {
-    const u32 replicated = REP4[color & 0x0F];
-    return (replicated << 16) | replicated;
-}
 #else /* RAY_COL_STRIDE == 2 */
 static const u32 REP2[16] = {
     0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
@@ -185,6 +190,7 @@ static WallColumnDescriptor describe_wall_column(const RayColumn *column) {
                                   tex_x, column->tex_y};
 }
 
+#if RAY_COL_STRIDE == 2
 static u8 sample_wall_descriptor(const WallColumnDescriptor *descriptor,
                                  const RaySceneColors *scene_colors,
                                  u16 y) {
@@ -198,8 +204,18 @@ static u8 sample_wall_descriptor(const WallColumnDescriptor *descriptor,
     return descriptor->shade_map[
         (descriptor->texture[((descriptor->vertical_samples[y - descriptor->top] +
                               descriptor->tex_y) & WALL_TEX_DIM_MASK) * WALL_TEX_DIM +
-                              descriptor->tex_x]) & 0x0F];
+                               descriptor->tex_x]) & 0x0F];
 }
+#endif
+
+static bool overlay_previously_touched(u16 tile_index) {
+    const u16 word = (u16)(tile_index >> 5);
+    const u32 mask = (u32)1u << (tile_index & 31);
+
+    return (bool)((g_overlay_previous_bits[word] & mask) != 0);
+}
+
+static void commit_base_tile(u16 tile_index, const u32 *tile_rows);
 
 #if (RAY_COL_STRIDE != 4) && (RAY_COL_STRIDE != 2)
 #error "build_raycast_tilemap only implements the RAY_COL_STRIDE == 4 and == 2 packers"
@@ -210,42 +226,68 @@ static u8 sample_wall_descriptor(const WallColumnDescriptor *descriptor,
 #endif
 
 #if RAY_COL_STRIDE == 4
+// Pre-shade the 32-texel source column once per sampled ray column. The hot
+// per-screen-pixel loop then performs only the vertical DDA lookup and one u16
+// load. The 64-byte temporary stays safely inside the strip helper's frame,
+// avoiding both a large call-stack allocation and renderer-global cache state.
+static void build_packed_wall_column(const WallColumnDescriptor *descriptor,
+                                     u16 packed_texels[WALL_TEX_DIM]) {
+    for (u16 tex_y = 0; tex_y < WALL_TEX_DIM; tex_y++) {
+        const u8 texel = descriptor->shade_map[
+            descriptor->texture[(tex_y * WALL_TEX_DIM) + descriptor->tex_x] & 0x0F];
+        packed_texels[tex_y] = (u16)REP4[texel];
+    }
+}
+
+static void build_column_packed_strip(const WallColumnDescriptor *descriptor,
+                                      const RaySceneColors *scene_colors,
+                                      u16 strip[VIEW_PIXEL_H]) {
+    const u16 ceiling = (u16)REP4[scene_colors->ceiling_color];
+    const u16 floor = (u16)REP4[scene_colors->floor_color];
+    u16 packed_texels[WALL_TEX_DIM];
+    u16 y = 0;
+
+    build_packed_wall_column(descriptor, packed_texels);
+
+    for (; y < descriptor->top; y++) {
+        strip[y] = ceiling;
+    }
+    for (; y < descriptor->bottom; y++) {
+        strip[y] = packed_texels[
+            (descriptor->vertical_samples[y - descriptor->top] + descriptor->tex_y) &
+            WALL_TEX_DIM_MASK];
+    }
+    for (; y < VIEW_PIXEL_H; y++) {
+        strip[y] = floor;
+    }
+}
+
 static void build_raycast_tilemap(const RayColumn *columns,
-                                  const RaySceneColors *scene_colors,
-                                  u32 target[][8]) {
+                                   const RaySceneColors *scene_colors,
+                                   u32 target[][8]) {
+    u16 strip_a[VIEW_PIXEL_H];
+    u16 strip_b[VIEW_PIXEL_H];
+
     // Each 8px-wide tile column maps to two cast columns (px 0 and 4), each
-    // replicated 4x. Describe both columns once, then sample directly while
-    // packing each tile row.
+    // replicated 4x. Expand each column once into a packed half-row strip, so
+    // the tile loop only combines two u16 values per output row.
     for (u16 tile_x = 0; tile_x < VIEW_TILE_W; tile_x++) {
         const u16 base_col = (u16)(tile_x * 8);
         const WallColumnDescriptor column_a = describe_wall_column(&columns[base_col]);
         const WallColumnDescriptor column_b = describe_wall_column(&columns[base_col + 4]);
-        const u32 ceiling_row = pack_flat_row(scene_colors->ceiling_color);
-        const u32 floor_row = pack_flat_row(scene_colors->floor_color);
+
+        build_column_packed_strip(&column_a, scene_colors, strip_a);
+        build_column_packed_strip(&column_b, scene_colors, strip_b);
 
         for (u16 tile_y = 0; tile_y < VIEW_TILE_H; tile_y++) {
             const u16 tile_index = (u16)((tile_y * VIEW_TILE_W) + tile_x);
             u16 pixel_y = (u16)(tile_y * 8);
 
-            if (((pixel_y + 7) < column_a.top) && ((pixel_y + 7) < column_b.top)) {
-                for (u16 row = 0; row < 8; row++) {
-                    target[tile_index][row] = ceiling_row;
-                }
-                continue;
-            }
-
-            if ((pixel_y >= column_a.bottom) && (pixel_y >= column_b.bottom)) {
-                for (u16 row = 0; row < 8; row++) {
-                    target[tile_index][row] = floor_row;
-                }
-                continue;
-            }
-
             for (u16 row = 0; row < 8; row++, pixel_y++) {
                 target[tile_index][row] =
-                    (REP4[sample_wall_descriptor(&column_a, scene_colors, pixel_y)] << 16) |
-                    REP4[sample_wall_descriptor(&column_b, scene_colors, pixel_y)];
+                    ((u32)strip_a[pixel_y] << 16) | strip_b[pixel_y];
             }
+            commit_base_tile(tile_index, target[tile_index]);
         }
     }
 }
@@ -292,6 +334,7 @@ static void build_raycast_tilemap(const RayColumn *columns,
                     (REP2[sample_wall_descriptor(&column_c, scene_colors, pixel_y)] << 8) |
                     REP2[sample_wall_descriptor(&column_d, scene_colors, pixel_y)];
             }
+            commit_base_tile(tile_index, target[tile_index]);
         }
     }
 }
@@ -354,6 +397,28 @@ static void build_raycast_tilemap_reference(const RayColumn *columns,
                 target[tile_index][row] =
                     (REP2[strip_a[pixel_y]] << 24) | (REP2[strip_b[pixel_y]] << 16) |
                     (REP2[strip_c[pixel_y]] << 8) | REP2[strip_d[pixel_y]];
+            }
+        }
+    }
+}
+#else /* RAY_COL_STRIDE == 4 */
+static void build_raycast_tilemap_reference(const RayColumn *columns,
+                                            const RaySceneColors *scene_colors,
+                                            u32 target[][8]) {
+    u8 strip_a[VIEW_PIXEL_H];
+    u8 strip_b[VIEW_PIXEL_H];
+
+    for (u16 tile_x = 0; tile_x < VIEW_TILE_W; tile_x++) {
+        const u16 base_col = (u16)(tile_x * 8);
+        build_column_strip_reference(&columns[base_col], scene_colors, strip_a);
+        build_column_strip_reference(&columns[base_col + 4], scene_colors, strip_b);
+
+        for (u16 tile_y = 0; tile_y < VIEW_TILE_H; tile_y++) {
+            const u16 tile_index = (u16)((tile_y * VIEW_TILE_W) + tile_x);
+            u16 pixel_y = (u16)(tile_y * 8);
+            for (u16 row = 0; row < 8; row++, pixel_y++) {
+                target[tile_index][row] =
+                    (REP4[strip_a[pixel_y]] << 16) | REP4[strip_b[pixel_y]];
             }
         }
     }
@@ -704,31 +769,20 @@ static void finish_overlay_bits(void) {
     }
 }
 
-static bool overlay_previously_touched(u16 tile_index) {
-    const u16 word = (u16)(tile_index >> 5);
-    const u32 mask = (u32)1u << (tile_index & 31);
+static void commit_base_tile(u16 tile_index, const u32 *tile_rows) {
+    bool changed = (bool)(!g_base_tiles_valid || overlay_previously_touched(tile_index));
 
-    return (bool)((g_overlay_previous_bits[word] & mask) != 0);
-}
-
-static void commit_base_tiles_from_view(void) {
-    for (u16 tile = 0; tile < VIEW_TILE_COUNT; tile++) {
-        bool changed = (bool)(!g_base_tiles_valid || overlay_previously_touched(tile));
-
-        for (u16 row = 0; row < 8; row++) {
-            const u32 row_data = g_view_tiles[tile][row];
-            if (g_base_view_tiles[tile][row] != row_data) {
-                g_base_view_tiles[tile][row] = row_data;
-                changed = TRUE;
-            }
-        }
-
-        if (changed) {
-            renderer_mark_tile_dirty(tile);
+    for (u16 row = 0; row < 8; row++) {
+        const u32 row_data = tile_rows[row];
+        if (g_base_view_tiles[tile_index][row] != row_data) {
+            g_base_view_tiles[tile_index][row] = row_data;
+            changed = TRUE;
         }
     }
 
-    g_base_tiles_valid = TRUE;
+    if (changed) {
+        renderer_mark_tile_dirty(tile_index);
+    }
 }
 
 static void upload_compass_tilemap(void) {
@@ -754,13 +808,16 @@ void renderer_render_scene(const RayColumn *columns,
                            bool weapon_flash,
                            bool damage_flash,
                            bool low_health_warning) {
+#if DEBUG_PERF
+    u32 stage_start = getSubTick();
+#endif
     ProjectedBillboard objects[BILLBOARD_MAX_PROJECTED_OBJECTS];
     const u16 object_count = billboard_project_scene(player, objects, BILLBOARD_MAX_PROJECTED_OBJECTS);
 
     if (base_dirty) {
         g_upload_requires_bank_swap = TRUE;
         build_raycast_tilemap(columns, scene_colors, g_view_tiles);
-#if RENDERER_REFERENCE_PACKER && RAY_COL_STRIDE == 2
+#if RENDERER_REFERENCE_PACKER
         build_raycast_tilemap_reference(columns, scene_colors, g_reference_view_tiles);
         for (u16 tile = 0; tile < VIEW_TILE_COUNT; tile++) {
             for (u16 row = 0; row < 8; row++) {
@@ -778,12 +835,19 @@ void renderer_render_scene(const RayColumn *columns,
             }
         }
 #endif
-        commit_base_tiles_from_view();
+        g_base_tiles_valid = TRUE;
         for (u16 i = 0; i < VIEW_DIRTY_WORD_COUNT; i++) {
             g_overlay_previous_bits[i] = 0;
         }
+#if DEBUG_PERF
+        s_debug_pack_subticks = getSubTick() - stage_start;
+        stage_start = getSubTick();
+#endif
     } else {
         restore_previous_overlay_tiles();
+#if DEBUG_PERF
+        s_debug_pack_subticks = 0;
+#endif
     }
 
     clear_overlay_bits();
@@ -796,6 +860,9 @@ void renderer_render_scene(const RayColumn *columns,
     }
     build_compass_tilemap(player->angle);
     finish_overlay_bits();
+#if DEBUG_PERF
+    s_debug_overlay_subticks = getSubTick() - stage_start;
+#endif
 }
 
 // Push the frame built by renderer_render_scene to VRAM. Call this right after a
@@ -803,7 +870,7 @@ void renderer_render_scene(const RayColumn *columns,
 // of stalling the CPU mid active-display (its old call site).
 #if DEBUG_PERF
 static void draw_upload_debug_stats(void) {
-    char text[32];
+    char text[40];
     const char upload_mode = (s_debug_upload_dirty_tiles == 0) ?
                                  'N' : (s_debug_upload_full ? 'F' : 'P');
     const char bank_mode = s_debug_upload_swap ? 'S' : 'I';
@@ -817,13 +884,24 @@ static void draw_upload_debug_stats(void) {
             upload_mode,
             bank_mode);
     VDP_drawTextFill(text, 0, 1, 24);
+    sprintf(text,
+            "C%04lu P%04lu O%04lu U%04lu",
+            (unsigned long)s_debug_cast_subticks,
+            (unsigned long)s_debug_pack_subticks,
+            (unsigned long)s_debug_overlay_subticks,
+            (unsigned long)s_debug_upload_subticks);
+    VDP_drawTextFill(text, 0, 2, 32);
 }
 #endif
 
 void renderer_upload_scene(void) {
+#if DEBUG_PERF
+    const u32 upload_start = getSubTick();
+#endif
     upload_view_tilemap();
     upload_compass_tilemap();
 #if DEBUG_PERF
+    s_debug_upload_subticks = getSubTick() - upload_start;
     draw_upload_debug_stats();
 #endif
 }

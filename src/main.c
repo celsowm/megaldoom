@@ -70,9 +70,15 @@ static void sync_hud(u32 frame,
 }
 
 static void render_current_view(u16 player_health, bool base_dirty) {
+#if DEBUG_PERF
+    const u32 cast_start = getSubTick();
+#endif
     if (base_dirty) {
         bsp_cast_frame(&g_player, g_ray_columns, &g_scene_colors);
     }
+#if DEBUG_PERF
+    renderer_debug_set_cast_subticks(base_dirty ? (getSubTick() - cast_start) : 0);
+#endif
     renderer_render_scene(
         g_ray_columns, &g_player, &g_scene_colors, base_dirty,
         g_weapon_flash > 0, g_player_damage_flash > 0,

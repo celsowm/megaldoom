@@ -41,6 +41,48 @@ static s32 abs_s32(s32 v) {
     return (v < 0) ? -v : v;
 }
 
+// These reciprocal quotients are always non-negative and fit in a u16 on the
+// valid BSP path. Using the 68000's native DIVU.W avoids the much slower
+// compiler-emitted signed 32-bit division helper while preserving the exact
+// integer result. Keep a general fallback for unusual map coordinates.
+static u16 reciprocal_depth(s32 depth) {
+    if ((depth > 0) && (depth <= 0xFFFF)) {
+        return divu(BSP_INV_SCALE, (u16)depth);
+    }
+
+    return (u16)(BSP_INV_SCALE / depth);
+}
+
+static s32 reciprocal_span(s32 span) {
+    const u32 numerator = (u32)FX_ONE << FX_SHIFT;
+
+    if (span == 1) {
+        return (s32)numerator;
+    }
+    if ((span > 1) && (span <= 0xFFFF)) {
+        return (s32)divu(numerator, (u16)span);
+    }
+
+    return (s32)(numerator / (u32)span);
+}
+
+// DIVS.W produces a 16-bit quotient. Screen projection and texture coordinates
+// normally stay in that range; use it when they do and retain the old 32-bit
+// expression for an exact overflow-safe fallback.
+static s32 perspective_divide(s32 numerator, s32 denominator) {
+    if ((denominator > 0) && (denominator <= 0x7FFF)) {
+        const s32 min_quotient_numerator = -((s32)denominator << 15);
+        const s32 max_quotient_numerator = ((s32)denominator << 15) - denominator;
+
+        if ((numerator >= min_quotient_numerator) &&
+            (numerator <= max_quotient_numerator)) {
+            return (s32)divs(numerator, (s16)denominator);
+        }
+    }
+
+    return numerator / denominator;
+}
+
 static void mark_sample_solid(u16 sample) {
     g_sample_solid[sample] = TRUE;
     g_solid_words[sample >> 5] |= (u32)1u << (sample & 31);
@@ -113,20 +155,22 @@ static void draw_seg(u16 seg_index) {
         return;
     }
     if (depthA < BSP_NEAR) {
-        const s32 t = (((s32)BSP_NEAR - depthA) << FX_SHIFT) / (depthB - depthA);
+        const s32 t = perspective_divide(((s32)BSP_NEAR - depthA) << FX_SHIFT,
+                                         depthB - depthA);
         latA += ((latB - latA) * t) >> FX_SHIFT;
         uA += ((uB - uA) * t) >> FX_SHIFT;
         depthA = BSP_NEAR;
     } else if (depthB < BSP_NEAR) {
-        const s32 t = (((s32)BSP_NEAR - depthB) << FX_SHIFT) / (depthA - depthB);
+        const s32 t = perspective_divide(((s32)BSP_NEAR - depthB) << FX_SHIFT,
+                                         depthA - depthB);
         latB += ((latA - latB) * t) >> FX_SHIFT;
         uB += ((uA - uB) * t) >> FX_SHIFT;
         depthB = BSP_NEAR;
     }
 
     // Project to screen x.
-    s32 xa = BSP_VIEW_CENTER_X + (latA * BSP_PROJ) / depthA;
-    s32 xb = BSP_VIEW_CENTER_X + (latB * BSP_PROJ) / depthB;
+    s32 xa = BSP_VIEW_CENTER_X + perspective_divide(latA * BSP_PROJ, depthA);
+    s32 xb = BSP_VIEW_CENTER_X + perspective_divide(latB * BSP_PROJ, depthB);
     if (xa == xb) {
         return;
     }
@@ -141,14 +185,14 @@ static void draw_seg(u16 seg_index) {
 
     const s32 span = xR - xL; // > 0 (xa != xb guarded above, ordered xL < xR)
     // Perspective-correct interpolation is linear in 1/depth and u/depth.
-    const s32 invzL = BSP_INV_SCALE / depthL;
-    const s32 invzR = BSP_INV_SCALE / depthR;
+    const s32 invzL = reciprocal_depth(depthL);
+    const s32 invzR = reciprocal_depth(depthR);
     const s32 uzL = uL * invzL;
     const s32 uzR = uR * invzR;
     // Reciprocal of the span, Q8, computed once per seg so the inner loop's
     // horizontal fraction is a multiply instead of a per-column divide. Matches
     // the old ((x-xL)<<8)/span to within the reciprocal's truncation.
-    const s32 inv_span = ((s32)FX_ONE << FX_SHIFT) / span;
+    const s32 inv_span = reciprocal_span(span);
 
     const u8 tid = (seg->texture_id < FREEDOOM_WALL_TEXTURE_COUNT) ?
                        seg->texture_id : MEGALDOOM_TEX_FALLBACK;
@@ -188,13 +232,13 @@ static void draw_seg(u16 seg_index) {
             continue;
         }
 
-        s32 depth_col = BSP_INV_SCALE / invz;
+        s32 depth_col = divu(BSP_INV_SCALE, (u16)invz);
         if (depth_col < 1) {
             depth_col = 1;
         }
 
         const s32 uz = uzL + (((uzR - uzL) * sfix) >> FX_SHIFT);
-        const s32 u_col = uz / invz;
+        const s32 u_col = perspective_divide(uz, invz);
 
         // height = BSP_VIEW_PIXEL_H*FX_ONE / depth_col, but depth_col = INV_SCALE/invz,
         // so fold to a multiply+shift and skip a divide. invz > 0 here (guarded), and
@@ -269,7 +313,8 @@ static bool project_box_range(const BspBox *box, s16 *left, s16 *right) {
     s32 min_screen = 0x7FFFFFFF;
     s32 max_screen = -0x7FFFFFFF;
     for (u16 i = 0; i < 4; i++) {
-        const s32 screen = BSP_VIEW_CENTER_X + (laterals[i] * BSP_PROJ) / depths[i];
+        const s32 screen = BSP_VIEW_CENTER_X +
+                           perspective_divide(laterals[i] * BSP_PROJ, depths[i]);
         if (screen < min_screen) min_screen = screen;
         if (screen > max_screen) max_screen = screen;
     }

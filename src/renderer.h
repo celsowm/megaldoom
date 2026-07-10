@@ -36,4 +36,8 @@ void renderer_render_scene(const RayColumn *columns,
                            bool low_health_warning);
 void renderer_upload_scene(void);
 
+#if DEBUG_PERF
+void renderer_debug_set_cast_subticks(u32 subticks);
+#endif
+
 #endif
