@@ -13,7 +13,10 @@ function Resolve-LocalPath([string]$Path) {
     return [IO.Path]::GetFullPath((Join-Path $Root $Path))
 }
 
-if (-not $GdkPath) {
+# Prefer an explicitly provided GDK; fall back to the vendored local toolchain
+# when it is missing OR points at a path without makefile.gen (a stale $env:GDK
+# pointing at e.g. C:\sgdk\ must not block the local fallback).
+if (-not $GdkPath -or -not (Test-Path (Join-Path $GdkPath "makefile.gen"))) {
     $localGdk = Join-Path $Root ".toolchain\sgdk"
     if (Test-Path (Join-Path $localGdk "makefile.gen")) {
         $GdkPath = $localGdk
