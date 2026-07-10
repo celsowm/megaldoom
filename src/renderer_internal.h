@@ -39,7 +39,6 @@ extern u32 g_view_tiles[VIEW_TILE_COUNT][8];
 extern u32 g_base_view_tiles[VIEW_TILE_COUNT][8];
 extern u32 g_view_dirty_bits[VIEW_DIRTY_WORD_COUNT];
 extern u16 g_view_dirty_count;
-extern u16 g_view_tilemap[VIEW_TILE_COUNT];
 extern u16 g_view_vram_bank;
 extern u16 g_compass_tilemap[COMPASS_W * COMPASS_H];
 

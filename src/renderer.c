@@ -5,11 +5,12 @@
 
 u32 g_view_tiles[VIEW_TILE_COUNT][8];
 u32 g_base_view_tiles[VIEW_TILE_COUNT][8];
-u16 g_view_tilemap[VIEW_TILE_COUNT];
 u16 g_compass_tilemap[COMPASS_W * COMPASS_H];
 u32 g_view_dirty_bits[VIEW_DIRTY_WORD_COUNT];
 u16 g_view_dirty_count;
 u16 g_view_vram_bank;
+
+static u16 s_view_bank_tilemaps[VIEW_BANK_COUNT][VIEW_TILE_COUNT];
 
 static void init_video(void) {
     VDP_setScreenWidth320();
@@ -80,20 +81,24 @@ static void init_hud_tiles(void) {
     VDP_loadTileData((const u32 *)FREEDOOM_FACE_TILES, FACE_TILE_BASE, FREEDOOM_FACE_TILE_COUNT, DMA);
 }
 
+static void build_view_bank_tilemaps(void) {
+    for (u16 bank = 0; bank < VIEW_BANK_COUNT; bank++) {
+        for (u16 y = 0; y < VIEW_TILE_H; y++) {
+            for (u16 x = 0; x < VIEW_TILE_W; x++) {
+                const u16 index = (u16)((y * VIEW_TILE_W) + x);
+                s_view_bank_tilemaps[bank][index] = TILE_ATTR_FULL(
+                    PAL3, FALSE, FALSE, FALSE,
+                    VIEW_TILE_BASE + (bank * VIEW_TILE_COUNT) + index);
+            }
+        }
+    }
+}
+
 void renderer_set_view_vram_bank(u16 bank) {
     g_view_vram_bank = (u16)(bank & 1);
 
-    for (u16 y = 0; y < VIEW_TILE_H; y++) {
-        for (u16 x = 0; x < VIEW_TILE_W; x++) {
-            const u16 index = (u16)((y * VIEW_TILE_W) + x);
-            g_view_tilemap[index] = TILE_ATTR_FULL(
-                PAL3, FALSE, FALSE, FALSE,
-                VIEW_TILE_BASE + (g_view_vram_bank * VIEW_TILE_COUNT) + index);
-        }
-    }
-
     VDP_setTileMapDataRect(BG_B,
-                           g_view_tilemap,
+                           s_view_bank_tilemaps[g_view_vram_bank],
                            VIEW_TILEMAP_X,
                            VIEW_TILEMAP_Y,
                            VIEW_TILE_W,
@@ -106,6 +111,7 @@ static void init_view_tilemap(void) {
     // The view tilemap points at one of two dynamic tile banks. Turn/base redraws
     // upload into the inactive bank, then swap this map only after the upload is
     // complete so a half-updated view is never displayed.
+    build_view_bank_tilemaps();
     renderer_set_view_vram_bank(0);
 }
 

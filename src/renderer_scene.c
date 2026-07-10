@@ -376,11 +376,17 @@ static void draw_projected_billboards(const RayColumn *columns,
             continue;
         }
 
-        // Exact equivalent of floor(rel_y * tex.h / height), built only for the
-        // visible screen rows. VIEW_PIXEL_H bounds the temp table even for very
-        // close sprites whose projected height exceeds 64px.
+        // Approximate floor(rel_y * tex.h / height) with one setup divide and a
+        // fixed-point DDA instead of a 68k divide for every visible sprite row.
+        u32 tex_y_acc = ((u32)(y0 - object->top) * tex.h) << 16;
+        const u32 tex_y_step = ((u32)tex.h << 16) / (u16)height;
         for (s16 y = y0; y <= y1; y++) {
-            tex_y_by_screen_row[y] = (u8)((((u32)(y - object->top)) * tex.h) / (u16)height);
+            u8 tex_y = (u8)(tex_y_acc >> 16);
+            if (tex_y >= tex.h) {
+                tex_y = (u8)(tex.h - 1);
+            }
+            tex_y_by_screen_row[y] = tex_y;
+            tex_y_acc += tex_y_step;
         }
 
         for (s16 col = object->left; col <= object->right; col++) {
@@ -483,6 +489,7 @@ static void upload_view_tilemap_partial(u16 vram_base) {
 
     if (g_view_dirty_count >= VIEW_DIRTY_FULL_THRESHOLD) {
         VDP_loadTileData((const u32 *)g_view_tiles, vram_base, VIEW_TILE_COUNT, DMA);
+        VDP_waitDMACompletion();
         clear_view_dirty_bits();
         return;
     }
@@ -510,6 +517,7 @@ static void upload_view_tilemap_partial(u16 vram_base) {
         run_count++;
         if (run_count > VIEW_DIRTY_MAX_RUNS) {
             VDP_loadTileData((const u32 *)g_view_tiles, vram_base, VIEW_TILE_COUNT, DMA);
+            VDP_waitDMACompletion();
             clear_view_dirty_bits();
             return;
         }
@@ -520,6 +528,7 @@ static void upload_view_tilemap_partial(u16 vram_base) {
                          DMA);
     }
 
+    VDP_waitDMACompletion();
     clear_view_dirty_bits();
 }
 
@@ -539,6 +548,7 @@ static void upload_view_tilemap_double_buffered(void) {
                      (u16)(vram_base + first_count),
                      second_count,
                      DMA);
+    VDP_waitDMACompletion();
     renderer_set_view_vram_bank(next_bank);
     clear_view_dirty_bits();
 }
