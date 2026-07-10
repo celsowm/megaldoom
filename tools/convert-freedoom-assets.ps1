@@ -11,6 +11,7 @@ param(
     [string]$HudPath = "res\originaldoom\graphics\STBAR.png",
     [string]$WeaponIdlePath = "res\originaldoom\sprites\PISGA0.png",
     [string]$WeaponFirePath = "res\originaldoom\sprites\PISGB0.png",
+    [string]$WeaponFlashPath = "res\originaldoom\sprites\PISFA0.png",
     [string]$FacePath = "res\originaldoom\graphics\STFST01.png",
     [string]$BillboardPath = "res\originaldoom\sprites\BON1A0.png",
     [string]$BillboardKeyPath = "res\originaldoom\sprites\BKEYA0.png",
@@ -36,6 +37,7 @@ $SwitchSourcePath = Join-Path $Root $SwitchTexturePath
 $HudSourcePath = Join-Path $Root $HudPath
 $WeaponIdleSourcePath = Join-Path $Root $WeaponIdlePath
 $WeaponFireSourcePath = Join-Path $Root $WeaponFirePath
+$WeaponFlashSourcePath = Join-Path $Root $WeaponFlashPath
 $FaceSourcePath = Join-Path $Root $FacePath
 $BillboardSourcePath = Join-Path $Root $BillboardPath
 $BillboardKeySourcePath = Join-Path $Root $BillboardKeyPath
@@ -87,6 +89,9 @@ if (-not (Test-Path $WeaponIdleSourcePath)) {
 }
 if (-not (Test-Path $WeaponFireSourcePath)) {
     throw "Weapon fire source not found: $WeaponFireSourcePath"
+}
+if (-not (Test-Path $WeaponFlashSourcePath)) {
+    throw "Weapon flash source not found: $WeaponFlashSourcePath"
 }
 if (-not (Test-Path $FaceSourcePath)) {
     throw "Face source not found: $FaceSourcePath"
@@ -328,6 +333,29 @@ function Convert-ImageTiles([string]$Path, [int]$Width, [int]$Height) {
     return $tiles
 }
 
+# Sprite leftOffset/topOffset from the WAD picture headers, written by
+# wad-extract.py as res/originaldoom/sprites/_offsets.json. Doom weapon and
+# muzzle-flash sprites are separate patches positioned by these offsets; the PNGs
+# carry no offset metadata, so the fire-frame composite needs them to land the
+# flash on the barrel. The hardcoded fallback covers DOOM1.WAD v1.9 pistol
+# sprites if the sidecar is absent.
+$SpriteOffsetsPath = Join-Path $Root "res\originaldoom\sprites\_offsets.json"
+$spriteOffsets = $null
+if (Test-Path $SpriteOffsetsPath) {
+    $spriteOffsets = Get-Content -Raw $SpriteOffsetsPath | ConvertFrom-Json
+}
+function Get-SpriteOffset([string]$Name) {
+    if ($spriteOffsets -and ($spriteOffsets.PSObject.Properties.Name -contains $Name)) {
+        return $spriteOffsets.$Name
+    }
+    switch ($Name) {
+        "PISGA0" { return [pscustomobject]@{ width = 57; height = 62; leftOffset = -126; topOffset = -106 } }
+        "PISGB0" { return [pscustomobject]@{ width = 79; height = 82; leftOffset = -104; topOffset = -86 } }
+        "PISFA0" { return [pscustomobject]@{ width = 41; height = 38; leftOffset = -140; topOffset = -66 } }
+        default  { return $null }
+    }
+}
+
 function Get-WeaponPaletteIndex([System.Drawing.Color]$Color, [bool]$FireFrame) {
     # Transparency is decided ONLY by alpha. Dark opaque pixels (the pistol's
     # metal/shadow) must stay solid, otherwise the gun renders see-through.
@@ -335,8 +363,18 @@ function Get-WeaponPaletteIndex([System.Drawing.Color]$Color, [bool]$FireFrame) 
         return 0
     }
 
-    if ($FireFrame -and ($Color.R -gt 180) -and ($Color.G -gt 120)) {
-        return 15
+    if ($FireFrame) {
+        # Muzzle-flash warm ramp, mapped onto PAL3 (FREEDOOM_WORLD_PALETTE). This
+        # branch only ever sees flash pixels: the gun body is coloured by
+        # Get-NearestWorldPaletteIndex directly in Convert-WeaponOverlayFire.
+        #   13 = light gray (white-hot core), 15 = gold (yellow),
+        #   14 = bright red, 8 = red, 2 = dark red.
+        $r = [int]$Color.R; $g = [int]$Color.G; $b = [int]$Color.B
+        if (($r -gt 225) -and ($g -gt 210) -and ($b -gt 160)) { return 13 }
+        if (($r -gt 190) -and ($g -gt 125)) { return 15 }
+        if (($r -gt 150) -and ($g -lt 100)) { return 14 }
+        if (($r -gt 100) -and ($g -lt 60))  { return 8 }
+        if (($r -gt 70)  -and ($g -lt 40))  { return 2 }
     }
     return Get-NearestWorldPaletteIndex $Color $false
 }
@@ -374,6 +412,79 @@ function Convert-WeaponOverlay([string]$Path, [bool]$FireFrame) {
         $image.Dispose()
     }
 
+    return $rows
+}
+
+# Build the FIRE weapon overlay: the recoiling pistol (PISGB0) with the Doom
+# muzzle-flash sprite (PISFA0) composited on top using each sprite's WAD
+# leftOffset/topOffset so the flash lands on the barrel. Both sprites share one
+# psprite anchor; placing each so its (leftOffset, topOffset) point sits on that
+# anchor aligns the flash to the muzzle exactly as in original Doom. The shared
+# canvas is then point-sampled into the same 72x54 draw box as the idle frame.
+function Convert-WeaponOverlayFire([string]$GunPath, [string]$FlashPath) {
+    $gunImage   = [System.Drawing.Bitmap]::new($GunPath)
+    $flashImage = [System.Drawing.Bitmap]::new($FlashPath)
+    $rows = New-Object System.Collections.Generic.List[string]
+    $drawWidth  = $WeaponDrawW
+    $drawHeight = $WeaponDrawH
+    $offsetX    = $WeaponDrawX
+    $offsetY    = $WeaponDrawY
+
+    $gunOffset = Get-SpriteOffset "PISGB0"
+    $flOffset  = Get-SpriteOffset "PISFA0"
+    $gunW = $gunImage.Width;   $gunH = $gunImage.Height
+    $flW  = $flashImage.Width; $flH  = $flashImage.Height
+
+    # Shared psprite anchor = origin (0,0). Sprite pixel (px,py) -> (px - leftOffset, py - topOffset).
+    $gunOX = -$gunOffset.leftOffset; $gunOY = -$gunOffset.topOffset
+    $flOX  = -$flOffset.leftOffset;  $flOY  = -$flOffset.topOffset
+    $canvasX0 = [Math]::Min($gunOX, $flOX)
+    $canvasY0 = [Math]::Min($gunOY, $flOY)
+    $canvasW  = [Math]::Max($gunOX + $gunW, $flOX + $flW) - $canvasX0
+    $canvasH  = [Math]::Max($gunOY + $gunH, $flOY + $flH) - $canvasY0
+    $gunPlaceX = $gunOX - $canvasX0; $gunPlaceY = $gunOY - $canvasY0
+    $flPlaceX  = $flOX  - $canvasX0; $flPlaceY  = $flOY  - $canvasY0
+
+    try {
+        for ($y = 0; $y -lt $WeaponOverlayH; $y++) {
+            $values = New-Object System.Collections.Generic.List[string]
+            for ($x = 0; $x -lt $WeaponOverlayW; $x++) {
+                $index = 0
+                if (($x -ge $offsetX) -and ($x -lt ($offsetX + $drawWidth)) -and
+                    ($y -ge $offsetY) -and ($y -lt ($offsetY + $drawHeight))) {
+                    $localX = $x - $offsetX
+                    $localY = $y - $offsetY
+                    $compX = [Math]::Min($canvasW - 1, [int](($localX * $canvasW) / $drawWidth))
+                    $compY = [Math]::Min($canvasH - 1, [int](($localY * $canvasH) / $drawHeight))
+
+                    # Recoiling gun -> normal world palette (same colour path as idle).
+                    $gx = $compX - $gunPlaceX
+                    $gy = $compY - $gunPlaceY
+                    if (($gx -ge 0) -and ($gx -lt $gunW) -and ($gy -ge 0) -and ($gy -lt $gunH)) {
+                        $gp = $gunImage.GetPixel($gx, $gy)
+                        if ($gp.A -ge 128) {
+                            $index = Get-NearestWorldPaletteIndex $gp $false
+                        }
+                    }
+
+                    # Muzzle flash on top -> warm ramp (fire red/yellow/white).
+                    $fx = $compX - $flPlaceX
+                    $fy = $compY - $flPlaceY
+                    if (($fx -ge 0) -and ($fx -lt $flW) -and ($fy -ge 0) -and ($fy -lt $flH)) {
+                        $fp = $flashImage.GetPixel($fx, $fy)
+                        if ($fp.A -ge 128) {
+                            $index = Get-WeaponPaletteIndex $fp $true
+                        }
+                    }
+                }
+                $values.Add($index.ToString())
+            }
+            $rows.Add("    {" + ($values -join ", ") + "}")
+        }
+    } finally {
+        $gunImage.Dispose()
+        $flashImage.Dispose()
+    }
     return $rows
 }
 
@@ -523,7 +634,7 @@ function Convert-FaceFrames() {
 }
 
 $weaponIdleRows = Convert-WeaponOverlay $WeaponIdleSourcePath $false
-$weaponFireRows = Convert-WeaponOverlay $WeaponFireSourcePath $true
+$weaponFireRows = Convert-WeaponOverlayFire $WeaponFireSourcePath $WeaponFlashSourcePath
 $hudTiles = Convert-HudTiles $HudSourcePath
 $faceTiles = Convert-FaceFrames
 $faceFrameCount = $FaceFrameNames.Count
@@ -561,6 +672,7 @@ $relativeSwitchSource = $SwitchTexturePath.Replace("\", "/")
 $relativeHudSource = $HudPath.Replace("\", "/")
 $relativeWeaponIdleSource = $WeaponIdlePath.Replace("\", "/")
 $relativeWeaponFireSource = $WeaponFirePath.Replace("\", "/")
+$relativeWeaponFlashSource = $WeaponFlashPath.Replace("\", "/")
 $relativeFaceSource = $FacePath.Replace("\", "/")
 $relativeBillboardSource = $BillboardPath.Replace("\", "/")
 $relativeBillboardKeySource = $BillboardKeyPath.Replace("\", "/")
@@ -641,7 +753,7 @@ $hudContent = @"
 // Generated by tools/convert-freedoom-assets.ps1.
 // HUD source: $relativeHudSource
 // Weapon idle source: $relativeWeaponIdleSource
-// Weapon fire source: $relativeWeaponFireSource
+// Weapon fire source: $relativeWeaponFireSource (gun) + $relativeWeaponFlashSource (muzzle flash)
 // Face source: $relativeFaceSource (animated set baked from res/originaldoom/graphics/STF*.png)
 // Generated at: $generatedAt
 static const u32 FREEDOOM_HUD_TILES[FREEDOOM_HUD_TILE_COUNT][8] = {

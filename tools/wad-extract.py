@@ -20,6 +20,7 @@ environment; if missing, install with `pip install Pillow`.
 """
 
 import argparse
+import json
 import os
 import struct
 import sys
@@ -553,6 +554,43 @@ def write_textures(out_root, textures):
     return count
 
 # --------------------------------------------------------------------------- #
+# Sprite offsets (for weapon / muzzle-flash compositing)
+# --------------------------------------------------------------------------- #
+
+def write_sprite_offsets(wad, sprite_lumps, out_path):
+    """Write a JSON map of sprite name -> {width, height, leftOffset, topOffset}.
+
+    Doom weapon and muzzle-flash sprites are separate patches positioned by the
+    leftOffset/topOffset in their picture header. The PNGs we write carry no
+    offset metadata, so downstream converters (the pistol muzzle-flash composite)
+    need this sidecar to align the flash over the gun as original Doom does.
+    """
+    offsets = {}
+    for lump in sprite_lumps:
+        if lump.size < PIC_HEADER_SIZE:
+            continue
+        try:
+            width, height, left_offset, top_offset = struct.unpack_from(
+                PIC_HEADER_FMT, wad.data, lump.filepos)
+        except struct.error:
+            continue
+        if not (0 < width <= MAX_PIC_WIDTH and 0 < height <= MAX_PIC_HEIGHT):
+            continue
+        offsets[lump.name] = {
+            "width": width,
+            "height": height,
+            "leftOffset": left_offset,
+            "topOffset": top_offset,
+        }
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    with open(out_path, "w") as fh:
+        json.dump(offsets, fh, indent=2, sort_keys=True)
+    print("  %-10s %4d entries -> %s"
+          % ("offsets", len(offsets), os.path.relpath(out_path, os.path.dirname(out_path))))
+    return len(offsets)
+
+
+# --------------------------------------------------------------------------- #
 # Main
 # --------------------------------------------------------------------------- #
 
@@ -612,6 +650,8 @@ def main():
         lambda lump: decode_picture(wad, lump, palette),
         "sprites",
     )
+    write_sprite_offsets(wad, categories["sprites"],
+                         os.path.join(out_root, "sprites", "_offsets.json"))
     total += write_category(
         out_root, "graphics", categories["graphics"],
         lambda lump: decode_picture(wad, lump, palette),
