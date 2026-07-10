@@ -3,7 +3,14 @@
 
 #include <genesis.h>
 
-#define RAY_VIEW_COLS 160
+// View geometry — single source of truth for the render viewport. The raycaster,
+// billboard and renderer all derive from these: VIEW_TILE_W/H in
+// renderer_internal.h alias RAY_VIEW_TILE_W/H, and the billboard projector
+// centres sprites on RAY_VIEW_COLS/ROWS. 8px tiles (Mega Drive hardware).
+#define RAY_VIEW_TILE_W 20
+#define RAY_VIEW_TILE_H 15
+#define RAY_VIEW_COLS (RAY_VIEW_TILE_W * 8)
+#define RAY_VIEW_ROWS (RAY_VIEW_TILE_H * 8)
 // Horizontal render granularity: cast/sample one wall column every N pixels and
 // duplicate across the gap. 1 = full 1px detail (heaviest), 2 = 2px (~80 cols),
 // 4 = 4px (~40 cols, original cost). Must divide 8. Lower = sharper but slower.

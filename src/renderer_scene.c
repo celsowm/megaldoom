@@ -585,7 +585,8 @@ static void draw_projected_billboards(const RayColumn *columns,
 
 // Draw the static weapon overlay from its precomposed per-tile-row ops (built
 // once in the asset generator). Each op is a single u32 read-modify-write,
-// so an idle frame costs a few hundred RMWs instead of ~72x54 per-pixel tests.
+// so an idle frame costs a few hundred RMWs instead of one per-pixel test across
+// the weapon draw box (FREEDOOM_WEAPON_DRAW_W x FREEDOOM_WEAPON_DRAW_H).
 // The clear masks are generated alongside the values (static const ROM data),
 // so the hot loop is just *dst = (*dst & ~clear) | val with no per-op mask
 // reconstruction.

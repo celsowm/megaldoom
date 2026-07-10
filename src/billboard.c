@@ -113,7 +113,7 @@ bool billboard_measure_object(const PlayerState *player, s16 cos_a, s16 sin_a,
     measure->type = type;
     measure->forward = forward;
     measure->side = side;
-    measure->center_col = (s16)((BILLBOARD_VIEW_COLS / 2) + bb_divs(side * 80, forward));
+    measure->center_col = (s16)((RAY_VIEW_COLS / 2) + bb_divs(side * 80, forward));
     const s32 half_w_num = type->scale * 4;
     if ((forward > 0) && (forward <= 0xFFFF)) {
         measure->half_w = (s16)divu((u32)half_w_num, (u16)forward);

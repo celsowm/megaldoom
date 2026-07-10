@@ -49,8 +49,12 @@ $HudOutPath = Join-Path $Root "src\generated_hud_assets.h"
 $MapOutPath = Join-Path $Root "src\generated_e1m1_map.c"
 $WeaponOverlayW = 160
 $WeaponOverlayH = 120
-$WeaponDrawW = 72
-$WeaponDrawH = 54
+# Pistol draw box inside the 160x120 view. Was 72x54 (~45% of the viewport in
+# each axis), which read as oversized against the 3D scene. 50x38 (~31% / ~32%)
+# keeps it anchored bottom-centre but visibly smaller. WeaponDrawX/Y are derived
+# so the gun stays centred horizontally and pinned to the bottom of the view.
+$WeaponDrawW = 50
+$WeaponDrawH = 38
 $WeaponDrawX = [int](($WeaponOverlayW - $WeaponDrawW) / 2)
 $WeaponDrawY = $WeaponOverlayH - $WeaponDrawH
 

@@ -11,8 +11,8 @@ static u16 billboard_project_one(const PlayerState *player,
         half_h = 28;
     }
 
-    const s16 top = (s16)((BILLBOARD_VIEW_PIXEL_H / 2) - half_h);
-    const s16 bottom = (s16)((BILLBOARD_VIEW_PIXEL_H / 2) + half_h);
+    const s16 top = (s16)((RAY_VIEW_ROWS / 2) - half_h);
+    const s16 bottom = (s16)((RAY_VIEW_ROWS / 2) + half_h);
     const s16 left = (s16)(measure->center_col - measure->half_w);
     const s16 right = (s16)(measure->center_col + measure->half_w);
     (void)player;

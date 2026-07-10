@@ -82,10 +82,14 @@ function New-WeaponOps([int[]]$Pixels) {
     $dst = New-Object System.Collections.Generic.List[int]
     $value = New-Object System.Collections.Generic.List[uint32]
     $clearMask = New-Object System.Collections.Generic.List[uint32]
-    $drawX = 44
-    $drawY = 66
-    $drawW = 72
-    $drawH = 54
+    # Single source of truth: the draw box is owned by convert-freedoom-assets.ps1
+    # (which writes FREEDOOM_WEAPON_DRAW_* into generated_hud_assets.h and scales
+    # the sprite into that box). Reading the defines back here keeps the per-tile
+    # ops in sync with the baked pixels instead of duplicating 44/66/72/54.
+    $drawX = Get-DefineValue $hudText "FREEDOOM_WEAPON_DRAW_X"
+    $drawY = Get-DefineValue $hudText "FREEDOOM_WEAPON_DRAW_Y"
+    $drawW = Get-DefineValue $hudText "FREEDOOM_WEAPON_DRAW_W"
+    $drawH = Get-DefineValue $hudText "FREEDOOM_WEAPON_DRAW_H"
     $tileXStart = $drawX -shr 3
     $tileXEnd = ($drawX + $drawW - 1) -shr 3
 
@@ -99,7 +103,7 @@ function New-WeaponOps([int[]]$Pixels) {
             [uint32]$packed = 0
             [uint32]$mask = 0
             for ($x = $xBegin; $x -lt $xStop; $x++) {
-                $texel = $Pixels[($y * 160) + $x]
+                $texel = $Pixels[($y * $viewPxW) + $x]
                 if ($texel -ne 0) {
                     $shift = (7 - ($x % 8)) * 4
                     $packed = $packed -bor ([uint32]($texel -band 0x0F) -shl $shift)
@@ -107,7 +111,7 @@ function New-WeaponOps([int[]]$Pixels) {
                 }
             }
             if ($packed -ne 0) {
-                [void]$dst.Add((($tileY * 20 + $tileX) * 8) + $rowY)
+                [void]$dst.Add((($tileY * $viewTileW + $tileX) * 8) + $rowY)
                 [void]$value.Add($packed)
                 [void]$clearMask.Add($mask)
             }
@@ -142,7 +146,7 @@ function New-OverlayOps([string]$Kind, [int]$Color) {
     $values = @{}
 
     function Add-Pixel([int]$X, [int]$Y) {
-        $tile = (($Y -shr 3) * 20) + ($X -shr 3)
+        $tile = (($Y -shr 3) * $viewTileW) + ($X -shr 3)
         $dst = ($tile * 8) + ($Y % 8)
         $shift = (7 - ($X % 8)) * 4
         $mask = [uint32]0x0F -shl $shift
@@ -156,16 +160,16 @@ function New-OverlayOps([string]$Kind, [int]$Color) {
     }
 
     if ($Kind -eq "damage") {
-        for ($x = 0; $x -lt 160; $x++) {
+        for ($x = 0; $x -lt $viewPxW; $x++) {
             for ($t = 0; $t -lt 3; $t++) {
                 Add-Pixel $x $t
-                Add-Pixel $x (119 - $t)
+                Add-Pixel $x ($viewPxH - 1 - $t)
             }
         }
-        for ($y = 0; $y -lt 120; $y++) {
+        for ($y = 0; $y -lt $viewPxH; $y++) {
             for ($t = 0; $t -lt 8; $t++) {
                 Add-Pixel $t $y
-                Add-Pixel (159 - $t) $y
+                Add-Pixel ($viewPxW - 1 - $t) $y
             }
         }
     } else {
@@ -208,6 +212,16 @@ function Format-OverlayRow([int[]]$Dst, [uint32[]]$Mask, [uint32[]]$Value, [int]
 
 $hudText = Get-Content -Raw $HudPath
 $worldText = Get-Content -Raw $WorldPath
+
+# View geometry, derived from the HUD header so this generator can never drift
+# from the C layout. FREEDOOM_WEAPON_W/H ARE the viewport pixel dimensions (the
+# weapon overlay canvas == the view), and the tile-grid width (VIEW_TILE_W in
+# renderer_internal.h == RAY_VIEW_TILE_W in raycast.h) is viewPxW/8. Both the
+# weapon ops and the full-view damage overlay linearize a tile as
+# (tileY * viewTileW + tileX), matching g_view_tiles[(tile_y * VIEW_TILE_W) + tile_x].
+$viewPxW   = Get-DefineValue $hudText "FREEDOOM_WEAPON_W"
+$viewPxH   = Get-DefineValue $hudText "FREEDOOM_WEAPON_H"
+$viewTileW = [int]($viewPxW / 8)
 $damageColor = Get-DefineValue $worldText "MEGALDOOM_WORLD_COLOR_DAMAGE"
 $warningColor = Get-DefineValue $worldText "MEGALDOOM_WORLD_COLOR_WARNING"
 $idlePixels = Get-ArrayValues $hudText "FREEDOOM_WEAPON_IDLE"

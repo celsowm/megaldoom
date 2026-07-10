@@ -622,6 +622,12 @@ def main():
         bx, by = vertices[s["v2"]]
         wl = abs(bx - ax) + abs(by - ay)
         if i % 12 == 0:
+            # Start a new visual row. The previous row needs a trailing comma
+            # so consecutive rows stay valid C (adjacent numeric tokens like
+            # "128\n    128" would otherwise be a syntax error). The very first
+            # row (i == 0) has no predecessor to terminate.
+            if i > 0:
+                lines[-1] += ","
             lines.append("    %d" % wl)
         else:
             lines[-1] += ",%d" % wl
