@@ -45,6 +45,18 @@ static u32 g_solid_words[BSP_SOLID_WORD_COUNT];
 static u16 g_solid_count;
 static RayColumn *g_columns;
 
+// --- Near/far order cache (Patch 3.2) ---------------------------------------
+// The front/back traversal order at each BSP node depends only on the player's
+// position relative to the partition line — not on the camera angle. During
+// pure rotation the position is unchanged, so this cache lets render_node skip
+// the per-node cross product (two s32 multiplies + subtract) entirely. One bit
+// per node: 1 = front-first (cross >= 0), 0 = back-first. Rebuilt only when
+// player.x or player.y changes; invalidated explicitly on teleport/reset.
+static u8 g_node_side_bits[(BSP_MAX_NODES + 7) / 8];
+static s32 g_node_cache_px;
+static s32 g_node_cache_py;
+static bool g_node_cache_valid;
+
 #if DEBUG_PERF
 // Temporary BSP instrumentation: counts how the new division-free frustum
 // precheck interacts with traversal. Nodes visited, boxes rejected cheaply
@@ -70,10 +82,6 @@ static u16 g_bsp_dbg_segments_drawn;
 #endif
 
 static void render_node(u16 child);
-
-static s32 abs_s32(s32 v) {
-    return (v < 0) ? -v : v;
-}
 
 // These reciprocal quotients are always non-negative and fit in a u16 on the
 // valid BSP path. Using the 68000's native DIVU.W avoids the much slower
@@ -181,8 +189,10 @@ static void draw_seg(u16 seg_index) {
     s32 latB = (relx * g_rx + rely * g_ry) >> FX_SHIFT;
 
     // Texture coordinate along the wall (world units), repeating every 256 px
-    // like the raycaster. u goes 0 -> wall_length from v1 -> v2.
-    const s32 wall_len = abs_s32((s32)b->x - a->x) + abs_s32((s32)b->y - a->y);
+    // like the raycaster. u goes 0 -> wall_length from v1 -> v2. The wall
+    // length is precomputed in ROM (bsp_seg_wall_len) so we avoid two vertex
+    // lookups and two abs calls per seg visit.
+    const s32 wall_len = bsp_seg_wall_len[seg_index];
     s32 uA = seg->tex_u_offset;
     s32 uB = (s32)seg->tex_u_offset + wall_len;
 
@@ -437,9 +447,11 @@ static void render_node(u16 child) {
     }
 
     const BspNode *n = &bsp_nodes[child];
-    // Which side of the partition line is the camera on?
-    const s32 cross = (g_px - n->px) * n->dy - (g_py - n->py) * n->dx;
-    if (cross >= 0) {
+    // Near/far order depends only on player position, not angle. The cache is
+    // rebuilt only when position changes (see bsp_cast_frame), so pure rotation
+    // reuses the cached bit instead of recomputing the partition cross product.
+    const u8 side_bit = (u8)(1u << (child & 7));
+    if (g_node_side_bits[child >> 3] & side_bit) {
         render_boxed_child(n->front, &n->front_box); // near side first
         render_boxed_child(n->back, &n->back_box);
     } else {
@@ -448,9 +460,31 @@ static void render_node(u16 child) {
     }
 }
 
+// Rebuild the near/far order cache for every node from the current camera
+// position. Called only when player.x or player.y changes (movement, push,
+// teleport, reset). Points exactly on a partition line take the front-first
+// branch (cross >= 0), matching the original inline computation.
+static void rebuild_node_side_cache(void) {
+    for (u16 i = 0; i < bsp_node_count; i++) {
+        const BspNode *n = &bsp_nodes[i];
+        const s32 cross = (g_px - n->px) * n->dy - (g_py - n->py) * n->dx;
+        if (cross >= 0) {
+            g_node_side_bits[i >> 3] |= (u8)(1u << (i & 7));
+        } else {
+            g_node_side_bits[i >> 3] &= (u8)~(1u << (i & 7));
+        }
+    }
+}
+
+void bsp_invalidate_node_cache(void) {
+    g_node_cache_valid = FALSE;
+}
+
 void bsp_init(void) {
-    // Nothing to precompute; the collision/LOS broad-phase computes seg AABBs
-    // inline from the vertex table (no per-seg RAM on the 64KB MD).
+    // The near/far order cache is rebuilt on the first bsp_cast_frame (position
+    // will differ from the bss-zeroed sentinel). Collision/LOS still computes
+    // seg AABBs inline from the vertex table (no per-seg RAM on the 64KB MD).
+    g_node_cache_valid = FALSE;
 }
 
 void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColors *scene_colors) {
@@ -467,6 +501,16 @@ void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColor
     g_px = player->x;
     g_py = player->y;
     g_columns = columns;
+
+    // Rebuild the near/far order cache only when the player's position changed
+    // since the last cast. Pure rotation reuses the cached bits, saving a
+    // cross product (2 multiplies + subtract) per node visited.
+    if (!g_node_cache_valid || g_px != g_node_cache_px || g_py != g_node_cache_py) {
+        rebuild_node_side_cache();
+        g_node_cache_px = g_px;
+        g_node_cache_py = g_py;
+        g_node_cache_valid = TRUE;
+    }
 
     scene_colors->ceiling_color = BSP_CEILING_COLOR;
     scene_colors->floor_color = BSP_FLOOR_COLOR;

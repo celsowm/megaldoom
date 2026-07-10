@@ -58,6 +58,12 @@ const BspNode bsp_nodes[] = {
 
 const u16 bsp_root_node = 0;
 const u16 bsp_seg_count = 12;
+const u16 bsp_node_count = 1u;
+
+// Precomputed |bx-ax| + |by-ay| per seg (see bsp_map.h).
+const u16 bsp_seg_wall_len[] = {
+    768, 640, 256, 640, 768, 1536, 768, 1536, 768, 640, 256, 640,
+};
 
 const s32 bsp_player_start_x = 2 * FX_ONE + (FX_ONE / 2); // 640
 const s32 bsp_player_start_y = 4 * FX_ONE;                // 1024, aligned with door

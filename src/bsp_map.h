@@ -95,6 +95,16 @@ extern const BspSectorVisual bsp_sector_visuals[];
 extern const BspNode bsp_nodes[];
 extern const u16 bsp_root_node;
 extern const u16 bsp_seg_count;
+extern const u16 bsp_node_count;
+
+// Compact parallel ROM table: precomputed horizontal wall length
+// (|bx-ax| + |by-ay|) per seg, so the renderer avoids two vertex lookups and
+// two abs calls per seg visit. Camera-independent, so it belongs in ROM.
+extern const u16 bsp_seg_wall_len[];
+
+// Upper bound on BSP nodes across any map, sizing the near/far order cache
+// bit array in bsp_render.c. E1M1 uses 236; the hand map uses 1.
+#define BSP_MAX_NODES 256
 
 // Player 1 start, supplied by the active map's data file.
 extern const s32 bsp_player_start_x;

@@ -613,6 +613,22 @@ def main():
     lines.append("};")
     lines.append("")
 
+    # Compact parallel ROM table: precomputed wall length per seg (|bx-ax| +
+    # |by-ay|). Camera-independent, stored in ROM to avoid two vertex lookups
+    # and two abs calls per seg visit in the renderer hot path.
+    lines.append("const u16 bsp_seg_wall_len[%d] = {" % len(out_segs))
+    for i, s in enumerate(out_segs):
+        ax, ay = vertices[s["v1"]]
+        bx, by = vertices[s["v2"]]
+        wl = abs(bx - ax) + abs(by - ay)
+        if i % 12 == 0:
+            lines.append("    %d" % wl)
+        else:
+            lines[-1] += ",%d" % wl
+    lines[-1] += ","
+    lines.append("};")
+    lines.append("")
+
     lines.append("const BspSubsector bsp_subsectors[%d] = {" % len(out_ssectors))
     for (first, count, sector_id) in out_ssectors:
         lines.append("    {%d, %d, %d}," % (first, count, sector_id))
@@ -635,6 +651,7 @@ def main():
 
     lines.append("const u16 bsp_root_node = %du;" % root)
     lines.append("const u16 bsp_seg_count = %du;" % len(out_segs))
+    lines.append("const u16 bsp_node_count = %du;" % len(nodes))
     lines.append("const s32 bsp_player_start_x = %d;" % start_x)
     lines.append("const s32 bsp_player_start_y = %d;" % start_y)
     lines.append("const u16 bsp_player_start_angle = %du;" % start_angle)
