@@ -92,6 +92,7 @@ static void reset_level(u16 phase_index, bool *level_cleared, u16 *shot_cooldown
     *player_health = PLAYER_MAX_HEALTH;
     *frame = 0;
 
+    renderer_invalidate_scene();
     renderer_draw_static_screen();
     sync_hud(*frame, phase_index, *player_health, *shot_cooldown, DOOR_ACTION_NONE, BILLBOARD_SHOT_NONE, FALSE);
     renderer_draw_hud(&g_hud);

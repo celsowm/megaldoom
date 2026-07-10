@@ -22,14 +22,16 @@
 #define BSP_INV_SCALE 16384  // fixed-point scale for 1/depth interpolation (1<<14)
 #define BSP_CEILING_COLOR 4  // dark gray
 #define BSP_FLOOR_COLOR 11   // standard gray
+#define BSP_SAMPLE_COLS (RAY_VIEW_COLS / RAY_COL_STRIDE)
+#define BSP_SOLID_WORD_COUNT ((BSP_SAMPLE_COLS + 31) / 32)
 
 // Per-frame view basis + camera, set at the top of bsp_cast_frame().
 static s16 g_fwx, g_fwy; // forward axis (cos, sin), Q8
 static s16 g_rx, g_ry;   // right axis, Q8
 static s32 g_px, g_py;   // camera position, world units
 
-static bool g_col_solid[RAY_VIEW_COLS];
-static u32 g_solid_words[(RAY_VIEW_COLS + 31) / 32];
+static bool g_sample_solid[BSP_SAMPLE_COLS];
+static u32 g_solid_words[BSP_SOLID_WORD_COUNT];
 static u16 g_solid_count;
 static RayColumn *g_columns;
 
@@ -39,21 +41,21 @@ static s32 abs_s32(s32 v) {
     return (v < 0) ? -v : v;
 }
 
-static void mark_column_solid(u16 x) {
-    g_col_solid[x] = TRUE;
-    g_solid_words[x >> 5] |= (u32)1u << (x & 31);
+static void mark_sample_solid(u16 sample) {
+    g_sample_solid[sample] = TRUE;
+    g_solid_words[sample >> 5] |= (u32)1u << (sample & 31);
     g_solid_count++;
 }
 
-static bool solid_range_filled(s16 left, s16 right) {
-    u16 word = (u16)((u16)left >> 5);
-    const u16 last_word = (u16)((u16)right >> 5);
+static bool solid_sample_range_filled(u16 left_sample, u16 right_sample) {
+    u16 word = (u16)(left_sample >> 5);
+    const u16 last_word = (u16)(right_sample >> 5);
 
     while (word <= last_word) {
         const u16 word_left = (u16)(word << 5);
         const u16 word_right = (u16)(word_left + 31);
-        const u16 range_left = ((u16)left > word_left) ? (u16)left : word_left;
-        const u16 range_right = ((u16)right < word_right) ? (u16)right : word_right;
+        const u16 range_left = (left_sample > word_left) ? left_sample : word_left;
+        const u16 range_right = (right_sample < word_right) ? right_sample : word_right;
         const u16 start_bit = (u16)(range_left & 31);
         const u16 end_bit = (u16)(range_right & 31);
         u32 mask = 0xFFFFFFFFu << start_bit;
@@ -162,63 +164,58 @@ static void draw_seg(u16 seg_index) {
     s32 x1 = xR - 1;
     if (x0 < 0) x0 = 0;
     if (x1 > RAY_VIEW_COLS - 1) x1 = RAY_VIEW_COLS - 1;
+    if (x0 > x1) {
+        return;
+    }
 
-    // depth carried to the in-between (non-sampled) columns for billboard occlusion.
-    // Only wall columns on a RAY_COL_STRIDE boundary are ever read for height/texture
-    // by build_raycast_tilemap; the columns between them contribute nothing to the
-    // wall image, so their depth just needs to be close enough (<= STRIDE-1 px off)
-    // for billboard-vs-wall occlusion. Carrying the last boundary depth avoids a
-    // per-column divide entirely on those columns.
-    s32 carry_depth = 0x7FFF;
-    s32 sfix_acc = (x0 - xL) * inv_span;
-    for (s32 x = x0; x <= x1; x++) {
-        const s32 sfix = (sfix_acc >> FX_SHIFT); // 0..256 across span
-        sfix_acc += inv_span;
+    const u16 first_sample = (u16)((x0 + RAY_COL_STRIDE - 1) / RAY_COL_STRIDE);
+    const u16 last_sample = (u16)(x1 / RAY_COL_STRIDE);
+    if (first_sample > last_sample) {
+        return;
+    }
 
-        if (g_col_solid[x]) {
+    for (u16 sample = first_sample; sample <= last_sample; sample++) {
+        if (g_sample_solid[sample]) {
             continue;
         }
 
+        const s32 x = (s32)sample * RAY_COL_STRIDE;
+        const s32 sfix = (((x - xL) * inv_span) >> FX_SHIFT); // 0..256 across span
         RayColumn *col = &g_columns[x];
 
-        if ((x & (RAY_COL_STRIDE - 1)) == 0) {
-            const s32 invz = invzL + (((invzR - invzL) * sfix) >> FX_SHIFT);
-            if (invz <= 0) {
-                continue;
-            }
-
-            s32 depth_col = BSP_INV_SCALE / invz;
-            if (depth_col < 1) {
-                depth_col = 1;
-            }
-
-            const s32 uz = uzL + (((uzR - uzL) * sfix) >> FX_SHIFT);
-            const s32 u_col = uz / invz;
-
-            // height = BSP_VIEW_PIXEL_H*FX_ONE / depth_col, but depth_col = INV_SCALE/invz,
-            // so fold to a multiply+shift and skip a divide. invz > 0 here (guarded), and
-            // BSP_VIEW_PIXEL_H*FX_ONE*invz (<= ~31M) fits in s32.
-            s32 height = ((s32)BSP_VIEW_PIXEL_H * FX_ONE * invz) >> 14; // BSP_INV_SCALE == 1<<14
-            if (height < 1) {
-                height = 1;
-            } else if (height > BSP_VIEW_PIXEL_H) {
-                height = BSP_VIEW_PIXEL_H;
-            }
-
-            col->height = (u16)height;
-            col->depth = (u16)depth_col;
-            const s32 scaled_u = (ushift >= 0) ? (u_col >> ushift) :
-                                                   (u_col * ((s32)1 << -ushift));
-            col->tex_x = (u8)(scaled_u & WALL_TEX_DIM_MASK);
-            col->tex_y = seg->tex_v_offset;
-            col->texture_id = tid;
-            col->shade = shade;
-            carry_depth = depth_col;
-        } else {
-            col->depth = (u16)carry_depth;
+        const s32 invz = invzL + (((invzR - invzL) * sfix) >> FX_SHIFT);
+        if (invz <= 0) {
+            continue;
         }
 
-        mark_column_solid((u16)x);
+        s32 depth_col = BSP_INV_SCALE / invz;
+        if (depth_col < 1) {
+            depth_col = 1;
+        }
+
+        const s32 uz = uzL + (((uzR - uzL) * sfix) >> FX_SHIFT);
+        const s32 u_col = uz / invz;
+
+        // height = BSP_VIEW_PIXEL_H*FX_ONE / depth_col, but depth_col = INV_SCALE/invz,
+        // so fold to a multiply+shift and skip a divide. invz > 0 here (guarded), and
+        // BSP_VIEW_PIXEL_H*FX_ONE*invz (<= ~31M) fits in s32.
+        s32 height = ((s32)BSP_VIEW_PIXEL_H * FX_ONE * invz) >> 14; // BSP_INV_SCALE == 1<<14
+        if (height < 1) {
+            height = 1;
+        } else if (height > BSP_VIEW_PIXEL_H) {
+            height = BSP_VIEW_PIXEL_H;
+        }
+
+        col->height = (u16)height;
+        col->depth = (u16)depth_col;
+        const s32 scaled_u = (ushift >= 0) ? (u_col >> ushift) :
+                                               (u_col * ((s32)1 << -ushift));
+        col->tex_x = (u8)(scaled_u & WALL_TEX_DIM_MASK);
+        col->tex_y = seg->tex_v_offset;
+        col->texture_id = tid;
+        col->shade = shade;
+
+        mark_sample_solid(sample);
     }
 }
 
@@ -300,17 +297,23 @@ static void render_boxed_child(u16 child, const BspBox *box) {
         return;
     }
 
+    const u16 left_sample = (u16)((left + RAY_COL_STRIDE - 1) / RAY_COL_STRIDE);
+    const u16 right_sample = (u16)(right / RAY_COL_STRIDE);
+    if (left_sample > right_sample) {
+        return;
+    }
+
     // Full-height solid walls make horizontal coverage sufficient: when every
     // column in the child's conservative range is already filled front-to-back,
     // no geometry in that child can change the frame. Test the range one word at
     // a time; rotation can make many child boxes cover most of the view.
-    if (!solid_range_filled(left, right)) {
+    if (!solid_sample_range_filled(left_sample, right_sample)) {
         render_node(child);
     }
 }
 
 static void render_node(u16 child) {
-    if (g_solid_count >= RAY_VIEW_COLS) {
+    if (g_solid_count >= BSP_SAMPLE_COLS) {
         return; // whole view already filled front-to-back
     }
 
@@ -354,11 +357,12 @@ void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColor
     // Clear occlusion and seed every column with a far/empty default so columns
     // no wall covers still render (as distant, mostly sky/floor).
     g_solid_count = 0;
-    for (u16 i = 0; i < ((RAY_VIEW_COLS + 31) / 32); i++) {
+    for (u16 i = 0; i < BSP_SOLID_WORD_COUNT; i++) {
         g_solid_words[i] = 0;
     }
-    for (u16 c = 0; c < RAY_VIEW_COLS; c++) {
-        g_col_solid[c] = FALSE;
+    for (u16 sample = 0; sample < BSP_SAMPLE_COLS; sample++) {
+        const u16 c = (u16)(sample * RAY_COL_STRIDE);
+        g_sample_solid[sample] = FALSE;
         columns[c].height = 1;
         columns[c].depth = 0x7FFF;
         columns[c].tex_x = 0;

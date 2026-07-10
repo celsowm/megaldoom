@@ -45,12 +45,17 @@ static u32 g_overlay_previous_bits[VIEW_DIRTY_WORD_COUNT];
 static u32 g_overlay_current_bits[VIEW_DIRTY_WORD_COUNT];
 static u16 g_last_compass_angle = 0xFFFF;
 static bool g_base_tiles_valid = FALSE;
+static bool g_upload_requires_bank_swap = FALSE;
 static bool g_compass_dirty = TRUE;
 
 void renderer_mark_overlay_tile(u16 tile_index) {
     const u16 word = (u16)(tile_index >> 5);
-    g_overlay_current_bits[word] |= (u32)1u << (tile_index & 31);
-    renderer_mark_tile_dirty(tile_index);
+    const u32 mask = (u32)1u << (tile_index & 31);
+
+    if ((g_overlay_current_bits[word] & mask) == 0) {
+        g_overlay_current_bits[word] |= mask;
+        renderer_mark_tile_dirty(tile_index);
+    }
 }
 
 static void build_shade_luts(void) {
@@ -108,7 +113,21 @@ void renderer_scene_init(void) {
     build_shade_luts();
     g_last_compass_angle = 0xFFFF;
     g_base_tiles_valid = FALSE;
+    g_upload_requires_bank_swap = FALSE;
     g_compass_dirty = TRUE;
+}
+
+void renderer_invalidate_scene(void) {
+    g_last_compass_angle = 0xFFFF;
+    g_base_tiles_valid = FALSE;
+    g_upload_requires_bank_swap = FALSE;
+    g_compass_dirty = TRUE;
+    for (u16 i = 0; i < VIEW_DIRTY_WORD_COUNT; i++) {
+        g_overlay_previous_bits[i] = 0;
+        g_overlay_current_bits[i] = 0;
+        g_view_dirty_bits[i] = 0;
+    }
+    g_view_dirty_count = 0;
 }
 
 typedef struct {
@@ -371,7 +390,8 @@ static void draw_projected_billboards(const RayColumn *columns,
             if ((col < 0) || (col >= RAY_VIEW_COLS)) {
                 continue;
             }
-            if (object->depth >= columns[col].depth) {
+            const u16 wall_col = (u16)(col & ~(RAY_COL_STRIDE - 1));
+            if (object->depth >= columns[wall_col].depth) {
                 continue;
             }
 
@@ -418,6 +438,7 @@ static void draw_weapon_overlay(bool flash) {
     const u32 *values = v ? MEGALDOOM_WEAPON_VALUE_FIRE : MEGALDOOM_WEAPON_VALUE_IDLE;
     const u16 count = MEGALDOOM_WEAPON_OP_COUNT[v];
     u32 *base = &g_view_tiles[0][0];
+    u16 last_marked_tile = 0xFFFF;
 
     for (u16 i = 0; i < count; i++) {
         const u32 val = values[i];
@@ -427,8 +448,13 @@ static void draw_weapon_overlay(bool flash) {
         const u32 t = (val | (val >> 1) | (val >> 2) | (val >> 3)) & 0x11111111u;
         const u32 clear_mask = (t << 4) - t;
         u32 *dst = base + dst_idx[i];
+        const u16 tile_index = (u16)(dst_idx[i] / 8);
+
         *dst = (*dst & ~clear_mask) | val;
-        renderer_mark_overlay_tile((u16)(dst_idx[i] / 8));
+        if (tile_index != last_marked_tile) {
+            renderer_mark_overlay_tile(tile_index);
+            last_marked_tile = tile_index;
+        }
     }
 }
 
@@ -443,17 +469,21 @@ static void draw_overlay_ops(const MegalDoomOverlayRowOp *ops, u16 count) {
     }
 }
 
-static void upload_view_tilemap(void) {
+static void clear_view_dirty_bits(void) {
+    for (u16 i = 0; i < VIEW_DIRTY_WORD_COUNT; i++) {
+        g_view_dirty_bits[i] = 0;
+    }
+    g_view_dirty_count = 0;
+}
+
+static void upload_view_tilemap_partial(u16 vram_base) {
     if (g_view_dirty_count == 0) {
         return;
     }
 
     if (g_view_dirty_count >= VIEW_DIRTY_FULL_THRESHOLD) {
-        VDP_loadTileData((const u32 *)g_view_tiles, VIEW_TILE_BASE, VIEW_TILE_COUNT, DMA);
-        for (u16 i = 0; i < VIEW_DIRTY_WORD_COUNT; i++) {
-            g_view_dirty_bits[i] = 0;
-        }
-        g_view_dirty_count = 0;
+        VDP_loadTileData((const u32 *)g_view_tiles, vram_base, VIEW_TILE_COUNT, DMA);
+        clear_view_dirty_bits();
         return;
     }
 
@@ -479,24 +509,47 @@ static void upload_view_tilemap(void) {
 
         run_count++;
         if (run_count > VIEW_DIRTY_MAX_RUNS) {
-            VDP_loadTileData((const u32 *)g_view_tiles, VIEW_TILE_BASE, VIEW_TILE_COUNT, DMA);
-            for (u16 i = 0; i < VIEW_DIRTY_WORD_COUNT; i++) {
-                g_view_dirty_bits[i] = 0;
-            }
-            g_view_dirty_count = 0;
+            VDP_loadTileData((const u32 *)g_view_tiles, vram_base, VIEW_TILE_COUNT, DMA);
+            clear_view_dirty_bits();
             return;
         }
 
         VDP_loadTileData((const u32 *)&g_view_tiles[first][0],
-                         VIEW_TILE_BASE + first,
+                         vram_base + first,
                          (u16)(tile - first),
                          DMA);
     }
 
-    for (u16 i = 0; i < VIEW_DIRTY_WORD_COUNT; i++) {
-        g_view_dirty_bits[i] = 0;
+    clear_view_dirty_bits();
+}
+
+static void upload_view_tilemap_double_buffered(void) {
+    const u16 next_bank = (u16)(g_view_vram_bank ^ 1);
+    const u16 vram_base = (u16)(VIEW_TILE_BASE + (next_bank * VIEW_TILE_COUNT));
+    const u16 first_count = (u16)(VIEW_TILE_COUNT / 2);
+    const u16 second_count = (u16)(VIEW_TILE_COUNT - first_count);
+
+    if (g_view_dirty_count == 0) {
+        return;
     }
-    g_view_dirty_count = 0;
+
+    VDP_loadTileData((const u32 *)g_view_tiles, vram_base, first_count, DMA);
+    VDP_waitVSync();
+    VDP_loadTileData((const u32 *)&g_view_tiles[first_count][0],
+                     (u16)(vram_base + first_count),
+                     second_count,
+                     DMA);
+    renderer_set_view_vram_bank(next_bank);
+    clear_view_dirty_bits();
+}
+
+static void upload_view_tilemap(void) {
+    if (g_upload_requires_bank_swap) {
+        upload_view_tilemap_double_buffered();
+        g_upload_requires_bank_swap = FALSE;
+    } else {
+        upload_view_tilemap_partial((u16)(VIEW_TILE_BASE + (g_view_vram_bank * VIEW_TILE_COUNT)));
+    }
 }
 
 static void clear_compass_tilemap(void) {
@@ -616,6 +669,7 @@ void renderer_render_scene(const RayColumn *columns,
     const u16 object_count = billboard_project_scene(player, objects, BILLBOARD_MAX_PROJECTED_OBJECTS);
 
     if (base_dirty) {
+        g_upload_requires_bank_swap = TRUE;
         build_raycast_tilemap(columns, scene_colors, g_view_tiles);
 #if RENDERER_REFERENCE_PACKER && RAY_COL_STRIDE == 2
         build_raycast_tilemap_reference(columns, scene_colors, g_reference_view_tiles);

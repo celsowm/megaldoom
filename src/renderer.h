@@ -24,6 +24,7 @@ typedef struct {
 } RendererHudState;
 
 void renderer_init(void);
+void renderer_invalidate_scene(void);
 void renderer_draw_static_screen(void);
 void renderer_draw_hud(const RendererHudState *state);
 void renderer_render_scene(const RayColumn *columns,

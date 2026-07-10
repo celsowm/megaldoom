@@ -9,6 +9,7 @@ u16 g_view_tilemap[VIEW_TILE_COUNT];
 u16 g_compass_tilemap[COMPASS_W * COMPASS_H];
 u32 g_view_dirty_bits[VIEW_DIRTY_WORD_COUNT];
 u16 g_view_dirty_count;
+u16 g_view_vram_bank;
 
 static void init_video(void) {
     VDP_setScreenWidth320();
@@ -79,17 +80,18 @@ static void init_hud_tiles(void) {
     VDP_loadTileData((const u32 *)FREEDOOM_FACE_TILES, FACE_TILE_BASE, FREEDOOM_FACE_TILE_COUNT, DMA);
 }
 
-static void init_view_tilemap(void) {
+void renderer_set_view_vram_bank(u16 bank) {
+    g_view_vram_bank = (u16)(bank & 1);
+
     for (u16 y = 0; y < VIEW_TILE_H; y++) {
         for (u16 x = 0; x < VIEW_TILE_W; x++) {
             const u16 index = (u16)((y * VIEW_TILE_W) + x);
-            g_view_tilemap[index] = TILE_ATTR_FULL(PAL3, FALSE, FALSE, FALSE, VIEW_TILE_BASE + index);
+            g_view_tilemap[index] = TILE_ATTR_FULL(
+                PAL3, FALSE, FALSE, FALSE,
+                VIEW_TILE_BASE + (g_view_vram_bank * VIEW_TILE_COUNT) + index);
         }
     }
 
-    // The view tilemap is static (each cell points at a fixed tile index); only the
-    // tile pixel data changes per frame. Upload the map once here so the per-frame
-    // path can skip the redundant CPU tilemap copy.
     VDP_setTileMapDataRect(BG_B,
                            g_view_tilemap,
                            VIEW_TILEMAP_X,
@@ -98,6 +100,13 @@ static void init_view_tilemap(void) {
                            VIEW_TILE_H,
                            VIEW_TILE_W,
                            CPU);
+}
+
+static void init_view_tilemap(void) {
+    // The view tilemap points at one of two dynamic tile banks. Turn/base redraws
+    // upload into the inactive bank, then swap this map only after the upload is
+    // complete so a half-updated view is never displayed.
+    renderer_set_view_vram_bank(0);
 }
 
 void renderer_mark_tile_dirty(u16 tile_index) {
