@@ -5,8 +5,7 @@
 
 // draw_seg only computes the height/texture fields at columns on a RAY_COL_STRIDE
 // boundary, matching the columns build_raycast_tilemap actually samples. That
-// relies on the stride being a power of two (the (x & (STRIDE-1)) test) and on
-// the renderer sampling at multiples of it (enforced there by RAY_COL_STRIDE==4).
+// relies on the stride being a power of two (the (x & (STRIDE-1)) test).
 #if (RAY_COL_STRIDE & (RAY_COL_STRIDE - 1)) != 0
 #error "draw_seg's strided-column optimization requires RAY_COL_STRIDE to be a power of two"
 #endif
@@ -21,6 +20,8 @@
 #define BSP_VIEW_PIXEL_H 120 // matches raycaster's RAY_VIEW_PIXEL_H
 #define BSP_NEAR 16          // near clip plane, in world units
 #define BSP_INV_SCALE 16384  // fixed-point scale for 1/depth interpolation (1<<14)
+#define BSP_CEILING_COLOR 4  // dark gray
+#define BSP_FLOOR_COLOR 11   // standard gray
 
 // Per-frame view basis + camera, set at the top of bsp_cast_frame().
 static s16 g_fwx, g_fwy; // forward axis (cos, sin), Q8
@@ -28,6 +29,7 @@ static s16 g_rx, g_ry;   // right axis, Q8
 static s32 g_px, g_py;   // camera position, world units
 
 static bool g_col_solid[RAY_VIEW_COLS];
+static u32 g_solid_words[(RAY_VIEW_COLS + 31) / 32];
 static u16 g_solid_count;
 static RayColumn *g_columns;
 
@@ -35,6 +37,37 @@ static void render_node(u16 child);
 
 static s32 abs_s32(s32 v) {
     return (v < 0) ? -v : v;
+}
+
+static void mark_column_solid(u16 x) {
+    g_col_solid[x] = TRUE;
+    g_solid_words[x >> 5] |= (u32)1u << (x & 31);
+    g_solid_count++;
+}
+
+static bool solid_range_filled(s16 left, s16 right) {
+    u16 word = (u16)((u16)left >> 5);
+    const u16 last_word = (u16)((u16)right >> 5);
+
+    while (word <= last_word) {
+        const u16 word_left = (u16)(word << 5);
+        const u16 word_right = (u16)(word_left + 31);
+        const u16 range_left = ((u16)left > word_left) ? (u16)left : word_left;
+        const u16 range_right = ((u16)right < word_right) ? (u16)right : word_right;
+        const u16 start_bit = (u16)(range_left & 31);
+        const u16 end_bit = (u16)(range_right & 31);
+        u32 mask = 0xFFFFFFFFu << start_bit;
+
+        if (end_bit < 31) {
+            mask &= (u32)((1u << (end_bit + 1)) - 1u);
+        }
+        if ((g_solid_words[word] & mask) != mask) {
+            return FALSE;
+        }
+        word++;
+    }
+
+    return TRUE;
 }
 
 // Draw one one-sided wall segment into the RayColumn buffer, respecting the
@@ -146,14 +179,14 @@ static void draw_seg(u16 seg_index) {
             continue;
         }
 
-        const s32 invz = invzL + (((invzR - invzL) * sfix) >> FX_SHIFT);
-        if (invz <= 0) {
-            continue;
-        }
-
         RayColumn *col = &g_columns[x];
 
         if ((x & (RAY_COL_STRIDE - 1)) == 0) {
+            const s32 invz = invzL + (((invzR - invzL) * sfix) >> FX_SHIFT);
+            if (invz <= 0) {
+                continue;
+            }
+
             s32 depth_col = BSP_INV_SCALE / invz;
             if (depth_col < 1) {
                 depth_col = 1;
@@ -185,8 +218,7 @@ static void draw_seg(u16 seg_index) {
             col->depth = (u16)carry_depth;
         }
 
-        g_col_solid[x] = TRUE;
-        g_solid_count++;
+        mark_column_solid((u16)x);
     }
 }
 
@@ -270,12 +302,10 @@ static void render_boxed_child(u16 child, const BspBox *box) {
 
     // Full-height solid walls make horizontal coverage sufficient: when every
     // column in the child's conservative range is already filled front-to-back,
-    // no geometry in that child can change the frame.
-    for (s16 x = left; x <= right; x++) {
-        if (!g_col_solid[x]) {
-            render_node(child);
-            return;
-        }
+    // no geometry in that child can change the frame. Test the range one word at
+    // a time; rotation can make many child boxes cover most of the view.
+    if (!solid_range_filled(left, right)) {
+        render_node(child);
     }
 }
 
@@ -309,16 +339,6 @@ void bsp_init(void) {
     // inline from the vertex table (no per-seg RAM on the 64KB MD).
 }
 
-static u16 find_point_subsector(s32 px, s32 py) {
-    u16 child = bsp_root_node;
-    while (!BSP_CHILD_IS_SUBSECTOR(child)) {
-        const BspNode *node = &bsp_nodes[BSP_CHILD_INDEX(child)];
-        const s32 cross = (px - node->px) * node->dy - (py - node->py) * node->dx;
-        child = (cross >= 0) ? node->front : node->back;
-    }
-    return BSP_CHILD_INDEX(child);
-}
-
 void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColors *scene_colors) {
     g_fwx = fx_cos(player->angle);
     g_fwy = fx_sin(player->angle);
@@ -328,14 +348,15 @@ void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColor
     g_py = player->y;
     g_columns = columns;
 
-    const BspSubsector *camera_subsector = &bsp_subsectors[find_point_subsector(g_px, g_py)];
-    const BspSectorVisual *visual = &bsp_sector_visuals[camera_subsector->sector_id];
-    scene_colors->ceiling_color = visual->ceiling_color;
-    scene_colors->floor_color = visual->floor_color;
+    scene_colors->ceiling_color = BSP_CEILING_COLOR;
+    scene_colors->floor_color = BSP_FLOOR_COLOR;
 
     // Clear occlusion and seed every column with a far/empty default so columns
     // no wall covers still render (as distant, mostly sky/floor).
     g_solid_count = 0;
+    for (u16 i = 0; i < ((RAY_VIEW_COLS + 31) / 32); i++) {
+        g_solid_words[i] = 0;
+    }
     for (u16 c = 0; c < RAY_VIEW_COLS; c++) {
         g_col_solid[c] = FALSE;
         columns[c].height = 1;

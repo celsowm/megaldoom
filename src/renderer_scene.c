@@ -44,6 +44,7 @@ static u8 g_shade_luts[SHADE_LEVELS][16];
 static u32 g_overlay_previous_bits[VIEW_DIRTY_WORD_COUNT];
 static u32 g_overlay_current_bits[VIEW_DIRTY_WORD_COUNT];
 static u16 g_last_compass_angle = 0xFFFF;
+static bool g_base_tiles_valid = FALSE;
 static bool g_compass_dirty = TRUE;
 
 void renderer_mark_overlay_tile(u16 tile_index) {
@@ -72,11 +73,21 @@ static const u32 REP4[16] = {
     0x0000, 0x1111, 0x2222, 0x3333, 0x4444, 0x5555, 0x6666, 0x7777,
     0x8888, 0x9999, 0xAAAA, 0xBBBB, 0xCCCC, 0xDDDD, 0xEEEE, 0xFFFF,
 };
+
+static u32 pack_flat_row(u8 color) {
+    const u32 replicated = REP4[color & 0x0F];
+    return (replicated << 16) | replicated;
+}
 #else /* RAY_COL_STRIDE == 2 */
 static const u32 REP2[16] = {
     0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
     0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF,
 };
+
+static u32 pack_flat_row(u8 color) {
+    const u32 replicated = REP2[color & 0x0F];
+    return (replicated << 24) | (replicated << 16) | (replicated << 8) | replicated;
+}
 #endif
 
 // Precomposed weapon overlay: the weapon bitmap is static per variant (idle /
@@ -96,6 +107,7 @@ static const u32 REP2[16] = {
 void renderer_scene_init(void) {
     build_shade_luts();
     g_last_compass_angle = 0xFFFF;
+    g_base_tiles_valid = FALSE;
     g_compass_dirty = TRUE;
 }
 
@@ -167,10 +179,26 @@ static void build_raycast_tilemap(const RayColumn *columns,
         const u16 base_col = (u16)(tile_x * 8);
         const WallColumnDescriptor column_a = describe_wall_column(&columns[base_col]);
         const WallColumnDescriptor column_b = describe_wall_column(&columns[base_col + 4]);
+        const u32 ceiling_row = pack_flat_row(scene_colors->ceiling_color);
+        const u32 floor_row = pack_flat_row(scene_colors->floor_color);
 
         for (u16 tile_y = 0; tile_y < VIEW_TILE_H; tile_y++) {
             const u16 tile_index = (u16)((tile_y * VIEW_TILE_W) + tile_x);
             u16 pixel_y = (u16)(tile_y * 8);
+
+            if (((pixel_y + 7) < column_a.top) && ((pixel_y + 7) < column_b.top)) {
+                for (u16 row = 0; row < 8; row++) {
+                    target[tile_index][row] = ceiling_row;
+                }
+                continue;
+            }
+
+            if ((pixel_y >= column_a.bottom) && (pixel_y >= column_b.bottom)) {
+                for (u16 row = 0; row < 8; row++) {
+                    target[tile_index][row] = floor_row;
+                }
+                continue;
+            }
 
             for (u16 row = 0; row < 8; row++, pixel_y++) {
                 target[tile_index][row] =
@@ -193,10 +221,28 @@ static void build_raycast_tilemap(const RayColumn *columns,
         const WallColumnDescriptor column_b = describe_wall_column(&columns[base_col + 2]);
         const WallColumnDescriptor column_c = describe_wall_column(&columns[base_col + 4]);
         const WallColumnDescriptor column_d = describe_wall_column(&columns[base_col + 6]);
+        const u32 ceiling_row = pack_flat_row(scene_colors->ceiling_color);
+        const u32 floor_row = pack_flat_row(scene_colors->floor_color);
 
         for (u16 tile_y = 0; tile_y < VIEW_TILE_H; tile_y++) {
             const u16 tile_index = (u16)((tile_y * VIEW_TILE_W) + tile_x);
             u16 pixel_y = (u16)(tile_y * 8);
+
+            if (((pixel_y + 7) < column_a.top) && ((pixel_y + 7) < column_b.top) &&
+                ((pixel_y + 7) < column_c.top) && ((pixel_y + 7) < column_d.top)) {
+                for (u16 row = 0; row < 8; row++) {
+                    target[tile_index][row] = ceiling_row;
+                }
+                continue;
+            }
+
+            if ((pixel_y >= column_a.bottom) && (pixel_y >= column_b.bottom) &&
+                (pixel_y >= column_c.bottom) && (pixel_y >= column_d.bottom)) {
+                for (u16 row = 0; row < 8; row++) {
+                    target[tile_index][row] = floor_row;
+                }
+                continue;
+            }
 
             for (u16 row = 0; row < 8; row++, pixel_y++) {
                 target[tile_index][row] =
@@ -289,26 +335,39 @@ static void draw_projected_billboards(const RayColumn *columns,
         const BillboardTex tex = get_billboard_texture(object->visual_id, object->frame);
         const u8 *lut = MEGALDOOM_BILLBOARD_REMAP[
             (object->visual_id < 6) ? object->visual_id : BILLBOARD_VISUAL_BONUS];
-        u8 tex_y_by_row[64];
-        u16 tex_y = 0;
-        u16 err = 0;
+        u8 tex_y_by_screen_row[VIEW_PIXEL_H];
+        s16 y0 = object->top;
+        s16 y1 = object->bottom;
+        u32 tex_x_acc = 0;
+        u32 tex_x_step;
+        s16 last_marked_tile_x = -1;
 
         if ((height <= 0) || (width <= 0)) {
             continue;
         }
+        tex_x_step = ((u32)tex.w << 8) / (u16)width;
 
-        // Exact equivalent of floor(rel_y * tex.h / height), built once per
-        // projected object instead of reseeding a DDA for every column.
-        for (u16 rel_y = 0; rel_y < (u16)height; rel_y++) {
-            tex_y_by_row[rel_y] = (u8)tex_y;
-            err = (u16)(err + tex.h);
-            while (err >= (u16)height) {
-                err = (u16)(err - (u16)height);
-                tex_y++;
-            }
+        if (y0 < 0) {
+            y0 = 0;
+        }
+        if (y1 >= VIEW_PIXEL_H) {
+            y1 = VIEW_PIXEL_H - 1;
+        }
+        if (y0 > y1) {
+            continue;
+        }
+
+        // Exact equivalent of floor(rel_y * tex.h / height), built only for the
+        // visible screen rows. VIEW_PIXEL_H bounds the temp table even for very
+        // close sprites whose projected height exceeds 64px.
+        for (s16 y = y0; y <= y1; y++) {
+            tex_y_by_screen_row[y] = (u8)((((u32)(y - object->top)) * tex.h) / (u16)height);
         }
 
         for (s16 col = object->left; col <= object->right; col++) {
+            u8 tex_x = (u8)(tex_x_acc >> 8);
+            tex_x_acc += tex_x_step;
+
             if ((col < 0) || (col >= RAY_VIEW_COLS)) {
                 continue;
             }
@@ -316,26 +375,18 @@ static void draw_projected_billboards(const RayColumn *columns,
                 continue;
             }
 
-            s16 frac = (s16)(((col - object->left) * 256) / width);
-            if (frac > 255) {
-                frac = 255;
+            if (tex_x >= tex.w) {
+                tex_x = (u8)(tex.w - 1);
             }
-            const u8 tex_x = (u8)(((u16)frac * tex.w) >> 8);
             const u16 tile_x = (u16)(col >> 3);
             const u16 shift = (u16)((7 - (col & 7)) * 4);
             const u32 keep_mask = ~((u32)0x0F << shift);
-            s16 y0 = object->top;
-            s16 y1 = object->bottom;
 
-            if (y0 < 0) {
-                y0 = 0;
-            }
-            if (y1 >= VIEW_PIXEL_H) {
-                y1 = VIEW_PIXEL_H - 1;
-            }
-
-            for (u16 overlay_tile_y = (u16)(y0 >> 3); overlay_tile_y <= (u16)(y1 >> 3); overlay_tile_y++) {
-                renderer_mark_overlay_tile((u16)(overlay_tile_y * VIEW_TILE_W + tile_x));
+            if ((s16)tile_x != last_marked_tile_x) {
+                for (u16 overlay_tile_y = (u16)(y0 >> 3); overlay_tile_y <= (u16)(y1 >> 3); overlay_tile_y++) {
+                    renderer_mark_overlay_tile((u16)(overlay_tile_y * VIEW_TILE_W + tile_x));
+                }
+                last_marked_tile_x = (s16)tile_x;
             }
 
             u16 y = (u16)y0;
@@ -347,8 +398,7 @@ static void draw_projected_billboards(const RayColumn *columns,
                 const u16 stop = (next_tile_y < y_end) ? next_tile_y : y_end;
 
                 for (; y < stop; y++) {
-                    const u16 rel_y = (u16)(y - object->top);
-                    const u8 texel = lut[tex.pixels[(tex_y_by_row[rel_y] * tex.w) + tex_x] & 0x0F];
+                    const u8 texel = lut[tex.pixels[(tex_y_by_screen_row[y] * tex.w) + tex_x] & 0x0F];
                     if (texel != 0) {
                         const u16 row_y = (u16)(y & 7);
                         tile[row_y] = (tile[row_y] & keep_mask) | ((u32)texel << shift);
@@ -512,6 +562,33 @@ static void finish_overlay_bits(void) {
     }
 }
 
+static bool overlay_previously_touched(u16 tile_index) {
+    const u16 word = (u16)(tile_index >> 5);
+    const u32 mask = (u32)1u << (tile_index & 31);
+
+    return (bool)((g_overlay_previous_bits[word] & mask) != 0);
+}
+
+static void commit_base_tiles_from_view(void) {
+    for (u16 tile = 0; tile < VIEW_TILE_COUNT; tile++) {
+        bool changed = (bool)(!g_base_tiles_valid || overlay_previously_touched(tile));
+
+        for (u16 row = 0; row < 8; row++) {
+            const u32 row_data = g_view_tiles[tile][row];
+            if (g_base_view_tiles[tile][row] != row_data) {
+                g_base_view_tiles[tile][row] = row_data;
+                changed = TRUE;
+            }
+        }
+
+        if (changed) {
+            renderer_mark_tile_dirty(tile);
+        }
+    }
+
+    g_base_tiles_valid = TRUE;
+}
+
 static void upload_compass_tilemap(void) {
     if (!g_compass_dirty) {
         return;
@@ -539,17 +616,17 @@ void renderer_render_scene(const RayColumn *columns,
     const u16 object_count = billboard_project_scene(player, objects, BILLBOARD_MAX_PROJECTED_OBJECTS);
 
     if (base_dirty) {
-        build_raycast_tilemap(columns, scene_colors, g_base_view_tiles);
+        build_raycast_tilemap(columns, scene_colors, g_view_tiles);
 #if RENDERER_REFERENCE_PACKER && RAY_COL_STRIDE == 2
         build_raycast_tilemap_reference(columns, scene_colors, g_reference_view_tiles);
         for (u16 tile = 0; tile < VIEW_TILE_COUNT; tile++) {
             for (u16 row = 0; row < 8; row++) {
-                if (g_base_view_tiles[tile][row] != g_reference_view_tiles[tile][row]) {
+                if (g_view_tiles[tile][row] != g_reference_view_tiles[tile][row]) {
                     // Keep the reference output in validation builds so a visual
                     // comparison remains safe even when the optimized path differs.
                     for (u16 copy_tile = 0; copy_tile < VIEW_TILE_COUNT; copy_tile++) {
                         for (u16 copy_row = 0; copy_row < 8; copy_row++) {
-                            g_base_view_tiles[copy_tile][copy_row] = g_reference_view_tiles[copy_tile][copy_row];
+                            g_view_tiles[copy_tile][copy_row] = g_reference_view_tiles[copy_tile][copy_row];
                         }
                     }
                     tile = VIEW_TILE_COUNT;
@@ -558,12 +635,7 @@ void renderer_render_scene(const RayColumn *columns,
             }
         }
 #endif
-        for (u16 tile = 0; tile < VIEW_TILE_COUNT; tile++) {
-            for (u16 row = 0; row < 8; row++) {
-                g_view_tiles[tile][row] = g_base_view_tiles[tile][row];
-            }
-            renderer_mark_tile_dirty(tile);
-        }
+        commit_base_tiles_from_view();
         for (u16 i = 0; i < VIEW_DIRTY_WORD_COUNT; i++) {
             g_overlay_previous_bits[i] = 0;
         }
