@@ -40,10 +40,15 @@ u16 billboard_project_scene(const PlayerState *player,
     } order[BILLBOARD_OBJECT_COUNT];
     u16 visible = 0;
 
+    // Compute the view basis once and share it across every object instead of
+    // redoing fx_cos/fx_sin per object inside billboard_measure_object.
+    const s16 cos_a = fx_cos(player->angle);
+    const s16 sin_a = fx_sin(player->angle);
+
     for (u16 i = 0; i < BILLBOARD_OBJECT_COUNT; i++) {
         BillboardMeasure measure;
 
-        if (!billboard_measure_object(player, &g_billboards[i], &measure)) {
+        if (!billboard_measure_object(player, cos_a, sin_a, &g_billboards[i], &measure)) {
             continue;
         }
         order[visible].index = (u8)i;

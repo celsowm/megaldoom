@@ -76,7 +76,26 @@ u8 billboard_get_object_frame(const BillboardObject *object) {
     return (u8)(object->anim_frame & (ENEMY_WALK_FRAME_COUNT - 1));
 }
 
-bool billboard_measure_object(const PlayerState *player, const BillboardObject *object, BillboardMeasure *measure) {
+// Bounded signed 32/16=16 division (DIVS.W) with an exact 32-bit fallback.
+// Mirrors perspective_divide() in bsp_render.c: the screen-column quotient on
+// the visible path fits in 16 bits, so the native instruction avoids the slow
+// compiler-emitted signed-division helper while preserving the exact integer
+// result.
+static s32 bb_divs(s32 numerator, s32 denominator) {
+    if ((denominator > 0) && (denominator <= 0x7FFF)) {
+        const s32 min_quotient_numerator = -((s32)denominator << 15);
+        const s32 max_quotient_numerator = ((s32)denominator << 15) - denominator;
+
+        if ((numerator >= min_quotient_numerator) &&
+            (numerator <= max_quotient_numerator)) {
+            return (s32)divs(numerator, (s16)denominator);
+        }
+    }
+
+    return numerator / denominator;
+}
+bool billboard_measure_object(const PlayerState *player, s16 cos_a, s16 sin_a,
+                              const BillboardObject *object, BillboardMeasure *measure) {
     if (!object->active) {
         return FALSE;
     }
@@ -84,8 +103,6 @@ bool billboard_measure_object(const PlayerState *player, const BillboardObject *
     const BillboardType *type = billboard_get_type(object->type_id);
     const s32 dx = object->x - player->x;
     const s32 dy = object->y - player->y;
-    const s16 cos_a = fx_cos(player->angle);
-    const s16 sin_a = fx_sin(player->angle);
     const s32 forward = (((s32)cos_a * dx) + ((s32)sin_a * dy)) >> FX_SHIFT;
     const s32 side = (((s32)cos_a * dy) - ((s32)sin_a * dx)) >> FX_SHIFT;
 
@@ -96,8 +113,13 @@ bool billboard_measure_object(const PlayerState *player, const BillboardObject *
     measure->type = type;
     measure->forward = forward;
     measure->side = side;
-    measure->center_col = (s16)((BILLBOARD_VIEW_COLS / 2) + ((side * 80) / forward));
-    measure->half_w = (s16)((type->scale * 4) / forward);
+    measure->center_col = (s16)((BILLBOARD_VIEW_COLS / 2) + bb_divs(side * 80, forward));
+    const s32 half_w_num = type->scale * 4;
+    if ((forward > 0) && (forward <= 0xFFFF)) {
+        measure->half_w = (s16)divu((u32)half_w_num, (u16)forward);
+    } else {
+        measure->half_w = (s16)(half_w_num / forward);
+    }
 
     if (measure->half_w > 12) {
         measure->half_w = 12;

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Optimized the BSP renderer's bounding-box frustum test with a division-free half-plane precheck (`LEFT_REJECT_SCALE` / `RIGHT_REJECT_SCALE`) that rejects out-of-FOV child boxes before paying for four perspective divisions, and derived the right view axis from the forward basis (`g_rx = -g_fwy; g_ry = g_fwx`) to drop two trig lookups per frame.
+- Replaced billboard software divisions with bounded 68000 `DIVS.W` / `DIVU.W` (shared view basis, `divu32_16_exact` two-stage divider for Q16 texture stepping) and converted the billboard renderer's texture-step divisions to `divu` / `divu32_16_exact`, removing roughly 14-28 slow 32-bit division-helper calls per turning frame.
+- Replaced the stride-4 strip packer with a direct pre-shaded tile packer that writes each output u32 once (no 120-entry intermediate strips, ~19 KB less intermediate traffic per base frame) and folded `commit_base_tile`'s per-row comparison into one difference accumulator.
+- Generated weapon clear masks as immutable ROM arrays (`MEGALDOOM_WEAPON_CLEAR_IDLE` / `_FIRE`) so `draw_weapon_overlay` is a single table-lookup read-modify-write per op instead of reconstructing each mask at runtime.
+- Added `DEBUG_PERF`-guarded BSP traversal instrumentation (nodes visited, cheap frustum rejects, boxes projected, near-plane fallbacks) to the perf overlay.
 - Added Doom sound effects through the XGM2 PCM driver: pistol gunshot, enemy pain/death, player pain/death, door move and item pickup.
 - Added `tools/extract-sfx.py` to extract Doom `DS*` DMX sound lumps from `DOOM1.WAD` into `res/sound/*.wav` (mirrors the existing MUS music extractor).
 - Declared XGM2 PCM SFX resources in `res/resources.res`; triggered with `XGM2_playPCM(..)` on PCM channels 2/3 so music (channel 1) is never interrupted.

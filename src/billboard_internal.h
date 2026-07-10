@@ -113,6 +113,7 @@ extern BillboardPickupKind g_last_pickup_kind;
 const BillboardType *billboard_get_type(u8 type_id);
 u8 billboard_get_object_visual_id(const BillboardObject *object, const BillboardType *type);
 u8 billboard_get_object_frame(const BillboardObject *object);
-bool billboard_measure_object(const PlayerState *player, const BillboardObject *object, BillboardMeasure *measure);
+bool billboard_measure_object(const PlayerState *player, s16 cos_a, s16 sin_a,
+                              const BillboardObject *object, BillboardMeasure *measure);
 
 #endif

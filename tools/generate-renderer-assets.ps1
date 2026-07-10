@@ -81,6 +81,7 @@ function New-WallSamplingRows {
 function New-WeaponOps([int[]]$Pixels) {
     $dst = New-Object System.Collections.Generic.List[int]
     $value = New-Object System.Collections.Generic.List[uint32]
+    $clearMask = New-Object System.Collections.Generic.List[uint32]
     $drawX = 44
     $drawY = 66
     $drawW = 72
@@ -96,17 +97,34 @@ function New-WeaponOps([int[]]$Pixels) {
             $xBegin = [Math]::Max($x0, $drawX)
             $xStop = [Math]::Min($x0 + 8, $drawX + $drawW)
             [uint32]$packed = 0
+            [uint32]$mask = 0
             for ($x = $xBegin; $x -lt $xStop; $x++) {
                 $texel = $Pixels[($y * 160) + $x]
                 if ($texel -ne 0) {
                     $shift = (7 - ($x % 8)) * 4
                     $packed = $packed -bor ([uint32]($texel -band 0x0F) -shl $shift)
+                    $mask = $mask -bor ([uint32]0x0F -shl $shift)
                 }
             }
             if ($packed -ne 0) {
                 [void]$dst.Add((($tileY * 20 + $tileX) * 8) + $rowY)
                 [void]$value.Add($packed)
+                [void]$clearMask.Add($mask)
             }
+        }
+    }
+
+    # Self-assert: each generated mask must equal the runtime nibble-expansion
+    # the old draw_weapon_overlay reconstructed, so the optimized table-lookup
+    # draw loop is image-exact. The old expression is (t<<4)-t in unsigned 32-bit
+    # (t = nonzero-nibble markers); reproduce the u32 wraparound via int64 + mask.
+    for ($i = 0; $i -lt $value.Count; $i++) {
+        $val = $value[$i]
+        $t = [uint32](($val -bor ($val -shr 1) -bor ($val -shr 2) -bor ($val -shr 3)) -band 0x11111111u)
+        $shifted = ($t -shl 4) -band 0xFFFFFFFFu
+        $expected = [uint32]((([int64]$shifted) - ([int64]$t)) -band 0xFFFFFFFFu)
+        if ($clearMask[$i] -ne $expected) {
+            throw ("Weapon clear-mask mismatch at op {0}: generated=0x{1:X8} expected=0x{2:X8}" -f $i, $clearMask[$i], $expected)
         }
     }
 
@@ -115,6 +133,7 @@ function New-WeaponOps([int[]]$Pixels) {
         Count = $count
         Dst = $dst.ToArray()
         Value = $value.ToArray()
+        Mask = $clearMask.ToArray()
     }
 }
 
@@ -236,6 +255,13 @@ foreach ($line in (New-WallSamplingRows)) { [void]$lines.Add($line) }
 [void]$lines.Add("};")
 [void]$lines.Add("static const u32 MEGALDOOM_WEAPON_VALUE_FIRE[$($fireOps.Count)] = {")
 [void]$lines.Add(((Format-FlatU32 $fireOps.Value) + ","))
+[void]$lines.Add("};")
+[void]$lines.Add("")
+[void]$lines.Add("static const u32 MEGALDOOM_WEAPON_CLEAR_IDLE[$($idleOps.Count)] = {")
+[void]$lines.Add(((Format-FlatU32 $idleOps.Mask) + ","))
+[void]$lines.Add("};")
+[void]$lines.Add("static const u32 MEGALDOOM_WEAPON_CLEAR_FIRE[$($fireOps.Count)] = {")
+[void]$lines.Add(((Format-FlatU32 $fireOps.Mask) + ","))
 [void]$lines.Add("};")
 [void]$lines.Add("")
 [void]$lines.Add("static const u16 MEGALDOOM_WEAPON_OP_COUNT[2] = {$($idleOps.Count), $($fireOps.Count)};")

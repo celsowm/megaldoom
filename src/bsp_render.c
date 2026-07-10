@@ -18,6 +18,16 @@
 #define BSP_VIEW_CENTER_X (RAY_VIEW_COLS / 2)
 #define BSP_PROJ 180
 #define BSP_VIEW_PIXEL_H 120 // matches raycaster's RAY_VIEW_PIXEL_H
+// Division-free frustum-rejection half-plane scales. screen = center +
+// perspective_divide(PROJ*lateral, depth); perspective_divide truncates toward
+// zero, so the linear plane tests below are a conservative superset of the old
+// screen-range reject: a box rejected here would also be rejected after the four
+// divisions (never the reverse). LEFT gains +1 because the old left test is a
+// strict "max_screen < 0"; RIGHT needs no margin because the old right test is a
+// non-strict "min_screen >= RAY_VIEW_COLS" whose integer threshold aligns with
+// toward-zero truncation of positive projections.
+#define LEFT_REJECT_SCALE (BSP_VIEW_CENTER_X + RAY_COL_STRIDE + 1)
+#define RIGHT_REJECT_SCALE (RAY_VIEW_COLS + RAY_COL_STRIDE - BSP_VIEW_CENTER_X)
 #define BSP_NEAR 16          // near clip plane, in world units
 #define BSP_INV_SCALE 16384  // fixed-point scale for 1/depth interpolation (1<<14)
 #define BSP_CEILING_COLOR 4  // dark gray
@@ -34,6 +44,26 @@ static bool g_sample_solid[BSP_SAMPLE_COLS];
 static u32 g_solid_words[BSP_SOLID_WORD_COUNT];
 static u16 g_solid_count;
 static RayColumn *g_columns;
+
+#if DEBUG_PERF
+// Temporary BSP instrumentation: counts how the new division-free frustum
+// precheck interacts with traversal. Nodes visited, boxes rejected cheaply
+// (by the half-plane test, avoiding 4 divisions), boxes that survived to the
+// 4-division projection path, and near-plane fallbacks (expanded to whole
+// view). Reset each frame in bsp_cast_frame; read by the DEBUG_PERF overlay.
+static u16 g_bsp_dbg_nodes_visited;
+static u16 g_bsp_dbg_boxes_rejected_cheap;
+static u16 g_bsp_dbg_boxes_projected;
+static u16 g_bsp_dbg_near_fallbacks;
+#define BSP_DBG_INC(c) (g_bsp_dbg_##c)++
+#define BSP_DBG_RESET() do { g_bsp_dbg_nodes_visited = 0; \
+        g_bsp_dbg_boxes_rejected_cheap = 0; \
+        g_bsp_dbg_boxes_projected = 0; \
+        g_bsp_dbg_near_fallbacks = 0; } while (0)
+#else
+#define BSP_DBG_INC(c) ((void)0)
+#define BSP_DBG_RESET() ((void)0)
+#endif
 
 static void render_node(u16 child);
 
@@ -286,6 +316,11 @@ static bool project_box_range(const BspBox *box, s16 *left, s16 *right) {
     s32 laterals[4];
     s32 min_depth = 0x7FFFFFFF;
     s32 max_depth = -0x7FFFFFFF;
+    // Track the division-free half-plane extrema in the same pass that computes
+    // depth/lateral, so surviving boxes reuse these arrays for the projections
+    // below without a second transform pass.
+    s32 max_left_plane = -0x7FFFFFFF;
+    s32 min_right_plane = 0x7FFFFFFF;
 
     for (u16 i = 0; i < 4; i++) {
         const s32 relx = (s32)xs[i] - g_px;
@@ -296,6 +331,11 @@ static bool project_box_range(const BspBox *box, s16 *left, s16 *right) {
         laterals[i] = lateral;
         if (depth < min_depth) min_depth = depth;
         if (depth > max_depth) max_depth = depth;
+
+        const s32 left_plane = (BSP_PROJ * lateral) + (LEFT_REJECT_SCALE * depth);
+        const s32 right_plane = (BSP_PROJ * lateral) - (RIGHT_REJECT_SCALE * depth);
+        if (left_plane > max_left_plane) max_left_plane = left_plane;
+        if (right_plane < min_right_plane) min_right_plane = right_plane;
     }
 
     if (max_depth < BSP_NEAR) {
@@ -305,13 +345,27 @@ static bool project_box_range(const BspBox *box, s16 *left, s16 *right) {
     // A box crossing the near plane can cover arbitrarily wide screen ranges;
     // visiting it is the conservative choice.
     if (min_depth < BSP_NEAR) {
+        BSP_DBG_INC(near_fallbacks);
         *left = 0;
         *right = RAY_VIEW_COLS - 1;
         return TRUE;
     }
 
+    // All four corners are in front of the near plane (depth > 0), so the
+    // half-plane signs are valid. Reject boxes proven completely outside the
+    // expanded viewport without paying for the four perspective divisions below.
+    if (max_left_plane <= 0) {
+        BSP_DBG_INC(boxes_rejected_cheap);
+        return FALSE;
+    }
+    if (min_right_plane >= 0) {
+        BSP_DBG_INC(boxes_rejected_cheap);
+        return FALSE;
+    }
+
     s32 min_screen = 0x7FFFFFFF;
     s32 max_screen = -0x7FFFFFFF;
+    BSP_DBG_INC(boxes_projected);
     for (u16 i = 0; i < 4; i++) {
         const s32 screen = BSP_VIEW_CENTER_X +
                            perspective_divide(laterals[i] * BSP_PROJ, depths[i]);
@@ -362,6 +416,7 @@ static void render_node(u16 child) {
         return; // whole view already filled front-to-back
     }
 
+    BSP_DBG_INC(nodes_visited);
     if (BSP_CHILD_IS_SUBSECTOR(child)) {
         const BspSubsector *ss = &bsp_subsectors[BSP_CHILD_INDEX(child)];
         for (u16 i = 0; i < ss->seg_count; i++) {
@@ -388,10 +443,16 @@ void bsp_init(void) {
 }
 
 void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColors *scene_colors) {
+    BSP_DBG_RESET();
     g_fwx = fx_cos(player->angle);
     g_fwy = fx_sin(player->angle);
-    g_rx = fx_cos((u16)(player->angle + ANGLE_90));
-    g_ry = fx_sin((u16)(player->angle + ANGLE_90));
+    // Right axis = forward rotated +90deg: (cos(a+90), sin(a+90)) = (-sin(a),
+    // cos(a)). Deriving it from the already-loaded forward basis drops two trig
+    // lookups per frame and is byte-exact: the generated Q8 sine table satisfies
+    // g_sin_table[(a+ANGLE_90)&MASK] == -g_sin_table[a] (half-period antisymmetry,
+    // verified across all four quadrants in fx_init_tables).
+    g_rx = (s16)-g_fwy;
+    g_ry = g_fwx;
     g_px = player->x;
     g_py = player->y;
     g_columns = columns;
@@ -418,3 +479,10 @@ void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColor
 
     render_node(bsp_root_node);
 }
+
+#if DEBUG_PERF
+u16 bsp_get_debug_nodes_visited(void) { return g_bsp_dbg_nodes_visited; }
+u16 bsp_get_debug_boxes_rejected_cheap(void) { return g_bsp_dbg_boxes_rejected_cheap; }
+u16 bsp_get_debug_boxes_projected(void) { return g_bsp_dbg_boxes_projected; }
+u16 bsp_get_debug_near_fallbacks(void) { return g_bsp_dbg_near_fallbacks; }
+#endif

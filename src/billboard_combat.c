@@ -69,11 +69,16 @@ BillboardShotResult billboard_fire_center(const PlayerState *player, u16 wall_de
     BillboardObject *best_object = NULL;
     s32 best_depth = 0x7FFFFFFF;
 
+    // Compute the view basis once and share it across the target scan, matching
+    // billboard_project_scene (avoids per-object fx_cos/fx_sin lookups).
+    const s16 cos_a = fx_cos(player->angle);
+    const s16 sin_a = fx_sin(player->angle);
+
     for (u16 i = 0; i < BILLBOARD_OBJECT_COUNT; i++) {
         BillboardObject *object = &g_billboards[i];
         BillboardMeasure measure;
 
-        if (!billboard_measure_object(player, object, &measure)) {
+        if (!billboard_measure_object(player, cos_a, sin_a, object, &measure)) {
             continue;
         }
         if (!measure.type->targetable) {

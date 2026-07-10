@@ -1,4 +1,5 @@
 #include "renderer_internal.h"
+#include "bsp_render.h"
 #include "generated_assets.h"
 #include "generated_billboard_assets.h"
 #include "generated_hud_assets.h"
@@ -228,8 +229,8 @@ static void commit_base_tile(u16 tile_index, const u32 *tile_rows);
 #if RAY_COL_STRIDE == 4
 // Pre-shade the 32-texel source column once per sampled ray column. The hot
 // per-screen-pixel loop then performs only the vertical DDA lookup and one u16
-// load. The 64-byte temporary stays safely inside the strip helper's frame,
-// avoiding both a large call-stack allocation and renderer-global cache state.
+// load. The 64-byte temporaries stay inside the packer's frame, avoiding both a
+// large call-stack allocation and renderer-global cache state.
 static void build_packed_wall_column(const WallColumnDescriptor *descriptor,
                                      u16 packed_texels[WALL_TEX_DIM]) {
     for (u16 tex_y = 0; tex_y < WALL_TEX_DIM; tex_y++) {
@@ -239,55 +240,75 @@ static void build_packed_wall_column(const WallColumnDescriptor *descriptor,
     }
 }
 
-static void build_column_packed_strip(const WallColumnDescriptor *descriptor,
-                                      const RaySceneColors *scene_colors,
-                                      u16 strip[VIEW_PIXEL_H]) {
-    const u16 ceiling = (u16)REP4[scene_colors->ceiling_color];
-    const u16 floor = (u16)REP4[scene_colors->floor_color];
-    u16 packed_texels[WALL_TEX_DIM];
-    u16 y = 0;
-
-    build_packed_wall_column(descriptor, packed_texels);
-
-    for (; y < descriptor->top; y++) {
-        strip[y] = ceiling;
-    }
-    for (; y < descriptor->bottom; y++) {
-        strip[y] = packed_texels[
-            (descriptor->vertical_samples[y - descriptor->top] + descriptor->tex_y) &
-            WALL_TEX_DIM_MASK];
-    }
-    for (; y < VIEW_PIXEL_H; y++) {
-        strip[y] = floor;
-    }
-}
-
 static void build_raycast_tilemap(const RayColumn *columns,
                                    const RaySceneColors *scene_colors,
                                    u32 target[][8]) {
-    u16 strip_a[VIEW_PIXEL_H];
-    u16 strip_b[VIEW_PIXEL_H];
-
     // Each 8px-wide tile column maps to two cast columns (px 0 and 4), each
-    // replicated 4x. Expand each column once into a packed half-row strip, so
-    // the tile loop only combines two u16 values per output row.
+    // replicated 4x. Pre-shade each column's 32 texels once, then pack directly
+    // into each tile row. Whole-tile ceiling/floor bands skip per-row wall
+    // sampling, and the two 120-entry u16 strips are gone: the packer writes
+    // each output u32 exactly once instead of building and re-reading a
+    // full-height temporary (~19 KB of intermediate traffic per base frame).
+    const u16 ceiling_packed = (u16)REP4[scene_colors->ceiling_color];
+    const u16 floor_packed = (u16)REP4[scene_colors->floor_color];
+    const u32 ceiling_row = ((u32)ceiling_packed << 16) | ceiling_packed;
+    const u32 floor_row = ((u32)floor_packed << 16) | floor_packed;
+
     for (u16 tile_x = 0; tile_x < VIEW_TILE_W; tile_x++) {
         const u16 base_col = (u16)(tile_x * 8);
         const WallColumnDescriptor column_a = describe_wall_column(&columns[base_col]);
         const WallColumnDescriptor column_b = describe_wall_column(&columns[base_col + 4]);
 
-        build_column_packed_strip(&column_a, scene_colors, strip_a);
-        build_column_packed_strip(&column_b, scene_colors, strip_b);
+        u16 packed_texels_a[WALL_TEX_DIM];
+        u16 packed_texels_b[WALL_TEX_DIM];
+        build_packed_wall_column(&column_a, packed_texels_a);
+        build_packed_wall_column(&column_b, packed_texels_b);
 
         for (u16 tile_y = 0; tile_y < VIEW_TILE_H; tile_y++) {
             const u16 tile_index = (u16)((tile_y * VIEW_TILE_W) + tile_x);
-            u16 pixel_y = (u16)(tile_y * 8);
+            const u16 pixel_y = (u16)(tile_y * 8);
+            u32 *tile = target[tile_index];
 
-            for (u16 row = 0; row < 8; row++, pixel_y++) {
-                target[tile_index][row] =
-                    ((u32)strip_a[pixel_y] << 16) | strip_b[pixel_y];
+            if ((pixel_y + 7) < column_a.top && (pixel_y + 7) < column_b.top) {
+                // Whole-tile ceiling: this 8px band lies entirely above both walls.
+                for (u16 row = 0; row < 8; row++) {
+                    tile[row] = ceiling_row;
+                }
+            } else if (pixel_y >= column_a.bottom && pixel_y >= column_b.bottom) {
+                // Whole-tile floor: this 8px band lies entirely below both walls.
+                for (u16 row = 0; row < 8; row++) {
+                    tile[row] = floor_row;
+                }
+            } else {
+                // Mixed band: resolve each of the 8 rows directly from the two
+                // pre-shaded columns. Output is byte-identical to the old
+                // strip-based packer (each row == (strip_a[py]<<16)|strip_b[py]).
+                for (u16 row = 0; row < 8; row++) {
+                    const u16 py = (u16)(pixel_y + row);
+                    u16 val_a;
+                    if (py < column_a.top) {
+                        val_a = ceiling_packed;
+                    } else if (py >= column_a.bottom) {
+                        val_a = floor_packed;
+                    } else {
+                        val_a = packed_texels_a[
+                            (column_a.vertical_samples[py - column_a.top] +
+                             column_a.tex_y) & WALL_TEX_DIM_MASK];
+                    }
+                    u16 val_b;
+                    if (py < column_b.top) {
+                        val_b = ceiling_packed;
+                    } else if (py >= column_b.bottom) {
+                        val_b = floor_packed;
+                    } else {
+                        val_b = packed_texels_b[
+                            (column_b.vertical_samples[py - column_b.top] +
+                             column_b.tex_y) & WALL_TEX_DIM_MASK];
+                    }
+                    tile[row] = ((u32)val_a << 16) | val_b;
+                }
             }
-            commit_base_tile(tile_index, target[tile_index]);
+            commit_base_tile(tile_index, tile);
         }
     }
 }
@@ -428,6 +449,29 @@ static void build_raycast_tilemap_reference(const RayColumn *columns,
 static u32 g_reference_view_tiles[VIEW_TILE_COUNT][8];
 #endif
 
+// Exact 32/16=32 unsigned division using two DIVU.W steps (base-65536 long
+// division). Produces the same integer quotient as the '/' operator, so it can
+// replace the slow compiler-emitted 32-bit unsigned-division helper for
+// quotients that exceed 16 bits (e.g. Q16 texture stepping for tall sprites).
+static u32 divu32_16_exact(u32 numerator, u16 denominator) {
+    const u16 high = (u16)(numerator >> 16);
+
+    // Quotient fits in 16 bits: one DIVU.W is exact.
+    if (high < denominator) {
+        return divu(numerator, denominator);
+    }
+
+    const u16 quotient_high = divu(high, denominator);
+    const u16 remainder_high =
+        (u16)(high - ((u32)quotient_high * denominator));
+
+    const u32 low_numerator =
+        ((u32)remainder_high << 16) | (numerator & 0xFFFFu);
+    const u16 quotient_low = divu(low_numerator, denominator);
+
+    return ((u32)quotient_high << 16) | quotient_low;
+}
+
 // Draw projected billboards object-by-object. Projection, texture selection,
 // colour remapping and the vertical DDA are all shared by the object's columns;
 // the per-column loop only resolves horizontal texture position and writes pixels.
@@ -451,7 +495,10 @@ static void draw_projected_billboards(const RayColumn *columns,
         if ((height <= 0) || (width <= 0)) {
             continue;
         }
-        tex_x_step = ((u32)tex.w << 8) / (u16)width;
+        // tex_x_step = (tex.w<<8)/width; width <= 2*half_w+1 (<= 25) and tex.w
+        // <= 24, so the quotient (<= 6144) fits u16 and DIVU.W is exact,
+        // avoiding the slow 32-bit unsigned-division helper.
+        tex_x_step = divu((u32)tex.w << 8, (u16)width);
 
         if (y0 < 0) {
             y0 = 0;
@@ -466,7 +513,11 @@ static void draw_projected_billboards(const RayColumn *columns,
         // Approximate floor(rel_y * tex.h / height) with one setup divide and a
         // fixed-point DDA instead of a 68k divide for every visible sprite row.
         u32 tex_y_acc = ((u32)(y0 - object->top) * tex.h) << 16;
-        const u32 tex_y_step = ((u32)tex.h << 16) / (u16)height;
+        // tex_y_step = (tex.h<<16)/height is Q16; for a 48px enemy the numerator
+        // is 3,145,728 and small projected heights make the quotient exceed 16
+        // bits, so a single DIVU.W cannot hold it. The two-stage divider produces
+        // the exact same quotient as '/'.
+        const u32 tex_y_step = divu32_16_exact((u32)tex.h << 16, (u16)height);
         for (s16 y = y0; y <= y1; y++) {
             u8 tex_y = (u8)(tex_y_acc >> 16);
             if (tex_y >= tex.h) {
@@ -523,27 +574,25 @@ static void draw_projected_billboards(const RayColumn *columns,
 }
 
 // Draw the static weapon overlay from its precomposed per-tile-row ops (built
-// once in build_weapon_overlay_ops). Each op is a single u32 read-modify-write,
+// once in the asset generator). Each op is a single u32 read-modify-write,
 // so an idle frame costs a few hundred RMWs instead of ~72x54 per-pixel tests.
+// The clear masks are generated alongside the values (static const ROM data),
+// so the hot loop is just *dst = (*dst & ~clear) | val with no per-op mask
+// reconstruction.
 static void draw_weapon_overlay(bool flash) {
     const u16 v = flash ? 1 : 0;
     const u16 *dst_idx = v ? MEGALDOOM_WEAPON_DST_FIRE : MEGALDOOM_WEAPON_DST_IDLE;
     const u32 *values = v ? MEGALDOOM_WEAPON_VALUE_FIRE : MEGALDOOM_WEAPON_VALUE_IDLE;
+    const u32 *clear_masks = v ? MEGALDOOM_WEAPON_CLEAR_FIRE : MEGALDOOM_WEAPON_CLEAR_IDLE;
     const u16 count = MEGALDOOM_WEAPON_OP_COUNT[v];
     u32 *base = &g_view_tiles[0][0];
     u16 last_marked_tile = 0xFFFF;
 
     for (u16 i = 0; i < count; i++) {
-        const u32 val = values[i];
-        // Rebuild clear_mask: set every nibble of val that has any bit -> 0x0F.
-        // t marks nonzero nibbles (low bit each); (t<<4)-t expands 0x1 -> 0xF per
-        // nibble with no cross-nibble carry (0xF < 0x10). Exact for 4bpp texels.
-        const u32 t = (val | (val >> 1) | (val >> 2) | (val >> 3)) & 0x11111111u;
-        const u32 clear_mask = (t << 4) - t;
         u32 *dst = base + dst_idx[i];
         const u16 tile_index = (u16)(dst_idx[i] / 8);
 
-        *dst = (*dst & ~clear_mask) | val;
+        *dst = (*dst & ~clear_masks[i]) | values[i];
         if (tile_index != last_marked_tile) {
             renderer_mark_overlay_tile(tile_index);
             last_marked_tile = tile_index;
@@ -770,17 +819,23 @@ static void finish_overlay_bits(void) {
 }
 
 static void commit_base_tile(u16 tile_index, const u32 *tile_rows) {
-    bool changed = (bool)(!g_base_tiles_valid || overlay_previously_touched(tile_index));
+    // Fold the 8 row comparisons into one difference accumulator instead of
+    // branching per row, and copy the new rows in the same pass (writing an
+    // unchanged value is a no-op but removes the per-row branch and the re-read
+    // of just-written data). The tile is dirty if any row changed, an overlay had
+    // previously touched it (so the erase must re-upload the base), or this is
+    // the first base build (g_base_tiles_valid == FALSE forces a full upload).
+    u32 difference =
+        (overlay_previously_touched(tile_index) || !g_base_tiles_valid) ? 1u : 0u;
+    u32 *base_rows = g_base_view_tiles[tile_index];
 
     for (u16 row = 0; row < 8; row++) {
         const u32 row_data = tile_rows[row];
-        if (g_base_view_tiles[tile_index][row] != row_data) {
-            g_base_view_tiles[tile_index][row] = row_data;
-            changed = TRUE;
-        }
+        difference |= (base_rows[row] ^ row_data);
+        base_rows[row] = row_data;
     }
 
-    if (changed) {
+    if (difference != 0) {
         renderer_mark_tile_dirty(tile_index);
     }
 }
@@ -891,6 +946,16 @@ static void draw_upload_debug_stats(void) {
             (unsigned long)s_debug_overlay_subticks,
             (unsigned long)s_debug_upload_subticks);
     VDP_drawTextFill(text, 0, 2, 32);
+    // TEMPORARY: BSP frustum-precheck instrumentation. N=nodes visited,
+    // R=cheap rejects (half-plane, no division), P=boxes projected (4 divs),
+    // F=near-plane fallbacks (expanded to whole view).
+    sprintf(text,
+            "N%03u R%03u P%03u F%03u",
+            (unsigned int)bsp_get_debug_nodes_visited(),
+            (unsigned int)bsp_get_debug_boxes_rejected_cheap(),
+            (unsigned int)bsp_get_debug_boxes_projected(),
+            (unsigned int)bsp_get_debug_near_fallbacks());
+    VDP_drawTextFill(text, 0, 3, 24);
 }
 #endif
 
