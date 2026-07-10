@@ -20,7 +20,7 @@ void player_init(PlayerState *player, u16 phase_index) {
     player->angle = bsp_player_start_angle;
 }
 
-#define PLAYER_MOVE_SUBSTEP 48
+#define PLAYER_MOVE_SUBSTEP 32
 
 void player_try_move(PlayerState *player, s16 forward, s16 strafe) {
     const s16 dir_x = fx_cos(player->angle);
@@ -34,13 +34,27 @@ void player_try_move(PlayerState *player, s16 forward, s16 strafe) {
     const s32 span = (abs_x > abs_y) ? abs_x : abs_y;
     // Split a large displacement into sub-steps so collision is sampled along the path
     // instead of only at the endpoint (prevents tunnelling through walls at low fps).
-    s16 steps = (s16)((span / PLAYER_MOVE_SUBSTEP) + 1);
-    const s32 step_x = dx / steps;
-    const s32 step_y = dy / steps;
+    s16 steps = (s16)((span + PLAYER_MOVE_SUBSTEP - 1) / PLAYER_MOVE_SUBSTEP);
+    const s32 start_x = player->x;
+    const s32 start_y = player->y;
+    s32 prev_target_x = start_x;
+    s32 prev_target_y = start_y;
+    s16 i;
 
-    while (steps-- > 0) {
+    if (steps < 1) {
+        steps = 1;
+    }
+
+    for (i = 1; i <= steps; i++) {
+        const s32 target_x = start_x + ((dx * i) / steps);
+        const s32 target_y = start_y + ((dy * i) / steps);
+        const s32 step_x = target_x - prev_target_x;
+        const s32 step_y = target_y - prev_target_y;
         const s32 next_x = player->x + step_x;
         const s32 next_y = player->y + step_y;
+
+        prev_target_x = target_x;
+        prev_target_y = target_y;
 
         if (!is_blocked_at(next_x, player->y)) {
             player->x = next_x;

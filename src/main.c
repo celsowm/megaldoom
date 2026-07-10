@@ -78,6 +78,7 @@ static void reset_level(u16 phase_index, bool *level_cleared, u16 *shot_cooldown
     bsp_map_reset(phase_index);
     billboard_init(phase_index);
     player_init(&g_player, phase_index);
+    player_controller_reset();
     g_weapon_flash = 0;
     g_player_damage_flash = 0;
     g_player_invuln = 0;
