@@ -6,8 +6,8 @@
 u32 g_view_tiles[VIEW_TILE_COUNT][8];
 u32 g_base_view_tiles[VIEW_TILE_COUNT][8];
 u16 g_compass_tilemap[COMPASS_W * COMPASS_H];
-u32 g_view_dirty_bits[VIEW_DIRTY_WORD_COUNT];
-u16 g_view_dirty_count;
+u32 g_view_bank_dirty_bits[VIEW_BANK_COUNT][VIEW_DIRTY_WORD_COUNT];
+u16 g_view_bank_dirty_count[VIEW_BANK_COUNT];
 u16 g_view_vram_bank;
 
 static u16 s_view_bank_tilemaps[VIEW_BANK_COUNT][VIEW_TILE_COUNT];
@@ -119,9 +119,13 @@ void renderer_mark_tile_dirty(u16 tile_index) {
     const u16 word = (u16)(tile_index >> 5);
     const u32 mask = (u32)1u << (tile_index & 31);
 
-    if ((g_view_dirty_bits[word] & mask) == 0) {
-        g_view_dirty_bits[word] |= mask;
-        g_view_dirty_count++;
+    // A CPU-side tile mutation makes both VRAM copies potentially stale. Each
+    // bank clears its own bit only after that bank's DMA has completed.
+    for (u16 bank = 0; bank < VIEW_BANK_COUNT; bank++) {
+        if ((g_view_bank_dirty_bits[bank][word] & mask) == 0) {
+            g_view_bank_dirty_bits[bank][word] |= mask;
+            g_view_bank_dirty_count[bank]++;
+        }
     }
 }
 

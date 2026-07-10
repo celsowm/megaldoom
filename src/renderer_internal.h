@@ -15,6 +15,7 @@
 #define VIEW_DIRTY_WORD_COUNT ((VIEW_TILE_COUNT + 31) / 32)
 #define VIEW_DIRTY_FULL_THRESHOLD 220
 #define VIEW_DIRTY_MAX_RUNS 24
+#define VIEW_DMA_TILES_PER_VBLANK 150
 #define PAIR_TILE_BASE (VIEW_TILE_BASE + VIEW_DYNAMIC_TILE_COUNT)
 #define PAIR_TILE_COUNT 256
 #define HUD_TILE_BASE (PAIR_TILE_BASE + PAIR_TILE_COUNT)
@@ -37,8 +38,8 @@
 
 extern u32 g_view_tiles[VIEW_TILE_COUNT][8];
 extern u32 g_base_view_tiles[VIEW_TILE_COUNT][8];
-extern u32 g_view_dirty_bits[VIEW_DIRTY_WORD_COUNT];
-extern u16 g_view_dirty_count;
+extern u32 g_view_bank_dirty_bits[VIEW_BANK_COUNT][VIEW_DIRTY_WORD_COUNT];
+extern u16 g_view_bank_dirty_count[VIEW_BANK_COUNT];
 extern u16 g_view_vram_bank;
 extern u16 g_compass_tilemap[COMPASS_W * COMPASS_H];
 

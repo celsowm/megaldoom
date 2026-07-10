@@ -48,6 +48,15 @@ static bool g_base_tiles_valid = FALSE;
 static bool g_upload_requires_bank_swap = FALSE;
 static bool g_compass_dirty = TRUE;
 
+#if DEBUG_PERF
+static u16 s_debug_upload_dirty_tiles;
+static u16 s_debug_upload_tiles;
+static u16 s_debug_upload_runs;
+static u16 s_debug_upload_bank;
+static bool s_debug_upload_full;
+static bool s_debug_upload_swap;
+#endif
+
 void renderer_mark_overlay_tile(u16 tile_index) {
     const u16 word = (u16)(tile_index >> 5);
     const u32 mask = (u32)1u << (tile_index & 31);
@@ -67,6 +76,19 @@ static void build_shade_luts(void) {
             g_shade_luts[level][c] =
                 FREEDOOM_WORLD_SHADE_MAP[g_shade_luts[level - 1][c] & 0x0F];
         }
+    }
+}
+
+static void mark_all_view_banks_dirty(void) {
+    for (u16 bank = 0; bank < VIEW_BANK_COUNT; bank++) {
+        for (u16 word = 0; word < VIEW_DIRTY_WORD_COUNT; word++) {
+            g_view_bank_dirty_bits[bank][word] = 0;
+        }
+        for (u16 tile = 0; tile < VIEW_TILE_COUNT; tile++) {
+            const u16 word = (u16)(tile >> 5);
+            g_view_bank_dirty_bits[bank][word] |= (u32)1u << (tile & 31);
+        }
+        g_view_bank_dirty_count[bank] = VIEW_TILE_COUNT;
     }
 }
 
@@ -115,6 +137,7 @@ void renderer_scene_init(void) {
     g_base_tiles_valid = FALSE;
     g_upload_requires_bank_swap = FALSE;
     g_compass_dirty = TRUE;
+    mark_all_view_banks_dirty();
 }
 
 void renderer_invalidate_scene(void) {
@@ -125,9 +148,8 @@ void renderer_invalidate_scene(void) {
     for (u16 i = 0; i < VIEW_DIRTY_WORD_COUNT; i++) {
         g_overlay_previous_bits[i] = 0;
         g_overlay_current_bits[i] = 0;
-        g_view_dirty_bits[i] = 0;
     }
-    g_view_dirty_count = 0;
+    mark_all_view_banks_dirty();
 }
 
 typedef struct {
@@ -475,90 +497,147 @@ static void draw_overlay_ops(const MegalDoomOverlayRowOp *ops, u16 count) {
     }
 }
 
-static void clear_view_dirty_bits(void) {
-    for (u16 i = 0; i < VIEW_DIRTY_WORD_COUNT; i++) {
-        g_view_dirty_bits[i] = 0;
-    }
-    g_view_dirty_count = 0;
+static bool view_bank_tile_is_dirty(u16 bank, u16 tile) {
+    const u16 word = (u16)(tile >> 5);
+    const u32 mask = (u32)1u << (tile & 31);
+    return (bool)((g_view_bank_dirty_bits[bank][word] & mask) != 0);
 }
 
-static void upload_view_tilemap_partial(u16 vram_base) {
-    if (g_view_dirty_count == 0) {
-        return;
+static void clear_view_bank_dirty_bits(u16 bank) {
+    for (u16 word = 0; word < VIEW_DIRTY_WORD_COUNT; word++) {
+        g_view_bank_dirty_bits[bank][word] = 0;
+    }
+    g_view_bank_dirty_count[bank] = 0;
+}
+
+static u16 count_view_bank_dirty_runs(u16 bank) {
+    u16 runs = 0;
+    bool in_run = FALSE;
+
+    for (u16 tile = 0; tile < VIEW_TILE_COUNT; tile++) {
+        const bool dirty = view_bank_tile_is_dirty(bank, tile);
+        if (dirty && !in_run) {
+            runs++;
+        }
+        in_run = dirty;
     }
 
-    if (g_view_dirty_count >= VIEW_DIRTY_FULL_THRESHOLD) {
-        VDP_loadTileData((const u32 *)g_view_tiles, vram_base, VIEW_TILE_COUNT, DMA);
+    return runs;
+}
+
+static void load_view_tile_run(u16 vram_base, u16 first, u16 count) {
+    VDP_loadTileData((const u32 *)&g_view_tiles[first][0],
+                     (u16)(vram_base + first),
+                     count,
+                     DMA);
+#if DEBUG_PERF
+    s_debug_upload_tiles = (u16)(s_debug_upload_tiles + count);
+    s_debug_upload_runs++;
+#endif
+}
+
+static void upload_full_view_bank(u16 vram_base, bool split_across_vblanks) {
+    if (!split_across_vblanks) {
+        load_view_tile_run(vram_base, 0, VIEW_TILE_COUNT);
         VDP_waitDMACompletion();
-        clear_view_dirty_bits();
         return;
     }
 
-    u16 run_count = 0;
-    for (u16 tile = 0; tile < VIEW_TILE_COUNT;) {
-        const u16 word = (u16)(tile >> 5);
-        const u32 mask = (u32)1u << (tile & 31);
+    load_view_tile_run(vram_base, 0, VIEW_DMA_TILES_PER_VBLANK);
+    VDP_waitDMACompletion();
+    VDP_waitVSync();
+    load_view_tile_run(vram_base,
+                       VIEW_DMA_TILES_PER_VBLANK,
+                       (u16)(VIEW_TILE_COUNT - VIEW_DMA_TILES_PER_VBLANK));
+    VDP_waitDMACompletion();
+}
 
-        if ((g_view_dirty_bits[word] & mask) == 0) {
+static void upload_partial_view_bank(u16 bank,
+                                     u16 vram_base,
+                                     bool split_across_vblanks) {
+    u16 batch_tiles = 0;
+
+    for (u16 tile = 0; tile < VIEW_TILE_COUNT;) {
+        if (!view_bank_tile_is_dirty(bank, tile)) {
             tile++;
             continue;
         }
 
-        const u16 first = tile;
-        while (tile < VIEW_TILE_COUNT) {
-            const u16 run_word = (u16)(tile >> 5);
-            const u32 run_mask = (u32)1u << (tile & 31);
-            if ((g_view_dirty_bits[run_word] & run_mask) == 0) {
-                break;
-            }
+        u16 first = tile;
+        while ((tile < VIEW_TILE_COUNT) && view_bank_tile_is_dirty(bank, tile)) {
             tile++;
         }
 
-        run_count++;
-        if (run_count > VIEW_DIRTY_MAX_RUNS) {
-            VDP_loadTileData((const u32 *)g_view_tiles, vram_base, VIEW_TILE_COUNT, DMA);
-            VDP_waitDMACompletion();
-            clear_view_dirty_bits();
-            return;
-        }
+        u16 remaining = (u16)(tile - first);
+        while (remaining > 0) {
+            if (split_across_vblanks &&
+                (batch_tiles == VIEW_DMA_TILES_PER_VBLANK)) {
+                VDP_waitDMACompletion();
+                VDP_waitVSync();
+                batch_tiles = 0;
+            }
 
-        VDP_loadTileData((const u32 *)&g_view_tiles[first][0],
-                         vram_base + first,
-                         (u16)(tile - first),
-                         DMA);
+            u16 count = remaining;
+            if (split_across_vblanks) {
+                const u16 available =
+                    (u16)(VIEW_DMA_TILES_PER_VBLANK - batch_tiles);
+                if (count > available) {
+                    count = available;
+                }
+            }
+
+            load_view_tile_run(vram_base, first, count);
+            first = (u16)(first + count);
+            remaining = (u16)(remaining - count);
+            batch_tiles = (u16)(batch_tiles + count);
+        }
     }
 
     VDP_waitDMACompletion();
-    clear_view_dirty_bits();
 }
 
-static void upload_view_tilemap_double_buffered(void) {
-    const u16 next_bank = (u16)(g_view_vram_bank ^ 1);
-    const u16 vram_base = (u16)(VIEW_TILE_BASE + (next_bank * VIEW_TILE_COUNT));
-    const u16 first_count = (u16)(VIEW_TILE_COUNT / 2);
-    const u16 second_count = (u16)(VIEW_TILE_COUNT - first_count);
+static bool upload_view_bank(u16 bank, bool split_across_vblanks) {
+    const u16 dirty_count = g_view_bank_dirty_count[bank];
+    const u16 run_count = count_view_bank_dirty_runs(bank);
+    const bool full_upload = (bool)((dirty_count >= VIEW_DIRTY_FULL_THRESHOLD) ||
+                                    (run_count > VIEW_DIRTY_MAX_RUNS));
+    const u16 vram_base = (u16)(VIEW_TILE_BASE + (bank * VIEW_TILE_COUNT));
 
-    if (g_view_dirty_count == 0) {
-        return;
+#if DEBUG_PERF
+    s_debug_upload_dirty_tiles = dirty_count;
+    s_debug_upload_tiles = 0;
+    s_debug_upload_runs = 0;
+    s_debug_upload_bank = bank;
+    s_debug_upload_full = full_upload;
+    s_debug_upload_swap = split_across_vblanks;
+#endif
+
+    if (dirty_count == 0) {
+        return FALSE;
     }
 
-    VDP_loadTileData((const u32 *)g_view_tiles, vram_base, first_count, DMA);
-    VDP_waitVSync();
-    VDP_loadTileData((const u32 *)&g_view_tiles[first_count][0],
-                     (u16)(vram_base + first_count),
-                     second_count,
-                     DMA);
-    VDP_waitDMACompletion();
-    renderer_set_view_vram_bank(next_bank);
-    clear_view_dirty_bits();
+    // Decide partial versus full before issuing any DMA. The previous path only
+    // discovered excessive fragmentation after already scheduling partial runs.
+    if (full_upload) {
+        upload_full_view_bank(vram_base, split_across_vblanks);
+    } else {
+        upload_partial_view_bank(bank, vram_base, split_across_vblanks);
+    }
+
+    // No bank is declared current until every DMA targeting it has finished.
+    clear_view_bank_dirty_bits(bank);
+    return TRUE;
 }
 
 static void upload_view_tilemap(void) {
     if (g_upload_requires_bank_swap) {
-        upload_view_tilemap_double_buffered();
+        const u16 next_bank = (u16)(g_view_vram_bank ^ 1);
+        if (upload_view_bank(next_bank, TRUE)) {
+            renderer_set_view_vram_bank(next_bank);
+        }
         g_upload_requires_bank_swap = FALSE;
     } else {
-        upload_view_tilemap_partial((u16)(VIEW_TILE_BASE + (g_view_vram_bank * VIEW_TILE_COUNT)));
+        upload_view_bank(g_view_vram_bank, FALSE);
     }
 }
 
@@ -722,7 +801,29 @@ void renderer_render_scene(const RayColumn *columns,
 // Push the frame built by renderer_render_scene to VRAM. Call this right after a
 // VDP_waitVSync so the ~9.6KB view-tile DMA runs at the fast vblank rate instead
 // of stalling the CPU mid active-display (its old call site).
+#if DEBUG_PERF
+static void draw_upload_debug_stats(void) {
+    char text[32];
+    const char upload_mode = (s_debug_upload_dirty_tiles == 0) ?
+                                 'N' : (s_debug_upload_full ? 'F' : 'P');
+    const char bank_mode = s_debug_upload_swap ? 'S' : 'I';
+
+    sprintf(text,
+            "D%03u U%03u R%02u B%u %c%c",
+            (unsigned int)s_debug_upload_dirty_tiles,
+            (unsigned int)s_debug_upload_tiles,
+            (unsigned int)s_debug_upload_runs,
+            (unsigned int)s_debug_upload_bank,
+            upload_mode,
+            bank_mode);
+    VDP_drawTextFill(text, 0, 1, 24);
+}
+#endif
+
 void renderer_upload_scene(void) {
     upload_view_tilemap();
     upload_compass_tilemap();
+#if DEBUG_PERF
+    draw_upload_debug_stats();
+#endif
 }
