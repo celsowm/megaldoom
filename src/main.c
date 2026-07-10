@@ -29,6 +29,7 @@
 
 static PlayerState g_player;
 static RayColumn g_ray_columns[RAY_VIEW_COLS];
+static RaySceneColors g_scene_colors;
 static u16 g_weapon_flash = 0;
 static u16 g_player_damage_flash = 0;
 static u16 g_player_invuln = 0;
@@ -68,10 +69,14 @@ static void sync_hud(u32 frame,
     g_hud.level_cleared = level_cleared;
 }
 
-static void render_current_view(u16 player_health) {
-    bsp_cast_frame(&g_player, g_ray_columns);
+static void render_current_view(u16 player_health, bool base_dirty) {
+    if (base_dirty) {
+        bsp_cast_frame(&g_player, g_ray_columns, &g_scene_colors);
+    }
     renderer_render_scene(
-        g_ray_columns, &g_player, g_weapon_flash > 0, g_player_damage_flash > 0, (bool)(player_health <= 1));
+        g_ray_columns, &g_player, &g_scene_colors, base_dirty,
+        g_weapon_flash > 0, g_player_damage_flash > 0,
+        (bool)(player_health <= 1));
 }
 
 static void reset_level(u16 phase_index, bool *level_cleared, u16 *shot_cooldown, u16 *player_health, u32 *frame) {
@@ -94,7 +99,8 @@ static void reset_level(u16 phase_index, bool *level_cleared, u16 *shot_cooldown
 
 int main(bool hard) {
     u32 frame = 0;
-    bool redraw = TRUE;
+    bool base_dirty = TRUE;
+    bool overlay_dirty = TRUE;
     bool pending_upload = FALSE;
     bool level_cleared = FALSE;
     u16 phase_index = 0;
@@ -146,11 +152,11 @@ int main(bool hard) {
         }
         if (g_weapon_flash > 0) {
             g_weapon_flash--;
-            redraw = TRUE;
+            overlay_dirty = TRUE;
         }
         if (g_player_damage_flash > 0) {
             g_player_damage_flash--;
-            redraw = TRUE;
+            overlay_dirty = TRUE;
         }
         if (g_player_invuln > 0) {
             g_player_invuln--;
@@ -162,13 +168,15 @@ int main(bool hard) {
         } else if ((JOY_readJoypad(JOY_1) & BUTTON_START) != 0) {
             phase_index = (u16)((phase_index + 1) & 1);
             reset_level(phase_index, &level_cleared, &shot_cooldown, &player_health, &frame);
-            redraw = TRUE;
+            base_dirty = TRUE;
+            overlay_dirty = TRUE;
         }
 
         if ((control & PLAYER_CONTROL_CHANGED) != 0) {
-            redraw = TRUE;
+            base_dirty = TRUE;
+            overlay_dirty = TRUE;
             if (billboard_collect_near(g_player.x, g_player.y)) {
-                redraw = TRUE;
+                overlay_dirty = TRUE;
             }
         }
 
@@ -193,7 +201,8 @@ int main(bool hard) {
                     level_cleared = TRUE;
                 }
                 if (action != DOOR_ACTION_EXIT_LOCKED) {
-                    redraw = TRUE;
+                    base_dirty = TRUE;
+                    overlay_dirty = TRUE;
                 }
             }
         }
@@ -205,10 +214,10 @@ int main(bool hard) {
                 shot = billboard_fire_center(&g_player, g_ray_columns[RAY_VIEW_COLS / 2].depth);
                 shot_cooldown = SHOT_COOLDOWN_FRAMES;
                 g_weapon_flash = WEAPON_FLASH_FRAMES;
-                redraw = TRUE;
+                overlay_dirty = TRUE;
 
                 if ((shot == BILLBOARD_SHOT_DAMAGE) || (shot == BILLBOARD_SHOT_KILL)) {
-                    redraw = TRUE;
+                    overlay_dirty = TRUE;
                 }
             }
 
@@ -219,13 +228,14 @@ int main(bool hard) {
             const BillboardEnemyUpdate enemy_update = billboard_update_enemies(&g_player);
 
             if (enemy_update.moved) {
-                redraw = TRUE;
+                overlay_dirty = TRUE;
             }
 
             if ((enemy_update.hits > 0) && (g_player_invuln == 0)) {
                 if (player_health <= 1) {
                     reset_level(phase_index, &level_cleared, &shot_cooldown, &player_health, &frame);
-                    redraw = TRUE;
+                    base_dirty = TRUE;
+                    overlay_dirty = TRUE;
                 } else {
                     player_apply_world_push(&g_player,
                                             (s32)enemy_update.push_x * PLAYER_HIT_PUSH_STEP,
@@ -233,7 +243,7 @@ int main(bool hard) {
                     player_health--;
                     g_player_damage_flash = PLAYER_DAMAGE_FLASH_FRAMES;
                     g_player_invuln = PLAYER_INVULN_FRAMES;
-                    redraw = TRUE;
+                    overlay_dirty = TRUE;
                 }
             }
         }
@@ -249,9 +259,10 @@ int main(bool hard) {
         VDP_showCPULoad(10, 0);
 #endif
 
-        if (redraw) {
-            render_current_view(player_health);
-            redraw = FALSE;
+        if (base_dirty || overlay_dirty) {
+            render_current_view(player_health, base_dirty);
+            base_dirty = FALSE;
+            overlay_dirty = FALSE;
             pending_upload = TRUE;
         }
 

@@ -29,20 +29,37 @@ typedef struct {
     u16 v2;
     s16 nx;
     s16 ny;
-    u8 texture_id; // RayTextureId
+    s16 tex_u_offset;
+    u8 tex_v_offset;
+    u8 texture_id; // exact generated E1M1 texture ID
     u8 type;       // BspSegType
 } BspSeg;
 
 typedef struct {
     u16 first_seg;
     u16 seg_count;
+    u16 sector_id;
 } BspSubsector;
+
+typedef struct {
+    u8 ceiling_color;
+    u8 floor_color;
+} BspSectorVisual;
+
+typedef struct {
+    s16 min_x;
+    s16 min_y;
+    s16 max_x;
+    s16 max_y;
+} BspBox;
 
 typedef struct {
     s16 px;
     s16 py;
     s16 dx;
     s16 dy;
+    BspBox front_box;
+    BspBox back_box;
     u16 front; // child encoding (see BSP_CHILD_* below)
     u16 back;
 } BspNode;
@@ -74,6 +91,7 @@ typedef enum {
 extern const BspVertex bsp_vertices[];
 extern const BspSeg bsp_segs[];
 extern const BspSubsector bsp_subsectors[];
+extern const BspSectorVisual bsp_sector_visuals[];
 extern const BspNode bsp_nodes[];
 extern const u16 bsp_root_node;
 extern const u16 bsp_seg_count;

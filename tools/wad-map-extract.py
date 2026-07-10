@@ -19,13 +19,274 @@ Usage: python tools/wad-map-extract.py [--map E1M1] [--wad DOOM1.WAD]
 """
 
 import argparse
+from collections import Counter
 import math
 import os
+import re
 import struct
-from datetime import datetime, timezone
+
+from PIL import Image
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_WAD = os.path.join(PROJECT_ROOT, "DOOM1.WAD")
+DEFAULT_ASSET_OUT = os.path.join(PROJECT_ROOT, "src", "generated_assets.h")
+ASSET_ROOT = os.path.join(PROJECT_ROOT, "res", "originaldoom")
+WALL_TEX_DIM = 32
+FALLBACK_TEXTURE = "__FALLBACK__"
+FALLBACK_TEXTURE_SOURCE = "GRAY7"
+WORLD_COLOR_DAMAGE = 14
+WORLD_COLOR_WARNING = 15
+
+
+def clean_name(raw):
+    if isinstance(raw, bytes):
+        raw = raw.split(b"\x00", 1)[0].decode("ascii", "ignore")
+    return raw.upper().rstrip("\x00").rstrip()
+
+
+def texture_macro(name):
+    if name == FALLBACK_TEXTURE:
+        return "MEGALDOOM_TEX_FALLBACK"
+    return "MEGALDOOM_TEX_" + re.sub(r"[^A-Z0-9_]", "_", name)
+
+
+def texture_path(name):
+    source = FALLBACK_TEXTURE_SOURCE if name == FALLBACK_TEXTURE else name
+    return os.path.join(ASSET_ROOT, "textures", source + ".png")
+
+
+def flat_path(name):
+    if name == "F_SKY1":
+        return os.path.join(ASSET_ROOT, "textures", "SKY1.png")
+    return os.path.join(ASSET_ROOT, "flats", name + ".png")
+
+
+def md_color(rgb):
+    """Quantize RGB to the Mega Drive's three bits per channel."""
+    return tuple(int(round((c * 7) / 255)) * 255 // 7 for c in rgb)
+
+
+def image_average(path):
+    with Image.open(path) as image:
+        pixels = list(image.convert("RGB").get_flattened_data())
+    count = max(1, len(pixels))
+    return tuple(sum(p[channel] for p in pixels) // count for channel in range(3))
+
+
+def add_image_histogram(histogram, path, size, weight):
+    with Image.open(path) as image:
+        rgba = image.convert("RGBA").resize(size, Image.Resampling.BOX)
+        for r, g, b, a in rgba.get_flattened_data():
+            if a >= 128:
+                histogram[md_color((r, g, b))] += weight
+
+
+def median_cut_colors(histogram, color_count):
+    entries = [(color, weight) for color, weight in histogram.items() if weight > 0]
+    boxes = [entries]
+    while len(boxes) < color_count:
+        split_index = -1
+        split_channel = 0
+        split_score = -1
+        for index, box in enumerate(boxes):
+            if len(box) < 2:
+                continue
+            ranges = [max(c[0][ch] for c in box) - min(c[0][ch] for c in box)
+                      for ch in range(3)]
+            channel = max(range(3), key=lambda ch: (ranges[ch], -ch))
+            score = ranges[channel] * sum(item[1] for item in box)
+            if score > split_score:
+                split_index, split_channel, split_score = index, channel, score
+        if split_index < 0:
+            break
+        box = sorted(boxes.pop(split_index), key=lambda item: (item[0][split_channel], item[0]))
+        total = sum(item[1] for item in box)
+        running = 0
+        cut = 1
+        for cut in range(1, len(box)):
+            running += box[cut - 1][1]
+            if running * 2 >= total:
+                break
+        boxes.append(box[:cut])
+        boxes.append(box[cut:])
+
+    colors = []
+    for box in boxes:
+        total = max(1, sum(item[1] for item in box))
+        average = tuple(sum(item[0][ch] * item[1] for item in box) // total for ch in range(3))
+        colors.append(md_color(average))
+    return colors
+
+
+def nearest_palette_index(rgb, palette, allowed=None):
+    indices = range(len(palette)) if allowed is None else allowed
+    return min(indices, key=lambda i: (
+        sum((rgb[ch] - palette[i][ch]) ** 2 for ch in range(3)), i))
+
+
+def build_world_palette(texture_names, texture_usage, sectors):
+    histogram = Counter()
+    for name in texture_names:
+        weight = max(1, min(16, texture_usage.get(name, 1)))
+        add_image_histogram(histogram, texture_path(name), (WALL_TEX_DIM, WALL_TEX_DIM), weight)
+
+    sprite_inputs = [
+        ("sprites/PISGA0.png", (72, 54)), ("sprites/PISGB0.png", (72, 54)),
+        ("sprites/BON1A0.png", (16, 16)), ("sprites/BKEYA0.png", (16, 16)),
+        ("sprites/BAR1A0.png", (16, 16)),
+    ]
+    sprite_inputs.extend(("sprites/POSS%s.png" % frame, (24, 48))
+                         for frame in ("A1", "B1", "C1", "D1", "F1", "H0", "I0", "J0", "K0", "L0"))
+    for relative, size in sprite_inputs:
+        add_image_histogram(histogram, os.path.join(ASSET_ROOT, relative), size, 4)
+
+    flat_usage = Counter()
+    for sector in sectors:
+        flat_usage[sector["floor_name"]] += 1
+        flat_usage[sector["ceiling_name"]] += 1
+    for name, count in flat_usage.items():
+        average = md_color(image_average(flat_path(name)))
+        histogram[average] += max(512, count * 128)
+
+    damage = md_color((0xD8, 0x28, 0x18))
+    warning = md_color((0xD8, 0xB0, 0x48))
+    reserved = {(0, 0, 0), damage, warning}
+    adaptive = []
+    for color in median_cut_colors(histogram, 16):
+        if color not in reserved and color not in adaptive:
+            adaptive.append(color)
+    for color, _ in histogram.most_common():
+        if color not in reserved and color not in adaptive:
+            adaptive.append(color)
+        if len(adaptive) >= 13:
+            break
+    fallback_colors = [md_color((v, v, v)) for v in (32, 64, 96, 128, 160, 192, 224)]
+    for color in fallback_colors:
+        if color not in reserved and color not in adaptive:
+            adaptive.append(color)
+    adaptive = adaptive[:13]
+    adaptive.sort(key=lambda c: (c[0] * 30 + c[1] * 59 + c[2] * 11, c))
+    return [(0, 0, 0)] + adaptive + [damage, warning]
+
+
+def build_shade_map(palette):
+    result = []
+    for index, color in enumerate(palette):
+        if index == 0:
+            result.append(0)
+            continue
+        luminance = color[0] * 30 + color[1] * 59 + color[2] * 11
+        darker = [i for i, candidate in enumerate(palette)
+                  if (candidate[0] * 30 + candidate[1] * 59 + candidate[2] * 11) < luminance]
+        target = tuple(channel * 2 // 3 for channel in color)
+        result.append(nearest_palette_index(target, palette, darker or [0]))
+    return result
+
+
+def convert_texture(path, palette):
+    with Image.open(path) as image:
+        resized = image.convert("RGB").resize((WALL_TEX_DIM, WALL_TEX_DIM), Image.Resampling.BOX)
+        return [[nearest_palette_index(resized.getpixel((x, y)), palette)
+                 for x in range(WALL_TEX_DIM)] for y in range(WALL_TEX_DIM)]
+
+
+def texture_shift(size):
+    if size >= WALL_TEX_DIM:
+        ratio = size // WALL_TEX_DIM
+        sign = 1
+        exact = ratio * WALL_TEX_DIM == size
+    else:
+        ratio = WALL_TEX_DIM // size
+        sign = -1
+        exact = ratio * size == WALL_TEX_DIM
+    if not exact or ratio & (ratio - 1):
+        raise ValueError("Texture dimension %d is not WALL_TEX_DIM times a power of two" % size)
+    return sign * (ratio.bit_length() - 1)
+
+
+def emit_world_assets(path, texture_usage, sectors):
+    texture_names = [FALLBACK_TEXTURE] + sorted(
+        name for name in texture_usage if name != FALLBACK_TEXTURE)
+    for name in texture_names:
+        if not os.path.isfile(texture_path(name)):
+            raise FileNotFoundError("Wall texture source not found: %s" % texture_path(name))
+
+    palette = build_world_palette(texture_names, texture_usage, sectors)
+    if len(palette) != 16:
+        raise RuntimeError("World palette must contain exactly 16 colors")
+    shade_map = build_shade_map(palette)
+    texture_ids = {name: index for index, name in enumerate(texture_names)}
+    texture_meta = {}
+    converted = []
+    for name in texture_names:
+        source = texture_path(name)
+        with Image.open(source) as image:
+            width, height = image.size
+        texture_meta[name] = dict(width=width, height=height, ushift=texture_shift(width))
+        converted.append(convert_texture(source, palette))
+
+    sector_visuals = []
+    for sector in sectors:
+        colors = []
+        for field in ("ceiling_name", "floor_name"):
+            name = sector[field]
+            average = image_average(flat_path(name))
+            if name != "F_SKY1":
+                average = tuple(channel * sector["light"] // 255 for channel in average)
+            colors.append(nearest_palette_index(md_color(average), palette, range(0, WORLD_COLOR_DAMAGE)))
+        sector_visuals.append(tuple(colors))
+
+    lines = [
+        "#ifndef MEGALDOOM_GENERATED_ASSETS_H",
+        "#define MEGALDOOM_GENERATED_ASSETS_H",
+        "",
+        "#include <genesis.h>",
+        "#include \"raycast.h\"",
+        "",
+        "// Generated deterministically by tools/wad-map-extract.py.",
+        "// Exact solid-wall texture catalog for E1M1; index 0 is the fallback.",
+        "#define FREEDOOM_WALL_TEXTURE_COUNT %d" % len(texture_names),
+        "#define MEGALDOOM_WORLD_COLOR_DAMAGE %d" % WORLD_COLOR_DAMAGE,
+        "#define MEGALDOOM_WORLD_COLOR_WARNING %d" % WORLD_COLOR_WARNING,
+    ]
+    for name in texture_names:
+        lines.append("#define %s %d" % (texture_macro(name), texture_ids[name]))
+    lines.extend([
+        "",
+        "static const u32 FREEDOOM_WORLD_PALETTE[16] = {",
+        "    " + ", ".join("0x%02X%02X%02X" % color for color in palette),
+        "};",
+        "",
+        "static const u8 FREEDOOM_WORLD_SHADE_MAP[16] = {",
+        "    " + ", ".join(str(value) for value in shade_map),
+        "};",
+        "",
+        "static const s8 FREEDOOM_WALL_TEXTURE_USHIFT[FREEDOOM_WALL_TEXTURE_COUNT] = {",
+        "    " + ", ".join(str(texture_meta[name]["ushift"]) for name in texture_names),
+        "};",
+        "",
+        "static const u16 FREEDOOM_WALL_TEXTURE_WIDTH[FREEDOOM_WALL_TEXTURE_COUNT] = {",
+        "    " + ", ".join(str(texture_meta[name]["width"]) for name in texture_names),
+        "};",
+        "",
+        "static const u16 FREEDOOM_WALL_TEXTURE_HEIGHT[FREEDOOM_WALL_TEXTURE_COUNT] = {",
+        "    " + ", ".join(str(texture_meta[name]["height"]) for name in texture_names),
+        "};",
+        "",
+        "static const u8 FREEDOOM_WALL_TEXTURES[FREEDOOM_WALL_TEXTURE_COUNT][WALL_TEX_DIM][WALL_TEX_DIM] = {",
+    ])
+    for texture_index, rows in enumerate(converted):
+        lines.append("    { // %d: %s (%dx%d)" % (
+            texture_index, texture_names[texture_index],
+            texture_meta[texture_names[texture_index]]["width"],
+            texture_meta[texture_names[texture_index]]["height"]))
+        for row in rows:
+            lines.append("        {" + ", ".join(str(value) for value in row) + "},")
+        lines.append("    },")
+    lines.extend(["};", "", "#endif", ""])
+    with open(path, "w", newline="\n") as fh:
+        fh.write("\n".join(lines))
+    return texture_ids, texture_meta, sector_visuals, palette
 
 # --- Minimal WAD reader (same layout as tools/wad-extract.py) --------------- #
 WAD_HEADER_FMT = "<4sii"   # signature, numLumps, dirOffset
@@ -83,17 +344,6 @@ def _is_map_marker(name):
     return name.startswith("MAP") and name[3:].isdigit()
 
 
-# --- RayTextureId (must match src/raycast.h) -------------------------------- #
-TEX_WALL = 0
-TEX_DOOR = 1
-TEX_LOCKED_DOOR = 2
-TEX_EXIT = 3
-TEX_BROWN = 4
-TEX_GRAY = 5
-TEX_METAL = 6
-TEX_BRICK = 7
-TEX_TECH = 8
-
 # BspSegType (must match src/bsp_map.h)
 SEG_WALL = 0
 SEG_DOOR = 1
@@ -105,25 +355,6 @@ LOCKED_DOOR_SPECIALS = {26, 27, 28, 32, 33, 34}
 EXIT_SPECIALS = {11, 51}
 
 LINE_FLAG_IMPASSABLE = 0x0001
-
-
-def texture_id_for(name):
-    n = name.upper().rstrip("\x00").rstrip()
-    if not n or n == "-":
-        return None
-    table = [
-        ("BROWN", TEX_BROWN),
-        ("STARTAN", TEX_TECH), ("COMP", TEX_TECH), ("TEK", TEX_TECH),
-        ("SLAD", TEX_TECH), ("SILVER", TEX_TECH),
-        ("GRAY", TEX_GRAY), ("PLAT", TEX_GRAY), ("LITE", TEX_GRAY),
-        ("METAL", TEX_METAL), ("SUPPORT", TEX_METAL), ("SHAWN", TEX_METAL),
-        ("BRICK", TEX_BRICK), ("WOOD", TEX_BRICK), ("BIGDOOR", TEX_BRICK),
-        ("DOOR", TEX_BRICK), ("STONE", TEX_BRICK),
-    ]
-    for prefix, tid in table:
-        if n.startswith(prefix):
-            return tid
-    return TEX_GRAY
 
 
 def reduce_normal(nx, ny):
@@ -139,6 +370,7 @@ def main():
     ap.add_argument("--wad", default=DEFAULT_WAD)
     ap.add_argument("--map", default="E1M1")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--assets-out", default=DEFAULT_ASSET_OUT)
     args = ap.parse_args()
 
     wad = WadFile(args.wad)
@@ -171,21 +403,24 @@ def main():
                 for i in range(len(verts_raw) // 4)]
     vertices = [(x, -y) for (x, y) in verts_up]
 
-    sectors = []  # (floor, ceil)
+    sectors = []
     for i in range(len(sectors_raw) // 26):
-        f, c = struct.unpack_from("<hh", sectors_raw, i * 26)
-        sectors.append((f, c))
+        floor_h, ceiling_h, floor_name, ceiling_name, light, special, tag = struct.unpack_from(
+            "<hh8s8shhh", sectors_raw, i * 26)
+        sectors.append(dict(
+            floor=floor_h,
+            ceiling=ceiling_h,
+            floor_name=clean_name(floor_name),
+            ceiling_name=clean_name(ceiling_name),
+            light=max(0, min(255, light)),
+        ))
 
-    sidedefs = []  # (upper, lower, middle, sector)
+    sidedefs = []
     for i in range(len(sides_raw) // 30):
         xoff, yoff, up, lo, mid, sec = struct.unpack_from(
             "<hh8s8s8sH", sides_raw, i * 30)
-        sidedefs.append((
-            up.split(b"\x00", 1)[0].decode("ascii", "ignore"),
-            lo.split(b"\x00", 1)[0].decode("ascii", "ignore"),
-            mid.split(b"\x00", 1)[0].decode("ascii", "ignore"),
-            sec,
-        ))
+        sidedefs.append(dict(xoff=xoff, yoff=yoff, upper=clean_name(up),
+                             lower=clean_name(lo), middle=clean_name(mid), sector=sec))
 
     linedefs = []
     for i in range(len(lines_raw) // 14):
@@ -198,7 +433,7 @@ def main():
     for i in range(len(segs_raw) // 12):
         v1, v2, angle, ld, direction, offset = struct.unpack_from(
             "<HHhHHh", segs_raw, i * 12)
-        segs.append(dict(v1=v1, v2=v2, ld=ld, direction=direction))
+        segs.append(dict(v1=v1, v2=v2, ld=ld, direction=direction, offset=offset))
 
     ssectors = []
     for i in range(len(ssectors_raw) // 4):
@@ -206,13 +441,25 @@ def main():
         ssectors.append((count, first))
 
     nodes = []
+
+    def flip_bbox(raw):
+        """Convert Doom (top,bottom,left,right) y-up bbox to engine y-down."""
+        top, bottom, left, right = raw
+        xs = (left, right)
+        ys = (-top, -bottom)
+        return (min(xs), min(ys), max(xs), max(ys))
+
     for i in range(len(nodes_raw) // 28):
         vals = struct.unpack_from("<hhhhhhhhhhhhHH", nodes_raw, i * 28)
         x, y, dx, dy = vals[0], vals[1], vals[2], vals[3]
+        right_box = flip_bbox(vals[4:8])
+        left_box = flip_bbox(vals[8:12])
         right_child, left_child = vals[12], vals[13]
         # Y-down flip: negate y and dy, and swap children (front=left, back=right)
         # so render_node's `cross >= 0 -> front` still selects Doom's right side.
+        # Boxes follow their children through the same swap.
         nodes.append(dict(x=x, y=-y, dx=dx, dy=-dy,
+                          front_box=left_box, back_box=right_box,
                           front=left_child, back=right_child))
 
     # --- Classify each linedef as solid (wall) or open (gap). --------------- #
@@ -221,44 +468,51 @@ def main():
             return True  # one-sided
         if ld["flags"] & LINE_FLAG_IMPASSABLE:
             return True
-        rs = sidedefs[ld["right"]][3] if ld["right"] != 0xFFFF else None
-        ls = sidedefs[ld["left"]][3] if ld["left"] != 0xFFFF else None
+        rs = sidedefs[ld["right"]]["sector"] if ld["right"] != 0xFFFF else None
+        ls = sidedefs[ld["left"]]["sector"] if ld["left"] != 0xFFFF else None
         if rs is None or ls is None:
             return True
-        rf, rc = sectors[rs]
-        lf, lc = sectors[ls]
+        rf, rc = sectors[rs]["floor"], sectors[rs]["ceiling"]
+        lf, lc = sectors[ls]["floor"], sectors[ls]["ceiling"]
         opening = min(rc, lc) - max(rf, lf)
         return opening <= 0
 
-    def seg_type_and_tex(seg):
+    def front_side_for(seg):
         ld = linedefs[seg["ld"]]
-        # Front sidedef of this seg.
         front_side = ld["right"] if seg["direction"] == 0 else ld["left"]
         if front_side == 0xFFFF:
             front_side = ld["right"]
+        return front_side
+
+    def seg_type_and_visual(seg):
+        ld = linedefs[seg["ld"]]
+        front_side = front_side_for(seg)
         seg_type = SEG_WALL
         if ld["special"] in EXIT_SPECIALS:
-            return SEG_EXIT, TEX_EXIT
-        if ld["special"] in DOOR_SPECIALS:
+            seg_type = SEG_EXIT
+        elif ld["special"] in DOOR_SPECIALS:
             if ld["special"] in LOCKED_DOOR_SPECIALS:
                 seg_type = SEG_LOCKED_DOOR
             else:
                 seg_type = SEG_DOOR
-            return seg_type, TEX_DOOR
-        # Texture: prefer middle, then lower, then upper.
-        tid = TEX_GRAY
+
+        name = FALLBACK_TEXTURE
+        xoff = seg["offset"]
+        yoff = 0
         if front_side != 0xFFFF:
-            up, lo, mid, _ = sidedefs[front_side]
-            for name in (mid, lo, up):
-                t = texture_id_for(name)
-                if t is not None:
-                    tid = t
+            side = sidedefs[front_side]
+            xoff += side["xoff"]
+            yoff = side["yoff"]
+            for candidate in (side["middle"], side["lower"], side["upper"]):
+                if candidate and candidate != "-":
+                    name = candidate
                     break
-        return seg_type, tid
+        return seg_type, name, xoff, yoff
 
     # --- Rebuild subsectors with only solid segs, preserving grouping. ------ #
-    out_segs = []       # dicts with v1,v2,nx,ny,tex,type
-    out_ssectors = []   # (first_seg, count)
+    out_segs = []       # dicts with geometry, exact texture name, offsets and type
+    out_ssectors = []   # (first_seg, count, sector_id)
+    texture_usage = Counter()
 
     def front_normal(seg):
         """Normal pointing into the seg's FRONT sector, in y-down space.
@@ -281,6 +535,11 @@ def main():
 
     for (count, first) in ssectors:
         start = len(out_segs)
+        sector_id = 0
+        if count:
+            source_side = front_side_for(segs[first])
+            if source_side != 0xFFFF:
+                sector_id = sidedefs[source_side]["sector"]
         for k in range(count):
             seg = segs[first + k]
             if not line_solid(linedefs[seg["ld"]]):
@@ -292,14 +551,27 @@ def main():
             nx, ny = front_normal(seg)
             if nx == 0 and ny == 0:
                 continue  # degenerate linedef
-            stype, tid = seg_type_and_tex(seg)
+            stype, texture_name, tex_u_offset, tex_v_offset = seg_type_and_visual(seg)
+            texture_usage[texture_name] += 1
             out_segs.append(dict(v1=seg["v1"], v2=seg["v2"],
-                                nx=nx, ny=ny, tex=tid, type=stype))
-        out_ssectors.append((start, len(out_segs) - start))
+                                nx=nx, ny=ny, texture_name=texture_name,
+                                tex_u_offset=tex_u_offset, tex_v_offset=tex_v_offset,
+                                type=stype))
+        out_ssectors.append((start, len(out_segs) - start, sector_id))
 
     if len(out_segs) > 1024:
         raise SystemExit("solid seg count %d exceeds BSP_MAX_SEGS (1024)"
                          % len(out_segs))
+
+    texture_ids, texture_meta, sector_visuals, palette = emit_world_assets(
+        args.assets_out, texture_usage, sectors)
+    for seg in out_segs:
+        name = seg["texture_name"]
+        if not -32768 <= seg["tex_u_offset"] <= 32767:
+            raise SystemExit("texture U offset out of s16 range: %d" % seg["tex_u_offset"])
+        seg["tex"] = texture_ids[name]
+        seg["tex_v"] = ((seg["tex_v_offset"] * WALL_TEX_DIM) //
+                        texture_meta[name]["height"]) & (WALL_TEX_DIM - 1)
 
     # --- Player 1 start from THINGS (type 1). ------------------------------- #
     start_x = start_y = 0
@@ -316,7 +588,7 @@ def main():
     root = (len(nodes) - 1) if nodes else 0x8000
 
     # --- Emit C. ------------------------------------------------------------ #
-    ts = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    ts = "source-derived"
     lines = []
     lines.append("// Generated by tools/wad-map-extract.py")
     lines.append("// Source: %s  map: %s" % (os.path.basename(args.wad), mapn))
@@ -335,21 +607,29 @@ def main():
 
     lines.append("const BspSeg bsp_segs[%d] = {" % len(out_segs))
     for s in out_segs:
-        lines.append("    {%d, %d, %d, %d, %d, %d}," % (
-            s["v1"], s["v2"], s["nx"], s["ny"], s["tex"], s["type"]))
+        lines.append("    {%d, %d, %d, %d, %d, %d, %d, %d}," % (
+            s["v1"], s["v2"], s["nx"], s["ny"], s["tex_u_offset"],
+            s["tex_v"], s["tex"], s["type"]))
     lines.append("};")
     lines.append("")
 
     lines.append("const BspSubsector bsp_subsectors[%d] = {" % len(out_ssectors))
-    for (first, count) in out_ssectors:
-        lines.append("    {%d, %d}," % (first, count))
+    for (first, count, sector_id) in out_ssectors:
+        lines.append("    {%d, %d, %d}," % (first, count, sector_id))
+    lines.append("};")
+    lines.append("")
+
+    lines.append("const BspSectorVisual bsp_sector_visuals[%d] = {" % len(sector_visuals))
+    for ceiling_color, floor_color in sector_visuals:
+        lines.append("    {%d, %d}," % (ceiling_color, floor_color))
     lines.append("};")
     lines.append("")
 
     lines.append("const BspNode bsp_nodes[%d] = {" % len(nodes))
     for nd in nodes:
-        lines.append("    {%d, %d, %d, %d, %du, %du}," % (
-            nd["x"], nd["y"], nd["dx"], nd["dy"], nd["front"], nd["back"]))
+        lines.append("    {%d, %d, %d, %d, {%d, %d, %d, %d}, {%d, %d, %d, %d}, %du, %du}," % (
+            nd["x"], nd["y"], nd["dx"], nd["dy"],
+            *nd["front_box"], *nd["back_box"], nd["front"], nd["back"]))
     lines.append("};")
     lines.append("")
 
@@ -368,6 +648,9 @@ def main():
     print("Wrote %s" % out_path)
     print("  vertices : %d" % len(vertices))
     print("  segs     : %d solid (of %d total)" % (len(out_segs), len(segs)))
+    print("  textures : %d exact + fallback" % (len(texture_ids) - 1))
+    print("  palette  : %s" % " ".join("%02X%02X%02X" % color for color in palette))
+    print("  assets   : %s" % args.assets_out)
     print("  subsectors: %d" % len(out_ssectors))
     print("  nodes    : %d (root=%d)" % (len(nodes), root))
     print("  player   : (%d,%d) angle_deg=%d -> %d" % (

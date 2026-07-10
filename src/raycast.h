@@ -17,9 +17,7 @@
 //   - bsp_render.c derives each seg's horizontal ushift from it,
 //   - renderer.c builds the x-WALL_TEX_DIM vertical sampling table from it,
 //   - the generated arrays are declared [WALL_TEX_DIM][WALL_TEX_DIM].
-// To change it: set this macro AND $WallDim in tools/convert-freedoom-assets.ps1
-// to the same power-of-two value, then regenerate. A mismatch fails to compile
-// (wrong number of array initializers), so the two can't silently drift.
+// Exact texture IDs and source dimensions are generated from the active WAD map.
 #define WALL_TEX_DIM 32
 #define WALL_TEX_DIM_MASK (WALL_TEX_DIM - 1)
 
@@ -29,26 +27,16 @@ typedef struct {
     u16 angle;
 } PlayerState;
 
-typedef enum {
-    RAY_TEXTURE_WALL = 0,
-    RAY_TEXTURE_DOOR = 1,
-    RAY_TEXTURE_LOCKED_DOOR = 2,
-    RAY_TEXTURE_EXIT = 3,
-    RAY_TEXTURE_WALL_BROWN = 4,
-    RAY_TEXTURE_WALL_GRAY = 5,
-    RAY_TEXTURE_WALL_METAL = 6,
-    RAY_TEXTURE_WALL_BRICK = 7,
-    RAY_TEXTURE_WALL_TECH = 8
-} RayTextureId;
-
-// Number of distinct wall textures (RayTextureId 0..8); sizes the WALL_TEX table,
-// the pre-shaded copies and the source-width table, all keyed by texture_id.
-#define RAY_TEXTURE_COUNT 9
+typedef struct {
+    u8 ceiling_color;
+    u8 floor_color;
+} RaySceneColors;
 
 typedef struct {
     u16 height;
     u16 depth;
     u8 tex_x;
+    u8 tex_y;
     u8 texture_id;
     u8 shade;
 } RayColumn;

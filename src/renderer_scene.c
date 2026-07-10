@@ -2,6 +2,7 @@
 #include "generated_assets.h"
 #include "generated_billboard_assets.h"
 #include "generated_hud_assets.h"
+#include "generated_renderer_assets.h"
 
 // Flat billboard-texture descriptor. Storing the pixels as a plain const u8* (a
 // [rows][cols] array decays cleanly) lets one draw loop sample sprites of any size:
@@ -31,44 +32,25 @@ static BillboardTex get_billboard_texture(u8 visual_id, u8 frame) {
     }
 }
 
-static u8 remap_damaged_billboard_texel(u8 texel) {
-    if (texel == 0) {
-        return 0;
-    }
-
-    return (texel & 1) ? 12 : 13;
-}
-
-// Damaged-hit flash for the enemy: shift toward red so a shot reads clearly. The
-// healthy enemy is drawn with its real converted colors (no remap) so it looks
-// like an actual Freedoom soldier instead of a flat yellow blob.
-static u8 remap_damaged_dummy_texel(u8 texel) {
-    if (texel == 0) {
-        return 0;
-    }
-
-    return (texel & 1) ? 12 : 2;
-}
-
-// Per-colour remap that darkens each wall texel by one step. Index 10 (brown) must
-// darken to 8 (dark brown), NOT 9 (blue) — that typo once turned every shaded brown
-// wall sky-blue. This is the single darkening step; the fog LUTs below apply it 0..N
-// times per column, so shading on the fly keeps a pre-baked [RAY_TEXTURE_COUNT]
-// [WALL_TEX_DIM][WALL_TEX_DIM] copy (~9 KB) out of the MD's 64 KB work RAM.
-static const u8 WALL_SHADE_MAP[16] = {0, 6, 2, 2, 3, 4, 5, 6, 8, 8, 8, 10, 12, 12, 14, 14};
-
-// Distance fog: walls are darkened in discrete steps the farther they are, giving
-// the scene depth instead of a flat full-bright look. Level 0 is the identity map
-// (nearest); each higher level applies WALL_SHADE_MAP once more, reusing that same
-// hand-verified darkening ramp (so colour 10 brown still darkens to 8, never to
-// blue). The LUTs are built once in renderer_scene_init from WALL_SHADE_MAP, then
-// selected per column by depth in build_column_strip. N/S ("shade") walls just add
-// one extra level, replacing the old two-map branch.
+// Distance fog: walls are darkened in discrete steps the farther they are. Level
+// 0 is identity; each higher level applies the luminance-derived mapping emitted
+// alongside PAL3, so no hand-authored palette indices can shift a hue to blue.
+// N/S ("shade") walls add one extra level.
 #define SHADE_LEVELS 4
 // depth (world units) >> FOG_SHIFT picks the base fog level. Tuned so mid-room
 // walls sit around level 1-2 and distant walls saturate at the darkest level.
 #define FOG_SHIFT 9
 static u8 g_shade_luts[SHADE_LEVELS][16];
+static u32 g_overlay_previous_bits[VIEW_DIRTY_WORD_COUNT];
+static u32 g_overlay_current_bits[VIEW_DIRTY_WORD_COUNT];
+static u16 g_last_compass_angle = 0xFFFF;
+static bool g_compass_dirty = TRUE;
+
+void renderer_mark_overlay_tile(u16 tile_index) {
+    const u16 word = (u16)(tile_index >> 5);
+    g_overlay_current_bits[word] |= (u32)1u << (tile_index & 31);
+    renderer_mark_tile_dirty(tile_index);
+}
 
 static void build_shade_luts(void) {
     for (u16 c = 0; c < 16; c++) {
@@ -76,24 +58,11 @@ static void build_shade_luts(void) {
     }
     for (u16 level = 1; level < SHADE_LEVELS; level++) {
         for (u16 c = 0; c < 16; c++) {
-            g_shade_luts[level][c] = WALL_SHADE_MAP[g_shade_luts[level - 1][c] & 0x0F];
+            g_shade_luts[level][c] =
+                FREEDOOM_WORLD_SHADE_MAP[g_shade_luts[level - 1][c] & 0x0F];
         }
     }
 }
-
-// Wall texture lookup indexed by texture_id, replacing the per-pixel 8-way branch.
-// Order matches the original sample_wall_texture chain (id 0 == default wall).
-static const u8 (*const WALL_TEX[RAY_TEXTURE_COUNT])[WALL_TEX_DIM] = {
-    FREEDOOM_WALL_TEXTURE,        // 0
-    FREEDOOM_DOOR_TEXTURE,        // 1
-    FREEDOOM_LOCKED_DOOR_TEXTURE, // 2
-    FREEDOOM_SWITCH_TEXTURE,      // 3
-    FREEDOOM_WALL_BROWN_TEXTURE,  // 4
-    FREEDOOM_WALL_GRAY_TEXTURE,   // 5
-    FREEDOOM_WALL_METAL_TEXTURE,  // 6
-    FREEDOOM_WALL_BRICK_TEXTURE,  // 7
-    FREEDOOM_WALL_TECH_TEXTURE,   // 8
-};
 
 // Pixel-replication table for the active stride (guarded so the unused one isn't
 // compiled): REP4[c] == c*0x1111 spreads a colour across 4px (stride 4); REP2[c] ==
@@ -124,68 +93,29 @@ static const u32 REP2[16] = {
 //
 // Theoretical max = affected tile span (10 x 8 tiles) * 8 rows; assets currently
 // use 331 (idle) / 277 (fire). The builder guards against overflow.
-#define WEAPON_MAX_ROW_OPS 384
-static u16 g_weapon_dst[2][WEAPON_MAX_ROW_OPS];   // flat u32 index into g_view_tiles
-static u32 g_weapon_value[2][WEAPON_MAX_ROW_OPS]; // weapon nibbles at their shifts
-static u16 g_weapon_op_count[2];
-
-static void build_weapon_overlay_ops(void) {
-    const u16 bottom_y = FREEDOOM_WEAPON_DRAW_Y + FREEDOOM_WEAPON_DRAW_H;
-    const u16 right_x = FREEDOOM_WEAPON_DRAW_X + FREEDOOM_WEAPON_DRAW_W;
-    const u16 tx_start = (u16)(FREEDOOM_WEAPON_DRAW_X >> 3);
-    const u16 tx_end = (u16)((right_x - 1) >> 3);
-
-    for (u16 v = 0; v < 2; v++) {
-        const u8 (*weapon)[FREEDOOM_WEAPON_W] = v ? FREEDOOM_WEAPON_FIRE : FREEDOOM_WEAPON_IDLE;
-        u16 count = 0;
-
-        for (u16 y = FREEDOOM_WEAPON_DRAW_Y; y < bottom_y; y++) {
-            const u16 tile_y = (u16)(y >> 3);
-            const u16 row_y = (u16)(y & 7);
-
-            for (u16 tile_x = tx_start; tile_x <= tx_end; tile_x++) {
-                const u16 x0 = (u16)(tile_x * 8);
-                const u16 x_begin = (x0 > FREEDOOM_WEAPON_DRAW_X) ? x0 : (u16)FREEDOOM_WEAPON_DRAW_X;
-                const u16 x_stop = ((x0 + 8) < right_x) ? (u16)(x0 + 8) : right_x;
-                u32 clear_mask = 0;
-                u32 value = 0;
-
-                for (u16 x = x_begin; x < x_stop; x++) {
-                    const u8 texel = weapon[y][x];
-                    if (texel != 0) {
-                        const u16 shift = (u16)((7 - (x & 7)) * 4);
-                        clear_mask |= (u32)0x0F << shift;
-                        value |= (u32)(texel & 0x0F) << shift;
-                    }
-                }
-
-                if ((clear_mask != 0) && (count < WEAPON_MAX_ROW_OPS)) {
-                    const u16 tile_index = (u16)((tile_y * VIEW_TILE_W) + tile_x);
-                    g_weapon_dst[v][count] = (u16)((tile_index * 8u) + row_y);
-                    g_weapon_value[v][count] = value;
-                    count++;
-                }
-            }
-        }
-
-        g_weapon_op_count[v] = count;
-    }
-}
-
 void renderer_scene_init(void) {
-    build_weapon_overlay_ops();
     build_shade_luts();
+    g_last_compass_angle = 0xFFFF;
+    g_compass_dirty = TRUE;
 }
 
-// Build a full vertical color strip for one ray column, resolving the texture
-// pointer and shade flag once (instead of per pixel). The wall is centered, so
-// everything above it is sky (y < VIEW_PIXEL_H/2) and below it is floor.
-static void build_column_strip(const RayColumn *column, u8 *strip) {
+typedef struct {
+    u16 top;
+    u16 bottom;
+    const u8 *texture;
+    const u8 *shade_map;
+    const u8 *vertical_samples;
+    u8 tex_x;
+    u8 tex_y;
+} WallColumnDescriptor;
+
+static WallColumnDescriptor describe_wall_column(const RayColumn *column) {
     const u16 wall_h = column->height;
     const u16 top = (u16)((VIEW_PIXEL_H - wall_h) / 2);
     const u16 bottom = (u16)(top + wall_h);
-    const u8 tid = (u8)((column->texture_id < RAY_TEXTURE_COUNT) ? column->texture_id : 0);
-    const u8 (*tex)[WALL_TEX_DIM] = WALL_TEX[tid];
+    const u8 tid = (u8)((column->texture_id < FREEDOOM_WALL_TEXTURE_COUNT) ?
+                            column->texture_id : MEGALDOOM_TEX_FALLBACK);
+    const u8 (*tex)[WALL_TEX_DIM] = FREEDOOM_WALL_TEXTURES[tid];
     // Distance fog + side shading fold into one LUT selection per column: the fog
     // level grows with depth, and N/S ("shade") walls add one extra darkening step.
     // g_shade_luts[0] is the identity, so near front walls are unshaded; every level
@@ -195,85 +125,146 @@ static void build_column_strip(const RayColumn *column, u8 *strip) {
         fog_level = SHADE_LEVELS - 1;
     }
     const u8 *shade_map = g_shade_luts[fog_level];
-    const u8 *ty_table = g_wall_tex_y_by_height[wall_h];
+    const u8 *ty_table = MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[wall_h];
     const u8 tex_x = (u8)(column->tex_x & WALL_TEX_DIM_MASK);
-    u16 y = 0;
 
-    for (; y < top; y++) {
-        strip[y] = 9; // sky
+    return (WallColumnDescriptor){top, bottom, (const u8 *)tex, shade_map, ty_table,
+                                  tex_x, column->tex_y};
+}
+
+static u8 sample_wall_descriptor(const WallColumnDescriptor *descriptor,
+                                 const RaySceneColors *scene_colors,
+                                 u16 y) {
+    if (y < descriptor->top) {
+        return scene_colors->ceiling_color;
+    }
+    if (y >= descriptor->bottom) {
+        return scene_colors->floor_color;
     }
 
-    for (; y < bottom; y++) {
-        strip[y] = shade_map[tex[ty_table[y - top]][tex_x] & 0x0F];
-    }
-
-    for (; y < VIEW_PIXEL_H; y++) {
-        strip[y] = 14; // floor
-    }
+    return descriptor->shade_map[
+        (descriptor->texture[((descriptor->vertical_samples[y - descriptor->top] +
+                              descriptor->tex_y) & WALL_TEX_DIM_MASK) * WALL_TEX_DIM +
+                              descriptor->tex_x]) & 0x0F];
 }
 
 #if (RAY_COL_STRIDE != 4) && (RAY_COL_STRIDE != 2)
 #error "build_raycast_tilemap only implements the RAY_COL_STRIDE == 4 and == 2 packers"
 #endif
 
-static u8 remap_billboard_texel(u8 visual_id, u8 texel) {
-    if (visual_id == BILLBOARD_VISUAL_DECOR_DAMAGED) {
-        return remap_damaged_billboard_texel(texel);
-    }
-    if (visual_id == BILLBOARD_VISUAL_DUMMY_DAMAGED) {
-        return remap_damaged_dummy_texel(texel);
-    }
-    // Healthy enemy (BILLBOARD_VISUAL_DUMMY) and all others: real colors, unchanged.
-    return texel;
-}
+#ifndef RENDERER_REFERENCE_PACKER
+#define RENDERER_REFERENCE_PACKER 0
+#endif
 
 #if RAY_COL_STRIDE == 4
-static void build_raycast_tilemap(const RayColumn *columns) {
-    u8 strip_a[VIEW_PIXEL_H];
-    u8 strip_b[VIEW_PIXEL_H];
-
+static void build_raycast_tilemap(const RayColumn *columns,
+                                  const RaySceneColors *scene_colors,
+                                  u32 target[][8]) {
     // Each 8px-wide tile column maps to two cast columns (px 0 and 4), each
-    // replicated 4x. Build both strips once per tile column, then pack the 15
-    // vertical tiles from them.
+    // replicated 4x. Describe both columns once, then sample directly while
+    // packing each tile row.
     for (u16 tile_x = 0; tile_x < VIEW_TILE_W; tile_x++) {
         const u16 base_col = (u16)(tile_x * 8);
-        build_column_strip(&columns[base_col], strip_a);
-        build_column_strip(&columns[base_col + 4], strip_b);
+        const WallColumnDescriptor column_a = describe_wall_column(&columns[base_col]);
+        const WallColumnDescriptor column_b = describe_wall_column(&columns[base_col + 4]);
 
         for (u16 tile_y = 0; tile_y < VIEW_TILE_H; tile_y++) {
             const u16 tile_index = (u16)((tile_y * VIEW_TILE_W) + tile_x);
             u16 pixel_y = (u16)(tile_y * 8);
 
             for (u16 row = 0; row < 8; row++, pixel_y++) {
-                g_view_tiles[tile_index][row] =
-                    (REP4[strip_a[pixel_y]] << 16) | REP4[strip_b[pixel_y]];
+                target[tile_index][row] =
+                    (REP4[sample_wall_descriptor(&column_a, scene_colors, pixel_y)] << 16) |
+                    REP4[sample_wall_descriptor(&column_b, scene_colors, pixel_y)];
             }
         }
     }
 }
 #else /* RAY_COL_STRIDE == 2 */
-static void build_raycast_tilemap(const RayColumn *columns) {
-    u8 strip_a[VIEW_PIXEL_H];
-    u8 strip_b[VIEW_PIXEL_H];
-    u8 strip_c[VIEW_PIXEL_H];
-    u8 strip_d[VIEW_PIXEL_H];
-
+static void build_raycast_tilemap(const RayColumn *columns,
+                                  const RaySceneColors *scene_colors,
+                                  u32 target[][8]) {
     // Each 8px-wide tile column maps to four cast columns (px 0, 2, 4, 6), each
     // replicated 2x -> twice the horizontal detail of the stride-4 packer at the
-    // same tile count / DMA cost. Pack MSB-first: px0,1 in the top nibbles.
+    // same tile count / DMA cost. Describe each column once and pack MSB-first.
     for (u16 tile_x = 0; tile_x < VIEW_TILE_W; tile_x++) {
         const u16 base_col = (u16)(tile_x * 8);
-        build_column_strip(&columns[base_col], strip_a);
-        build_column_strip(&columns[base_col + 2], strip_b);
-        build_column_strip(&columns[base_col + 4], strip_c);
-        build_column_strip(&columns[base_col + 6], strip_d);
+        const WallColumnDescriptor column_a = describe_wall_column(&columns[base_col]);
+        const WallColumnDescriptor column_b = describe_wall_column(&columns[base_col + 2]);
+        const WallColumnDescriptor column_c = describe_wall_column(&columns[base_col + 4]);
+        const WallColumnDescriptor column_d = describe_wall_column(&columns[base_col + 6]);
 
         for (u16 tile_y = 0; tile_y < VIEW_TILE_H; tile_y++) {
             const u16 tile_index = (u16)((tile_y * VIEW_TILE_W) + tile_x);
             u16 pixel_y = (u16)(tile_y * 8);
 
             for (u16 row = 0; row < 8; row++, pixel_y++) {
-                g_view_tiles[tile_index][row] =
+                target[tile_index][row] =
+                    (REP2[sample_wall_descriptor(&column_a, scene_colors, pixel_y)] << 24) |
+                    (REP2[sample_wall_descriptor(&column_b, scene_colors, pixel_y)] << 16) |
+                    (REP2[sample_wall_descriptor(&column_c, scene_colors, pixel_y)] << 8) |
+                    REP2[sample_wall_descriptor(&column_d, scene_colors, pixel_y)];
+            }
+        }
+    }
+}
+#endif
+
+#if RENDERER_REFERENCE_PACKER
+// Test-only implementation of the previous strip-based packer. A validation
+// build can compare this buffer with the direct descriptor packer; release builds
+// compile it out, so it consumes neither ROM nor work RAM.
+static void build_column_strip_reference(const RayColumn *column,
+                                         const RaySceneColors *scene_colors,
+                                         u8 *strip) {
+    const u16 wall_h = column->height;
+    const u16 top = (u16)((VIEW_PIXEL_H - wall_h) / 2);
+    const u16 bottom = (u16)(top + wall_h);
+    const u8 tid = (u8)((column->texture_id < FREEDOOM_WALL_TEXTURE_COUNT) ?
+                            column->texture_id : MEGALDOOM_TEX_FALLBACK);
+    const u8 (*tex)[WALL_TEX_DIM] = FREEDOOM_WALL_TEXTURES[tid];
+    u16 fog_level = (u16)(column->depth >> FOG_SHIFT) + (column->shade ? 1u : 0u);
+    if (fog_level > (SHADE_LEVELS - 1)) {
+        fog_level = SHADE_LEVELS - 1;
+    }
+    const u8 *shade_map = g_shade_luts[fog_level];
+    const u8 *ty_table = MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[wall_h];
+    const u8 tex_x = (u8)(column->tex_x & WALL_TEX_DIM_MASK);
+    u16 y = 0;
+
+    for (; y < top; y++) {
+        strip[y] = scene_colors->ceiling_color;
+    }
+    for (; y < bottom; y++) {
+        strip[y] = shade_map[tex[(ty_table[y - top] + column->tex_y) & WALL_TEX_DIM_MASK]
+                                [tex_x] & 0x0F];
+    }
+    for (; y < VIEW_PIXEL_H; y++) {
+        strip[y] = scene_colors->floor_color;
+    }
+}
+
+#if RAY_COL_STRIDE == 2
+static void build_raycast_tilemap_reference(const RayColumn *columns,
+                                            const RaySceneColors *scene_colors,
+                                            u32 target[][8]) {
+    u8 strip_a[VIEW_PIXEL_H];
+    u8 strip_b[VIEW_PIXEL_H];
+    u8 strip_c[VIEW_PIXEL_H];
+    u8 strip_d[VIEW_PIXEL_H];
+
+    for (u16 tile_x = 0; tile_x < VIEW_TILE_W; tile_x++) {
+        const u16 base_col = (u16)(tile_x * 8);
+        build_column_strip_reference(&columns[base_col], scene_colors, strip_a);
+        build_column_strip_reference(&columns[base_col + 2], scene_colors, strip_b);
+        build_column_strip_reference(&columns[base_col + 4], scene_colors, strip_c);
+        build_column_strip_reference(&columns[base_col + 6], scene_colors, strip_d);
+
+        for (u16 tile_y = 0; tile_y < VIEW_TILE_H; tile_y++) {
+            const u16 tile_index = (u16)((tile_y * VIEW_TILE_W) + tile_x);
+            u16 pixel_y = (u16)(tile_y * 8);
+            for (u16 row = 0; row < 8; row++, pixel_y++) {
+                target[tile_index][row] =
                     (REP2[strip_a[pixel_y]] << 24) | (REP2[strip_b[pixel_y]] << 16) |
                     (REP2[strip_c[pixel_y]] << 8) | REP2[strip_d[pixel_y]];
             }
@@ -282,89 +273,86 @@ static void build_raycast_tilemap(const RayColumn *columns) {
 }
 #endif
 
-// Draw the one-column billboard spans on top of the packed wall tiles. This is
-// O(visible billboard pixels): cheap for scattered sprites (turning) yet bounded
-// for a fullscreen enemy. Per span the tile_x and nibble shift are constant, and
-// we walk tile rows so the tile-row base address is computed once per 8 rows
-// (one 68000 multiply per tile, not per pixel — that per-pixel multiply was what
-// made the old set_view_column_color path spike).
-static void draw_billboard_spans(const RayColumn *columns, const BillboardSpan *spans, u16 span_count) {
-    for (u16 i = 0; i < span_count; i++) {
-        const BillboardSpan *span = &spans[i];
+static u32 g_reference_view_tiles[VIEW_TILE_COUNT][8];
+#endif
 
-        if ((span->column < 0) || (span->column >= RAY_VIEW_COLS)) {
+// Draw projected billboards object-by-object. Projection, texture selection,
+// colour remapping and the vertical DDA are all shared by the object's columns;
+// the per-column loop only resolves horizontal texture position and writes pixels.
+static void draw_projected_billboards(const RayColumn *columns,
+                                      const ProjectedBillboard *objects,
+                                      u16 object_count) {
+    for (u16 i = 0; i < object_count; i++) {
+        const ProjectedBillboard *object = &objects[i];
+        const s16 height = (s16)(object->bottom - object->top + 1);
+        const s16 width = (s16)(object->right - object->left + 1);
+        const BillboardTex tex = get_billboard_texture(object->visual_id, object->frame);
+        const u8 *lut = MEGALDOOM_BILLBOARD_REMAP[
+            (object->visual_id < 6) ? object->visual_id : BILLBOARD_VISUAL_BONUS];
+        u8 tex_y_by_row[64];
+        u16 tex_y = 0;
+        u16 err = 0;
+
+        if ((height <= 0) || (width <= 0)) {
             continue;
         }
-        if (span->depth >= columns[span->column].depth) {
-            continue;
+
+        // Exact equivalent of floor(rel_y * tex.h / height), built once per
+        // projected object instead of reseeding a DDA for every column.
+        for (u16 rel_y = 0; rel_y < (u16)height; rel_y++) {
+            tex_y_by_row[rel_y] = (u8)tex_y;
+            err = (u16)(err + tex.h);
+            while (err >= (u16)height) {
+                err = (u16)(err - (u16)height);
+                tex_y++;
+            }
         }
 
-        const s16 height = (s16)(span->bottom - span->top + 1);
-        const BillboardTex tex = get_billboard_texture(span->visual_id, span->frame);
-        // span->tex_x is a 0-255 normalized horizontal fraction (projection is
-        // sprite-size-agnostic); scale it back to this sprite's real width here.
-        const u8 tex_x = (u8)(((u16)span->tex_x * tex.w) >> 8);
-        // All billboards use the exact Bresenham DDA below (floor(rel_y*tex.h/height),
-        // advanced by add/compare per pixel, no per-pixel divide). The shared wall
-        // sampling table now bakes the 32-texel wall height, so it can no longer be
-        // borrowed for the 16-tall sprites; the DDA is byte-identical to what the
-        // 16-tall table path produced.
+        for (s16 col = object->left; col <= object->right; col++) {
+            if ((col < 0) || (col >= RAY_VIEW_COLS)) {
+                continue;
+            }
+            if (object->depth >= columns[col].depth) {
+                continue;
+            }
 
-        // Collapse the per-pixel colour remap into a 16-entry LUT resolved once per
-        // span, so the inner loop does one table lookup instead of a branch. Every
-        // remap maps 0 -> 0, so lut[0] == 0 preserves transparency.
-        u8 lut[16];
-        for (u16 c = 0; c < 16; c++) {
-            lut[c] = remap_billboard_texel(span->visual_id, (u8)c);
-        }
+            s16 frac = (s16)(((col - object->left) * 256) / width);
+            if (frac > 255) {
+                frac = 255;
+            }
+            const u8 tex_x = (u8)(((u16)frac * tex.w) >> 8);
+            const u16 tile_x = (u16)(col >> 3);
+            const u16 shift = (u16)((7 - (col & 7)) * 4);
+            const u32 keep_mask = ~((u32)0x0F << shift);
+            s16 y0 = object->top;
+            s16 y1 = object->bottom;
 
-        const u16 col = (u16)span->column;
-        const u16 tile_x = (u16)(col >> 3);
-        const u16 shift = (u16)((7 - (col & 7)) * 4);
-        const u32 keep_mask = ~((u32)0x0F << shift);
+            if (y0 < 0) {
+                y0 = 0;
+            }
+            if (y1 >= VIEW_PIXEL_H) {
+                y1 = VIEW_PIXEL_H - 1;
+            }
 
-        s16 y0 = span->top;
-        s16 y1 = span->bottom;
-        if (y0 < 0) {
-            y0 = 0;
-        }
-        if (y1 >= VIEW_PIXEL_H) {
-            y1 = VIEW_PIXEL_H - 1;
-        }
+            for (u16 overlay_tile_y = (u16)(y0 >> 3); overlay_tile_y <= (u16)(y1 >> 3); overlay_tile_y++) {
+                renderer_mark_overlay_tile((u16)(overlay_tile_y * VIEW_TILE_W + tile_x));
+            }
 
-        // DDA state: exact floor(rel_y * tex.h / height), advanced by add/compare per
-        // pixel (no divide). Seeded from the first visible row (rel_y_start) when the
-        // span is clipped at the top.
-        const s16 rel_y_start = (s16)((s16)y0 - span->top);
-        u16 tex_y;
-        u16 err;
-        {
-            const s32 num = (s32)rel_y_start * tex.h;
-            tex_y = (u16)(num / height);
-            err = (u16)(num % height);
-        }
+            u16 y = (u16)y0;
+            const u16 y_end = (u16)(y1 + 1);
+            while (y < y_end) {
+                const u16 tile_y = (u16)(y >> 3);
+                u32 *tile = g_view_tiles[(tile_y * VIEW_TILE_W) + tile_x];
+                const u16 next_tile_y = (u16)((tile_y + 1) * 8);
+                const u16 stop = (next_tile_y < y_end) ? next_tile_y : y_end;
 
-        u16 y = (u16)y0;
-        const u16 y_end = (u16)(y1 + 1);
-        while (y < y_end) {
-            const u16 tile_y = (u16)(y >> 3);
-            u32 *tile = g_view_tiles[(tile_y * VIEW_TILE_W) + tile_x]; // multiply once per tile
-            const u16 next_tile_y = (u16)((tile_y + 1) * 8);
-            const u16 stop = (next_tile_y < y_end) ? next_tile_y : y_end;
-
-            for (; y < stop; y++) {
-                const u16 ty = tex_y;
-                err = (u16)(err + tex.h);
-                while (err >= (u16)height) {
-                    err = (u16)(err - (u16)height);
-                    tex_y++;
-                }
-
-                const u8 texel = lut[tex.pixels[(ty * tex.w) + tex_x] & 0x0F];
-
-                if (texel != 0) {
-                    const u16 row_y = (u16)(y & 7);
-                    tile[row_y] = (tile[row_y] & keep_mask) | ((u32)texel << shift);
+                for (; y < stop; y++) {
+                    const u16 rel_y = (u16)(y - object->top);
+                    const u8 texel = lut[tex.pixels[(tex_y_by_row[rel_y] * tex.w) + tex_x] & 0x0F];
+                    if (texel != 0) {
+                        const u16 row_y = (u16)(y & 7);
+                        tile[row_y] = (tile[row_y] & keep_mask) | ((u32)texel << shift);
+                    }
                 }
             }
         }
@@ -376,9 +364,9 @@ static void draw_billboard_spans(const RayColumn *columns, const BillboardSpan *
 // so an idle frame costs a few hundred RMWs instead of ~72x54 per-pixel tests.
 static void draw_weapon_overlay(bool flash) {
     const u16 v = flash ? 1 : 0;
-    const u16 *dst_idx = g_weapon_dst[v];
-    const u32 *values = g_weapon_value[v];
-    const u16 count = g_weapon_op_count[v];
+    const u16 *dst_idx = v ? MEGALDOOM_WEAPON_DST_FIRE : MEGALDOOM_WEAPON_DST_IDLE;
+    const u32 *values = v ? MEGALDOOM_WEAPON_VALUE_FIRE : MEGALDOOM_WEAPON_VALUE_IDLE;
+    const u16 count = MEGALDOOM_WEAPON_OP_COUNT[v];
     u32 *base = &g_view_tiles[0][0];
 
     for (u16 i = 0; i < count; i++) {
@@ -390,47 +378,75 @@ static void draw_weapon_overlay(bool flash) {
         const u32 clear_mask = (t << 4) - t;
         u32 *dst = base + dst_idx[i];
         *dst = (*dst & ~clear_mask) | val;
+        renderer_mark_overlay_tile((u16)(dst_idx[i] / 8));
     }
 }
 
-#define DAMAGE_BORDER_PX 8
+static void draw_overlay_ops(const MegalDoomOverlayRowOp *ops, u16 count) {
+    u32 *base = &g_view_tiles[0][0];
 
-static void draw_damage_overlay(void) {
-    for (u16 x = 0; x < RAY_VIEW_COLS; x++) {
-        for (u16 t = 0; t < 3; t++) {
-            set_view_column_color(x, t, 2);
-            set_view_column_color(x, (VIEW_PIXEL_H - 1 - t), 2);
-        }
-    }
-
-    for (u16 y = 0; y < VIEW_PIXEL_H; y++) {
-        for (u16 t = 0; t < DAMAGE_BORDER_PX; t++) {
-            set_view_column_color(t, y, 2);
-            set_view_column_color((RAY_VIEW_COLS - 1 - t), y, 2);
-        }
-    }
-}
-
-static void draw_low_health_overlay(void) {
-    for (u16 x = 16; x <= 32; x++) {
-        set_view_column_color(x, 1, 11);
-        set_view_column_color(x, 2, 11);
-        set_view_column_color(x, (VIEW_PIXEL_H - 3), 11);
-        set_view_column_color(x, (VIEW_PIXEL_H - 2), 11);
-    }
-
-    for (u16 x = (RAY_VIEW_COLS - 33); x <= (RAY_VIEW_COLS - 17); x++) {
-        set_view_column_color(x, 1, 11);
-        set_view_column_color(x, 2, 11);
-        set_view_column_color(x, (VIEW_PIXEL_H - 3), 11);
-        set_view_column_color(x, (VIEW_PIXEL_H - 2), 11);
+    for (u16 i = 0; i < count; i++) {
+        const MegalDoomOverlayRowOp *op = &ops[i];
+        u32 *dst = base + op->dst;
+        *dst = (*dst & ~op->clear_mask) | op->value;
+        renderer_mark_overlay_tile((u16)(op->dst / 8));
     }
 }
 
 static void upload_view_tilemap(void) {
-    // The tilemap itself is static and was uploaded once at init; only the tile
-    // pixel data changes per frame, so just DMA the tiles.
-    VDP_loadTileData((const u32 *)g_view_tiles, VIEW_TILE_BASE, VIEW_TILE_COUNT, DMA);
+    if (g_view_dirty_count == 0) {
+        return;
+    }
+
+    if (g_view_dirty_count >= VIEW_DIRTY_FULL_THRESHOLD) {
+        VDP_loadTileData((const u32 *)g_view_tiles, VIEW_TILE_BASE, VIEW_TILE_COUNT, DMA);
+        for (u16 i = 0; i < VIEW_DIRTY_WORD_COUNT; i++) {
+            g_view_dirty_bits[i] = 0;
+        }
+        g_view_dirty_count = 0;
+        return;
+    }
+
+    u16 run_count = 0;
+    for (u16 tile = 0; tile < VIEW_TILE_COUNT;) {
+        const u16 word = (u16)(tile >> 5);
+        const u32 mask = (u32)1u << (tile & 31);
+
+        if ((g_view_dirty_bits[word] & mask) == 0) {
+            tile++;
+            continue;
+        }
+
+        const u16 first = tile;
+        while (tile < VIEW_TILE_COUNT) {
+            const u16 run_word = (u16)(tile >> 5);
+            const u32 run_mask = (u32)1u << (tile & 31);
+            if ((g_view_dirty_bits[run_word] & run_mask) == 0) {
+                break;
+            }
+            tile++;
+        }
+
+        run_count++;
+        if (run_count > VIEW_DIRTY_MAX_RUNS) {
+            VDP_loadTileData((const u32 *)g_view_tiles, VIEW_TILE_BASE, VIEW_TILE_COUNT, DMA);
+            for (u16 i = 0; i < VIEW_DIRTY_WORD_COUNT; i++) {
+                g_view_dirty_bits[i] = 0;
+            }
+            g_view_dirty_count = 0;
+            return;
+        }
+
+        VDP_loadTileData((const u32 *)&g_view_tiles[first][0],
+                         VIEW_TILE_BASE + first,
+                         (u16)(tile - first),
+                         DMA);
+    }
+
+    for (u16 i = 0; i < VIEW_DIRTY_WORD_COUNT; i++) {
+        g_view_dirty_bits[i] = 0;
+    }
+    g_view_dirty_count = 0;
 }
 
 static void clear_compass_tilemap(void) {
@@ -449,6 +465,10 @@ static void set_compass_tile(s16 x, s16 y, u8 color) {
 }
 
 static void build_compass_tilemap(u16 angle) {
+    if (angle == g_last_compass_angle) {
+        return;
+    }
+
     const s16 vx = fx_cos(angle);
     const s16 vy = fx_sin(angle);
     const s16 dot_x = (s16)(2 + ((vx * 2) >> FX_SHIFT));
@@ -461,9 +481,42 @@ static void build_compass_tilemap(u16 angle) {
     set_compass_tile(4, 2, 7);
     set_compass_tile(2, 4, 7);
     set_compass_tile(dot_x, dot_y, 13);
+    g_last_compass_angle = angle;
+    g_compass_dirty = TRUE;
+}
+
+static void restore_previous_overlay_tiles(void) {
+    for (u16 tile = 0; tile < VIEW_TILE_COUNT; tile++) {
+        const u16 word = (u16)(tile >> 5);
+        const u32 mask = (u32)1u << (tile & 31);
+        if ((g_overlay_previous_bits[word] & mask) == 0) {
+            continue;
+        }
+
+        for (u16 row = 0; row < 8; row++) {
+            g_view_tiles[tile][row] = g_base_view_tiles[tile][row];
+        }
+        renderer_mark_tile_dirty(tile);
+    }
+}
+
+static void clear_overlay_bits(void) {
+    for (u16 i = 0; i < VIEW_DIRTY_WORD_COUNT; i++) {
+        g_overlay_current_bits[i] = 0;
+    }
+}
+
+static void finish_overlay_bits(void) {
+    for (u16 i = 0; i < VIEW_DIRTY_WORD_COUNT; i++) {
+        g_overlay_previous_bits[i] = g_overlay_current_bits[i];
+    }
 }
 
 static void upload_compass_tilemap(void) {
+    if (!g_compass_dirty) {
+        return;
+    }
+
     VDP_setTileMapDataRect(BG_B,
                            g_compass_tilemap,
                            COMPASS_X,
@@ -472,25 +525,62 @@ static void upload_compass_tilemap(void) {
                            COMPASS_H,
                            COMPASS_W,
                            CPU);
+    g_compass_dirty = FALSE;
 }
 
 void renderer_render_scene(const RayColumn *columns,
                            const PlayerState *player,
+                           const RaySceneColors *scene_colors,
+                           bool base_dirty,
                            bool weapon_flash,
                            bool damage_flash,
                            bool low_health_warning) {
-    BillboardSpan spans[BILLBOARD_MAX_SPANS];
-    const u16 span_count = billboard_project_scene(player, spans, BILLBOARD_MAX_SPANS);
+    ProjectedBillboard objects[BILLBOARD_MAX_PROJECTED_OBJECTS];
+    const u16 object_count = billboard_project_scene(player, objects, BILLBOARD_MAX_PROJECTED_OBJECTS);
 
-    build_raycast_tilemap(columns);
-    draw_billboard_spans(columns, spans, span_count);
+    if (base_dirty) {
+        build_raycast_tilemap(columns, scene_colors, g_base_view_tiles);
+#if RENDERER_REFERENCE_PACKER && RAY_COL_STRIDE == 2
+        build_raycast_tilemap_reference(columns, scene_colors, g_reference_view_tiles);
+        for (u16 tile = 0; tile < VIEW_TILE_COUNT; tile++) {
+            for (u16 row = 0; row < 8; row++) {
+                if (g_base_view_tiles[tile][row] != g_reference_view_tiles[tile][row]) {
+                    // Keep the reference output in validation builds so a visual
+                    // comparison remains safe even when the optimized path differs.
+                    for (u16 copy_tile = 0; copy_tile < VIEW_TILE_COUNT; copy_tile++) {
+                        for (u16 copy_row = 0; copy_row < 8; copy_row++) {
+                            g_base_view_tiles[copy_tile][copy_row] = g_reference_view_tiles[copy_tile][copy_row];
+                        }
+                    }
+                    tile = VIEW_TILE_COUNT;
+                    break;
+                }
+            }
+        }
+#endif
+        for (u16 tile = 0; tile < VIEW_TILE_COUNT; tile++) {
+            for (u16 row = 0; row < 8; row++) {
+                g_view_tiles[tile][row] = g_base_view_tiles[tile][row];
+            }
+            renderer_mark_tile_dirty(tile);
+        }
+        for (u16 i = 0; i < VIEW_DIRTY_WORD_COUNT; i++) {
+            g_overlay_previous_bits[i] = 0;
+        }
+    } else {
+        restore_previous_overlay_tiles();
+    }
+
+    clear_overlay_bits();
+    draw_projected_billboards(columns, objects, object_count);
     draw_weapon_overlay(weapon_flash);
     if (damage_flash) {
-        draw_damage_overlay();
+        draw_overlay_ops(MEGALDOOM_DAMAGE_OVERLAY_OPS, MEGALDOOM_OVERLAY_OP_COUNT[0]);
     } else if (low_health_warning) {
-        draw_low_health_overlay();
+        draw_overlay_ops(MEGALDOOM_LOW_HEALTH_OVERLAY_OPS, MEGALDOOM_OVERLAY_OP_COUNT[1]);
     }
     build_compass_tilemap(player->angle);
+    finish_overlay_bits();
 }
 
 // Push the frame built by renderer_render_scene to VRAM. Call this right after a

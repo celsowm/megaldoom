@@ -44,6 +44,7 @@ $BillboardEnemySourcePath = Join-Path $Root $BillboardEnemyPath
 $OutPath = Join-Path $Root "src\generated_assets.h"
 $BillboardOutPath = Join-Path $Root "src\generated_billboard_assets.h"
 $HudOutPath = Join-Path $Root "src\generated_hud_assets.h"
+$MapOutPath = Join-Path $Root "src\generated_e1m1_map.c"
 $WeaponOverlayW = 160
 $WeaponOverlayH = 120
 $WeaponDrawW = 72
@@ -104,6 +105,35 @@ if (-not (Test-Path $BillboardEnemySourcePath)) {
 }
 
 Add-Type -AssemblyName System.Drawing
+
+# The WAD generator owns the exact E1M1 wall catalog, PAL3 palette and sector
+# colors. Generate it first so weapon and billboard conversion can target the
+# same 16-color line used by the dynamic view tiles.
+& python (Join-Path $PSScriptRoot "wad-map-extract.py") `
+    --wad (Join-Path $Root "DOOM1.WAD") `
+    --map E1M1 `
+    --out $MapOutPath `
+    --assets-out $OutPath
+if ($LASTEXITCODE -ne 0) {
+    throw "E1M1 map/world asset generation failed."
+}
+
+$worldHeaderText = Get-Content -Raw $OutPath
+$worldPaletteMatch = [regex]::Match(
+    $worldHeaderText,
+    'static const u32 FREEDOOM_WORLD_PALETTE\[16\]\s*=\s*\{(?<body>.*?)\};',
+    [Text.RegularExpressions.RegexOptions]::Singleline)
+if (-not $worldPaletteMatch.Success) {
+    throw "Could not read FREEDOOM_WORLD_PALETTE from $OutPath"
+}
+$worldPalette = @([regex]::Matches($worldPaletteMatch.Groups["body"].Value, '0x[0-9A-Fa-f]{6}') |
+    ForEach-Object {
+        $rgb = [Convert]::ToInt32($_.Value.Substring(2), 16)
+        ,@((($rgb -shr 16) -band 0xFF), (($rgb -shr 8) -band 0xFF), ($rgb -band 0xFF))
+    })
+if ($worldPalette.Count -ne 16) {
+    throw "Expected 16 PAL3 colors, found $($worldPalette.Count)."
+}
 
 $palette = @(
     @(0x00, 0x00, 0x00),
@@ -171,6 +201,23 @@ function Get-NearestPaletteIndex([System.Drawing.Color]$Color) {
     return Get-NearestIndexInPalette $Color $palette
 }
 
+function Get-NearestWorldPaletteIndex([System.Drawing.Color]$Color, [bool]$AllowTransparent = $true) {
+    $start = if ($AllowTransparent) { 0 } else { 1 }
+    $bestIndex = $start
+    $bestDistance = [int]::MaxValue
+    for ($i = $start; $i -lt $worldPalette.Count; $i++) {
+        $dr = [int]$Color.R - $worldPalette[$i][0]
+        $dg = [int]$Color.G - $worldPalette[$i][1]
+        $db = [int]$Color.B - $worldPalette[$i][2]
+        $distance = ($dr * $dr) + ($dg * $dg) + ($db * $db)
+        if ($distance -lt $bestDistance) {
+            $bestDistance = $distance
+            $bestIndex = $i
+        }
+    }
+    return $bestIndex
+}
+
 function Convert-Image([string]$Path, [int]$Width, [int]$Height, [bool]$UseAlphaTransparency) {
     # Area/box downscale: each output texel is the AVERAGE of the full source
     # rectangle it covers, then quantized to the palette. Point sampling (grabbing
@@ -217,7 +264,7 @@ function Convert-Image([string]$Path, [int]$Width, [int]$Height, [bool]$UseAlpha
                 if (-not $UseAlphaTransparency) {
                     $avg = [System.Drawing.Color]::FromArgb(
                         [int]($sumR / $count), [int]($sumG / $count), [int]($sumB / $count))
-                    $index = Get-NearestPaletteIndex $avg
+                    $index = Get-NearestWorldPaletteIndex $avg $true
                 } else {
                     # Sprites: a texel is transparent only when the covered area is
                     # mostly transparent. Otherwise average the OPAQUE pixels so edge
@@ -231,10 +278,7 @@ function Convert-Image([string]$Path, [int]$Width, [int]$Height, [bool]$UseAlpha
                             $avg = [System.Drawing.Color]::FromArgb(
                                 [int]($sumR / $count), [int]($sumG / $count), [int]($sumB / $count))
                         }
-                        $index = Get-NearestPaletteIndex $avg
-                        if ($index -eq 0) {
-                            $index = 2
-                        }
+                        $index = Get-NearestWorldPaletteIndex $avg $false
                     }
                 }
 
@@ -292,27 +336,9 @@ function Get-WeaponPaletteIndex([System.Drawing.Color]$Color, [bool]$FireFrame) 
     }
 
     if ($FireFrame -and ($Color.R -gt 180) -and ($Color.G -gt 120)) {
-        return 11
+        return 15
     }
-
-    # Warm/skin-dominant (the pistol hand). Map to BROWN tones (13 lit, 10 shadow),
-    # never to the saturated red index 12 - a shadowed hand was turning red.
-    if (($Color.R -gt $Color.G + 24) -and ($Color.R -gt $Color.B + 32)) {
-        if ($Color.R -gt 160) { return 13 }
-        return 10
-    }
-
-    if (($Color.B -gt $Color.R + 12) -and ($Color.B -gt $Color.G + 8)) {
-        return 8
-    }
-
-    $lum = [int](($Color.R * 30 + $Color.G * 59 + $Color.B * 11) / 100)
-    if ($lum -lt 55) { return 2 }
-    if ($lum -lt 90) { return 3 }
-    if ($lum -lt 130) { return 4 }
-    if ($lum -lt 175) { return 5 }
-    if ($lum -lt 215) { return 6 }
-    return 7
+    return Get-NearestWorldPaletteIndex $Color $false
 }
 
 function Convert-WeaponOverlay([string]$Path, [bool]$FireFrame) {
@@ -496,22 +522,6 @@ function Convert-FaceFrames() {
     return $allTiles
 }
 
-# Wall textures are 32x32: at 16x16 photoreal Doom textures downscale to
-# unrecognizable mush; 32x32 restores enough resolution for door panels, metal
-# mesh and wood grain to read. The 3D view samples these per-pixel, so the larger
-# size costs only ROM + a bigger sampling table, no extra VRAM/DMA. Keep this in
-# sync with WALL_TEX/g_wall_tex_shaded dims (renderer_scene.c), the x32 sampling
-# table (renderer.c) and WALL_TEX_USHIFT (bsp_render.c).
-$WallDim = 32
-$wallRows = Convert-Image $SourcePath $WallDim $WallDim $false
-$wallBrownRows = Convert-Image $WallBrownSourcePath $WallDim $WallDim $false
-$wallGrayRows = Convert-Image $WallGraySourcePath $WallDim $WallDim $false
-$wallMetalRows = Convert-Image $WallMetalSourcePath $WallDim $WallDim $false
-$wallBrickRows = Convert-Image $WallBrickSourcePath $WallDim $WallDim $false
-$wallTechRows = Convert-Image $WallTechSourcePath $WallDim $WallDim $false
-$doorRows = Convert-Image $DoorSourcePath $WallDim $WallDim $false
-$lockedDoorRows = Convert-Image $LockedDoorSourcePath $WallDim $WallDim $false
-$switchRows = Convert-Image $SwitchSourcePath $WallDim $WallDim $false
 $weaponIdleRows = Convert-WeaponOverlay $WeaponIdleSourcePath $false
 $weaponFireRows = Convert-WeaponOverlay $WeaponFireSourcePath $true
 $hudTiles = Convert-HudTiles $HudSourcePath
@@ -556,7 +566,7 @@ $relativeBillboardSource = $BillboardPath.Replace("\", "/")
 $relativeBillboardKeySource = $BillboardKeyPath.Replace("\", "/")
 $relativeBillboardDecorSource = $BillboardDecorPath.Replace("\", "/")
 $relativeBillboardEnemySource = $BillboardEnemyPath.Replace("\", "/")
-$generatedAt = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssK")
+$generatedAt = "source-derived"
 
 $billboardContent = @"
 #ifndef MEGALDOOM_GENERATED_BILLBOARD_ASSETS_H
@@ -663,76 +673,14 @@ $($weaponFireRows -join ",`r`n")
 
 Set-Content -Path $HudOutPath -Value $hudContent -NoNewline
 
+& (Join-Path $PSScriptRoot "generate-renderer-assets.ps1")
+if (-not $?) {
+    throw "Renderer asset generation failed."
+}
+
 if ($BillboardOnly) {
     Write-Host "Generated $BillboardOutPath from $BillboardPath, $BillboardKeyPath and $BillboardDecorPath" -ForegroundColor Green
     return
 }
-
-$content = @"
-#ifndef MEGALDOOM_GENERATED_ASSETS_H
-#define MEGALDOOM_GENERATED_ASSETS_H
-
-#include <genesis.h>
-
-// The wall arrays below are declared [WALL_TEX_DIM][WALL_TEX_DIM]; that macro comes
-// from raycast.h, so include this header only after raycast.h (renderer_scene.c
-// does). If \$WallDim in the converter and WALL_TEX_DIM ever disagree the array
-// initializers won't fit and this header fails to compile - by design.
-
-// Generated by tools/convert-freedoom-assets.ps1.
-// Stone wall source: $relativeSource
-// Brown wall source: $relativeWallBrownSource
-// Gray wall source: $relativeWallGraySource
-// Metal wall source: $relativeWallMetalSource
-// Brick wall source: $relativeWallBrickSource
-// Tech wall source: $relativeWallTechSource
-// Door source: $relativeDoorSource
-// Locked door source: $relativeLockedDoorSource
-// Switch source: $relativeSwitchSource
-// Generated at: $generatedAt
-static const u8 FREEDOOM_WALL_TEXTURE[WALL_TEX_DIM][WALL_TEX_DIM] = {
-$($wallRows -join ",`r`n")
-};
-
-static const u8 FREEDOOM_WALL_BROWN_TEXTURE[WALL_TEX_DIM][WALL_TEX_DIM] = {
-$($wallBrownRows -join ",`r`n")
-};
-
-static const u8 FREEDOOM_WALL_GRAY_TEXTURE[WALL_TEX_DIM][WALL_TEX_DIM] = {
-$($wallGrayRows -join ",`r`n")
-};
-
-static const u8 FREEDOOM_WALL_METAL_TEXTURE[WALL_TEX_DIM][WALL_TEX_DIM] = {
-$($wallMetalRows -join ",`r`n")
-};
-
-static const u8 FREEDOOM_WALL_BRICK_TEXTURE[WALL_TEX_DIM][WALL_TEX_DIM] = {
-$($wallBrickRows -join ",`r`n")
-};
-
-static const u8 FREEDOOM_WALL_TECH_TEXTURE[WALL_TEX_DIM][WALL_TEX_DIM] = {
-$($wallTechRows -join ",`r`n")
-};
-
-static const u8 FREEDOOM_DOOR_TEXTURE[WALL_TEX_DIM][WALL_TEX_DIM] = {
-$($doorRows -join ",`r`n")
-};
-
-static const u8 FREEDOOM_LOCKED_DOOR_TEXTURE[WALL_TEX_DIM][WALL_TEX_DIM] = {
-$($lockedDoorRows -join ",`r`n")
-};
-
-static const u8 FREEDOOM_SWITCH_TEXTURE[WALL_TEX_DIM][WALL_TEX_DIM] = {
-$($switchRows -join ",`r`n")
-};
-
-#endif
-"@
-
-try {
-    Set-Content -Path $OutPath -Value $content -NoNewline
-    Write-Host "Generated $OutPath from $TexturePath" -ForegroundColor Green
-} catch {
-    Write-Warning "Could not update $OutPath. The existing wall texture header was left unchanged. $($_.Exception.Message)"
-}
+Write-Host "Generated $OutPath and $MapOutPath from DOOM1.WAD" -ForegroundColor Green
 Write-Host "Generated $BillboardOutPath from $BillboardPath, $BillboardKeyPath and $BillboardDecorPath" -ForegroundColor Green

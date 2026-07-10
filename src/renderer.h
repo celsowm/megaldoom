@@ -28,6 +28,8 @@ void renderer_draw_static_screen(void);
 void renderer_draw_hud(const RendererHudState *state);
 void renderer_render_scene(const RayColumn *columns,
                            const PlayerState *player,
+                           const RaySceneColors *scene_colors,
+                           bool base_dirty,
                            bool weapon_flash,
                            bool damage_flash,
                            bool low_health_warning);

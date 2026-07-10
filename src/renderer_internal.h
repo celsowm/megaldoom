@@ -11,6 +11,9 @@
 #define VIEW_PIXEL_H (VIEW_TILE_H * 8)
 #define VIEW_TILE_BASE TILE_USER_INDEX
 #define VIEW_DYNAMIC_TILE_COUNT VIEW_TILE_COUNT
+#define VIEW_DIRTY_WORD_COUNT ((VIEW_TILE_COUNT + 31) / 32)
+#define VIEW_DIRTY_FULL_THRESHOLD 128
+#define VIEW_DIRTY_MAX_RUNS 32
 #define PAIR_TILE_BASE (VIEW_TILE_BASE + VIEW_DYNAMIC_TILE_COUNT)
 #define PAIR_TILE_COUNT 256
 #define HUD_TILE_BASE (PAIR_TILE_BASE + PAIR_TILE_COUNT)
@@ -31,14 +34,17 @@
 #define HUD_FACE_TILE_X (HUD_PANEL_X + 15)
 #define HUD_FACE_TILE_Y (HUD_PANEL_Y + 1)
 
-extern u32 g_pair_tiles[PAIR_TILE_COUNT][8];
 extern u32 g_view_tiles[VIEW_TILE_COUNT][8];
+extern u32 g_base_view_tiles[VIEW_TILE_COUNT][8];
+extern u32 g_view_dirty_bits[VIEW_DIRTY_WORD_COUNT];
+extern u16 g_view_dirty_count;
 extern u16 g_view_tilemap[VIEW_TILE_COUNT];
 extern u16 g_compass_tilemap[COMPASS_W * COMPASS_H];
-extern u8 g_wall_tex_y_by_height[VIEW_PIXEL_H + 1][VIEW_PIXEL_H];
 
 void set_view_pair_tile(u16 x, u16 y, u8 left_color, u8 right_color);
 void set_view_column_color(u16 column, u16 y, u8 color);
+void renderer_mark_tile_dirty(u16 tile_index);
+void renderer_mark_overlay_tile(u16 tile_index);
 void renderer_set_bg_pair_tile(u16 x, u16 y, u8 left_color, u8 right_color);
 void renderer_scene_init(void);
 

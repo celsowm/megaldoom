@@ -4,7 +4,7 @@
 #include <genesis.h>
 #include "raycast.h"
 
-#define BILLBOARD_MAX_SPANS 192
+#define BILLBOARD_MAX_PROJECTED_OBJECTS 7
 
 typedef enum {
     BILLBOARD_VISUAL_BONUS = 0,
@@ -16,14 +16,14 @@ typedef enum {
 } BillboardVisualId;
 
 typedef struct {
-    s16 column;
+    s16 left;
+    s16 right;
     s16 top;
     s16 bottom;
     u16 depth;
-    u8 tex_x;
     u8 visual_id;
     u8 frame;
-} BillboardSpan;
+} ProjectedBillboard;
 
 typedef struct {
     u16 bonus;
@@ -60,6 +60,8 @@ u16 billboard_get_target_count(void);
 u16 billboard_get_target_health(void);
 BillboardShotResult billboard_fire_center(const PlayerState *player, u16 wall_depth);
 BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player);
-u16 billboard_project_scene(const PlayerState *player, BillboardSpan *spans, u16 max_spans);
+u16 billboard_project_scene(const PlayerState *player,
+                            ProjectedBillboard *objects,
+                            u16 max_objects);
 
 #endif

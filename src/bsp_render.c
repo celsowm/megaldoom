@@ -1,6 +1,7 @@
 #include "bsp_render.h"
 #include "bsp_map.h"
 #include "fixed_math.h"
+#include "generated_assets.h"
 
 // draw_seg only computes the height/texture fields at columns on a RAY_COL_STRIDE
 // boundary, matching the columns build_raycast_tilemap actually samples. That
@@ -30,27 +31,10 @@ static bool g_col_solid[RAY_VIEW_COLS];
 static u16 g_solid_count;
 static RayColumn *g_columns;
 
+static void render_node(u16 child);
+
 static s32 abs_s32(s32 v) {
     return (v < 0) ? -v : v;
-}
-
-// Source Doom texture width (px) per texture_id; order matches WALL_TEX[] in
-// renderer_scene.c and the converter's wall list:
-//   0 STONE 1 DOOR3 2 BIGDOOR2 3 SW1COMP 4 BROWN1 5 GRAY7 6 METAL1 7 STONE2 8 TEKWALL4
-static const u16 WALL_TEX_SRC_WIDTH[RAY_TEXTURE_COUNT] = {
-    256, 64, 128, 64, 128, 256, 64, 128, 128};
-
-// Horizontal repeat shift = log2(source_width / WALL_TEX_DIM). Both operands are
-// powers of two, so this is an exact integer log2 of their ratio. Assumes the
-// source is at least WALL_TEX_DIM wide (true for every wall texture: min 64).
-static u8 wall_tex_ushift(u8 tid) {
-    u16 ratio = (u16)(WALL_TEX_SRC_WIDTH[tid] / WALL_TEX_DIM);
-    u8 shift = 0;
-    while (ratio > 1) {
-        ratio = (u16)(ratio >> 1);
-        shift++;
-    }
-    return shift;
 }
 
 // Draw one one-sided wall segment into the RayColumn buffer, respecting the
@@ -86,8 +70,8 @@ static void draw_seg(u16 seg_index) {
     // Texture coordinate along the wall (world units), repeating every 256 px
     // like the raycaster. u goes 0 -> wall_length from v1 -> v2.
     const s32 wall_len = abs_s32((s32)b->x - a->x) + abs_s32((s32)b->y - a->y);
-    s32 uA = 0;
-    s32 uB = wall_len;
+    s32 uA = seg->tex_u_offset;
+    s32 uB = (s32)seg->tex_u_offset + wall_len;
 
     // Near-plane clipping.
     if (depthA < BSP_NEAR && depthB < BSP_NEAR) {
@@ -131,14 +115,15 @@ static void draw_seg(u16 seg_index) {
     // the old ((x-xL)<<8)/span to within the reciprocal's truncation.
     const s32 inv_span = ((s32)FX_ONE << FX_SHIFT) / span;
 
-    const u8 tid = seg->texture_id;
+    const u8 tid = (seg->texture_id < FREEDOOM_WALL_TEXTURE_COUNT) ?
+                       seg->texture_id : MEGALDOOM_TEX_FALLBACK;
     const u8 shade = (seg->ny != 0) ? 1 : 0; // N/S walls use the shaded copy
     // Per-texture horizontal repeat: the WALL_TEX_DIM-wide texture must span one full
     // period of the source Doom texture (Doom maps 1 texel == 1 world unit), so it
     // repeats every source_width world units instead of a fixed 256. The shift is
     // log2(source_width / WALL_TEX_DIM), derived here from the source widths so it
     // tracks WALL_TEX_DIM automatically instead of being a hand-baked table.
-    const u8 ushift = wall_tex_ushift((tid < RAY_TEXTURE_COUNT) ? tid : 0);
+    const s8 ushift = FREEDOOM_WALL_TEXTURE_USHIFT[tid];
 
     s32 x0 = xL;
     s32 x1 = xR - 1;
@@ -152,12 +137,15 @@ static void draw_seg(u16 seg_index) {
     // for billboard-vs-wall occlusion. Carrying the last boundary depth avoids a
     // per-column divide entirely on those columns.
     s32 carry_depth = 0x7FFF;
+    s32 sfix_acc = (x0 - xL) * inv_span;
     for (s32 x = x0; x <= x1; x++) {
+        const s32 sfix = (sfix_acc >> FX_SHIFT); // 0..256 across span
+        sfix_acc += inv_span;
+
         if (g_col_solid[x]) {
             continue;
         }
 
-        const s32 sfix = (((x - xL) * inv_span) >> FX_SHIFT); // 0..256 across span
         const s32 invz = invzL + (((invzR - invzL) * sfix) >> FX_SHIFT);
         if (invz <= 0) {
             continue;
@@ -186,7 +174,10 @@ static void draw_seg(u16 seg_index) {
 
             col->height = (u16)height;
             col->depth = (u16)depth_col;
-            col->tex_x = (u8)((u_col >> ushift) & WALL_TEX_DIM_MASK);
+            const s32 scaled_u = (ushift >= 0) ? (u_col >> ushift) :
+                                                   (u_col * ((s32)1 << -ushift));
+            col->tex_x = (u8)(scaled_u & WALL_TEX_DIM_MASK);
+            col->tex_y = seg->tex_v_offset;
             col->texture_id = tid;
             col->shade = shade;
             carry_depth = depth_col;
@@ -196,6 +187,95 @@ static void draw_seg(u16 seg_index) {
 
         g_col_solid[x] = TRUE;
         g_solid_count++;
+    }
+}
+
+// Project a child's axis-aligned world-space box to a conservative horizontal
+// screen range. Any near-plane ambiguity expands to the whole view; only boxes
+// proven completely behind the camera or outside the expanded viewport are cut.
+static bool project_box_range(const BspBox *box, s16 *left, s16 *right) {
+    if ((box->min_x > box->max_x) || (box->min_y > box->max_y)) {
+        *left = 0;
+        *right = RAY_VIEW_COLS - 1;
+        return TRUE;
+    }
+
+    if ((g_px >= box->min_x) && (g_px <= box->max_x) &&
+        (g_py >= box->min_y) && (g_py <= box->max_y)) {
+        *left = 0;
+        *right = RAY_VIEW_COLS - 1;
+        return TRUE;
+    }
+
+    const s16 xs[4] = {box->min_x, box->max_x, box->max_x, box->min_x};
+    const s16 ys[4] = {box->min_y, box->min_y, box->max_y, box->max_y};
+    s32 depths[4];
+    s32 laterals[4];
+    s32 min_depth = 0x7FFFFFFF;
+    s32 max_depth = -0x7FFFFFFF;
+
+    for (u16 i = 0; i < 4; i++) {
+        const s32 relx = (s32)xs[i] - g_px;
+        const s32 rely = (s32)ys[i] - g_py;
+        const s32 depth = (relx * g_fwx + rely * g_fwy) >> FX_SHIFT;
+        const s32 lateral = (relx * g_rx + rely * g_ry) >> FX_SHIFT;
+        depths[i] = depth;
+        laterals[i] = lateral;
+        if (depth < min_depth) min_depth = depth;
+        if (depth > max_depth) max_depth = depth;
+    }
+
+    if (max_depth < BSP_NEAR) {
+        return FALSE;
+    }
+
+    // A box crossing the near plane can cover arbitrarily wide screen ranges;
+    // visiting it is the conservative choice.
+    if (min_depth < BSP_NEAR) {
+        *left = 0;
+        *right = RAY_VIEW_COLS - 1;
+        return TRUE;
+    }
+
+    s32 min_screen = 0x7FFFFFFF;
+    s32 max_screen = -0x7FFFFFFF;
+    for (u16 i = 0; i < 4; i++) {
+        const s32 screen = BSP_VIEW_CENTER_X + (laterals[i] * BSP_PROJ) / depths[i];
+        if (screen < min_screen) min_screen = screen;
+        if (screen > max_screen) max_screen = screen;
+    }
+
+    // Cover integer projection/truncation at box edges and the renderer's
+    // horizontal sample stride before making an outside-FOV decision.
+    min_screen -= RAY_COL_STRIDE;
+    max_screen += RAY_COL_STRIDE;
+    if ((max_screen < 0) || (min_screen >= RAY_VIEW_COLS)) {
+        return FALSE;
+    }
+
+    if (min_screen < 0) min_screen = 0;
+    if (max_screen >= RAY_VIEW_COLS) max_screen = RAY_VIEW_COLS - 1;
+    *left = (s16)min_screen;
+    *right = (s16)max_screen;
+    return TRUE;
+}
+
+static void render_boxed_child(u16 child, const BspBox *box) {
+    s16 left;
+    s16 right;
+
+    if (!project_box_range(box, &left, &right)) {
+        return;
+    }
+
+    // Full-height solid walls make horizontal coverage sufficient: when every
+    // column in the child's conservative range is already filled front-to-back,
+    // no geometry in that child can change the frame.
+    for (s16 x = left; x <= right; x++) {
+        if (!g_col_solid[x]) {
+            render_node(child);
+            return;
+        }
     }
 }
 
@@ -216,11 +296,11 @@ static void render_node(u16 child) {
     // Which side of the partition line is the camera on?
     const s32 cross = (g_px - n->px) * n->dy - (g_py - n->py) * n->dx;
     if (cross >= 0) {
-        render_node(n->front); // near side first
-        render_node(n->back);
+        render_boxed_child(n->front, &n->front_box); // near side first
+        render_boxed_child(n->back, &n->back_box);
     } else {
-        render_node(n->back);
-        render_node(n->front);
+        render_boxed_child(n->back, &n->back_box);
+        render_boxed_child(n->front, &n->front_box);
     }
 }
 
@@ -229,7 +309,17 @@ void bsp_init(void) {
     // inline from the vertex table (no per-seg RAM on the 64KB MD).
 }
 
-void bsp_cast_frame(const PlayerState *player, RayColumn *columns) {
+static u16 find_point_subsector(s32 px, s32 py) {
+    u16 child = bsp_root_node;
+    while (!BSP_CHILD_IS_SUBSECTOR(child)) {
+        const BspNode *node = &bsp_nodes[BSP_CHILD_INDEX(child)];
+        const s32 cross = (px - node->px) * node->dy - (py - node->py) * node->dx;
+        child = (cross >= 0) ? node->front : node->back;
+    }
+    return BSP_CHILD_INDEX(child);
+}
+
+void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColors *scene_colors) {
     g_fwx = fx_cos(player->angle);
     g_fwy = fx_sin(player->angle);
     g_rx = fx_cos((u16)(player->angle + ANGLE_90));
@@ -237,6 +327,11 @@ void bsp_cast_frame(const PlayerState *player, RayColumn *columns) {
     g_px = player->x;
     g_py = player->y;
     g_columns = columns;
+
+    const BspSubsector *camera_subsector = &bsp_subsectors[find_point_subsector(g_px, g_py)];
+    const BspSectorVisual *visual = &bsp_sector_visuals[camera_subsector->sector_id];
+    scene_colors->ceiling_color = visual->ceiling_color;
+    scene_colors->floor_color = visual->floor_color;
 
     // Clear occlusion and seed every column with a far/empty default so columns
     // no wall covers still render (as distant, mostly sky/floor).
@@ -246,7 +341,8 @@ void bsp_cast_frame(const PlayerState *player, RayColumn *columns) {
         columns[c].height = 1;
         columns[c].depth = 0x7FFF;
         columns[c].tex_x = 0;
-        columns[c].texture_id = 0;
+        columns[c].tex_y = 0;
+        columns[c].texture_id = MEGALDOOM_TEX_FALLBACK;
         columns[c].shade = 0;
     }
 

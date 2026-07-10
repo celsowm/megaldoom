@@ -1,11 +1,14 @@
 #include "renderer_internal.h"
+#include "generated_assets.h"
 #include "generated_hud_assets.h"
+#include "generated_renderer_assets.h"
 
-u32 g_pair_tiles[PAIR_TILE_COUNT][8];
 u32 g_view_tiles[VIEW_TILE_COUNT][8];
+u32 g_base_view_tiles[VIEW_TILE_COUNT][8];
 u16 g_view_tilemap[VIEW_TILE_COUNT];
 u16 g_compass_tilemap[COMPASS_W * COMPASS_H];
-u8 g_wall_tex_y_by_height[VIEW_PIXEL_H + 1][VIEW_PIXEL_H];
+u32 g_view_dirty_bits[VIEW_DIRTY_WORD_COUNT];
+u16 g_view_dirty_count;
 
 static void init_video(void) {
     VDP_setScreenWidth320();
@@ -40,6 +43,12 @@ static void init_video(void) {
         PAL_setColor((u16)(32 + i), RGB24_TO_VDPCOLOR(FREEDOOM_FACE_PALETTE[i]));
     }
 
+    // Palette line 3 is dedicated to the dynamic 3D view. Keeping it separate
+    // from the status bar gives E1M1's walls, weapon and actors all 16 entries.
+    for (u16 i = 0; i < 16; i++) {
+        PAL_setColor((u16)(48 + i), RGB24_TO_VDPCOLOR(FREEDOOM_WORLD_PALETTE[i]));
+    }
+
     VDP_clearPlane(BG_A, TRUE);
     VDP_clearPlane(BG_B, TRUE);
     VDP_setBackgroundColor(0);
@@ -62,18 +71,7 @@ static u32 make_pair_tile_row(u8 left_color, u8 right_color) {
 }
 
 static void init_pair_tiles(void) {
-    for (u16 left = 0; left < 16; left++) {
-        for (u16 right = 0; right < 16; right++) {
-            const u16 tile = (u16)((left << 4) | right);
-            const u32 row = make_pair_tile_row((u8)left, (u8)right);
-
-            for (u16 y = 0; y < 8; y++) {
-                g_pair_tiles[tile][y] = row;
-            }
-        }
-    }
-
-    VDP_loadTileData((const u32 *)g_pair_tiles, PAIR_TILE_BASE, PAIR_TILE_COUNT, DMA);
+    VDP_loadTileData((const u32 *)MEGALDOOM_PAIR_TILES, PAIR_TILE_BASE, PAIR_TILE_COUNT, DMA);
 }
 
 static void init_hud_tiles(void) {
@@ -81,22 +79,11 @@ static void init_hud_tiles(void) {
     VDP_loadTileData((const u32 *)FREEDOOM_FACE_TILES, FACE_TILE_BASE, FREEDOOM_FACE_TILE_COUNT, DMA);
 }
 
-static void init_wall_sampling_table(void) {
-    // Maps a wall pixel row -> texel row for the WALL_TEX_DIM-tall wall textures.
-    // Only walls use this table now; billboards sample via their own exact DDA (they
-    // are 16/48 tall, not WALL_TEX_DIM), so this bakes the wall height unconditionally.
-    for (u16 height = 1; height <= VIEW_PIXEL_H; height++) {
-        for (u16 rel_y = 0; rel_y < VIEW_PIXEL_H; rel_y++) {
-            g_wall_tex_y_by_height[height][rel_y] = (u8)((rel_y * WALL_TEX_DIM) / height);
-        }
-    }
-}
-
 static void init_view_tilemap(void) {
     for (u16 y = 0; y < VIEW_TILE_H; y++) {
         for (u16 x = 0; x < VIEW_TILE_W; x++) {
             const u16 index = (u16)((y * VIEW_TILE_W) + x);
-            g_view_tilemap[index] = TILE_ATTR_FULL(PAL0, FALSE, FALSE, FALSE, VIEW_TILE_BASE + index);
+            g_view_tilemap[index] = TILE_ATTR_FULL(PAL3, FALSE, FALSE, FALSE, VIEW_TILE_BASE + index);
         }
     }
 
@@ -113,6 +100,16 @@ static void init_view_tilemap(void) {
                            CPU);
 }
 
+void renderer_mark_tile_dirty(u16 tile_index) {
+    const u16 word = (u16)(tile_index >> 5);
+    const u32 mask = (u32)1u << (tile_index & 31);
+
+    if ((g_view_dirty_bits[word] & mask) == 0) {
+        g_view_dirty_bits[word] |= mask;
+        g_view_dirty_count++;
+    }
+}
+
 void set_view_pair_tile(u16 x, u16 y, u8 left_color, u8 right_color) {
     const u32 row = make_pair_tile_row(left_color, right_color);
     const u16 map_index = (u16)((y * VIEW_TILE_W) + x);
@@ -120,6 +117,7 @@ void set_view_pair_tile(u16 x, u16 y, u8 left_color, u8 right_color) {
     for (u16 row_index = 0; row_index < 8; row_index++) {
         g_view_tiles[map_index][row_index] = row;
     }
+    renderer_mark_tile_dirty(map_index);
 }
 
 void set_view_column_color(u16 column, u16 y, u8 color) {
@@ -134,6 +132,7 @@ void set_view_column_color(u16 column, u16 y, u8 color) {
     row |= ((u32)(color & 0x0F)) << shift;
 
     g_view_tiles[map_index][row_y] = row;
+    renderer_mark_overlay_tile(map_index);
 }
 
 void renderer_set_bg_pair_tile(u16 x, u16 y, u8 left_color, u8 right_color) {
@@ -146,7 +145,6 @@ void renderer_init(void) {
     init_video();
     init_pair_tiles();
     init_hud_tiles();
-    init_wall_sampling_table();
     init_view_tilemap();
     renderer_scene_init();
 }

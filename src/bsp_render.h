@@ -9,6 +9,6 @@
 // the entire downstream tile-packing drawer (renderer_scene.c) and billboard
 // depth occlusion are reused unchanged.
 void bsp_init(void);
-void bsp_cast_frame(const PlayerState *player, RayColumn *columns);
+void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColors *scene_colors);
 
 #endif
