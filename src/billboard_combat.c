@@ -98,8 +98,8 @@ BillboardShotResult billboard_fire_center(const PlayerState *player, u16 wall_de
         if (measure.forward >= wall_depth) {
             continue;
         }
-        if ((RAY_VIEW_COLS / 2) < (measure.center_col - measure.half_w) ||
-            (RAY_VIEW_COLS / 2) > (measure.center_col + measure.half_w)) {
+        if (RAY_VIEW_CENTER_X < (measure.center_col - measure.half_w) ||
+            RAY_VIEW_CENTER_X > (measure.center_col + measure.half_w)) {
             continue;
         }
 

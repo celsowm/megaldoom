@@ -14,7 +14,6 @@ static BillboardProjectionOrder s_order[BILLBOARD_MAX_PROJECTED_OBJECTS];
 static u16 s_debug_culled;
 static u16 s_debug_candidates;
 static u16 s_debug_occluded;
-static u16 s_debug_los_culled;
 static u16 s_debug_projected;
 #endif
 
@@ -22,15 +21,10 @@ static u16 billboard_project_one(const PlayerState *player,
                                  const BillboardObject *object,
                                  const BillboardMeasure *measure,
                                  ProjectedBillboard *projected) {
-
-    s16 half_h = (s16)(measure->half_w * 2);
-
-    if (half_h > 28) {
-        half_h = 28;
-    }
-
-    const s16 top = (s16)((RAY_VIEW_ROWS / 2) - half_h);
-    const s16 bottom = (s16)((RAY_VIEW_ROWS / 2) + half_h);
+    const s16 floor_y = (s16)(RAY_VIEW_CENTER_Y +
+        divu((u32)RAY_PROJ_Y * RAY_CAMERA_HEIGHT, (u16)measure->forward));
+    const s16 bottom = floor_y;
+    const s16 top = (s16)(bottom - measure->projected_height + 1);
     const s16 left = (s16)(measure->center_col - measure->half_w);
     const s16 right = (s16)(measure->center_col + measure->half_w);
     (void)player;
@@ -42,6 +36,31 @@ static u16 billboard_project_one(const PlayerState *player,
     projected->visual_id = billboard_get_object_visual_id(object, measure->type);
     projected->frame = billboard_get_object_frame(object);
     return 1;
+}
+
+// The wall buffer is sampled once per RAY_COL_STRIDE pixels. A billboard is
+// drawable when any sampled block it covers is in front of that block's wall;
+// individual pixels are still z-tested while rasterizing. This avoids making a
+// wide sprite vanish merely because its centre lies behind a pillar.
+static bool billboard_span_has_visible_block(const BillboardMeasure *measure,
+                                             const RayColumn *columns) {
+    s16 left = (s16)(measure->center_col - measure->half_w);
+    s16 right = (s16)(measure->center_col + measure->half_w);
+
+    if (right < 0 || left >= RAY_VIEW_COLS) {
+        return FALSE;
+    }
+    if (left < 0) left = 0;
+    if (right >= RAY_VIEW_COLS) right = RAY_VIEW_COLS - 1;
+
+    const u16 first = (u16)(left & ~(RAY_COL_STRIDE - 1));
+    const u16 last = (u16)(right & ~(RAY_COL_STRIDE - 1));
+    for (u16 col = first; col <= last; col += RAY_COL_STRIDE) {
+        if (measure->forward < columns[col].depth) {
+            return TRUE;
+        }
+    }
+    return FALSE;
 }
 
 u16 billboard_project_scene(const PlayerState *player,
@@ -59,7 +78,6 @@ u16 billboard_project_scene(const PlayerState *player,
     s_debug_culled = 0;
     s_debug_candidates = 0;
     s_debug_occluded = 0;
-    s_debug_los_culled = 0;
     s_debug_projected = 0;
 #endif
 
@@ -88,25 +106,9 @@ u16 billboard_project_scene(const PlayerState *player,
 #if DEBUG_PERF
         s_debug_candidates++;
 #endif
-        {
-            s16 center = measure.center_col;
-            if (center < 0) center = 0;
-            else if (center >= RAY_VIEW_COLS) center = RAY_VIEW_COLS - 1;
-            const u16 wall_col = (u16)(center & ~(RAY_COL_STRIDE - 1));
-            const u16 next_wall_col = (wall_col + RAY_COL_STRIDE < RAY_VIEW_COLS) ?
-                                      (u16)(wall_col + RAY_COL_STRIDE) : wall_col;
-            const u16 wall_depth = (columns[next_wall_col].depth < columns[wall_col].depth) ?
-                                   columns[next_wall_col].depth : columns[wall_col].depth;
-            if (measure.forward >= wall_depth) {
+        if (!billboard_span_has_visible_block(&measure, columns)) {
 #if DEBUG_PERF
-                s_debug_occluded++;
-#endif
-                continue;
-            }
-        }
-        if (!billboard_has_line_of_sight(i, player)) {
-#if DEBUG_PERF
-            s_debug_los_culled++;
+            s_debug_occluded++;
 #endif
             continue;
         }
@@ -171,6 +173,5 @@ u16 billboard_project_scene(const PlayerState *player,
 u16 billboard_get_debug_culled_count(void) { return s_debug_culled; }
 u16 billboard_get_debug_candidate_count(void) { return s_debug_candidates; }
 u16 billboard_get_debug_occluded_count(void) { return s_debug_occluded; }
-u16 billboard_get_debug_los_culled_count(void) { return s_debug_los_culled; }
 u16 billboard_get_debug_projected_count(void) { return s_debug_projected; }
 #endif

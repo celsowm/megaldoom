@@ -7,6 +7,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 MAP_SOURCE = ROOT / "src" / "generated_e1m1_map.c"
+RUNTIME_SOURCE = ROOT / "src" / "billboard.c"
 
 CURATED_TYPES = {
     5, 6, 9, 13, 34, 35, 43, 44, 45, 46, 47, 48,
@@ -21,6 +22,7 @@ NOT_SINGLE_PLAYER_FLAG = 0x0010
 
 def main() -> int:
     text = MAP_SOURCE.read_text(encoding="utf-8")
+    runtime_text = RUNTIME_SOURCE.read_text(encoding="utf-8")
     initializer = re.search(
         r"const BspThing bsp_things\[\d+\] = \{(.*?)\n\};", text, re.DOTALL
     )
@@ -39,6 +41,17 @@ def main() -> int:
         thing for thing in curated
         if (thing[4] & MEDIUM_FLAG) and not (thing[4] & NOT_SINGLE_PLAYER_FLAG)
     ]
+    mapped_types = {
+        int(value)
+        for value in re.findall(r"case\s+(\d+)\s*:", runtime_text)
+    }
+    eligible_types = {thing[2] for thing in runtime}
+    missing_mappings = sorted(eligible_types - mapped_types)
+    if missing_mappings:
+        raise ValueError(
+            "eligible E1M1 THING types have no map_thing_type mapping: "
+            + ", ".join(map(str, missing_mappings))
+        )
     enemies = sum(thing[2] in ENEMY_TYPES for thing in runtime)
     decor = sum(thing[2] in DECOR_TYPES for thing in runtime)
     items = len(runtime) - enemies - decor
@@ -52,7 +65,7 @@ def main() -> int:
         )
 
     print("ok    billboard population: 102 curated, 70 medium single-player "
-          "(6 enemies, 46 items, 18 decor)")
+          "(6 enemies, 46 items, 18 decor); all eligible types map at runtime")
     return 0
 
 

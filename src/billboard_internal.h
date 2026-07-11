@@ -7,10 +7,6 @@
 
 #define BILLBOARD_MIN_DEPTH 32
 #define BILLBOARD_MAX_DEPTH (6 * FX_ONE)
-#define BILLBOARD_SCALE (3 * FX_ONE)
-#define BILLBOARD_ITEM_SCALE (2 * FX_ONE)
-#define BILLBOARD_PROP_SCALE ((5 * FX_ONE) / 2)
-#define BILLBOARD_TALL_PROP_SCALE ((15 * FX_ONE) / 2)
 #define BILLBOARD_PHASE_COUNT 2
 // View dimensions come from raycast.h (RAY_VIEW_COLS/ROWS) -- billboard.h
 // includes it -- instead of being redefined here.
@@ -82,7 +78,8 @@ typedef struct {
     u8 effect;
     u8 hit_points;
     u8 radius;
-    s32 scale;
+    u16 world_width;
+    u16 world_height;
     s32 max_depth;
     bool collectible;
     bool targetable;
@@ -118,6 +115,7 @@ typedef struct {
     s32 side;
     s16 center_col;
     s16 half_w;
+    s16 projected_height;
 } BillboardMeasure;
 
 extern BillboardObject g_billboards[];

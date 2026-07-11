@@ -7,7 +7,7 @@
 
 // Flat billboard-texture descriptor. Storing the pixels as a plain const u8* (a
 // [rows][cols] array decays cleanly) lets one draw loop sample sprites of any size:
-// the enemy is 24x48, every other billboard stays 16x16. Index as pixels[y*w + x].
+// world sprites and enemies are 24x48. Index as pixels[y*w + x].
 typedef struct {
     const u8 *pixels;
     u8 w;
@@ -545,14 +545,9 @@ static void draw_projected_billboards(const RayColumn *columns,
                 continue;
             }
             const u16 wall_col = (u16)(col & ~(RAY_COL_STRIDE - 1));
-            // Walls are sampled once per 4px block. At a depth discontinuity,
-            // treating the next sample as part of this block is conservative:
-            // it can trim at most one block from a sprite edge, but never lets a
-            // billboard leak through a wall or appear embedded in it.
-            const u16 next_wall_col = (wall_col + RAY_COL_STRIDE < RAY_VIEW_COLS) ?
-                                      (u16)(wall_col + RAY_COL_STRIDE) : wall_col;
-            const u16 wall_depth = (columns[next_wall_col].depth < columns[wall_col].depth) ?
-                                   columns[next_wall_col].depth : columns[wall_col].depth;
+            // The base image repeats the sampled wall column across this exact
+            // block, so billboard depth must use that same sample.
+            const u16 wall_depth = columns[wall_col].depth;
             if (object->depth >= wall_depth) {
                 continue;
             }
@@ -1051,11 +1046,10 @@ static void draw_upload_debug_stats(void) {
             (unsigned long)bsp_get_debug_side_cache_subticks());
     VDP_drawTextFill(text, 0, 5, 40);
 
-    sprintf(text, "O%02u C%02u W%02u L%02u D%02u A%02u H%02u M%02u",
+    sprintf(text, "O%02u C%02u W%02u D%02u A%02u H%02u M%02u",
             (unsigned int)billboard_get_active_count(),
             (unsigned int)billboard_get_debug_candidate_count(),
             (unsigned int)billboard_get_debug_occluded_count(),
-            (unsigned int)billboard_get_debug_los_culled_count(),
             (unsigned int)billboard_get_debug_projected_count(),
             (unsigned int)billboard_get_debug_simulated_enemy_count(),
             (unsigned int)billboard_get_debug_visibility_cache_hits(),

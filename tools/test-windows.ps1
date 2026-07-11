@@ -16,6 +16,11 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
+& python (Join-Path $PSScriptRoot "test-billboard-projection.py")
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
 & python (Join-Path $PSScriptRoot "test-billboard-population.py")
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE

@@ -100,7 +100,6 @@ bool billboard_position_blocked(s32 x, s32 y, s32 radius);
 u16 billboard_get_debug_culled_count(void);
 u16 billboard_get_debug_candidate_count(void);
 u16 billboard_get_debug_occluded_count(void);
-u16 billboard_get_debug_los_culled_count(void);
 u16 billboard_get_debug_projected_count(void);
 u16 billboard_get_debug_prop_collision_candidates(void);
 u16 billboard_get_debug_visibility_cache_hits(void);

@@ -11,6 +11,14 @@
 #define RAY_VIEW_TILE_H 15
 #define RAY_VIEW_COLS (RAY_VIEW_TILE_W * 8)
 #define RAY_VIEW_ROWS (RAY_VIEW_TILE_H * 8)
+#define RAY_VIEW_CENTER_X (RAY_VIEW_COLS / 2)
+#define RAY_VIEW_CENTER_Y (RAY_VIEW_ROWS / 2)
+// Shared camera geometry. Wall and billboard projection must use these exact
+// values or world objects drift against the BSP as the player turns.
+#define RAY_PROJ_X 180
+#define RAY_PROJ_Y RAY_VIEW_ROWS
+#define RAY_WORLD_WALL_HEIGHT 256
+#define RAY_CAMERA_HEIGHT (RAY_WORLD_WALL_HEIGHT / 2)
 // Horizontal render granularity: cast/sample one wall column every N pixels and
 // duplicate across the gap. 1 = full 1px detail (heaviest), 2 = 2px (~80 cols),
 // 4 = 4px (~40 cols, original cost). Must divide 8. Lower = sharper but slower.

@@ -15,9 +15,6 @@
 // horizontal field of view matches the raycaster's 48 degrees:
 //   at the screen edge, |lateral/depth| = tan(24deg) ~= 0.445 maps to +/-80,
 //   so PROJ = 80 / 0.445 ~= 180.
-#define BSP_VIEW_CENTER_X (RAY_VIEW_COLS / 2)
-#define BSP_PROJ 180
-#define BSP_VIEW_PIXEL_H 120 // matches raycaster's RAY_VIEW_PIXEL_H
 // Division-free frustum-rejection half-plane scales. screen = center +
 // perspective_divide(PROJ*lateral, depth); perspective_divide truncates toward
 // zero, so the linear plane tests below are a conservative superset of the old
@@ -26,8 +23,8 @@
 // strict "max_screen < 0"; RIGHT needs no margin because the old right test is a
 // non-strict "min_screen >= RAY_VIEW_COLS" whose integer threshold aligns with
 // toward-zero truncation of positive projections.
-#define LEFT_REJECT_SCALE (BSP_VIEW_CENTER_X + RAY_COL_STRIDE + 1)
-#define RIGHT_REJECT_SCALE (RAY_VIEW_COLS + RAY_COL_STRIDE - BSP_VIEW_CENTER_X)
+#define LEFT_REJECT_SCALE (RAY_VIEW_CENTER_X + RAY_COL_STRIDE + 1)
+#define RIGHT_REJECT_SCALE (RAY_VIEW_COLS + RAY_COL_STRIDE - RAY_VIEW_CENTER_X)
 #define BSP_NEAR 16          // near clip plane, in world units
 #define BSP_INV_SCALE 16384  // fixed-point scale for 1/depth interpolation (1<<14)
 #define BSP_CEILING_COLOR 4  // dark gray
@@ -219,8 +216,8 @@ static void draw_seg(u16 seg_index) {
     }
 
     // Project to screen x.
-    s32 xa = BSP_VIEW_CENTER_X + perspective_divide(latA * BSP_PROJ, depthA);
-    s32 xb = BSP_VIEW_CENTER_X + perspective_divide(latB * BSP_PROJ, depthB);
+    s32 xa = RAY_VIEW_CENTER_X + perspective_divide(latA * RAY_PROJ_X, depthA);
+    s32 xb = RAY_VIEW_CENTER_X + perspective_divide(latB * RAY_PROJ_X, depthB);
     if (xa == xb) {
         return;
     }
@@ -291,14 +288,13 @@ static void draw_seg(u16 seg_index) {
         const s32 uz = uzL + (((uzR - uzL) * sfix) >> FX_SHIFT);
         const s32 u_col = perspective_divide(uz, invz);
 
-        // height = BSP_VIEW_PIXEL_H*FX_ONE / depth_col, but depth_col = INV_SCALE/invz,
-        // so fold to a multiply+shift and skip a divide. invz > 0 here (guarded), and
-        // BSP_VIEW_PIXEL_H*FX_ONE*invz (<= ~31M) fits in s32.
-        s32 height = ((s32)BSP_VIEW_PIXEL_H * FX_ONE * invz) >> 14; // BSP_INV_SCALE == 1<<14
+        // height = RAY_PROJ_Y*RAY_WORLD_WALL_HEIGHT / depth_col, but depth_col =
+        // INV_SCALE/invz, so fold to a multiply+shift and skip a divide.
+        s32 height = ((s32)RAY_PROJ_Y * RAY_WORLD_WALL_HEIGHT * invz) >> 14;
         if (height < 1) {
             height = 1;
-        } else if (height > BSP_VIEW_PIXEL_H) {
-            height = BSP_VIEW_PIXEL_H;
+        } else if (height > RAY_VIEW_ROWS) {
+            height = RAY_VIEW_ROWS;
         }
 
         col->height = (u16)height;
@@ -357,8 +353,8 @@ static bool project_box_range(const BspBox *box, s16 *left, s16 *right) {
         if (depth < min_depth) min_depth = depth;
         if (depth > max_depth) max_depth = depth;
 
-        const s32 left_plane = (BSP_PROJ * lateral) + (LEFT_REJECT_SCALE * depth);
-        const s32 right_plane = (BSP_PROJ * lateral) - (RIGHT_REJECT_SCALE * depth);
+        const s32 left_plane = (RAY_PROJ_X * lateral) + (LEFT_REJECT_SCALE * depth);
+        const s32 right_plane = (RAY_PROJ_X * lateral) - (RIGHT_REJECT_SCALE * depth);
         if (left_plane > max_left_plane) max_left_plane = left_plane;
         if (right_plane < min_right_plane) min_right_plane = right_plane;
     }
@@ -379,8 +375,8 @@ static bool project_box_range(const BspBox *box, s16 *left, s16 *right) {
         for (u16 i = 0; i < 4; i++) {
             const u16 j = (u16)((i + 1) & 3);
             if (depths[i] >= BSP_NEAR) {
-                const s32 screen = BSP_VIEW_CENTER_X +
-                    perspective_divide(laterals[i] * BSP_PROJ, depths[i]);
+                const s32 screen = RAY_VIEW_CENTER_X +
+                    perspective_divide(laterals[i] * RAY_PROJ_X, depths[i]);
                 if (screen < min_screen) min_screen = screen;
                 if (screen > max_screen) max_screen = screen;
                 any = TRUE;
@@ -391,8 +387,8 @@ static bool project_box_range(const BspBox *box, s16 *left, s16 *right) {
                                                  denom);
                 const s32 lateral = laterals[i] +
                     (((laterals[j] - laterals[i]) * t) >> FX_SHIFT);
-                const s32 screen = BSP_VIEW_CENTER_X +
-                    perspective_divide(lateral * BSP_PROJ, BSP_NEAR);
+                const s32 screen = RAY_VIEW_CENTER_X +
+                    perspective_divide(lateral * RAY_PROJ_X, BSP_NEAR);
                 if (screen < min_screen) min_screen = screen;
                 if (screen > max_screen) max_screen = screen;
                 any = TRUE;
@@ -425,8 +421,8 @@ static bool project_box_range(const BspBox *box, s16 *left, s16 *right) {
     s32 max_screen = -0x7FFFFFFF;
     BSP_DBG_INC(boxes_projected);
     for (u16 i = 0; i < 4; i++) {
-        const s32 screen = BSP_VIEW_CENTER_X +
-                           perspective_divide(laterals[i] * BSP_PROJ, depths[i]);
+        const s32 screen = RAY_VIEW_CENTER_X +
+                           perspective_divide(laterals[i] * RAY_PROJ_X, depths[i]);
         if (screen < min_screen) min_screen = screen;
         if (screen > max_screen) max_screen = screen;
     }
