@@ -208,7 +208,11 @@ int main(bool hard) {
                 if (pickup.effect == BILLBOARD_EFFECT_HEALTH) {
                     player_health = (u16)((player_health + pickup.amount > PLAYER_MAX_HEALTH) ? PLAYER_MAX_HEALTH : player_health + pickup.amount);
                 } else if (pickup.effect == BILLBOARD_EFFECT_ARMOR) {
-                    player_armor = (u16)((pickup.amount > player_armor) ? pickup.amount : player_armor);
+                    if (pickup.amount == 1) {
+                        player_armor++;
+                    } else {
+                        player_armor = (u16)((pickup.amount > player_armor) ? pickup.amount : player_armor);
+                    }
                     if (player_armor > PLAYER_MAX_ARMOR) player_armor = PLAYER_MAX_ARMOR;
                 } else if (pickup.effect == BILLBOARD_EFFECT_AMMO) {
                     player_ammo = (u16)((player_ammo + pickup.amount > 99) ? 99 : player_ammo + pickup.amount);

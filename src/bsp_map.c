@@ -14,6 +14,7 @@
 static bool g_seg_open[BSP_MAX_SEGS];
 static u16 g_query_seen_generation[BSP_MAX_SEGS];
 static u16 g_query_generation = 1;
+static u16 g_visibility_revision = 1;
 
 #if DEBUG_PERF
 static BspDebugQueryOwner g_query_owner;
@@ -36,11 +37,15 @@ void bsp_map_reset(u16 phase_index) {
     for (u16 i = 0; i < bsp_seg_count; i++) {
         g_seg_open[i] = FALSE;
     }
+    g_visibility_revision++;
+    if (g_visibility_revision == 0) g_visibility_revision = 1;
 }
 
 bool bsp_seg_is_open(u16 seg_index) {
     return (seg_index < bsp_seg_count) ? g_seg_open[seg_index] : FALSE;
 }
+
+u16 bsp_get_visibility_revision(void) { return g_visibility_revision; }
 
 // Squared distance from point (px, py) to the finite segment of seg s.
 static s32 seg_point_dist2(const BspSeg *s, s32 px, s32 py) {
@@ -164,6 +169,15 @@ static s32 cross3(s32 ax, s32 ay, s32 bx, s32 by, s32 cx, s32 cy) {
     return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
 }
 
+static bool point_on_segment(s32 ax, s32 ay, s32 bx, s32 by, s32 px, s32 py) {
+    const s32 min_x = (ax < bx) ? ax : bx;
+    const s32 max_x = (ax > bx) ? ax : bx;
+    const s32 min_y = (ay < by) ? ay : by;
+    const s32 max_y = (ay > by) ? ay : by;
+    return (bool)((px >= min_x) && (px <= max_x) &&
+                  (py >= min_y) && (py <= max_y));
+}
+
 bool bsp_segment_hits_wall(s32 x0, s32 y0, s32 x1, s32 y1) {
     // Ray AABB, used to reject non-overlapping segs before the 4 cross3 multiplies.
     const s32 ray_minx = (x0 < x1) ? x0 : x1;
@@ -215,8 +229,19 @@ bool bsp_segment_hits_wall(s32 x0, s32 y0, s32 x1, s32 y1) {
         const s32 d3 = cross3(a->x, a->y, b->x, b->y, x0, y0);
         const s32 d4 = cross3(a->x, a->y, b->x, b->y, x1, y1);
 
-        if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
-            ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
+        const bool proper_cross =
+            ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+            ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+        // A ray grazing a wall endpoint is still occluded. The old strict-only
+        // test leaked billboards through exact BSP corners, where their centre
+        // LOS looked clear while their projected width overlapped the wall.
+        const bool endpoint_touch =
+            (d1 == 0 && point_on_segment(x0, y0, x1, y1, a->x, a->y)) ||
+            (d2 == 0 && point_on_segment(x0, y0, x1, y1, b->x, b->y)) ||
+            (d3 == 0 && point_on_segment(a->x, a->y, b->x, b->y, x0, y0)) ||
+            (d4 == 0 && point_on_segment(a->x, a->y, b->x, b->y, x1, y1));
+
+        if (proper_cross || endpoint_touch) {
                     hit = TRUE;
                     break;
                 }
@@ -282,6 +307,8 @@ static void toggle_door(u16 seg_index) {
             g_seg_open[j] = new_state;
         }
     }
+    g_visibility_revision++;
+    if (g_visibility_revision == 0) g_visibility_revision = 1;
 }
 
 DoorActionResult bsp_use_in_front(s32 x, s32 y, u16 angle, bool has_key, bool *consumed_key) {

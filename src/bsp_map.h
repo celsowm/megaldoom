@@ -143,6 +143,10 @@ void bsp_map_reset(u16 phase_index);
 // Runtime door state. Non-door segs are never "open".
 bool bsp_seg_is_open(u16 seg_index);
 
+// Monotonic revision for cached visibility. Changes whenever door state or the
+// active map resets, so billboard LOS results never survive world-geometry changes.
+u16 bsp_get_visibility_revision(void);
+
 // Collision: is a circle of the given radius at world (x, y) touching a solid
 // (closed) wall segment? Used by player and enemy movement.
 bool bsp_circle_blocked(s32 x, s32 y, s32 radius);

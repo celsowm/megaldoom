@@ -13,17 +13,19 @@ typedef enum {
     BILLBOARD_VISUAL_RED_KEY = 3,
     BILLBOARD_VISUAL_STIMPACK = 4,
     BILLBOARD_VISUAL_MEDIKIT = 5,
-    BILLBOARD_VISUAL_GREEN_ARMOR = 6,
-    BILLBOARD_VISUAL_BLUE_ARMOR = 7,
-    BILLBOARD_VISUAL_CLIP = 8,
-    BILLBOARD_VISUAL_AMMO_BOX = 9,
-    BILLBOARD_VISUAL_CANDLE = 10,
-    BILLBOARD_VISUAL_CANDELABRA = 11,
-    BILLBOARD_VISUAL_COLUMN = 12,
-    BILLBOARD_VISUAL_BARREL = 13,
-    BILLBOARD_VISUAL_TREE = 14,
-    BILLBOARD_VISUAL_DUMMY = 15,
-    BILLBOARD_VISUAL_DUMMY_DAMAGED = 16
+    BILLBOARD_VISUAL_ARMOR_BONUS = 6,
+    BILLBOARD_VISUAL_GREEN_ARMOR = 7,
+    BILLBOARD_VISUAL_BLUE_ARMOR = 8,
+    BILLBOARD_VISUAL_CLIP = 9,
+    BILLBOARD_VISUAL_AMMO_BOX = 10,
+    BILLBOARD_VISUAL_CANDLE = 11,
+    BILLBOARD_VISUAL_CANDELABRA = 12,
+    BILLBOARD_VISUAL_COLUMN = 13,
+    BILLBOARD_VISUAL_ELEC = 14,
+    BILLBOARD_VISUAL_BARREL = 15,
+    BILLBOARD_VISUAL_TREE = 16,
+    BILLBOARD_VISUAL_DUMMY = 17,
+    BILLBOARD_VISUAL_DUMMY_DAMAGED = 18
 } BillboardVisualId;
 
 typedef struct {
@@ -96,11 +98,18 @@ BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player);
 bool billboard_position_blocked(s32 x, s32 y, s32 radius);
 #if DEBUG_PERF
 u16 billboard_get_debug_culled_count(void);
+u16 billboard_get_debug_candidate_count(void);
+u16 billboard_get_debug_occluded_count(void);
+u16 billboard_get_debug_los_culled_count(void);
 u16 billboard_get_debug_projected_count(void);
 u16 billboard_get_debug_prop_collision_candidates(void);
+u16 billboard_get_debug_visibility_cache_hits(void);
+u16 billboard_get_debug_visibility_cache_misses(void);
+u16 billboard_get_debug_simulated_enemy_count(void);
 void billboard_debug_reset_stats(void);
 #endif
 u16 billboard_project_scene(const PlayerState *player,
+                            const RayColumn *columns,
                             ProjectedBillboard *objects,
                             u16 max_objects);
 

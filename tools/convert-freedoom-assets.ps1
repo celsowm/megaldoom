@@ -123,6 +123,7 @@ $BillboardWorldSpecs = @(
     @{ Name = "RED_KEY"; Path = "res\originaldoom\sprites\RKEYA0.png" },
     @{ Name = "STIMPACK"; Path = "res\originaldoom\sprites\STIMA0.png" },
     @{ Name = "MEDIKIT"; Path = "res\originaldoom\sprites\MEDIA0.png" },
+    @{ Name = "ARMOR_BONUS"; Path = "res\originaldoom\sprites\BON2A0.png" },
     @{ Name = "GREEN_ARMOR"; Path = "res\originaldoom\sprites\ARM1A0.png" },
     @{ Name = "BLUE_ARMOR"; Path = "res\originaldoom\sprites\ARM2A0.png" },
     @{ Name = "CLIP"; Path = "res\originaldoom\sprites\CLIPA0.png" },
@@ -130,6 +131,7 @@ $BillboardWorldSpecs = @(
     @{ Name = "CANDLE"; Path = "res\originaldoom\sprites\CANDA0.png" },
     @{ Name = "CANDELABRA"; Path = "res\originaldoom\sprites\CBRAA0.png" },
     @{ Name = "COLUMN"; Path = "res\originaldoom\sprites\COLUA0.png" },
+    @{ Name = "ELEC"; Path = "res\originaldoom\sprites\ELECA0.png" },
     @{ Name = "BARREL"; Path = "res\originaldoom\sprites\BAR1A0.png" },
     @{ Name = "TREE"; Path = "res\originaldoom\sprites\TREDA0.png" }
 )
@@ -254,7 +256,7 @@ function Get-NearestWorldPaletteIndex([System.Drawing.Color]$Color, [bool]$Allow
 }
 
 function Convert-Image([string]$Path, [int]$Width, [int]$Height, [bool]$UseAlphaTransparency,
-                       [bool]$PreserveAspect = $false) {
+                       [bool]$PreserveAspect = $false, [bool]$BottomAlign = $false) {
     # Area/box downscale: each output texel is the AVERAGE of the full source
     # rectangle it covers, then quantized to the palette. Point sampling (grabbing
     # a single source pixel) aliased high-frequency Doom textures into random-looking
@@ -272,7 +274,7 @@ function Convert-Image([string]$Path, [int]$Width, [int]$Height, [bool]$UseAlpha
         $drawWidth = [Math]::Max(1, [int][Math]::Round($image.Width * $scale))
         $drawHeight = [Math]::Max(1, [int][Math]::Round($image.Height * $scale))
         $drawX = [int](($Width - $drawWidth) / 2)
-        $drawY = [int](($Height - $drawHeight) / 2)
+        $drawY = if ($BottomAlign) { $Height - $drawHeight } else { [int](($Height - $drawHeight) / 2) }
     }
 
     try {
@@ -703,7 +705,10 @@ $billboardWorldW = 24
 $billboardWorldH = 48
 $billboardWorldBlocks = New-Object System.Collections.Generic.List[string]
 foreach ($spec in $BillboardWorldSpecs) {
-    $rows = Convert-Image (Join-Path $Root $spec.Path) $billboardWorldW $billboardWorldH $true $true
+    # World billboards share a floor contact point. Keep their horizontal centre,
+    # but place the preserved-aspect sprite against the bottom of the canvas so
+    # small pickups do not float halfway up a 24x48 actor box.
+    $rows = Convert-Image (Join-Path $Root $spec.Path) $billboardWorldW $billboardWorldH $true $true $true
     $billboardWorldBlocks.Add("    {" + "`r`n" + ($rows -join ",`r`n") + "`r`n    }")
 }
 # Enemy (zombieman) animation frames, all scaled into the same 24x48 box.

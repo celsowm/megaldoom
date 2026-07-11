@@ -10,6 +10,7 @@
 #define BILLBOARD_SCALE (3 * FX_ONE)
 #define BILLBOARD_ITEM_SCALE (2 * FX_ONE)
 #define BILLBOARD_PROP_SCALE ((5 * FX_ONE) / 2)
+#define BILLBOARD_TALL_PROP_SCALE ((15 * FX_ONE) / 2)
 #define BILLBOARD_PHASE_COUNT 2
 // View dimensions come from raycast.h (RAY_VIEW_COLS/ROWS) -- billboard.h
 // includes it -- instead of being redefined here.
@@ -20,18 +21,20 @@
 #define BILLBOARD_TYPE_KEY 1
 #define BILLBOARD_TYPE_STIMPACK 2
 #define BILLBOARD_TYPE_MEDIKIT 3
-#define BILLBOARD_TYPE_GREEN_ARMOR 4
-#define BILLBOARD_TYPE_BLUE_ARMOR 5
-#define BILLBOARD_TYPE_CLIP 6
-#define BILLBOARD_TYPE_AMMO_BOX 7
-#define BILLBOARD_TYPE_CANDLE 8
-#define BILLBOARD_TYPE_CANDELABRA 9
-#define BILLBOARD_TYPE_COLUMN 10
-#define BILLBOARD_TYPE_BARREL 11
-#define BILLBOARD_TYPE_TREE 12
-#define BILLBOARD_TYPE_DUMMY 13
-#define BILLBOARD_TYPE_COUNT 14
-#define BILLBOARD_PROP_RADIUS 32
+#define BILLBOARD_TYPE_ARMOR_BONUS 4
+#define BILLBOARD_TYPE_GREEN_ARMOR 5
+#define BILLBOARD_TYPE_BLUE_ARMOR 6
+#define BILLBOARD_TYPE_CLIP 7
+#define BILLBOARD_TYPE_AMMO_BOX 8
+#define BILLBOARD_TYPE_CANDLE 9
+#define BILLBOARD_TYPE_CANDELABRA 10
+#define BILLBOARD_TYPE_COLUMN 11
+#define BILLBOARD_TYPE_ELEC 12
+#define BILLBOARD_TYPE_BARREL 13
+#define BILLBOARD_TYPE_TREE 14
+#define BILLBOARD_TYPE_DUMMY 15
+#define BILLBOARD_TYPE_COUNT 16
+#define BILLBOARD_PROP_RADIUS 16
 
 #define DUMMY_MOVE_STEP (FX_ONE / 8)
 #define DUMMY_MOVE_INTERVAL 5
@@ -51,8 +54,6 @@
 #define DUMMY_HOME_RANGE_SQ (DUMMY_HOME_RANGE * DUMMY_HOME_RANGE)
 #define DUMMY_LEASH_RANGE (2 * FX_ONE)
 #define DUMMY_LEASH_RANGE_SQ (DUMMY_LEASH_RANGE * DUMMY_LEASH_RANGE)
-#define DUMMY_PATROL_RANGE (FX_ONE / 2)
-#define DUMMY_PATROL_INTERVAL 8
 #define DUMMY_SPOT_DELAY_FRAMES 12
 #define DUMMY_SEPARATION_RANGE (FX_ONE / 2)
 #define DUMMY_SEPARATION_RANGE_SQ (DUMMY_SEPARATION_RANGE * DUMMY_SEPARATION_RANGE)
@@ -98,8 +99,6 @@ typedef struct {
     u8 attack_cooldown;
     s32 home_x;
     s32 home_y;
-    s8 patrol_dir;
-    bool patrol_axis_x;
     bool saw_player;
     u8 spot_cooldown;
     s32 last_seen_x;
@@ -131,5 +130,8 @@ u8 billboard_get_object_visual_id(const BillboardObject *object, const Billboard
 u8 billboard_get_object_frame(const BillboardObject *object);
 bool billboard_measure_object(const PlayerState *player, s16 cos_a, s16 sin_a,
                               const BillboardObject *object, BillboardMeasure *measure);
+void billboard_visibility_begin(const PlayerState *player);
+bool billboard_has_line_of_sight(u16 index, const PlayerState *player);
+void billboard_invalidate_object_visibility(u16 index);
 
 #endif

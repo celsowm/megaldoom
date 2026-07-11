@@ -3,31 +3,8 @@
 
 #define ENEMY_RADIUS 24
 
-// Line-of-sight is the one heavy (full-map seg scan) call an awake enemy makes
-// every frame; movement collision is already gated behind move_cooldown. Refresh
-// each enemy's LOS only every ENEMY_LOS_REFRESH frames, staggered by index so the
-// scans spread across frames instead of all landing on one. Enemy reactions lag by
-// at most this many frames, which is imperceptible at the ~4-tic AI cadence.
-#define ENEMY_LOS_REFRESH 3
-static bool s_los_cache[BILLBOARD_OBJECT_COUNT];
-static u16 s_ai_tick;
-
-static bool has_line_of_sight(const BillboardObject *object, const PlayerState *player) {
-    return !bsp_segment_hits_wall(object->x, object->y, player->x, player->y);
-}
-
-// Awake-gated, throttled line-of-sight: recompute (and cache) only on this enemy's
-// scheduled frame, otherwise reuse the cached result. Asleep enemies never consult
-// LOS, so skip the scan entirely for them.
-static bool resolve_visible(u16 index, bool awake, const BillboardObject *object, const PlayerState *player) {
-    if (!awake) {
-        return FALSE;
-    }
-    if (((s_ai_tick + index) % ENEMY_LOS_REFRESH) == 0) {
-        s_los_cache[index] = has_line_of_sight(object, player);
-    }
-    return s_los_cache[index];
-}
+static u8 s_simulated_enemy_indices[BILLBOARD_OBJECT_COUNT];
+static u16 s_simulated_enemy_count;
 
 static s16 get_step_toward(s32 delta) {
     if (delta > 0) {
@@ -48,7 +25,7 @@ static bool is_position_blocked(s32 x, s32 y) {
            billboard_position_blocked(x, y, ENEMY_RADIUS);
 }
 
-static bool try_move_dummy(BillboardObject *object, s16 step_x, s16 step_y) {
+static bool try_move_dummy(u16 index, BillboardObject *object, s16 step_x, s16 step_y) {
     bool moved = FALSE;
 
     if ((step_x != 0) && !is_position_blocked(object->x + step_x, object->y)) {
@@ -61,40 +38,13 @@ static bool try_move_dummy(BillboardObject *object, s16 step_x, s16 step_y) {
         moved = TRUE;
     }
 
-    return moved;
-}
-
-static bool patrol_dummy(BillboardObject *object) {
-    const s32 patrol_target_x = object->home_x + ((object->patrol_axis_x ? object->patrol_dir : 0) * DUMMY_PATROL_RANGE);
-    const s32 patrol_target_y = object->home_y + ((object->patrol_axis_x ? 0 : object->patrol_dir) * DUMMY_PATROL_RANGE);
-    const s32 dx = patrol_target_x - object->x;
-    const s32 dy = patrol_target_y - object->y;
-    s16 step_x = get_step_toward(dx);
-    s16 step_y = get_step_toward(dy);
-    bool moved;
-
-    if ((dx == 0) && (dy == 0)) {
-        object->patrol_dir = (s8)-object->patrol_dir;
-        step_x = (s16)(object->patrol_axis_x ? (object->patrol_dir * DUMMY_MOVE_STEP) : 0);
-        step_y = (s16)(object->patrol_axis_x ? 0 : (object->patrol_dir * DUMMY_MOVE_STEP));
-    }
-
-    moved = try_move_dummy(object, step_x, step_y);
-    if (!moved) {
-        object->patrol_dir = (s8)-object->patrol_dir;
-        moved = try_move_dummy(object,
-                               (s16)(object->patrol_axis_x ? (object->patrol_dir * DUMMY_MOVE_STEP) : 0),
-                               (s16)(object->patrol_axis_x ? 0 : (object->patrol_dir * DUMMY_MOVE_STEP)));
-    }
-
-    if (moved) {
-        object->move_cooldown = DUMMY_PATROL_INTERVAL;
-    }
+    if (moved) billboard_invalidate_object_visibility(index);
 
     return moved;
 }
 
-static bool separate_dummies(BillboardObject *left, BillboardObject *right) {
+static bool separate_dummies(u16 left_index, BillboardObject *left,
+                             u16 right_index, BillboardObject *right) {
     const s32 dx = right->x - left->x;
     const s32 dy = right->y - left->y;
     const s32 dist_sq = (dx * dx) + (dy * dy);
@@ -125,8 +75,8 @@ static bool separate_dummies(BillboardObject *left, BillboardObject *right) {
         right_step_y = (s16)-left_step_y;
     }
 
-    moved = try_move_dummy(left, left_step_x, left_step_y) || moved;
-    moved = try_move_dummy(right, right_step_x, right_step_y) || moved;
+    moved = try_move_dummy(left_index, left, left_step_x, left_step_y) || moved;
+    moved = try_move_dummy(right_index, right, right_step_x, right_step_y) || moved;
 
     return moved;
 }
@@ -141,11 +91,22 @@ static bool update_dummy_alive(u16 index, BillboardObject *object, const PlayerS
     const s32 seen_dx = object->last_seen_x - object->x;
     const s32 seen_dy = object->last_seen_y - object->y;
     const s32 seen_dist_sq = (seen_dx * seen_dx) + (seen_dy * seen_dy);
-    const bool awake = (player_dist_sq <= DUMMY_WAKE_RANGE_SQ) || object->has_last_seen;
-    // Throttled, awake-gated line-of-sight (see resolve_visible). `visible` is only
-    // read under `awake` branches below.
-    const bool visible = resolve_visible(index, awake, object, player);
+    const bool perception_candidate =
+        (player_dist_sq <= DUMMY_WAKE_RANGE_SQ) || object->has_last_seen;
+    const bool visible = perception_candidate && billboard_has_line_of_sight(index, player);
+    const bool engaged = visible || object->has_last_seen;
     bool moved = FALSE;
+
+    // A dormant enemy is completely outside the simulation working set: no
+    // patrol, animation, cooldown churn, collision or redraw until it perceives
+    // the player. This is the normal idle state for map-spawned enemies.
+    if (!engaged) {
+        object->saw_player = FALSE;
+        object->spot_cooldown = 0;
+        object->anim_frame = 0;
+        object->anim_timer = 0;
+        return FALSE;
+    }
 
     if (object->move_cooldown > 0) {
         object->move_cooldown--;
@@ -164,19 +125,16 @@ static bool update_dummy_alive(u16 index, BillboardObject *object, const PlayerS
     // discrete move_cooldown steps so it looks smooth, not once-per-hop). The
     // attack pose overrides the walk pose while attack_anim is active. Idle/asleep
     // enemies hold the rest pose.
-    if (awake && (object->attack_anim == 0)) {
+    if (object->attack_anim == 0) {
         if (object->anim_timer == 0) {
             object->anim_frame = (u8)((object->anim_frame + 1) & (ENEMY_WALK_FRAME_COUNT - 1));
             object->anim_timer = ENEMY_WALK_HOLD;
         } else {
             object->anim_timer--;
         }
-    } else if (!awake) {
-        object->anim_frame = 0;
-        object->anim_timer = 0;
     }
 
-    if (awake && visible) {
+    if (visible) {
         if (!object->saw_player) {
             object->saw_player = TRUE;
             object->spot_cooldown = DUMMY_SPOT_DELAY_FRAMES;
@@ -189,7 +147,7 @@ static bool update_dummy_alive(u16 index, BillboardObject *object, const PlayerS
         object->spot_cooldown = 0;
     }
 
-    if (awake && visible && (object->spot_cooldown == 0) && (player_dist_sq <= DUMMY_ATTACK_RANGE_SQ) &&
+    if (visible && (object->spot_cooldown == 0) && (player_dist_sq <= DUMMY_ATTACK_RANGE_SQ) &&
         (object->attack_cooldown == 0)) {
         object->attack_cooldown = DUMMY_ATTACK_COOLDOWN;
         object->move_cooldown = DUMMY_ATTACK_RECOVERY_FRAMES;
@@ -207,39 +165,39 @@ static bool update_dummy_alive(u16 index, BillboardObject *object, const PlayerS
         s16 step_y;
 
         if ((home_dist_sq > DUMMY_LEASH_RANGE_SQ) && (home_dist_sq > DUMMY_HOME_RANGE_SQ)) {
-            object->has_last_seen = FALSE;
             step_x = get_step_toward(home_dx);
             step_y = get_step_toward(home_dy);
-        } else if (awake && visible && (player_dist_sq > DUMMY_STOP_RANGE_SQ) && (player_dist_sq <= DUMMY_CHASE_RANGE_SQ)) {
+        } else if (visible && (player_dist_sq > DUMMY_STOP_RANGE_SQ) && (player_dist_sq <= DUMMY_CHASE_RANGE_SQ)) {
             step_x = get_step_toward(player_dx);
             step_y = get_step_toward(player_dy);
         } else if (object->has_last_seen && (seen_dist_sq > DUMMY_LAST_SEEN_RANGE_SQ)) {
             step_x = get_step_toward(seen_dx);
             step_y = get_step_toward(seen_dy);
         } else if (home_dist_sq > DUMMY_HOME_RANGE_SQ) {
-            object->has_last_seen = FALSE;
             step_x = get_step_toward(home_dx);
             step_y = get_step_toward(home_dy);
-        } else if (!awake || !visible) {
+        } else if (!visible) {
             object->has_last_seen = FALSE;
-            return patrol_dummy(object);
+            object->anim_frame = 0;
+            object->anim_timer = 0;
+            return FALSE;
         } else {
             return FALSE;
         }
 
         if ((step_x < 0 ? -step_x : step_x) >= (step_y < 0 ? -step_y : step_y)) {
-            moved = try_move_dummy(object, step_x, 0);
+            moved = try_move_dummy(index, object, step_x, 0);
             if (!moved) {
-                moved = try_move_dummy(object, 0, step_y);
+                moved = try_move_dummy(index, object, 0, step_y);
             } else {
-                moved = try_move_dummy(object, 0, step_y) || moved;
+                moved = try_move_dummy(index, object, 0, step_y) || moved;
             }
         } else {
-            moved = try_move_dummy(object, 0, step_y);
+            moved = try_move_dummy(index, object, 0, step_y);
             if (!moved) {
-                moved = try_move_dummy(object, step_x, 0);
+                moved = try_move_dummy(index, object, step_x, 0);
             } else {
-                moved = try_move_dummy(object, step_x, 0) || moved;
+                moved = try_move_dummy(index, object, step_x, 0) || moved;
             }
         }
     }
@@ -249,6 +207,16 @@ static bool update_dummy_alive(u16 index, BillboardObject *object, const PlayerS
     }
 
     return moved;
+}
+
+static bool enemy_affects_view(u16 index, const BillboardObject *object,
+                               const PlayerState *player, s16 cos_a, s16 sin_a) {
+    BillboardMeasure measure;
+
+    if (!billboard_measure_object(player, cos_a, sin_a, object, &measure)) return FALSE;
+    if ((measure.center_col + measure.half_w < 0) ||
+        (measure.center_col - measure.half_w >= RAY_VIEW_COLS)) return FALSE;
+    return billboard_has_line_of_sight(index, player);
 }
 
 // Step the death sequence one frame; holds on the final pose (corpse) once done.
@@ -291,8 +259,11 @@ static bool update_dummy(u16 index, BillboardObject *object, const PlayerState *
 BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player) {
     BillboardEnemyUpdate update = {FALSE, 0, 0, 0};
     s32 best_hit_dist = 0x7FFFFFFF;
+    const s16 cos_a = fx_cos(player->angle);
+    const s16 sin_a = fx_sin(player->angle);
 
-    s_ai_tick++; // advances the staggered line-of-sight refresh schedule
+    billboard_visibility_begin(player);
+    s_simulated_enemy_count = 0;
 
     for (u16 i = 0; i < BILLBOARD_OBJECT_COUNT; i++) {
         BillboardObject *object = &g_billboards[i];
@@ -305,8 +276,16 @@ BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player) {
             continue;
         }
 
-        if (update_dummy(i, object, player, &update.hits)) {
+        const bool was_visible = enemy_affects_view(i, object, player, cos_a, sin_a);
+        const bool changed = update_dummy(i, object, player, &update.hits);
+        const bool now_visible = changed ?
+            enemy_affects_view(i, object, player, cos_a, sin_a) : was_visible;
+
+        if (changed && (was_visible || now_visible)) {
             update.moved = TRUE;
+        }
+        if ((object->life_state == ENEMY_ALIVE) && object->has_last_seen) {
+            s_simulated_enemy_indices[s_simulated_enemy_count++] = (u8)i;
         }
 
         if ((update.hits > hits_before) && (dist_sq < best_hit_dist)) {
@@ -316,19 +295,26 @@ BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player) {
         }
     }
 
-    for (u16 i = 0; i < BILLBOARD_OBJECT_COUNT; i++) {
-        if (!g_billboards[i].active || (g_billboards[i].type_id != BILLBOARD_TYPE_DUMMY)) {
-            continue;
-        }
-        for (u16 j = (u16)(i + 1); j < BILLBOARD_OBJECT_COUNT; j++) {
-            if (!g_billboards[j].active || (g_billboards[j].type_id != BILLBOARD_TYPE_DUMMY)) {
-                continue;
-            }
-            if (separate_dummies(&g_billboards[i], &g_billboards[j])) {
-                update.moved = TRUE;
+    // Pair separation is local to the simulation working set, never all map enemies.
+    for (u16 a = 0; a < s_simulated_enemy_count; a++) {
+        const u16 i = s_simulated_enemy_indices[a];
+        for (u16 b = (u16)(a + 1); b < s_simulated_enemy_count; b++) {
+            const u16 j = s_simulated_enemy_indices[b];
+            const bool left_was_visible = enemy_affects_view(i, &g_billboards[i], player, cos_a, sin_a);
+            const bool right_was_visible = enemy_affects_view(j, &g_billboards[j], player, cos_a, sin_a);
+            if (separate_dummies(i, &g_billboards[i], j, &g_billboards[j])) {
+                const bool left_now_visible = enemy_affects_view(i, &g_billboards[i], player, cos_a, sin_a);
+                const bool right_now_visible = enemy_affects_view(j, &g_billboards[j], player, cos_a, sin_a);
+                if (left_was_visible || right_was_visible || left_now_visible || right_now_visible) {
+                    update.moved = TRUE;
+                }
             }
         }
     }
 
     return update;
 }
+
+#if DEBUG_PERF
+u16 billboard_get_debug_simulated_enemy_count(void) { return s_simulated_enemy_count; }
+#endif

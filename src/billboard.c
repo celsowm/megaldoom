@@ -6,14 +6,16 @@ static const BillboardType BILLBOARD_TYPES[BILLBOARD_TYPE_COUNT] = {
     {BILLBOARD_VISUAL_BLUE_KEY,    BILLBOARD_EFFECT_KEY,    1, 20, BILLBOARD_ITEM_SCALE, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
     {BILLBOARD_VISUAL_STIMPACK,    BILLBOARD_EFFECT_HEALTH, 1, 20, BILLBOARD_ITEM_SCALE, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
     {BILLBOARD_VISUAL_MEDIKIT,     BILLBOARD_EFFECT_HEALTH, 1, 24, BILLBOARD_ITEM_SCALE, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
+    {BILLBOARD_VISUAL_ARMOR_BONUS, BILLBOARD_EFFECT_ARMOR,  1, 16, BILLBOARD_ITEM_SCALE, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
     {BILLBOARD_VISUAL_GREEN_ARMOR, BILLBOARD_EFFECT_ARMOR,  1, 28, BILLBOARD_ITEM_SCALE, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
     {BILLBOARD_VISUAL_BLUE_ARMOR,  BILLBOARD_EFFECT_ARMOR,  1, 28, BILLBOARD_ITEM_SCALE, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
     {BILLBOARD_VISUAL_CLIP,        BILLBOARD_EFFECT_AMMO,   1, 18, BILLBOARD_ITEM_SCALE, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
     {BILLBOARD_VISUAL_AMMO_BOX,    BILLBOARD_EFFECT_AMMO,   1, 24, BILLBOARD_ITEM_SCALE, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
     {BILLBOARD_VISUAL_CANDLE,      BILLBOARD_EFFECT_NONE,   1, BILLBOARD_PROP_RADIUS, BILLBOARD_PROP_SCALE, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
     {BILLBOARD_VISUAL_CANDELABRA,  BILLBOARD_EFFECT_NONE,   1, BILLBOARD_PROP_RADIUS, BILLBOARD_PROP_SCALE, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
-    {BILLBOARD_VISUAL_COLUMN,      BILLBOARD_EFFECT_NONE,   1, 48, BILLBOARD_PROP_SCALE, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
-    {BILLBOARD_VISUAL_BARREL,      BILLBOARD_EFFECT_NONE,   1, BILLBOARD_PROP_RADIUS, BILLBOARD_PROP_SCALE, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
+    {BILLBOARD_VISUAL_COLUMN,      BILLBOARD_EFFECT_NONE,   1, 16, BILLBOARD_PROP_SCALE, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
+    {BILLBOARD_VISUAL_ELEC,        BILLBOARD_EFFECT_NONE,   1, 16, BILLBOARD_TALL_PROP_SCALE, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
+    {BILLBOARD_VISUAL_BARREL,      BILLBOARD_EFFECT_NONE,   1, 20, BILLBOARD_PROP_SCALE, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
     {BILLBOARD_VISUAL_TREE,        BILLBOARD_EFFECT_NONE,   1, 48, BILLBOARD_PROP_SCALE, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
     {BILLBOARD_VISUAL_DUMMY,       BILLBOARD_EFFECT_NONE,   3, 24, BILLBOARD_SCALE, BILLBOARD_MAX_DEPTH, FALSE, TRUE,  FALSE},
 };
@@ -22,9 +24,21 @@ BillboardObject g_billboards[BILLBOARD_OBJECT_COUNT];
 u16 g_collected_count;
 BillboardPickupCounts g_pickup_counts;
 BillboardPickupKind g_last_pickup_kind;
+static u16 g_visibility_generation = 1;
+static u16 g_visibility_entry_generation[BILLBOARD_OBJECT_COUNT];
+static bool g_visibility_result[BILLBOARD_OBJECT_COUNT];
+static s32 g_visibility_player_x;
+static s32 g_visibility_player_y;
+static u16 g_visibility_bsp_revision;
+static bool g_visibility_context_valid;
 #if DEBUG_PERF
 static u16 g_debug_prop_collision_candidates;
+static u16 g_debug_visibility_cache_hits;
+static u16 g_debug_visibility_cache_misses;
 #endif
+
+#define DOOM_THING_SKILL_MEDIUM 0x0002u
+#define DOOM_THING_NOT_SINGLE_PLAYER 0x0010u
 
 static u8 map_thing_type(u16 doom_type, u8 *visual) {
     switch (doom_type) {
@@ -32,7 +46,7 @@ static u8 map_thing_type(u16 doom_type, u8 *visual) {
         case 6:  *visual = BILLBOARD_VISUAL_YELLOW_KEY; return BILLBOARD_TYPE_KEY;
         case 13: *visual = BILLBOARD_VISUAL_RED_KEY; return BILLBOARD_TYPE_KEY;
         case 2014: *visual = BILLBOARD_VISUAL_BONUS; return BILLBOARD_TYPE_BONUS;
-        case 2015: *visual = BILLBOARD_VISUAL_GREEN_ARMOR; return BILLBOARD_TYPE_GREEN_ARMOR;
+        case 2015: *visual = BILLBOARD_VISUAL_ARMOR_BONUS; return BILLBOARD_TYPE_ARMOR_BONUS;
         case 2011: *visual = BILLBOARD_VISUAL_STIMPACK; return BILLBOARD_TYPE_STIMPACK;
         case 2012: *visual = BILLBOARD_VISUAL_MEDIKIT; return BILLBOARD_TYPE_MEDIKIT;
         case 2018: *visual = BILLBOARD_VISUAL_GREEN_ARMOR; return BILLBOARD_TYPE_GREEN_ARMOR;
@@ -41,9 +55,8 @@ static u8 map_thing_type(u16 doom_type, u8 *visual) {
         case 2048: *visual = BILLBOARD_VISUAL_AMMO_BOX; return BILLBOARD_TYPE_AMMO_BOX;
         case 34: *visual = BILLBOARD_VISUAL_CANDLE; return BILLBOARD_TYPE_CANDLE;
         case 35: case 44: case 45: *visual = BILLBOARD_VISUAL_CANDELABRA; return BILLBOARD_TYPE_CANDELABRA;
-        // Doom's floor/tall lamps are represented by the tall COLU sprite in
-        // the compact atlas; they deliberately block movement like columns.
-        case 46: case 47: case 48: case 2028: case 2046: *visual = BILLBOARD_VISUAL_COLUMN; return BILLBOARD_TYPE_COLUMN;
+        case 48: *visual = BILLBOARD_VISUAL_ELEC; return BILLBOARD_TYPE_ELEC;
+        case 2028: *visual = BILLBOARD_VISUAL_COLUMN; return BILLBOARD_TYPE_COLUMN;
         case 2035: *visual = BILLBOARD_VISUAL_BARREL; return BILLBOARD_TYPE_BARREL;
         case 43: *visual = BILLBOARD_VISUAL_TREE; return BILLBOARD_TYPE_TREE;
         case 9: case 3001: case 3004: *visual = BILLBOARD_VISUAL_DUMMY; return BILLBOARD_TYPE_DUMMY;
@@ -103,7 +116,15 @@ void billboard_init(u16 phase_index) {
     (void)phase_index;
     for (u16 i = 0; i < BILLBOARD_OBJECT_COUNT; i++) g_billboards[i].active = FALSE;
     for (u16 i = 0; i < bsp_thing_count && count < BILLBOARD_OBJECT_COUNT; i++) {
+        const u16 flags = bsp_things[i].flags;
         u8 visual = 0;
+
+        // Runtime policy: Doom medium skill, single-player. The generated map
+        // remains source-faithful and keeps every THING for future skill/menu work.
+        if ((flags & DOOM_THING_SKILL_MEDIUM) == 0 ||
+            (flags & DOOM_THING_NOT_SINGLE_PLAYER) != 0) {
+            continue;
+        }
         const u8 type = map_thing_type(bsp_things[i].type, &visual);
         if (type == 0xFF) continue;
         BillboardObject *object = &g_billboards[count++];
@@ -115,14 +136,66 @@ void billboard_init(u16 phase_index) {
         object->active = TRUE;
         object->home_x = object->x;
         object->home_y = object->y;
-        object->patrol_dir = 1;
-        object->patrol_axis_x = (bool)((count & 1) == 0);
         if (type != BILLBOARD_TYPE_KEY) object->hp = billboard_get_type(type)->hit_points;
     }
     g_collected_count = 0;
     g_pickup_counts.bonus = 0;
     g_pickup_counts.key = 0;
     g_last_pickup_kind = BILLBOARD_PICKUP_NONE;
+    g_visibility_context_valid = FALSE;
+    g_visibility_generation = 1;
+    for (u16 i = 0; i < BILLBOARD_OBJECT_COUNT; i++) {
+        g_visibility_entry_generation[i] = 0;
+    }
+}
+
+void billboard_visibility_begin(const PlayerState *player) {
+    const u16 bsp_revision = bsp_get_visibility_revision();
+
+    if (g_visibility_context_valid &&
+        g_visibility_player_x == player->x &&
+        g_visibility_player_y == player->y &&
+        g_visibility_bsp_revision == bsp_revision) {
+        return;
+    }
+
+    g_visibility_player_x = player->x;
+    g_visibility_player_y = player->y;
+    g_visibility_bsp_revision = bsp_revision;
+    g_visibility_context_valid = TRUE;
+    g_visibility_generation++;
+    if (g_visibility_generation == 0) {
+        for (u16 i = 0; i < BILLBOARD_OBJECT_COUNT; i++) {
+            g_visibility_entry_generation[i] = 0;
+        }
+        g_visibility_generation = 1;
+    }
+}
+
+bool billboard_has_line_of_sight(u16 index, const PlayerState *player) {
+    billboard_visibility_begin(player);
+    if (index >= BILLBOARD_OBJECT_COUNT) return FALSE;
+
+    if (g_visibility_entry_generation[index] == g_visibility_generation) {
+#if DEBUG_PERF
+        g_debug_visibility_cache_hits++;
+#endif
+        return g_visibility_result[index];
+    }
+
+#if DEBUG_PERF
+    g_debug_visibility_cache_misses++;
+#endif
+    g_visibility_result[index] = !bsp_segment_hits_wall(
+        g_billboards[index].x, g_billboards[index].y, player->x, player->y);
+    g_visibility_entry_generation[index] = g_visibility_generation;
+    return g_visibility_result[index];
+}
+
+void billboard_invalidate_object_visibility(u16 index) {
+    if (index < BILLBOARD_OBJECT_COUNT) {
+        g_visibility_entry_generation[index] = 0;
+    }
 }
 
 BillboardPickupResult billboard_collect_near(s32 x, s32 y) {
@@ -137,8 +210,13 @@ BillboardPickupResult billboard_collect_near(s32 x, s32 y) {
         object->active = FALSE;
         result.collected = TRUE;
         result.effect = type->effect;
-        if (type->effect == BILLBOARD_EFFECT_HEALTH) result.amount = (object->type_id == BILLBOARD_TYPE_MEDIKIT) ? 25 : 10;
-        else if (type->effect == BILLBOARD_EFFECT_ARMOR) result.amount = (object->type_id == BILLBOARD_TYPE_BLUE_ARMOR) ? 200 : 100;
+        if (type->effect == BILLBOARD_EFFECT_HEALTH) {
+            result.amount = (object->type_id == BILLBOARD_TYPE_MEDIKIT) ? 25 :
+                            ((object->type_id == BILLBOARD_TYPE_BONUS) ? 1 : 10);
+        } else if (type->effect == BILLBOARD_EFFECT_ARMOR) {
+            result.amount = (object->type_id == BILLBOARD_TYPE_BLUE_ARMOR) ? 200 :
+                            ((object->type_id == BILLBOARD_TYPE_ARMOR_BONUS) ? 1 : 100);
+        }
         else if (type->effect == BILLBOARD_EFFECT_AMMO) result.amount = (object->type_id == BILLBOARD_TYPE_AMMO_BOX) ? 20 : 10;
         else if (type->effect == BILLBOARD_EFFECT_KEY) {
             result.amount = 1;
@@ -176,5 +254,11 @@ u16 billboard_get_enemy_count(void) { u16 n = 0; for (u16 i = 0; i < BILLBOARD_O
 u16 billboard_get_active_count(void) { u16 n = 0; for (u16 i = 0; i < BILLBOARD_OBJECT_COUNT; i++) if (g_billboards[i].active) n++; return n; }
 #if DEBUG_PERF
 u16 billboard_get_debug_prop_collision_candidates(void) { return g_debug_prop_collision_candidates; }
-void billboard_debug_reset_stats(void) { g_debug_prop_collision_candidates = 0; }
+u16 billboard_get_debug_visibility_cache_hits(void) { return g_debug_visibility_cache_hits; }
+u16 billboard_get_debug_visibility_cache_misses(void) { return g_debug_visibility_cache_misses; }
+void billboard_debug_reset_stats(void) {
+    g_debug_prop_collision_candidates = 0;
+    g_debug_visibility_cache_hits = 0;
+    g_debug_visibility_cache_misses = 0;
+}
 #endif

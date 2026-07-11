@@ -500,6 +500,7 @@ static void draw_projected_billboards(const RayColumn *columns,
         u32 tex_x_acc = 0;
         u32 tex_x_step;
         s16 last_marked_tile_x = -1;
+        u16 opaque_tile_rows = 0;
 
         if ((height <= 0) || (width <= 0)) {
             continue;
@@ -544,7 +545,15 @@ static void draw_projected_billboards(const RayColumn *columns,
                 continue;
             }
             const u16 wall_col = (u16)(col & ~(RAY_COL_STRIDE - 1));
-            if (object->depth >= columns[wall_col].depth) {
+            // Walls are sampled once per 4px block. At a depth discontinuity,
+            // treating the next sample as part of this block is conservative:
+            // it can trim at most one block from a sprite edge, but never lets a
+            // billboard leak through a wall or appear embedded in it.
+            const u16 next_wall_col = (wall_col + RAY_COL_STRIDE < RAY_VIEW_COLS) ?
+                                      (u16)(wall_col + RAY_COL_STRIDE) : wall_col;
+            const u16 wall_depth = (columns[next_wall_col].depth < columns[wall_col].depth) ?
+                                   columns[next_wall_col].depth : columns[wall_col].depth;
+            if (object->depth >= wall_depth) {
                 continue;
             }
 
@@ -556,10 +565,15 @@ static void draw_projected_billboards(const RayColumn *columns,
             const u32 keep_mask = ~((u32)0x0F << shift);
 
             if ((s16)tile_x != last_marked_tile_x) {
-                for (u16 overlay_tile_y = (u16)(y0 >> 3); overlay_tile_y <= (u16)(y1 >> 3); overlay_tile_y++) {
-                    renderer_mark_overlay_tile((u16)(overlay_tile_y * VIEW_TILE_W + tile_x));
+                if (last_marked_tile_x >= 0) {
+                    for (u16 overlay_tile_y = 0; overlay_tile_y < VIEW_TILE_H; overlay_tile_y++) {
+                        if ((opaque_tile_rows & ((u16)1u << overlay_tile_y)) != 0) {
+                            renderer_mark_overlay_tile((u16)(overlay_tile_y * VIEW_TILE_W + last_marked_tile_x));
+                        }
+                    }
                 }
                 last_marked_tile_x = (s16)tile_x;
+                opaque_tile_rows = 0;
             }
 
             u16 y = (u16)y0;
@@ -575,7 +589,15 @@ static void draw_projected_billboards(const RayColumn *columns,
                     if (texel != 0) {
                         const u16 row_y = (u16)(y & 7);
                         tile[row_y] = (tile[row_y] & keep_mask) | ((u32)texel << shift);
+                        opaque_tile_rows |= (u16)1u << tile_y;
                     }
+                }
+            }
+        }
+        if (last_marked_tile_x >= 0) {
+            for (u16 overlay_tile_y = 0; overlay_tile_y < VIEW_TILE_H; overlay_tile_y++) {
+                if ((opaque_tile_rows & ((u16)1u << overlay_tile_y)) != 0) {
+                    renderer_mark_overlay_tile((u16)(overlay_tile_y * VIEW_TILE_W + last_marked_tile_x));
                 }
             }
         }
@@ -901,7 +923,8 @@ void renderer_render_scene(const RayColumn *columns,
     renderer_reset_frame_modified();
 #endif
     ProjectedBillboard objects[BILLBOARD_MAX_PROJECTED_OBJECTS];
-    const u16 object_count = billboard_project_scene(player, objects, BILLBOARD_MAX_PROJECTED_OBJECTS);
+    const u16 object_count = billboard_project_scene(
+        player, columns, objects, BILLBOARD_MAX_PROJECTED_OBJECTS);
 
     if (base_dirty) {
         g_upload_requires_bank_swap = TRUE;
@@ -1028,10 +1051,15 @@ static void draw_upload_debug_stats(void) {
             (unsigned long)bsp_get_debug_side_cache_subticks());
     VDP_drawTextFill(text, 0, 5, 40);
 
-    sprintf(text, "Obj=%02u Cull=%02u Draw=%02u PK=%03u", (unsigned int)billboard_get_active_count(),
-            (unsigned int)billboard_get_debug_culled_count(),
+    sprintf(text, "O%02u C%02u W%02u L%02u D%02u A%02u H%02u M%02u",
+            (unsigned int)billboard_get_active_count(),
+            (unsigned int)billboard_get_debug_candidate_count(),
+            (unsigned int)billboard_get_debug_occluded_count(),
+            (unsigned int)billboard_get_debug_los_culled_count(),
             (unsigned int)billboard_get_debug_projected_count(),
-            (unsigned int)billboard_get_debug_prop_collision_candidates());
+            (unsigned int)billboard_get_debug_simulated_enemy_count(),
+            (unsigned int)billboard_get_debug_visibility_cache_hits(),
+            (unsigned int)billboard_get_debug_visibility_cache_misses());
     VDP_drawTextFill(text, 0, 6, 40);
 }
 #endif

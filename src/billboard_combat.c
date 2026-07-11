@@ -11,7 +11,7 @@ static bool is_position_blocked(s32 x, s32 y) {
            billboard_position_blocked(x, y, ENEMY_RADIUS);
 }
 
-static void push_dummy_on_hit(BillboardObject *object, const PlayerState *player) {
+static void push_dummy_on_hit(u16 index, BillboardObject *object, const PlayerState *player) {
     s16 step_x = 0;
     s16 step_y = 0;
 
@@ -37,6 +37,8 @@ static void push_dummy_on_hit(BillboardObject *object, const PlayerState *player
     if ((step_y != 0) && !is_position_blocked(object->x, object->y + step_y)) {
         object->y += step_y;
     }
+
+    billboard_invalidate_object_visibility(index);
 
     object->move_cooldown = DUMMY_HIT_STUN_FRAMES;
 }
@@ -71,6 +73,7 @@ u16 billboard_get_target_health(void) {
 
 BillboardShotResult billboard_fire_center(const PlayerState *player, u16 wall_depth) {
     BillboardObject *best_object = NULL;
+    u16 best_index = 0;
     s32 best_depth = 0x7FFFFFFF;
 
     // Compute the view basis once and share it across the target scan, matching
@@ -103,6 +106,7 @@ BillboardShotResult billboard_fire_center(const PlayerState *player, u16 wall_de
         if (measure.forward < best_depth) {
             best_depth = measure.forward;
             best_object = object;
+            best_index = i;
         }
     }
 
@@ -110,7 +114,7 @@ BillboardShotResult billboard_fire_center(const PlayerState *player, u16 wall_de
         return BILLBOARD_SHOT_NONE;
     }
 
-    push_dummy_on_hit(best_object, player);
+    push_dummy_on_hit(best_index, best_object, player);
 
     if (best_object->hp > 1) {
         best_object->hp--;
