@@ -1,23 +1,30 @@
 #include "player_controller.h"
 #include "fixed_math.h"
 
-// Turning uses a fixed-point ramp. At the locked 30fps cadence this keeps the
-// first visible tap finer than before (1 angle unit instead of 2), while held
-// turns ramp quickly to a higher top speed so the camera feels less stiff.
+// Turning uses a fixed-point ramp that is scaled by the real elapsed-vblank count
+// (see player_controller_update), so the angular velocity per real second is
+// frame-rate-independent. The constants below express a per-vblank rate; at the
+// locked 20fps cadence (TARGET_FRAME_VSYNCS=3) a held turn applies speed*3 each
+// iteration, and at 30fps it would apply speed*2 — both yield the same degrees/sec
+// (speed * 60 / 256 angle-units per second), so a steady tap stays fine (1 angle
+// unit on the first visible step) while held turns ramp to a snappy top speed.
 #define TURN_FP_SHIFT 8
 #define TURN_FP_ONE (1 << TURN_FP_SHIFT)
 #define TURN_MIN_FP (TURN_FP_ONE / 2)
 #define TURN_MAX_FP (4 * TURN_FP_ONE)
 #define TURN_ACCEL_FP ((3 * TURN_FP_ONE) / 2)
-// Translation uses velocity ramps for inertia instead of instant on/off.
-// Values doubled from the original 60fps-tuned speeds (30/24/6/8) because the
-// locked cadence is now TARGET_FRAME_VSYNCS=2 (30fps): player_try_move runs once
-// per iteration regardless of vsync count, so half the iterations/sec means half
-// the real-world speed unless compensated here.
-#define MOVE_MAX 120
-#define STRAFE_MAX 96
-#define MOVE_ACCEL 40 // per frame, ramping up toward the target speed
-#define MOVE_DECEL 64 // per frame, ramping down when released or reversing
+// Translation uses velocity ramps for inertia instead of instant on/off. These are
+// per-iteration values: player_try_move runs once per main-loop iteration regardless
+// of vsync count, so fewer iterations/sec means less real-world speed unless
+// compensated. The cadence is now TARGET_FRAME_VSYNCS=3 (20fps = 20 iterations/sec,
+// 2/3 of the old 30fps), so the magnitudes are scaled by 3/2 relative to the 30fps
+// baseline to preserve the same real-world walk/strafe speed. player_try_move
+// sub-steps the displacement (PLAYER_MOVE_SUBSTEP), so the larger per-iteration step
+// cannot tunnel through walls.
+#define MOVE_MAX 180
+#define STRAFE_MAX 144
+#define MOVE_ACCEL 60 // per iteration, ramping up toward the target speed
+#define MOVE_DECEL 96 // per iteration, ramping down when released or reversing
 
 static u16 s_previous_joy = 0;
 static s16 s_vel_forward = 0;

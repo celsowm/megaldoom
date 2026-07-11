@@ -18,8 +18,8 @@
 // 3 = 20fps). A steady cadence is what makes movement feel uniform; the lock only pays
 // off when a redraw reliably finishes within this many vblanks. Tune from the DEBUG_PERF
 // CPU-load% while moving (turn right + go north): load under ~95% -> 1 holds 60; under
-// ~185% -> 2 holds 30; otherwise 3 holds a rock-steady 20. Default 2 targets 30fps.
-#define TARGET_FRAME_VSYNCS 2
+// ~185% -> 2 holds 30; otherwise 3 holds a rock-steady 20. Default 3 targets 20fps.
+#define TARGET_FRAME_VSYNCS 3
 
 // Perf diagnostics overlay (FPS + CPU load + frame-load cursor). Set to 0 (or
 // build with -DDEBUG_PERF=0) for clean release builds.
@@ -145,7 +145,7 @@ int main(bool hard) {
         DoorActionResult action_status = g_hud.action_status;
         BillboardShotResult shot_status = g_hud.shot_status;
         // Real vblanks elapsed since last iteration. Keep it clamped for future diagnostics,
-        // but do not feed render stalls back into player control as visible camera jumps.
+        // but now it IS fed to the turn controller so rotation stays time-correct.
         const u32 cur_vtimer = vtimer;
         u16 elapsed_frames = (u16)(cur_vtimer - prev_vtimer);
 
@@ -155,7 +155,7 @@ int main(bool hard) {
         } else if (elapsed_frames > 4) {
             elapsed_frames = 4;
         }
-        (void)elapsed_frames;
+        // elapsed_frames is fed to player_controller_update below so turning is time-correct.
 
         if (shot_cooldown > 0) {
             shot_cooldown--;
@@ -174,7 +174,7 @@ int main(bool hard) {
 
         JOY_update();
         if (!level_cleared) {
-            control = player_controller_update(&g_player, TARGET_FRAME_VSYNCS);
+            control = player_controller_update(&g_player, elapsed_frames);
         } else if ((JOY_readJoypad(JOY_1) & BUTTON_START) != 0) {
             phase_index = (u16)((phase_index + 1) & 1);
             reset_level(phase_index, &level_cleared, &shot_cooldown, &player_health, &frame);
