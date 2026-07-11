@@ -59,6 +59,11 @@ const BspNode bsp_nodes[] = {
 const u16 bsp_root_node = 0;
 const u16 bsp_seg_count = 12;
 const u16 bsp_node_count = 1u;
+const BspThing bsp_things[] = {
+    {640, 1024, 1u, 0u, 0u},
+    {1408, 1024, 2028u, 0u, 0u},
+};
+const u16 bsp_thing_count = 2u;
 
 // Precomputed |bx-ax| + |by-ay| per seg (see bsp_map.h).
 const u16 bsp_seg_wall_len[] = {

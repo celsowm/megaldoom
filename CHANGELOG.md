@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Generated raw E1M1 THINGS into ROM and spawn a curated set of 102 gameplay
+  entities: pickups, enemies, candles/lamp-style props, columns and barrels.
+- Added a generated 15-sprite billboard world atlas, functional health/armor/
+  pistol-ammo pickups, real HUD ammo/armor values, and blocking static props.
+- Capped imported billboard rendering to the nearest 12 visible objects and
+  added active/cull/draw/prop-collision DEBUG_PERF counters.
 - Added an offline-generated spatial blockmap for exact local collision and LOS
   queries, replacing repeated full E1M1 segment scans.
 - Made BSP near/far ordering lazy per visited node and clipped near-plane child

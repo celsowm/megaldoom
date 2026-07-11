@@ -64,6 +64,17 @@ typedef struct {
     u16 back;
 } BspNode;
 
+// A raw Doom THING converted to engine coordinates. Runtime billboard spawning
+// owns the curated type mapping; keeping raw type/flags here lets the generated
+// map remain a faithful, compact source of level entities.
+typedef struct {
+    s16 x;
+    s16 y;
+    u16 type;
+    u16 angle;
+    u16 flags;
+} BspThing;
+
 // Child encoding (Doom convention): high bit set => subsector leaf, low bits =
 // index into the corresponding array.
 #define BSP_CHILD_LEAF_BIT 0x8000u
@@ -96,6 +107,8 @@ extern const BspNode bsp_nodes[];
 extern const u16 bsp_root_node;
 extern const u16 bsp_seg_count;
 extern const u16 bsp_node_count;
+extern const BspThing bsp_things[];
+extern const u16 bsp_thing_count;
 
 // Compact parallel ROM table: precomputed horizontal wall length
 // (|bx-ax| + |by-ay|) per seg, so the renderer avoids two vertex lookups and

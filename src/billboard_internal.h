@@ -2,21 +2,37 @@
 #define MEGALDOOM_BILLBOARD_INTERNAL_H
 
 #include "billboard.h"
+#include "bsp_map.h"
 #include "fixed_math.h"
 
 #define BILLBOARD_MIN_DEPTH 32
 #define BILLBOARD_MAX_DEPTH (6 * FX_ONE)
 #define BILLBOARD_SCALE (3 * FX_ONE)
+#define BILLBOARD_ITEM_SCALE (2 * FX_ONE)
+#define BILLBOARD_PROP_SCALE ((5 * FX_ONE) / 2)
 #define BILLBOARD_PHASE_COUNT 2
 // View dimensions come from raycast.h (RAY_VIEW_COLS/ROWS) -- billboard.h
 // includes it -- instead of being redefined here.
-#define BILLBOARD_OBJECT_COUNT 7
+#define BILLBOARD_OBJECT_COUNT 112
 #define BILLBOARD_COLLECT_RADIUS (FX_ONE / 2)
 #define BILLBOARD_COLLECT_RADIUS_SQ (BILLBOARD_COLLECT_RADIUS * BILLBOARD_COLLECT_RADIUS)
 #define BILLBOARD_TYPE_BONUS 0
 #define BILLBOARD_TYPE_KEY 1
-#define BILLBOARD_TYPE_DECOR 2
-#define BILLBOARD_TYPE_DUMMY 3
+#define BILLBOARD_TYPE_STIMPACK 2
+#define BILLBOARD_TYPE_MEDIKIT 3
+#define BILLBOARD_TYPE_GREEN_ARMOR 4
+#define BILLBOARD_TYPE_BLUE_ARMOR 5
+#define BILLBOARD_TYPE_CLIP 6
+#define BILLBOARD_TYPE_AMMO_BOX 7
+#define BILLBOARD_TYPE_CANDLE 8
+#define BILLBOARD_TYPE_CANDELABRA 9
+#define BILLBOARD_TYPE_COLUMN 10
+#define BILLBOARD_TYPE_BARREL 11
+#define BILLBOARD_TYPE_TREE 12
+#define BILLBOARD_TYPE_DUMMY 13
+#define BILLBOARD_TYPE_COUNT 14
+#define BILLBOARD_PROP_RADIUS 32
+
 #define DUMMY_MOVE_STEP (FX_ONE / 8)
 #define DUMMY_MOVE_INTERVAL 5
 #define DUMMY_STOP_RANGE (FX_ONE / 2)
@@ -62,12 +78,14 @@
 
 typedef struct {
     u8 visual_id;
-    u8 damaged_visual_id;
+    u8 effect;
     u8 hit_points;
+    u8 radius;
     s32 scale;
     s32 max_depth;
     bool collectible;
     bool targetable;
+    bool blocking;
 } BillboardType;
 
 typedef struct {
@@ -103,7 +121,6 @@ typedef struct {
     s16 half_w;
 } BillboardMeasure;
 
-extern const BillboardObject INITIAL_BILLBOARDS[BILLBOARD_PHASE_COUNT][BILLBOARD_OBJECT_COUNT];
 extern BillboardObject g_billboards[];
 extern u16 g_collected_count;
 extern BillboardPickupCounts g_pickup_counts;

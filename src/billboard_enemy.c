@@ -44,7 +44,8 @@ static bool is_position_blocked(s32 x, s32 y) {
 #if DEBUG_PERF
     bsp_debug_set_query_owner(BSP_QUERY_ENEMY);
 #endif
-    return bsp_circle_blocked(x, y, ENEMY_RADIUS);
+    return bsp_circle_blocked(x, y, ENEMY_RADIUS) ||
+           billboard_position_blocked(x, y, ENEMY_RADIUS);
 }
 
 static bool try_move_dummy(BillboardObject *object, s16 step_x, s16 step_y) {
@@ -316,7 +317,13 @@ BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player) {
     }
 
     for (u16 i = 0; i < BILLBOARD_OBJECT_COUNT; i++) {
+        if (!g_billboards[i].active || (g_billboards[i].type_id != BILLBOARD_TYPE_DUMMY)) {
+            continue;
+        }
         for (u16 j = (u16)(i + 1); j < BILLBOARD_OBJECT_COUNT; j++) {
+            if (!g_billboards[j].active || (g_billboards[j].type_id != BILLBOARD_TYPE_DUMMY)) {
+                continue;
+            }
             if (separate_dummies(&g_billboards[i], &g_billboards[j])) {
                 update.moved = TRUE;
             }

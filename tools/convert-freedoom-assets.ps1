@@ -113,6 +113,32 @@ if (-not (Test-Path $BillboardEnemySourcePath)) {
     throw "Billboard enemy source not found: $BillboardEnemySourcePath"
 }
 
+# Curated E1M1 item/prop atlas. Every entry is baked into the same compact 24x48
+# billboard canvas; transparent padding preserves the original sprite silhouette
+# while keeping the 68000 renderer's texture lookup branch-free.
+$BillboardWorldSpecs = @(
+    @{ Name = "BONUS"; Path = "res\originaldoom\sprites\BON1A0.png" },
+    @{ Name = "BLUE_KEY"; Path = "res\originaldoom\sprites\BKEYA0.png" },
+    @{ Name = "YELLOW_KEY"; Path = "res\originaldoom\sprites\YKEYA0.png" },
+    @{ Name = "RED_KEY"; Path = "res\originaldoom\sprites\RKEYA0.png" },
+    @{ Name = "STIMPACK"; Path = "res\originaldoom\sprites\STIMA0.png" },
+    @{ Name = "MEDIKIT"; Path = "res\originaldoom\sprites\MEDIA0.png" },
+    @{ Name = "GREEN_ARMOR"; Path = "res\originaldoom\sprites\ARM1A0.png" },
+    @{ Name = "BLUE_ARMOR"; Path = "res\originaldoom\sprites\ARM2A0.png" },
+    @{ Name = "CLIP"; Path = "res\originaldoom\sprites\CLIPA0.png" },
+    @{ Name = "AMMO_BOX"; Path = "res\originaldoom\sprites\AMMOA0.png" },
+    @{ Name = "CANDLE"; Path = "res\originaldoom\sprites\CANDA0.png" },
+    @{ Name = "CANDELABRA"; Path = "res\originaldoom\sprites\CBRAA0.png" },
+    @{ Name = "COLUMN"; Path = "res\originaldoom\sprites\COLUA0.png" },
+    @{ Name = "BARREL"; Path = "res\originaldoom\sprites\BAR1A0.png" },
+    @{ Name = "TREE"; Path = "res\originaldoom\sprites\TREDA0.png" }
+)
+foreach ($spec in $BillboardWorldSpecs) {
+    if (-not (Test-Path (Join-Path $Root $spec.Path))) {
+        throw "Billboard world sprite not found: $($spec.Path)"
+    }
+}
+
 Add-Type -AssemblyName System.Drawing
 
 # The WAD generator owns the exact E1M1 wall catalog, PAL3 palette and sector
@@ -227,7 +253,8 @@ function Get-NearestWorldPaletteIndex([System.Drawing.Color]$Color, [bool]$Allow
     return $bestIndex
 }
 
-function Convert-Image([string]$Path, [int]$Width, [int]$Height, [bool]$UseAlphaTransparency) {
+function Convert-Image([string]$Path, [int]$Width, [int]$Height, [bool]$UseAlphaTransparency,
+                       [bool]$PreserveAspect = $false) {
     # Area/box downscale: each output texel is the AVERAGE of the full source
     # rectangle it covers, then quantized to the palette. Point sampling (grabbing
     # a single source pixel) aliased high-frequency Doom textures into random-looking
@@ -235,22 +262,46 @@ function Convert-Image([string]$Path, [int]$Width, [int]$Height, [bool]$UseAlpha
     # STONE/BROWN reads as a real (if low-res) wall instead of static.
     $image = [System.Drawing.Bitmap]::new($Path)
     $rows = New-Object System.Collections.Generic.List[string]
+    $drawWidth = $Width
+    $drawHeight = $Height
+    $drawX = 0
+    $drawY = 0
+
+    if ($PreserveAspect) {
+        $scale = [Math]::Min($Width / $image.Width, $Height / $image.Height)
+        $drawWidth = [Math]::Max(1, [int][Math]::Round($image.Width * $scale))
+        $drawHeight = [Math]::Max(1, [int][Math]::Round($image.Height * $scale))
+        $drawX = [int](($Width - $drawWidth) / 2)
+        $drawY = [int](($Height - $drawHeight) / 2)
+    }
 
     try {
         for ($y = 0; $y -lt $Height; $y++) {
             $values = New-Object System.Collections.Generic.List[string]
 
+            if (($y -lt $drawY) -or ($y -ge ($drawY + $drawHeight))) {
+                for ($x = 0; $x -lt $Width; $x++) { $values.Add("0") }
+                $rows.Add("    {" + ($values -join ", ") + "}")
+                continue
+            }
+            $localY = $y - $drawY
+
             # Floor (not [int], which rounds) and clamp the start so upscaling small
             # sprites can never push the source rect past the image edge (empty rect
             # -> divide-by-zero).
-            $sy0 = [Math]::Min($image.Height - 1, [int][Math]::Floor(($y * $image.Height) / $Height))
-            $sy1 = [int][Math]::Floor((($y + 1) * $image.Height) / $Height)
+            $sy0 = [Math]::Min($image.Height - 1, [int][Math]::Floor(($localY * $image.Height) / $drawHeight))
+            $sy1 = [int][Math]::Floor((($localY + 1) * $image.Height) / $drawHeight)
             if ($sy1 -le $sy0) { $sy1 = $sy0 + 1 }
             if ($sy1 -gt $image.Height) { $sy1 = $image.Height }
 
             for ($x = 0; $x -lt $Width; $x++) {
-                $sx0 = [Math]::Min($image.Width - 1, [int][Math]::Floor(($x * $image.Width) / $Width))
-                $sx1 = [int][Math]::Floor((($x + 1) * $image.Width) / $Width)
+                if (($x -lt $drawX) -or ($x -ge ($drawX + $drawWidth))) {
+                    $values.Add("0")
+                    continue
+                }
+                $localX = $x - $drawX
+                $sx0 = [Math]::Min($image.Width - 1, [int][Math]::Floor(($localX * $image.Width) / $drawWidth))
+                $sx1 = [int][Math]::Floor((($localX + 1) * $image.Width) / $drawWidth)
                 if ($sx1 -le $sx0) { $sx1 = $sx0 + 1 }
                 if ($sx1 -gt $image.Width) { $sx1 = $image.Width }
 
@@ -648,6 +699,13 @@ $facePaletteRgb = ($facePalette | ForEach-Object {
 $billboardRows = Convert-Image $BillboardSourcePath 16 16 $true
 $billboardKeyRows = Convert-Image $BillboardKeySourcePath 16 16 $true
 $billboardDecorRows = Convert-Image $BillboardDecorSourcePath 16 16 $true
+$billboardWorldW = 24
+$billboardWorldH = 48
+$billboardWorldBlocks = New-Object System.Collections.Generic.List[string]
+foreach ($spec in $BillboardWorldSpecs) {
+    $rows = Convert-Image (Join-Path $Root $spec.Path) $billboardWorldW $billboardWorldH $true $true
+    $billboardWorldBlocks.Add("    {" + "`r`n" + ($rows -join ",`r`n") + "`r`n    }")
+}
 # Enemy (zombieman) animation frames, all scaled into the same 24x48 box.
 # Order MUST match the pose indices in src/billboard_internal.h:
 #   0..3 walk (POSSA1..D1), 4 attack (POSSF1), 5..9 death (POSSH0..L0, L0 = corpse).
@@ -707,6 +765,14 @@ $($billboardKeyRows -join ",`r`n")
 
 static const u8 FREEDOOM_BILLBOARD_DECOR_TEXTURE[16][16] = {
 $($billboardDecorRows -join ",`r`n")
+};
+
+#define FREEDOOM_BILLBOARD_WORLD_W $billboardWorldW
+#define FREEDOOM_BILLBOARD_WORLD_H $billboardWorldH
+#define FREEDOOM_BILLBOARD_WORLD_TEXTURE_COUNT $($BillboardWorldSpecs.Count)
+// $((($BillboardWorldSpecs | ForEach-Object { $_.Name }) -join ", "))
+static const u8 FREEDOOM_BILLBOARD_WORLD_TEXTURES[FREEDOOM_BILLBOARD_WORLD_TEXTURE_COUNT][FREEDOOM_BILLBOARD_WORLD_H][FREEDOOM_BILLBOARD_WORLD_W] = {
+$($billboardWorldBlocks -join ",`r`n")
 };
 
 #define FREEDOOM_BILLBOARD_ENEMY_W $BillboardEnemyW

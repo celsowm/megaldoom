@@ -691,17 +691,26 @@ def main():
         seg["tex_v"] = ((seg["tex_v_offset"] * WALL_TEX_DIM) //
                         texture_meta[name]["height"]) & (WALL_TEX_DIM - 1)
 
-    # --- Player 1 start from THINGS (type 1). ------------------------------- #
+    # --- THINGS / Player 1 start. ------------------------------------------- #
+    # Convert every THING into engine y-down coordinates.  The runtime owns the
+    # deliberately-curated mapping to billboards/items, so unsupported types can
+    # be reported and ignored without throwing away source-map fidelity.
+    out_things = []
     start_x = start_y = 0
     start_angle_deg = 0
     for i in range(len(things_raw) // 10):
         tx, ty, tang, ttype, tflags = struct.unpack_from("<hhHHH", things_raw, i * 10)
-        if ttype == 1:
+        out_things.append((tx, -ty, ttype, (256 - (round(tang * 256 / 360) & 255)) & 255, tflags))
+        if ttype == 1 and start_x == 0 and start_y == 0:
             start_x, start_y, start_angle_deg = tx, ty, tang
-            break
     # Y-down flip: negate the start Y and mirror the angle about the x-axis.
     start_y = -start_y
     start_angle = (256 - (round(start_angle_deg * 256 / 360) & 255)) & 255
+    curated_thing_types = {5, 6, 9, 13, 34, 35, 43, 44, 45, 46, 47, 48,
+                           2007, 2011, 2012, 2014, 2015, 2018, 2019, 2028,
+                           2035, 2046, 2048, 3001, 3004}
+    supported_things = sum(1 for _, _, thing_type, _, _ in out_things
+                           if thing_type in curated_thing_types)
 
     root = (len(nodes) - 1) if nodes else 0x8000
 
@@ -823,6 +832,12 @@ def main():
     lines.append("const u16 bsp_root_node = %du;" % root)
     lines.append("const u16 bsp_seg_count = %du;" % len(out_segs))
     lines.append("const u16 bsp_node_count = %du;" % len(nodes))
+    lines.append("const BspThing bsp_things[%d] = {" % len(out_things))
+    for x, y, thing_type, angle, flags in out_things:
+        lines.append("    {%d, %d, %du, %du, %du}," %
+                     (x, y, thing_type, angle, flags))
+    lines.append("};")
+    lines.append("const u16 bsp_thing_count = %du;" % len(out_things))
     lines.append("const s32 bsp_player_start_x = %d;" % start_x)
     lines.append("const s32 bsp_player_start_y = %d;" % start_y)
     lines.append("const u16 bsp_player_start_angle = %du;" % start_angle)
@@ -845,6 +860,8 @@ def main():
           (grid_w, grid_h, len(grid_indices), spatial_checks))
     print("  player   : (%d,%d) angle_deg=%d -> %d" % (
         start_x, start_y, start_angle_deg, start_angle))
+    print("  things   : %d raw, %d curated, %d skipped" %
+          (len(out_things), supported_things, len(out_things) - supported_things))
 
 
 if __name__ == "__main__":

@@ -22,14 +22,13 @@ static BillboardTex get_billboard_texture(u8 visual_id, u8 frame) {
             return (BillboardTex){(const u8 *)FREEDOOM_BILLBOARD_ENEMY_FRAMES[f],
                                   FREEDOOM_BILLBOARD_ENEMY_W, FREEDOOM_BILLBOARD_ENEMY_H};
         }
-        case BILLBOARD_VISUAL_DECOR_DAMAGED:
-        case BILLBOARD_VISUAL_DECOR:
-            return (BillboardTex){(const u8 *)FREEDOOM_BILLBOARD_DECOR_TEXTURE, 16, 16};
-        case BILLBOARD_VISUAL_KEY:
-            return (BillboardTex){(const u8 *)FREEDOOM_BILLBOARD_KEY_TEXTURE, 16, 16};
-        case BILLBOARD_VISUAL_BONUS:
         default:
-            return (BillboardTex){(const u8 *)FREEDOOM_BILLBOARD_BONUS_TEXTURE, 16, 16};
+            if (visual_id < FREEDOOM_BILLBOARD_WORLD_TEXTURE_COUNT) {
+                return (BillboardTex){(const u8 *)FREEDOOM_BILLBOARD_WORLD_TEXTURES[visual_id],
+                                      FREEDOOM_BILLBOARD_WORLD_W, FREEDOOM_BILLBOARD_WORLD_H};
+            }
+            return (BillboardTex){(const u8 *)FREEDOOM_BILLBOARD_WORLD_TEXTURES[BILLBOARD_VISUAL_BONUS],
+                                  FREEDOOM_BILLBOARD_WORLD_W, FREEDOOM_BILLBOARD_WORLD_H};
     }
 }
 
@@ -1028,6 +1027,12 @@ static void draw_upload_debug_stats(void) {
             (unsigned int)bsp_get_debug_los_candidates(),
             (unsigned long)bsp_get_debug_side_cache_subticks());
     VDP_drawTextFill(text, 0, 5, 40);
+
+    sprintf(text, "Obj=%02u Cull=%02u Draw=%02u PK=%03u", (unsigned int)billboard_get_active_count(),
+            (unsigned int)billboard_get_debug_culled_count(),
+            (unsigned int)billboard_get_debug_projected_count(),
+            (unsigned int)billboard_get_debug_prop_collision_candidates());
+    VDP_drawTextFill(text, 0, 6, 40);
 }
 #endif
 

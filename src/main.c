@@ -13,7 +13,10 @@
 #define PLAYER_DAMAGE_FLASH_FRAMES 6
 #define PLAYER_INVULN_FRAMES 24
 #define PLAYER_HIT_PUSH_STEP (FX_ONE / 4)
-#define PLAYER_MAX_HEALTH 3
+#define PLAYER_MAX_HEALTH 100
+#define PLAYER_MAX_ARMOR 200
+#define PLAYER_START_AMMO 50
+#define PLAYER_HIT_DAMAGE 20
 // Locked frame cadence: every iteration lasts this many vblanks (1 = 60fps, 2 = 30fps,
 // 3 = 20fps). A steady cadence is what makes movement feel uniform; the lock only pays
 // off when a redraw reliably finishes within this many vblanks. Tune from the DEBUG_PERF
@@ -39,7 +42,7 @@ static u8 get_portrait_state(u16 player_health) {
     if (g_player_damage_flash > 0) {
         return 1;
     }
-    if (player_health <= 1) {
+    if (player_health <= 20) {
         return 2;
     }
 
@@ -49,6 +52,8 @@ static u8 get_portrait_state(u16 player_health) {
 static void sync_hud(u32 frame,
                      u16 phase_index,
                      u16 player_health,
+                     u16 player_armor,
+                     u16 player_ammo,
                      u16 shot_cooldown,
                      DoorActionResult action_status,
                      BillboardShotResult shot_status,
@@ -57,6 +62,8 @@ static void sync_hud(u32 frame,
     g_hud.phase = (u16)((phase_index % 99) + 1);
     g_hud.player_health = player_health;
     g_hud.health_percent = (u16)((player_health * 100u) / PLAYER_MAX_HEALTH);
+    g_hud.armor = player_armor;
+    g_hud.ammo = player_ammo;
     g_hud.shot_cooldown = shot_cooldown;
     g_hud.enemy_count = billboard_get_enemy_count();
     g_hud.target_count = billboard_get_target_count();
@@ -82,10 +89,11 @@ static void render_current_view(u16 player_health, bool base_dirty) {
     renderer_render_scene(
         g_ray_columns, &g_player, &g_scene_colors, base_dirty,
         g_weapon_flash > 0, g_player_damage_flash > 0,
-        (bool)(player_health <= 1));
+        (bool)(player_health <= 20));
 }
 
-static void reset_level(u16 phase_index, bool *level_cleared, u16 *shot_cooldown, u16 *player_health, u32 *frame) {
+static void reset_level(u16 phase_index, bool *level_cleared, u16 *shot_cooldown,
+                        u16 *player_health, u16 *player_armor, u16 *player_ammo, u32 *frame) {
     bsp_map_reset(phase_index);
     billboard_init(phase_index);
     player_init(&g_player, phase_index);
@@ -96,11 +104,14 @@ static void reset_level(u16 phase_index, bool *level_cleared, u16 *shot_cooldown
     *level_cleared = FALSE;
     *shot_cooldown = 0;
     *player_health = PLAYER_MAX_HEALTH;
+    *player_armor = 0;
+    *player_ammo = PLAYER_START_AMMO;
     *frame = 0;
 
     renderer_invalidate_scene();
     renderer_draw_static_screen();
-    sync_hud(*frame, phase_index, *player_health, *shot_cooldown, DOOR_ACTION_NONE, BILLBOARD_SHOT_NONE, FALSE);
+    sync_hud(*frame, phase_index, *player_health, *player_armor, *player_ammo,
+             *shot_cooldown, DOOR_ACTION_NONE, BILLBOARD_SHOT_NONE, FALSE);
     renderer_draw_hud(&g_hud);
 }
 
@@ -112,6 +123,8 @@ int main(bool hard) {
     bool level_cleared = FALSE;
     u16 phase_index = 0;
     u16 player_health = PLAYER_MAX_HEALTH;
+    u16 player_armor = 0;
+    u16 player_ammo = PLAYER_START_AMMO;
     u16 shot_cooldown = 0;
     u32 prev_vtimer = vtimer;
 
@@ -133,7 +146,7 @@ int main(bool hard) {
     Z80_loadDriver(Z80_DRIVER_XGM2, TRUE);
     XGM2_play(test_music);
 
-    reset_level(phase_index, &level_cleared, &shot_cooldown, &player_health, &frame);
+    reset_level(phase_index, &level_cleared, &shot_cooldown, &player_health, &player_armor, &player_ammo, &frame);
 
 #if DEBUG_PERF
     // Scanline cursor (sprite 0): top = 0% load, bottom = 100% load, averaged.
@@ -151,6 +164,7 @@ int main(bool hard) {
 
 #if DEBUG_PERF
         bsp_debug_reset_query_stats();
+        billboard_debug_reset_stats();
 #endif
 
         prev_vtimer = cur_vtimer;
@@ -181,7 +195,7 @@ int main(bool hard) {
             control = player_controller_update(&g_player, elapsed_frames);
         } else if ((JOY_readJoypad(JOY_1) & BUTTON_START) != 0) {
             phase_index = (u16)((phase_index + 1) & 1);
-            reset_level(phase_index, &level_cleared, &shot_cooldown, &player_health, &frame);
+            reset_level(phase_index, &level_cleared, &shot_cooldown, &player_health, &player_armor, &player_ammo, &frame);
             base_dirty = TRUE;
             overlay_dirty = TRUE;
         }
@@ -189,7 +203,16 @@ int main(bool hard) {
         if ((control & PLAYER_CONTROL_CHANGED) != 0) {
             base_dirty = TRUE;
             overlay_dirty = TRUE;
-            if (billboard_collect_near(g_player.x, g_player.y)) {
+            const BillboardPickupResult pickup = billboard_collect_near(g_player.x, g_player.y);
+            if (pickup.collected) {
+                if (pickup.effect == BILLBOARD_EFFECT_HEALTH) {
+                    player_health = (u16)((player_health + pickup.amount > PLAYER_MAX_HEALTH) ? PLAYER_MAX_HEALTH : player_health + pickup.amount);
+                } else if (pickup.effect == BILLBOARD_EFFECT_ARMOR) {
+                    player_armor = (u16)((pickup.amount > player_armor) ? pickup.amount : player_armor);
+                    if (player_armor > PLAYER_MAX_ARMOR) player_armor = PLAYER_MAX_ARMOR;
+                } else if (pickup.effect == BILLBOARD_EFFECT_AMMO) {
+                    player_ammo = (u16)((player_ammo + pickup.amount > 99) ? 99 : player_ammo + pickup.amount);
+                }
                 overlay_dirty = TRUE;
                 XGM2_playPCM(sfx_pickup, sizeof(sfx_pickup), SOUND_PCM_CH2);
             }
@@ -230,9 +253,10 @@ int main(bool hard) {
         if ((control & PLAYER_CONTROL_FIRE) != 0) {
             BillboardShotResult shot = BILLBOARD_SHOT_NONE;
 
-            if (shot_cooldown == 0) {
+            if ((shot_cooldown == 0) && (player_ammo > 0)) {
                 shot = billboard_fire_center(&g_player, g_ray_columns[RAY_VIEW_COLS / 2].depth);
                 shot_cooldown = SHOT_COOLDOWN_FRAMES;
+                player_ammo--;
                 g_weapon_flash = WEAPON_FLASH_FRAMES;
                 overlay_dirty = TRUE;
 
@@ -262,16 +286,19 @@ int main(bool hard) {
             }
 
             if ((enemy_update.hits > 0) && (g_player_invuln == 0)) {
-                if (player_health <= 1) {
+                const u16 armor_absorb = (u16)(((PLAYER_HIT_DAMAGE / 3) < player_armor) ? (PLAYER_HIT_DAMAGE / 3) : player_armor);
+                const u16 damage = (u16)(PLAYER_HIT_DAMAGE - armor_absorb);
+                player_armor = (u16)(player_armor - armor_absorb);
+                if (player_health <= damage) {
                     XGM2_playPCM(sfx_player_death, sizeof(sfx_player_death), SOUND_PCM_CH2);
-                    reset_level(phase_index, &level_cleared, &shot_cooldown, &player_health, &frame);
+                    reset_level(phase_index, &level_cleared, &shot_cooldown, &player_health, &player_armor, &player_ammo, &frame);
                     base_dirty = TRUE;
                     overlay_dirty = TRUE;
                 } else {
                     player_apply_world_push(&g_player,
                                             (s32)enemy_update.push_x * PLAYER_HIT_PUSH_STEP,
                                             (s32)enemy_update.push_y * PLAYER_HIT_PUSH_STEP);
-                    player_health--;
+                    player_health = (u16)(player_health - damage);
                     g_player_damage_flash = PLAYER_DAMAGE_FLASH_FRAMES;
                     g_player_invuln = PLAYER_INVULN_FRAMES;
                     overlay_dirty = TRUE;
@@ -280,7 +307,8 @@ int main(bool hard) {
             }
         }
 
-        sync_hud(frame, phase_index, player_health, shot_cooldown, action_status, shot_status, level_cleared);
+        sync_hud(frame, phase_index, player_health, player_armor, player_ammo,
+                 shot_cooldown, action_status, shot_status, level_cleared);
         renderer_draw_hud(&g_hud);
 
 #if DEBUG_PERF

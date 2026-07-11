@@ -171,11 +171,10 @@ void renderer_draw_static_screen(void) {
 
 void renderer_draw_hud(const RendererHudState *state) {
     char text[4];
-    const u16 armor = (u16)(state->pickups.key + state->pickups.bonus);
-    const bool numbers_changed = (state->shot_cooldown != s_last_ammo) ||
+    const bool numbers_changed = (state->ammo != s_last_ammo) ||
                                  (state->health_percent != s_last_health) ||
                                  (state->enemy_count != s_last_frags) ||
-                                 (armor != s_last_armor);
+                                 (state->armor != s_last_armor);
 
     // Doom-red numerals (palette line 1, foreground index 15) so they read
     // clearly against the grey metal bar. Restore the default text palette
@@ -184,10 +183,10 @@ void renderer_draw_hud(const RendererHudState *state) {
     if (numbers_changed) {
         VDP_setTextPalette(PAL1);
 
-        if (state->shot_cooldown != s_last_ammo) {
-            write_u16_2(state->shot_cooldown, text);
+        if (state->ammo != s_last_ammo) {
+            write_u16_2(state->ammo, text);
             VDP_drawText(text, HUD_AMMO_X, HUD_NUM_ROW);
-            s_last_ammo = state->shot_cooldown;
+            s_last_ammo = state->ammo;
         }
 
         if (state->health_percent != s_last_health) {
@@ -202,10 +201,10 @@ void renderer_draw_hud(const RendererHudState *state) {
             s_last_frags = state->enemy_count;
         }
 
-        if (armor != s_last_armor) {
-            write_u16_2(armor, text);
+        if (state->armor != s_last_armor) {
+            write_u16_2(state->armor, text);
             VDP_drawText(text, HUD_ARMOR_X, HUD_NUM_ROW);
-            s_last_armor = armor;
+            s_last_armor = state->armor;
         }
 
         VDP_setTextPalette(PAL0);

@@ -1,6 +1,7 @@
 #include "raycast.h"
 #include "fixed_math.h"
 #include "bsp_map.h"
+#include "billboard.h"
 
 // Player physics. The world geometry and collision now live in the BSP map
 // (bsp_map.c); the old grid DDA raycaster is gone — walls are drawn by
@@ -12,7 +13,8 @@ static bool is_blocked_at(s32 x, s32 y) {
 #if DEBUG_PERF
     bsp_debug_set_query_owner(BSP_QUERY_PLAYER);
 #endif
-    return bsp_circle_blocked(x, y, PLAYER_RADIUS);
+    return bsp_circle_blocked(x, y, PLAYER_RADIUS) ||
+           billboard_position_blocked(x, y, PLAYER_RADIUS);
 }
 
 void player_init(PlayerState *player, u16 phase_index) {

@@ -11,6 +11,8 @@ typedef struct {
     u16 phase;
     u16 player_health;
     u16 health_percent;
+    u16 ammo;
+    u16 armor;
     u16 shot_cooldown;
     u16 enemy_count;
     u16 target_count;
