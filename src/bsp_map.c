@@ -12,6 +12,17 @@
 
 // Runtime open state per seg (only door segs are ever set open).
 static bool g_seg_open[BSP_MAX_SEGS];
+static u16 g_query_seen_generation[BSP_MAX_SEGS];
+static u16 g_query_generation = 1;
+
+#if DEBUG_PERF
+static BspDebugQueryOwner g_query_owner;
+static u32 g_player_collision_subticks;
+static u32 g_enemy_collision_subticks;
+static u32 g_los_subticks;
+static u16 g_collision_candidates;
+static u16 g_los_candidates;
+#endif
 
 // Collision and line-of-sight scan all bsp_seg_count segs; on the 68000 the real
 // cost is the per-seg s32 multiplies in seg_point_dist2 / cross3. We reject
@@ -65,9 +76,60 @@ static s32 seg_point_dist2(const BspSeg *s, s32 px, s32 py) {
     return dx * dx + dy * dy;
 }
 
+static void clear_query_seen(void) {
+    g_query_generation++;
+    if (g_query_generation == 0) {
+        for (u16 i = 0; i < BSP_MAX_SEGS; i++) g_query_seen_generation[i] = 0;
+        g_query_generation = 1;
+    }
+}
+
+static bool mark_query_seg(u16 seg_index) {
+    if (g_query_seen_generation[seg_index] == g_query_generation) return FALSE;
+    g_query_seen_generation[seg_index] = g_query_generation;
+    return TRUE;
+}
+
+// Mathematical floor division by the 256-unit cell size. C right-shift/division
+// of negatives is implementation-dependent/toward zero, so handle it explicitly.
+static s32 grid_coord(s32 value, s32 origin) {
+    const s32 relative = value - origin;
+    if (relative >= 0) return relative >> BSP_GRID_CELL_SHIFT;
+    return -(((-relative) + BSP_GRID_CELL_SIZE - 1) >> BSP_GRID_CELL_SHIFT);
+}
+
+static bool grid_cell_valid(s32 cx, s32 cy) {
+    return (bool)((cx >= 0) && (cy >= 0) &&
+                  (cx < bsp_grid_width) && (cy < bsp_grid_height));
+}
+
 bool bsp_circle_blocked(s32 x, s32 y, s32 radius) {
     const s32 r2 = radius * radius;
-    for (u16 i = 0; i < bsp_seg_count; i++) {
+    s32 cx0 = grid_coord(x - radius, bsp_grid_min_x);
+    s32 cx1 = grid_coord(x + radius, bsp_grid_min_x);
+    s32 cy0 = grid_coord(y - radius, bsp_grid_min_y);
+    s32 cy1 = grid_coord(y + radius, bsp_grid_min_y);
+#if DEBUG_PERF
+    const u32 query_start = getSubTick();
+#endif
+    bool blocked = FALSE;
+
+    if (cx0 < 0) cx0 = 0;
+    if (cy0 < 0) cy0 = 0;
+    if (cx1 >= bsp_grid_width) cx1 = bsp_grid_width - 1;
+    if (cy1 >= bsp_grid_height) cy1 = bsp_grid_height - 1;
+    clear_query_seen();
+    for (s32 cy = cy0; cy <= cy1 && !blocked; cy++) {
+        for (s32 cx = cx0; cx <= cx1 && !blocked; cx++) {
+            if (!grid_cell_valid(cx, cy)) continue;
+            const u16 cell = (u16)(cy * bsp_grid_width + cx);
+            const u16 end = bsp_grid_cell_offsets[cell + 1];
+            for (u16 p = bsp_grid_cell_offsets[cell]; p < end; p++) {
+                const u16 i = bsp_grid_seg_indices[p];
+                if (!mark_query_seg(i)) continue;
+#if DEBUG_PERF
+                g_collision_candidates++;
+#endif
         if (g_seg_open[i]) {
             continue;
         }
@@ -85,10 +147,17 @@ bool bsp_circle_blocked(s32 x, s32 y, s32 radius) {
             continue;
         }
         if (seg_point_dist2(s, x, y) < r2) {
-            return TRUE;
+                    blocked = TRUE;
+                    break;
+                }
+            }
         }
     }
-    return FALSE;
+#if DEBUG_PERF
+    if (g_query_owner == BSP_QUERY_PLAYER) g_player_collision_subticks += getSubTick() - query_start;
+    else g_enemy_collision_subticks += getSubTick() - query_start;
+#endif
+    return blocked;
 }
 
 static s32 cross3(s32 ax, s32 ay, s32 bx, s32 by, s32 cx, s32 cy) {
@@ -102,7 +171,30 @@ bool bsp_segment_hits_wall(s32 x0, s32 y0, s32 x1, s32 y1) {
     const s32 ray_miny = (y0 < y1) ? y0 : y1;
     const s32 ray_maxy = (y0 > y1) ? y0 : y1;
 
-    for (u16 i = 0; i < bsp_seg_count; i++) {
+    s32 cx = grid_coord(x0, bsp_grid_min_x);
+    s32 cy = grid_coord(y0, bsp_grid_min_y);
+    const s32 end_cx = grid_coord(x1, bsp_grid_min_x);
+    const s32 end_cy = grid_coord(y1, bsp_grid_min_y);
+    const s32 step_x = (end_cx > cx) ? 1 : ((end_cx < cx) ? -1 : 0);
+    const s32 step_y = (end_cy > cy) ? 1 : ((end_cy < cy) ? -1 : 0);
+    const s32 ray_dx = (x1 >= x0) ? x1 - x0 : x0 - x1;
+    const s32 ray_dy = (y1 >= y0) ? y1 - y0 : y0 - y1;
+    bool hit = FALSE;
+#if DEBUG_PERF
+    const u32 query_start = getSubTick();
+#endif
+
+    clear_query_seen();
+    while (TRUE) {
+        if (grid_cell_valid(cx, cy)) {
+            const u16 cell = (u16)(cy * bsp_grid_width + cx);
+            const u16 end = bsp_grid_cell_offsets[cell + 1];
+            for (u16 p = bsp_grid_cell_offsets[cell]; p < end; p++) {
+                const u16 i = bsp_grid_seg_indices[p];
+                if (!mark_query_seg(i)) continue;
+#if DEBUG_PERF
+                g_los_candidates++;
+#endif
         if (g_seg_open[i]) {
             continue;
         }
@@ -125,11 +217,53 @@ bool bsp_segment_hits_wall(s32 x0, s32 y0, s32 x1, s32 y1) {
 
         if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
             ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
-            return TRUE;
+                    hit = TRUE;
+                    break;
+                }
+            }
         }
+        if (hit || (cx == end_cx && cy == end_cy)) break;
+
+        // Supercover grid walk. At a corner crossing advance both axes; segment
+        // AABBs are inserted inclusively, so either adjacent cell contains every
+        // wall lying exactly on the shared boundary.
+        if (step_x == 0) { cy += step_y; continue; }
+        if (step_y == 0) { cx += step_x; continue; }
+        if (cx == end_cx) { cy += step_y; continue; }
+        if (cy == end_cy) { cx += step_x; continue; }
+        const s32 x_boundary = bsp_grid_min_x +
+            ((step_x > 0 ? cx + 1 : cx) * BSP_GRID_CELL_SIZE);
+        const s32 y_boundary = bsp_grid_min_y +
+            ((step_y > 0 ? cy + 1 : cy) * BSP_GRID_CELL_SIZE);
+        const s32 x_distance = (step_x > 0) ? x_boundary - x0 : x0 - x_boundary;
+        const s32 y_distance = (step_y > 0) ? y_boundary - y0 : y0 - y_boundary;
+        const s32 lhs = x_distance * ray_dy;
+        const s32 rhs = y_distance * ray_dx;
+        if (lhs == rhs) { cx += step_x; cy += step_y; }
+        else if (lhs < rhs) cx += step_x;
+        else cy += step_y;
     }
-    return FALSE;
+#if DEBUG_PERF
+    g_los_subticks += getSubTick() - query_start;
+#endif
+    return hit;
 }
+
+#if DEBUG_PERF
+void bsp_debug_set_query_owner(BspDebugQueryOwner owner) { g_query_owner = owner; }
+void bsp_debug_reset_query_stats(void) {
+    g_player_collision_subticks = 0;
+    g_enemy_collision_subticks = 0;
+    g_los_subticks = 0;
+    g_collision_candidates = 0;
+    g_los_candidates = 0;
+}
+u32 bsp_get_debug_player_collision_subticks(void) { return g_player_collision_subticks; }
+u32 bsp_get_debug_enemy_collision_subticks(void) { return g_enemy_collision_subticks; }
+u32 bsp_get_debug_los_subticks(void) { return g_los_subticks; }
+u16 bsp_get_debug_collision_candidates(void) { return g_collision_candidates; }
+u16 bsp_get_debug_los_candidates(void) { return g_los_candidates; }
+#endif
 
 // Toggle a door and every coincident door seg (same vertex pair) so the two
 // back-to-back one-sided door faces open/close together.

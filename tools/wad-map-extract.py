@@ -38,6 +38,124 @@ WORLD_COLOR_DAMAGE = 14
 WORLD_COLOR_WARNING = 15
 
 
+def validate_spatial_grid(vertices, segs, grid_min_x, grid_min_y, grid_w,
+                          grid_h, grid_cell, grid_cells, start_x, start_y):
+    """Prove indexed queries match exhaustive queries on deterministic samples."""
+    def cell_coord(value, origin):
+        return (value - origin) // grid_cell
+
+    def circle_candidates(x, y, radius):
+        result = set()
+        cx0 = max(0, cell_coord(x - radius, grid_min_x))
+        cy0 = max(0, cell_coord(y - radius, grid_min_y))
+        cx1 = min(grid_w - 1, cell_coord(x + radius, grid_min_x))
+        cy1 = min(grid_h - 1, cell_coord(y + radius, grid_min_y))
+        for cy in range(cy0, cy1 + 1):
+            for cx in range(cx0, cx1 + 1):
+                result.update(grid_cells[cy * grid_w + cx])
+        return result
+
+    def los_candidates(x0, y0, x1, y1):
+        cx, cy = cell_coord(x0, grid_min_x), cell_coord(y0, grid_min_y)
+        ex, ey = cell_coord(x1, grid_min_x), cell_coord(y1, grid_min_y)
+        sx = 1 if ex > cx else (-1 if ex < cx else 0)
+        sy = 1 if ey > cy else (-1 if ey < cy else 0)
+        ray_dx, ray_dy = abs(x1 - x0), abs(y1 - y0)
+        result = set()
+        guard = 0
+        while True:
+            guard += 1
+            if guard > (grid_w + grid_h + 8):
+                raise SystemExit("blockmap LOS traversal did not converge for ray %r" %
+                                 ((x0, y0, x1, y1),))
+            if 0 <= cx < grid_w and 0 <= cy < grid_h:
+                result.update(grid_cells[cy * grid_w + cx])
+            if cx == ex and cy == ey:
+                return result
+            if sx == 0:
+                cy += sy
+                continue
+            if sy == 0:
+                cx += sx
+                continue
+            if cx == ex:
+                cy += sy
+                continue
+            if cy == ey:
+                cx += sx
+                continue
+            xb = grid_min_x + ((cx + 1 if sx > 0 else cx) * grid_cell)
+            yb = grid_min_y + ((cy + 1 if sy > 0 else cy) * grid_cell)
+            xdist = xb - x0 if sx > 0 else x0 - xb
+            ydist = yb - y0 if sy > 0 else y0 - yb
+            lhs, rhs = xdist * ray_dy, ydist * ray_dx
+            if lhs == rhs:
+                cx, cy = cx + sx, cy + sy
+            elif lhs < rhs:
+                cx += sx
+            else:
+                cy += sy
+
+    def cross(ax, ay, bx, by, cx, cy):
+        return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)
+
+    def strict_intersection(x0, y0, x1, y1, ax, ay, bx, by):
+        d1 = cross(x0, y0, x1, y1, ax, ay)
+        d2 = cross(x0, y0, x1, y1, bx, by)
+        d3 = cross(ax, ay, bx, by, x0, y0)
+        d4 = cross(ax, ay, bx, by, x1, y1)
+        return (((d1 > 0 and d2 < 0) or (d1 < 0 and d2 > 0)) and
+                ((d3 > 0 and d4 < 0) or (d3 < 0 and d4 > 0)))
+
+    # Circle broad phase: any segment whose expanded AABB contains the sample
+    # point must be present. Include route start, cell boundaries and wall ends.
+    points = [(start_x, start_y)]
+    for x, y in vertices:
+        points.extend(((x, y), (x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)))
+    for cy in range(grid_h + 1):
+        for cx in range(grid_w + 1):
+            points.append((grid_min_x + cx * grid_cell,
+                           grid_min_y + cy * grid_cell))
+    for radius in (24, 32):
+        for x, y in points:
+            candidates = circle_candidates(x, y, radius)
+            for i, seg in enumerate(segs):
+                ax, ay = vertices[seg["v1"]]
+                bx, by = vertices[seg["v2"]]
+                if (x + radius >= min(ax, bx) and x - radius <= max(ax, bx) and
+                        y + radius >= min(ay, by) and y - radius <= max(ay, by) and
+                        i not in candidates):
+                    raise SystemExit("blockmap circle validation failed at segment %d" % i)
+
+    # LOS broad phase: a segment can intersect a query only if both AABBs
+    # overlap. Exercise horizontal, vertical, diagonal, zero-length and the
+    # player-start-to-wall route family.
+    rays = [(start_x, start_y, start_x, start_y)]
+    bounds = (grid_min_x, grid_min_y,
+              grid_min_x + grid_w * grid_cell - 1,
+              grid_min_y + grid_h * grid_cell - 1)
+    rays.extend(((bounds[0], start_y, bounds[2], start_y),
+                 (start_x, bounds[1], start_x, bounds[3]),
+                 (bounds[0], bounds[1], bounds[2], bounds[3]),
+                 (bounds[0], bounds[3], bounds[2], bounds[1])))
+    rays.extend((start_x, start_y, x, y) for x, y in vertices)
+    for x0, y0, x1, y1 in rays:
+        candidates = los_candidates(x0, y0, x1, y1)
+        rminx, rmaxx = min(x0, x1), max(x0, x1)
+        rminy, rmaxy = min(y0, y1), max(y0, y1)
+        for i, seg in enumerate(segs):
+            ax, ay = vertices[seg["v1"]]
+            bx, by = vertices[seg["v2"]]
+            if (rmaxx >= min(ax, bx) and rminx <= max(ax, bx) and
+                    rmaxy >= min(ay, by) and rminy <= max(ay, by) and
+                    strict_intersection(x0, y0, x1, y1, ax, ay, bx, by) and
+                    i not in candidates):
+                raise SystemExit("blockmap LOS validation failed at segment %d ray=(%d,%d)-(%d,%d) seg=(%d,%d)-(%d,%d)" %
+                                 (i, x0, y0, x1, y1, ax, ay, bx, by))
+
+    return len(points) * 2 + len(rays)
+
+
 def clean_name(raw):
     if isinstance(raw, bytes):
         raw = raw.split(b"\x00", 1)[0].decode("ascii", "ignore")
@@ -635,6 +753,53 @@ def main():
     lines.append("};")
     lines.append("")
 
+    # Uniform 256-unit blockmap used by runtime collision and LOS.  A segment is
+    # referenced by every cell touched by its AABB; the exact segment tests remain
+    # authoritative, so this is a conservative broad phase rather than a geometry
+    # approximation.  All arrays are const and therefore live in cartridge ROM.
+    grid_cell = 256
+    grid_min_x = (min(x for x, _ in vertices) // grid_cell) * grid_cell
+    grid_min_y = (min(y for _, y in vertices) // grid_cell) * grid_cell
+    grid_max_x = (max(x for x, _ in vertices) // grid_cell) * grid_cell
+    grid_max_y = (max(y for _, y in vertices) // grid_cell) * grid_cell
+    grid_w = ((grid_max_x - grid_min_x) // grid_cell) + 1
+    grid_h = ((grid_max_y - grid_min_y) // grid_cell) + 1
+    grid_cells = [[] for _ in range(grid_w * grid_h)]
+    for seg_index, s in enumerate(out_segs):
+        ax, ay = vertices[s["v1"]]
+        bx, by = vertices[s["v2"]]
+        cx0 = (min(ax, bx) - grid_min_x) // grid_cell
+        cx1 = (max(ax, bx) - grid_min_x) // grid_cell
+        cy0 = (min(ay, by) - grid_min_y) // grid_cell
+        cy1 = (max(ay, by) - grid_min_y) // grid_cell
+        for cy in range(cy0, cy1 + 1):
+            for cx in range(cx0, cx1 + 1):
+                grid_cells[cy * grid_w + cx].append(seg_index)
+
+    grid_offsets = [0]
+    grid_indices = []
+    for cell in grid_cells:
+        grid_indices.extend(cell)
+        grid_offsets.append(len(grid_indices))
+
+    spatial_checks = validate_spatial_grid(
+        vertices, out_segs, grid_min_x, grid_min_y, grid_w, grid_h,
+        grid_cell, grid_cells, start_x, start_y)
+
+    lines.append("const s16 bsp_grid_min_x = %d;" % grid_min_x)
+    lines.append("const s16 bsp_grid_min_y = %d;" % grid_min_y)
+    lines.append("const u16 bsp_grid_width = %du;" % grid_w)
+    lines.append("const u16 bsp_grid_height = %du;" % grid_h)
+    lines.append("const u16 bsp_grid_cell_offsets[%d] = {" % len(grid_offsets))
+    for i in range(0, len(grid_offsets), 12):
+        lines.append("    %s," % ",".join(str(v) for v in grid_offsets[i:i + 12]))
+    lines.append("};")
+    lines.append("const u16 bsp_grid_seg_indices[%d] = {" % len(grid_indices))
+    for i in range(0, len(grid_indices), 12):
+        lines.append("    %s," % ",".join(str(v) for v in grid_indices[i:i + 12]))
+    lines.append("};")
+    lines.append("")
+
     lines.append("const BspSubsector bsp_subsectors[%d] = {" % len(out_ssectors))
     for (first, count, sector_id) in out_ssectors:
         lines.append("    {%d, %d, %d}," % (first, count, sector_id))
@@ -676,6 +841,8 @@ def main():
     print("  assets   : %s" % args.assets_out)
     print("  subsectors: %d" % len(out_ssectors))
     print("  nodes    : %d (root=%d)" % (len(nodes), root))
+    print("  blockmap : %dx%d, %d refs, %d validation queries" %
+          (grid_w, grid_h, len(grid_indices), spatial_checks))
     print("  player   : (%d,%d) angle_deg=%d -> %d" % (
         start_x, start_y, start_angle_deg, start_angle))
 

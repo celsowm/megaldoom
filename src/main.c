@@ -19,7 +19,7 @@
 // off when a redraw reliably finishes within this many vblanks. Tune from the DEBUG_PERF
 // CPU-load% while moving (turn right + go north): load under ~95% -> 1 holds 60; under
 // ~185% -> 2 holds 30; otherwise 3 holds a rock-steady 20. Default 3 targets 20fps.
-#define TARGET_FRAME_VSYNCS 3
+// TARGET_FRAME_VSYNCS is defined in player_controller.h (shared with the movement ramp).
 
 // Perf diagnostics overlay (FPS + CPU load + frame-load cursor). Set to 0 (or
 // build with -DDEBUG_PERF=0) for clean release builds.
@@ -148,6 +148,10 @@ int main(bool hard) {
         // but now it IS fed to the turn controller so rotation stays time-correct.
         const u32 cur_vtimer = vtimer;
         u16 elapsed_frames = (u16)(cur_vtimer - prev_vtimer);
+
+#if DEBUG_PERF
+        bsp_debug_reset_query_stats();
+#endif
 
         prev_vtimer = cur_vtimer;
         if (elapsed_frames < 1) {

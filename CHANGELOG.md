@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Added an offline-generated spatial blockmap for exact local collision and LOS
+  queries, replacing repeated full E1M1 segment scans.
+- Made BSP near/far ordering lazy per visited node and clipped near-plane child
+  boxes instead of conservatively expanding them to the full view.
+- Reduced player movement collision calls and removed per-substep divisions.
+- Expanded `DEBUG_PERF` with player/enemy collision, LOS, candidate-count and
+  BSP side-cache measurements.
+- Added deterministic blockmap validation across 5,638 route, boundary, wall-end,
+  cardinal, diagonal and zero-length query cases.
+
+## Unreleased
+
 - Optimized the BSP renderer's bounding-box frustum test with a division-free half-plane precheck (`LEFT_REJECT_SCALE` / `RIGHT_REJECT_SCALE`) that rejects out-of-FOV child boxes before paying for four perspective divisions, and derived the right view axis from the forward basis (`g_rx = -g_fwy; g_ry = g_fwx`) to drop two trig lookups per frame.
 - Replaced billboard software divisions with bounded 68000 `DIVS.W` / `DIVU.W` (shared view basis, `divu32_16_exact` two-stage divider for Q16 texture stepping) and converted the billboard renderer's texture-step divisions to `divu` / `divu32_16_exact`, removing roughly 14-28 slow 32-bit division-helper calls per turning frame.
 - Replaced the stride-4 strip packer with a direct pre-shaded tile packer that writes each output u32 once (no 120-entry intermediate strips, ~19 KB less intermediate traffic per base frame) and folded `commit_base_tile`'s per-row comparison into one difference accumulator.

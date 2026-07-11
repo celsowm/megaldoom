@@ -53,6 +53,8 @@ static RayColumn *g_columns;
 // per node: 1 = front-first (cross >= 0), 0 = back-first. Rebuilt only when
 // player.x or player.y changes; invalidated explicitly on teleport/reset.
 static u8 g_node_side_bits[(BSP_MAX_NODES + 7) / 8];
+static u16 g_node_side_generation[BSP_MAX_NODES];
+static u16 g_position_generation;
 static s32 g_node_cache_px;
 static s32 g_node_cache_py;
 static bool g_node_cache_valid;
@@ -69,13 +71,15 @@ static u16 g_bsp_dbg_boxes_projected;
 static u16 g_bsp_dbg_near_fallbacks;
 static u16 g_bsp_dbg_segments_tested;
 static u16 g_bsp_dbg_segments_drawn;
+static u32 g_bsp_dbg_side_cache_subticks;
 #define BSP_DBG_INC(c) (g_bsp_dbg_##c)++
 #define BSP_DBG_RESET() do { g_bsp_dbg_nodes_visited = 0; \
         g_bsp_dbg_boxes_rejected_cheap = 0; \
         g_bsp_dbg_boxes_projected = 0; \
         g_bsp_dbg_near_fallbacks = 0; \
         g_bsp_dbg_segments_tested = 0; \
-        g_bsp_dbg_segments_drawn = 0; } while (0)
+        g_bsp_dbg_segments_drawn = 0; \
+        g_bsp_dbg_side_cache_subticks = 0; } while (0)
 #else
 #define BSP_DBG_INC(c) ((void)0)
 #define BSP_DBG_RESET() ((void)0)
@@ -363,12 +367,45 @@ static bool project_box_range(const BspBox *box, s16 *left, s16 *right) {
         return FALSE;
     }
 
-    // A box crossing the near plane can cover arbitrarily wide screen ranges;
-    // visiting it is the conservative choice.
+    // Clip a near-plane-crossing box polygon instead of expanding it to the
+    // whole view. The old fallback was safe but caused large adjacent BSP
+    // subtrees to be visited when walking through doorways.
     if (min_depth < BSP_NEAR) {
         BSP_DBG_INC(near_fallbacks);
-        *left = 0;
-        *right = RAY_VIEW_COLS - 1;
+        s32 min_screen = 0x7FFFFFFF;
+        s32 max_screen = -0x7FFFFFFF;
+        bool any = FALSE;
+        BSP_DBG_INC(boxes_projected);
+        for (u16 i = 0; i < 4; i++) {
+            const u16 j = (u16)((i + 1) & 3);
+            if (depths[i] >= BSP_NEAR) {
+                const s32 screen = BSP_VIEW_CENTER_X +
+                    perspective_divide(laterals[i] * BSP_PROJ, depths[i]);
+                if (screen < min_screen) min_screen = screen;
+                if (screen > max_screen) max_screen = screen;
+                any = TRUE;
+            }
+            if ((depths[i] < BSP_NEAR) != (depths[j] < BSP_NEAR)) {
+                const s32 denom = depths[j] - depths[i];
+                const s32 t = perspective_divide(((s32)BSP_NEAR - depths[i]) << FX_SHIFT,
+                                                 denom);
+                const s32 lateral = laterals[i] +
+                    (((laterals[j] - laterals[i]) * t) >> FX_SHIFT);
+                const s32 screen = BSP_VIEW_CENTER_X +
+                    perspective_divide(lateral * BSP_PROJ, BSP_NEAR);
+                if (screen < min_screen) min_screen = screen;
+                if (screen > max_screen) max_screen = screen;
+                any = TRUE;
+            }
+        }
+        if (!any) return FALSE;
+        min_screen -= RAY_COL_STRIDE;
+        max_screen += RAY_COL_STRIDE;
+        if ((max_screen < 0) || (min_screen >= RAY_VIEW_COLS)) return FALSE;
+        if (min_screen < 0) min_screen = 0;
+        if (max_screen >= RAY_VIEW_COLS) max_screen = RAY_VIEW_COLS - 1;
+        *left = (s16)min_screen;
+        *right = (s16)max_screen;
         return TRUE;
     }
 
@@ -451,28 +488,24 @@ static void render_node(u16 child) {
     // rebuilt only when position changes (see bsp_cast_frame), so pure rotation
     // reuses the cached bit instead of recomputing the partition cross product.
     const u8 side_bit = (u8)(1u << (child & 7));
+    if (g_node_side_generation[child] != g_position_generation) {
+#if DEBUG_PERF
+        const u32 side_start = getSubTick();
+#endif
+        const s32 cross = (g_px - n->px) * n->dy - (g_py - n->py) * n->dx;
+        if (cross >= 0) g_node_side_bits[child >> 3] |= side_bit;
+        else g_node_side_bits[child >> 3] &= (u8)~side_bit;
+        g_node_side_generation[child] = g_position_generation;
+#if DEBUG_PERF
+        g_bsp_dbg_side_cache_subticks += getSubTick() - side_start;
+#endif
+    }
     if (g_node_side_bits[child >> 3] & side_bit) {
         render_boxed_child(n->front, &n->front_box); // near side first
         render_boxed_child(n->back, &n->back_box);
     } else {
         render_boxed_child(n->back, &n->back_box);
         render_boxed_child(n->front, &n->front_box);
-    }
-}
-
-// Rebuild the near/far order cache for every node from the current camera
-// position. Called only when player.x or player.y changes (movement, push,
-// teleport, reset). Points exactly on a partition line take the front-first
-// branch (cross >= 0), matching the original inline computation.
-static void rebuild_node_side_cache(void) {
-    for (u16 i = 0; i < bsp_node_count; i++) {
-        const BspNode *n = &bsp_nodes[i];
-        const s32 cross = (g_px - n->px) * n->dy - (g_py - n->py) * n->dx;
-        if (cross >= 0) {
-            g_node_side_bits[i >> 3] |= (u8)(1u << (i & 7));
-        } else {
-            g_node_side_bits[i >> 3] &= (u8)~(1u << (i & 7));
-        }
     }
 }
 
@@ -485,6 +518,8 @@ void bsp_init(void) {
     // will differ from the bss-zeroed sentinel). Collision/LOS still computes
     // seg AABBs inline from the vertex table (no per-seg RAM on the 64KB MD).
     g_node_cache_valid = FALSE;
+    g_position_generation = 1;
+    for (u16 i = 0; i < BSP_MAX_NODES; i++) g_node_side_generation[i] = 0;
 }
 
 void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColors *scene_colors) {
@@ -506,7 +541,11 @@ void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColor
     // since the last cast. Pure rotation reuses the cached bits, saving a
     // cross product (2 multiplies + subtract) per node visited.
     if (!g_node_cache_valid || g_px != g_node_cache_px || g_py != g_node_cache_py) {
-        rebuild_node_side_cache();
+        g_position_generation++;
+        if (g_position_generation == 0) {
+            for (u16 i = 0; i < BSP_MAX_NODES; i++) g_node_side_generation[i] = 0;
+            g_position_generation = 1;
+        }
         g_node_cache_px = g_px;
         g_node_cache_py = g_py;
         g_node_cache_valid = TRUE;
@@ -542,4 +581,5 @@ u16 bsp_get_debug_boxes_projected(void) { return g_bsp_dbg_boxes_projected; }
 u16 bsp_get_debug_near_fallbacks(void) { return g_bsp_dbg_near_fallbacks; }
 u16 bsp_get_debug_segments_tested(void) { return g_bsp_dbg_segments_tested; }
 u16 bsp_get_debug_segments_drawn(void) { return g_bsp_dbg_segments_drawn; }
+u32 bsp_get_debug_side_cache_subticks(void) { return g_bsp_dbg_side_cache_subticks; }
 #endif

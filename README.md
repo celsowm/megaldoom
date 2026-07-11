@@ -173,6 +173,22 @@ These folders are ignored by git.
 
 ## Design notes
 
+### Runtime complexity
+
+- BSP rendering is worst-case `O(nodes + segments + sampled columns)`, but normal
+  frames visit only view-relevant nodes and segments. Near/far node decisions are
+  computed lazily once per reached node at each player position and reused while
+  rotating in place.
+- Player/enemy circle collision uses the generated 256-unit blockmap and is
+  `O(k)` in local candidate segments instead of scanning every map segment.
+- Enemy line-of-sight walks crossed blockmap cells and is `O(c + k)` for crossed
+  cells plus unique segment candidates.
+- Enemy separation remains `O(E^2)`; `E` is currently capped at seven objects.
+
+Build with `tools/build-windows.ps1 -DebugPerf` to show cast, packing, billboard,
+overlay, DMA, collision, LOS, blockmap-candidate and lazy BSP-side costs in the
+on-screen diagnostic rows.
+
 This is deliberately not a direct DoomGeo renderer port. DoomGeo leans on Neo Geo sprite-strip strengths. The Mega Drive has much tighter sprite-per-line and VRAM constraints, so the first milestones use software bitmap mode. The correct long-term route is to replace this renderer with a tile/column renderer using pre-scaled wall slices.
 
 Suggested next milestones:

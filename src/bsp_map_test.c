@@ -65,6 +65,21 @@ const u16 bsp_seg_wall_len[] = {
     768, 640, 256, 640, 768, 1536, 768, 1536, 768, 640, 256, 640,
 };
 
+// Conservative hand-map blockmap. Keeping one cell per 256 world units mirrors
+// the generated-map contract and allows the same indexed query code in tests.
+const s16 bsp_grid_min_x = 256;
+const s16 bsp_grid_min_y = 256;
+const u16 bsp_grid_width = 7u;
+const u16 bsp_grid_height = 7u;
+const u16 bsp_grid_cell_offsets[50] = {
+    0,2,3,4,8,9,10,12,13,13,13,15,15,15,16,17,17,17,21,21,21,22,23,23,23,
+    27,27,27,28,29,29,29,31,31,31,32,33,33,33,35,35,35,36,38,39,40,44,45,46,48,
+};
+const u16 bsp_grid_seg_indices[48] = {
+    0,5,0,0,0,1,6,9,6,6,6,7,5,1,9,7,5,1,2,9,10,7,5,2,3,10,11,7,5,3,11,7,
+    5,3,11,7,4,5,4,4,3,4,8,11,8,8,7,8,
+};
+
 const s32 bsp_player_start_x = 2 * FX_ONE + (FX_ONE / 2); // 640
 const s32 bsp_player_start_y = 4 * FX_ONE;                // 1024, aligned with door
 const u16 bsp_player_start_angle = 0;                     // face east toward door

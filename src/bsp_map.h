@@ -102,6 +102,18 @@ extern const u16 bsp_node_count;
 // two abs calls per seg visit. Camera-independent, so it belongs in ROM.
 extern const u16 bsp_seg_wall_len[];
 
+// Offline-generated 256-world-unit broad-phase grid. Each cell owns a slice
+// [offsets[cell], offsets[cell+1]) of segment indices. Exact collision and LOS
+// tests still run against those candidates, preserving map semantics.
+#define BSP_GRID_CELL_SHIFT 8
+#define BSP_GRID_CELL_SIZE (1 << BSP_GRID_CELL_SHIFT)
+extern const s16 bsp_grid_min_x;
+extern const s16 bsp_grid_min_y;
+extern const u16 bsp_grid_width;
+extern const u16 bsp_grid_height;
+extern const u16 bsp_grid_cell_offsets[];
+extern const u16 bsp_grid_seg_indices[];
+
 // Upper bound on BSP nodes across any map, sizing the near/far order cache
 // bit array in bsp_render.c. E1M1 uses 236; the hand map uses 1.
 #define BSP_MAX_NODES 256
@@ -124,6 +136,20 @@ bool bsp_circle_blocked(s32 x, s32 y, s32 radius);
 
 // Line-of-sight: does the segment (x0,y0)-(x1,y1) cross any solid wall?
 bool bsp_segment_hits_wall(s32 x0, s32 y0, s32 x1, s32 y1);
+
+#if DEBUG_PERF
+typedef enum {
+    BSP_QUERY_PLAYER = 0,
+    BSP_QUERY_ENEMY = 1
+} BspDebugQueryOwner;
+void bsp_debug_set_query_owner(BspDebugQueryOwner owner);
+u32 bsp_get_debug_player_collision_subticks(void);
+u32 bsp_get_debug_enemy_collision_subticks(void);
+u32 bsp_get_debug_los_subticks(void);
+u16 bsp_get_debug_collision_candidates(void);
+u16 bsp_get_debug_los_candidates(void);
+void bsp_debug_reset_query_stats(void);
+#endif
 
 // Interact with whatever door / exit switch is directly in front of the player.
 DoorActionResult bsp_use_in_front(s32 x, s32 y, u16 angle, bool has_key, bool *consumed_key);

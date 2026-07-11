@@ -41,6 +41,9 @@ static s16 get_step_toward(s32 delta) {
 }
 
 static bool is_position_blocked(s32 x, s32 y) {
+#if DEBUG_PERF
+    bsp_debug_set_query_owner(BSP_QUERY_ENEMY);
+#endif
     return bsp_circle_blocked(x, y, ENEMY_RADIUS);
 }
 

@@ -20,6 +20,7 @@ u16 bsp_get_debug_boxes_projected(void);
 u16 bsp_get_debug_near_fallbacks(void);
 u16 bsp_get_debug_segments_tested(void);
 u16 bsp_get_debug_segments_drawn(void);
+u32 bsp_get_debug_side_cache_subticks(void);
 #endif
 
 #endif

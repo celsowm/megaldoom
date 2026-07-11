@@ -1016,6 +1016,18 @@ static void draw_upload_debug_stats(void) {
             (unsigned int)bsp_get_debug_segments_tested(),
             (unsigned int)bsp_get_debug_segments_drawn());
     VDP_drawTextFill(text, 0, 4, 40);
+
+    // Row 5 — gameplay spatial queries and lazy BSP ordering. PC/EC are player
+    // and enemy collision time, L is LOS time, K/LK are tested candidates, and
+    // Sc is time computing node sides not yet cached for this position.
+    sprintf(text, "PC=%03lu EC=%03lu L=%03lu K=%03u LK=%03u Sc=%03lu",
+            (unsigned long)bsp_get_debug_player_collision_subticks(),
+            (unsigned long)bsp_get_debug_enemy_collision_subticks(),
+            (unsigned long)bsp_get_debug_los_subticks(),
+            (unsigned int)bsp_get_debug_collision_candidates(),
+            (unsigned int)bsp_get_debug_los_candidates(),
+            (unsigned long)bsp_get_debug_side_cache_subticks());
+    VDP_drawTextFill(text, 0, 5, 40);
 }
 #endif
 
