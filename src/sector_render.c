@@ -34,7 +34,16 @@ typedef struct {
     s16 fwy;
     s16 rx;
     s16 ry;
+    s16 base_floor_height;
+    u8 base_floor_color;
 } SectorRenderContext;
+
+typedef struct {
+    s32 da;
+    s32 la;
+    s32 db;
+    s32 lb;
+} RenderSegView;
 
 const u8 *bsp_sector_scene_color(void) { return &g_scene_color[0][0]; }
 const u16 *bsp_sector_scene_depth(void) { return &g_scene_depth[0][0]; }
@@ -44,24 +53,25 @@ u16 bsp_sector_depth_at(u16 x, u16 y) {
 
 // The 68000 has native DIVS.W (32-bit dividend / 16-bit divisor). C expressions
 // with an s32 divisor otherwise call the much slower compiler 32/32 helper.
-// Use the native instruction whenever both divisor and quotient fit, retaining
-// the exact C fallback for unusual coordinates.
+// Normalize a negative divisor, then use shifts for the quotient-fit guard. The
+// previous guard multiplied the divisor twice for every divide, adding expensive
+// MULS work to one of the hottest renderer helpers.
 static s32 fast_signed_divide(s32 numerator, s32 denominator) {
-    if (denominator != 0 && denominator >= -32768L && denominator <= 32767L) {
-        const s16 divisor = (s16)denominator;
-        s32 min_numerator;
-        s32 max_numerator;
-
-        if (divisor > 0) {
-            min_numerator = -((s32)divisor * 32768L);
-            max_numerator = (s32)divisor * 32767L;
-        } else {
-            min_numerator = (s32)divisor * 32767L;
-            max_numerator = -((s32)divisor * 32768L);
+    if (denominator != 0 && denominator >= -32767L && denominator <= 32767L) {
+        if (denominator < 0) {
+            if (numerator == (-2147483647L - 1L)) {
+                return numerator / denominator;
+            }
+            numerator = -numerator;
+            denominator = -denominator;
         }
 
-        if (numerator >= min_numerator && numerator <= max_numerator) {
-            return (s32)divs(numerator, divisor);
+        {
+            const s32 magnitude_limit = denominator << 15;
+            if (numerator >= -magnitude_limit &&
+                numerator <= magnitude_limit - denominator) {
+                return (s32)divs(numerator, (s16)denominator);
+            }
         }
     }
 
@@ -87,25 +97,34 @@ static void draw_span(u16 sx, s16 top, s16 bottom, u16 depth, u8 texture,
     if (top > bottom || texture == 0xFF) return;
     if (texture >= FREEDOOM_WALL_TEXTURE_COUNT) texture = MEGALDOOM_TEX_FALLBACK;
 
-    // Exact replacement for ((row * WALL_TEX_DIM) / height), but with no
-    // division in the per-pixel loop. The error accumulator produces the same
-    // floor() sequence as the old expression for every span height.
-    const u16 height = (u16)(bottom - top + 1);
-    const u8 *texture_pixels = &FREEDOOM_WALL_TEXTURES[texture][0][0];
-    u16 tex_y = 0;
-    u16 tex_error = 0;
+    // Exact quotient/remainder DDA for floor(row * WALL_TEX_DIM / height).
+    // Splitting WALL_TEX_DIM / height once means the per-pixel loop needs at
+    // most one correction branch. The previous while loop always performed 32
+    // subtraction/increment iterations per span, which was especially costly
+    // for the many short wall slices seen while moving through portals.
+    {
+        const u16 height = (u16)(bottom - top + 1);
+        const u8 *texture_pixels = &FREEDOOM_WALL_TEXTURES[texture][0][0];
+        const u16 tex_step = divu(WALL_TEX_DIM, height);
+        const u16 tex_remainder =
+            (u16)(WALL_TEX_DIM - (tex_step * height));
+        u16 tex_y = 0;
+        u16 tex_error = 0;
 
-    for (s16 y = top; y <= bottom; y++) {
-        if (depth < g_scene_depth[sx][y]) {
-            g_scene_depth[sx][y] = depth;
-            g_scene_color[sx][y] =
-                texture_pixels[((tex_y & WALL_TEX_DIM_MASK) * WALL_TEX_DIM) + tex_x] & 15;
-        }
+        for (s16 y = top; y <= bottom; y++) {
+            if (depth < g_scene_depth[sx][y]) {
+                g_scene_depth[sx][y] = depth;
+                g_scene_color[sx][y] =
+                    texture_pixels[((tex_y & WALL_TEX_DIM_MASK) * WALL_TEX_DIM) +
+                                   tex_x] & 15;
+            }
 
-        tex_error = (u16)(tex_error + WALL_TEX_DIM);
-        while (tex_error >= height) {
-            tex_error = (u16)(tex_error - height);
-            tex_y++;
+            tex_y = (u16)(tex_y + tex_step);
+            tex_error = (u16)(tex_error + tex_remainder);
+            if (tex_error >= height) {
+                tex_error = (u16)(tex_error - height);
+                tex_y++;
+            }
         }
     }
 }
@@ -157,119 +176,154 @@ static void add_plane_edge(s16 x0, s16 y0, s16 x1, s16 y1) {
         temp = y0; y0 = y1; y1 = temp;
     }
     if (y1 < RAY_VIEW_CENTER_Y || y0 >= RAY_VIEW_ROWS) return;
-    const s32 dy = (s32)y1 - y0;
-    const s32 step = fast_signed_divide(
-        ((s32)x1 - x0) << INTERP_SHIFT, dy);
-    s16 start = y0 < RAY_VIEW_CENTER_Y ? RAY_VIEW_CENTER_Y : y0;
-    s16 end = y1 >= RAY_VIEW_ROWS ? RAY_VIEW_ROWS - 1 : y1;
-    s32 xq = ((s32)x0 << INTERP_SHIFT) + step * (start - y0);
-    for (s16 y = start; y <= end; y++) {
-        const s16 x = (s16)(xq >> INTERP_SHIFT);
-        if (x < g_plane_left[y]) g_plane_left[y] = x;
-        if (x > g_plane_right[y]) g_plane_right[y] = x;
-        xq += step;
+    {
+        const s32 dy = (s32)y1 - y0;
+        const s32 step = fast_signed_divide(
+            ((s32)x1 - x0) << INTERP_SHIFT, dy);
+        s16 start = y0 < RAY_VIEW_CENTER_Y ? RAY_VIEW_CENTER_Y : y0;
+        s16 end = y1 >= RAY_VIEW_ROWS ? RAY_VIEW_ROWS - 1 : y1;
+        s32 xq = ((s32)x0 << INTERP_SHIFT) + step * (start - y0);
+        for (s16 y = start; y <= end; y++) {
+            const s16 x = (s16)(xq >> INTERP_SHIFT);
+            if (x < g_plane_left[y]) g_plane_left[y] = x;
+            if (x > g_plane_right[y]) g_plane_right[y] = x;
+            xq += step;
+        }
     }
 }
 
 static void draw_floor_subsector(const SectorRenderContext *context,
                                  u16 subsector_id) {
     const BspRenderSubsector *subsector = &bsp_render_subsectors[subsector_id];
+    const BspSectorState *state;
+    u8 color;
+
     if (subsector->seg_count < 3 || subsector->sector_id >= bsp_sector_count) return;
-    const BspSectorState *state = bsp_get_sector_state(subsector->sector_id);
+    state = bsp_get_sector_state(subsector->sector_id);
     if (!state || state->floor_height >= context->player->view_z) return;
 
-    s32 input_lat[MAX_PLANE_VERTICES];
-    s32 input_depth[MAX_PLANE_VERTICES];
-    s32 clipped_lat[MAX_PLANE_VERTICES];
-    s32 clipped_depth[MAX_PLANE_VERTICES];
-    u16 input_count = subsector->seg_count;
-    if (input_count > MAX_PLANE_VERTICES - 2) input_count = MAX_PLANE_VERTICES - 2;
-    for (u16 i = 0; i < input_count; i++) {
-        const BspRenderSeg *seg = &bsp_render_segs[subsector->first_seg + i];
-        const BspVertex *vertex = &bsp_vertices[seg->v1];
-        const s32 dx = (s32)vertex->x - context->player->x;
-        const s32 dy = (s32)vertex->y - context->player->y;
-        input_depth[i] = (dx * context->fwx + dy * context->fwy) >> FX_SHIFT;
-        input_lat[i] = (dx * context->rx + dy * context->ry) >> FX_SHIFT;
+    color = bsp_sectors[subsector->sector_id].floor_color & 15;
+    // clear_scene_flat already painted this exact floor plane across the lower
+    // half. Re-rasterizing same-height/same-colour subsectors only changes FAR
+    // to PLANE_DEPTH; all real object depths are nearer, so the visible result
+    // and billboard visibility are identical.
+    if (state->floor_height == context->base_floor_height &&
+        color == context->base_floor_color) {
+        return;
     }
 
-    u16 clipped_count = 0;
-    u16 previous = (u16)(input_count - 1);
-    for (u16 current = 0; current < input_count; current++) {
-        const bool previous_inside = input_depth[previous] >= SECTOR_NEAR;
-        const bool current_inside = input_depth[current] >= SECTOR_NEAR;
-        if (previous_inside != current_inside) {
-            const s32 denominator = input_depth[current] - input_depth[previous];
-            const s32 t = fast_signed_divide(
-                ((s32)SECTOR_NEAR - input_depth[previous]) << INTERP_SHIFT,
-                denominator);
-            clipped_lat[clipped_count] = input_lat[previous] +
-                (((input_lat[current] - input_lat[previous]) * t) >> INTERP_SHIFT);
-            clipped_depth[clipped_count++] = SECTOR_NEAR;
+    {
+        s32 input_lat[MAX_PLANE_VERTICES];
+        s32 input_depth[MAX_PLANE_VERTICES];
+        s32 clipped_lat[MAX_PLANE_VERTICES];
+        s32 clipped_depth[MAX_PLANE_VERTICES];
+        u16 input_count = subsector->seg_count;
+        u16 clipped_count = 0;
+        u16 previous;
+        s16 screen_x[MAX_PLANE_VERTICES];
+        s16 screen_y[MAX_PLANE_VERTICES];
+
+        if (input_count > MAX_PLANE_VERTICES - 2) input_count = MAX_PLANE_VERTICES - 2;
+        for (u16 i = 0; i < input_count; i++) {
+            const BspRenderSeg *seg = &bsp_render_segs[subsector->first_seg + i];
+            const BspVertex *vertex = &bsp_vertices[seg->v1];
+            const s32 dx = (s32)vertex->x - context->player->x;
+            const s32 dy = (s32)vertex->y - context->player->y;
+            input_depth[i] = (dx * context->fwx + dy * context->fwy) >> FX_SHIFT;
+            input_lat[i] = (dx * context->rx + dy * context->ry) >> FX_SHIFT;
         }
-        if (current_inside && clipped_count < MAX_PLANE_VERTICES) {
-            clipped_lat[clipped_count] = input_lat[current];
-            clipped_depth[clipped_count++] = input_depth[current];
+
+        previous = (u16)(input_count - 1);
+        for (u16 current = 0; current < input_count; current++) {
+            const bool previous_inside = input_depth[previous] >= SECTOR_NEAR;
+            const bool current_inside = input_depth[current] >= SECTOR_NEAR;
+            if (previous_inside != current_inside) {
+                const s32 denominator = input_depth[current] - input_depth[previous];
+                const s32 t = fast_signed_divide(
+                    ((s32)SECTOR_NEAR - input_depth[previous]) << INTERP_SHIFT,
+                    denominator);
+                clipped_lat[clipped_count] = input_lat[previous] +
+                    (((input_lat[current] - input_lat[previous]) * t) >> INTERP_SHIFT);
+                clipped_depth[clipped_count++] = SECTOR_NEAR;
+            }
+            if (current_inside && clipped_count < MAX_PLANE_VERTICES) {
+                clipped_lat[clipped_count] = input_lat[current];
+                clipped_depth[clipped_count++] = input_depth[current];
+            }
+            previous = current;
         }
-        previous = current;
-    }
-    if (clipped_count < 3) return;
+        if (clipped_count < 3) return;
 
-    s16 screen_x[MAX_PLANE_VERTICES];
-    s16 screen_y[MAX_PLANE_VERTICES];
-    for (u16 i = 0; i < clipped_count; i++) {
-        screen_x[i] = clamp_screen_x(RAY_VIEW_CENTER_X +
-            fast_signed_divide(clipped_lat[i] * RAY_PROJ_X, clipped_depth[i]));
-        screen_y[i] = project_world_z(state->floor_height,
-                                      context->player->view_z,
-                                      clipped_depth[i]);
-    }
-    for (u16 y = RAY_VIEW_CENTER_Y; y < RAY_VIEW_ROWS; y++) {
-        g_plane_left[y] = 32767;
-        g_plane_right[y] = -32768;
-    }
-    previous = (u16)(clipped_count - 1);
-    for (u16 current = 0; current < clipped_count; current++) {
-        add_plane_edge(screen_x[previous], screen_y[previous],
-                       screen_x[current], screen_y[current]);
-        previous = current;
-    }
+        for (u16 i = 0; i < clipped_count; i++) {
+            screen_x[i] = clamp_screen_x(RAY_VIEW_CENTER_X +
+                fast_signed_divide(clipped_lat[i] * RAY_PROJ_X, clipped_depth[i]));
+            screen_y[i] = project_world_z(state->floor_height,
+                                          context->player->view_z,
+                                          clipped_depth[i]);
+        }
+        for (u16 y = RAY_VIEW_CENTER_Y; y < RAY_VIEW_ROWS; y++) {
+            g_plane_left[y] = 32767;
+            g_plane_right[y] = -32768;
+        }
+        previous = (u16)(clipped_count - 1);
+        for (u16 current = 0; current < clipped_count; current++) {
+            add_plane_edge(screen_x[previous], screen_y[previous],
+                           screen_x[current], screen_y[current]);
+            previous = current;
+        }
 
-    const u8 color = bsp_sectors[subsector->sector_id].floor_color & 15;
-    for (u16 y = RAY_VIEW_CENTER_Y; y < RAY_VIEW_ROWS; y++) {
-        s16 left = g_plane_left[y];
-        s16 right = g_plane_right[y];
-        if (left > right || right < 0 || left >= RAY_VIEW_COLS) continue;
-        if (left < 0) left = 0;
-        if (right >= RAY_VIEW_COLS) right = RAY_VIEW_COLS - 1;
-        const u16 first = (u16)((left + RAY_COL_STRIDE - 1) / RAY_COL_STRIDE);
-        const u16 last = (u16)(right / RAY_COL_STRIDE);
-        for (u16 sx = first; sx <= last; sx++) {
-            if (y > g_ceiling_clip[sx] && y < g_floor_clip[sx] &&
-                g_scene_depth[sx][y] == SCENE_FAR) {
-                g_scene_color[sx][y] = color;
-                g_scene_depth[sx][y] = PLANE_DEPTH;
+        for (u16 y = RAY_VIEW_CENTER_Y; y < RAY_VIEW_ROWS; y++) {
+            s16 left = g_plane_left[y];
+            s16 right = g_plane_right[y];
+            if (left > right || right < 0 || left >= RAY_VIEW_COLS) continue;
+            if (left < 0) left = 0;
+            if (right >= RAY_VIEW_COLS) right = RAY_VIEW_COLS - 1;
+            {
+                const u16 first = (u16)((left + RAY_COL_STRIDE - 1) / RAY_COL_STRIDE);
+                const u16 last = (u16)(right / RAY_COL_STRIDE);
+                for (u16 sx = first; sx <= last; sx++) {
+                    if (y > g_ceiling_clip[sx] && y < g_floor_clip[sx] &&
+                        g_scene_depth[sx][y] == SCENE_FAR) {
+                        g_scene_color[sx][y] = color;
+                        g_scene_depth[sx][y] = PLANE_DEPTH;
+                    }
+                }
             }
         }
     }
 }
 
-static void draw_render_seg(const PlayerState *player, const BspRenderSeg *seg,
-                            s16 fwx, s16 fwy, s16 rx, s16 ry) {
+static void transform_render_seg(const SectorRenderContext *context,
+                                 const BspRenderSeg *seg,
+                                 RenderSegView *view) {
     const BspVertex *a = &bsp_vertices[seg->v1];
     const BspVertex *b = &bsp_vertices[seg->v2];
+    s32 relx = (s32)a->x - context->player->x;
+    s32 rely = (s32)a->y - context->player->y;
+
+    view->da = (relx * context->fwx + rely * context->fwy) >> FX_SHIFT;
+    view->la = (relx * context->rx + rely * context->ry) >> FX_SHIFT;
+    relx = (s32)b->x - context->player->x;
+    rely = (s32)b->y - context->player->y;
+    view->db = (relx * context->fwx + rely * context->fwy) >> FX_SHIFT;
+    view->lb = (relx * context->rx + rely * context->ry) >> FX_SHIFT;
+}
+
+static void draw_render_seg(const PlayerState *player, const BspRenderSeg *seg,
+                            const RenderSegView *view) {
+    const BspVertex *a = &bsp_vertices[seg->v1];
+    const BspVertex *b = &bsp_vertices[seg->v2];
+    s32 da = view->da;
+    s32 la = view->la;
+    s32 db = view->db;
+    s32 lb = view->lb;
+    s32 ua;
+    s32 ub;
+
     if (((player->x - a->x) * seg->nx + (player->y - a->y) * seg->ny) <= 0) return;
 
-    s32 relx = (s32)a->x - player->x;
-    s32 rely = (s32)a->y - player->y;
-    s32 da = (relx * fwx + rely * fwy) >> FX_SHIFT;
-    s32 la = (relx * rx + rely * ry) >> FX_SHIFT;
-    relx = (s32)b->x - player->x;
-    rely = (s32)b->y - player->y;
-    s32 db = (relx * fwx + rely * fwy) >> FX_SHIFT;
-    s32 lb = (relx * rx + rely * ry) >> FX_SHIFT;
-    s32 ua = seg->tex_u_offset;
-    s32 ub = ua + abs32((s32)b->x - a->x) + abs32((s32)b->y - a->y);
+    ua = seg->tex_u_offset;
+    ub = ua + abs32((s32)b->x - a->x) + abs32((s32)b->y - a->y);
 
     if (da < SECTOR_NEAR && db < SECTOR_NEAR) return;
     if (da < SECTOR_NEAR) {
@@ -286,145 +340,158 @@ static void draw_render_seg(const PlayerState *player, const BspRenderSeg *seg,
         db = SECTOR_NEAR;
     }
 
-    s32 xa = RAY_VIEW_CENTER_X + fast_signed_divide(la * RAY_PROJ_X, da);
-    s32 xb = RAY_VIEW_CENTER_X + fast_signed_divide(lb * RAY_PROJ_X, db);
-    if (xa == xb) return;
-    if (xa > xb) {
-        s32 temp = xa; xa = xb; xb = temp;
-        temp = da; da = db; db = temp;
-        temp = ua; ua = ub; ub = temp;
-    }
-    const s32 left = xa < 0 ? 0 : xa;
-    const s32 right = xb >= RAY_VIEW_COLS ? RAY_VIEW_COLS - 1 : xb - 1;
-    if (left > right) return;
+    {
+        s32 xa = RAY_VIEW_CENTER_X + fast_signed_divide(la * RAY_PROJ_X, da);
+        s32 xb = RAY_VIEW_CENTER_X + fast_signed_divide(lb * RAY_PROJ_X, db);
+        if (xa == xb) return;
+        if (xa > xb) {
+            s32 temp = xa; xa = xb; xb = temp;
+            temp = da; da = db; db = temp;
+            temp = ua; ua = ub; ub = temp;
+        }
 
-    const BspSectorState *front = bsp_get_sector_state(seg->front_sector);
-    const BspSectorState *back = bsp_get_sector_state(seg->back_sector);
-    if (!front) return;
-    const s32 span = xb - xa;
-    const u16 first_sample = (u16)((left + RAY_COL_STRIDE - 1) / RAY_COL_STRIDE);
-    const u16 last_sample = (u16)(right / RAY_COL_STRIDE);
-    const s32 first_x = (s32)first_sample * RAY_COL_STRIDE;
-    const s16 fca = project_world_z(front->ceiling_height, player->view_z, da);
-    const s16 fcb = project_world_z(front->ceiling_height, player->view_z, db);
-    const s16 ffa = project_world_z(front->floor_height, player->view_z, da);
-    const s16 ffb = project_world_z(front->floor_height, player->view_z, db);
-    const s16 bca = back ? project_world_z(back->ceiling_height, player->view_z, da) : 0;
-    const s16 bcb = back ? project_world_z(back->ceiling_height, player->view_z, db) : 0;
-    const s16 bfa = back ? project_world_z(back->floor_height, player->view_z, da) : 0;
-    const s16 bfb = back ? project_world_z(back->floor_height, player->view_z, db) : 0;
+        {
+            const s32 left = xa < 0 ? 0 : xa;
+            const s32 right = xb >= RAY_VIEW_COLS ? RAY_VIEW_COLS - 1 : xb - 1;
+            const BspSectorState *front;
+            const BspSectorState *back;
+            s32 span;
+            u16 first_sample;
+            u16 last_sample;
+            s32 first_x;
+            s16 fca, fcb, ffa, ffb, bca, bcb, bfa, bfb;
+            s32 depth_q, u_q, fc_q, ff_q, bc_q, bf_q;
+            s32 depth_step, u_step, fc_step, ff_step, bc_step, bf_step;
 
-    s32 depth_q = interpolate_at(da, db, xa, span, first_x);
-    s32 u_q = interpolate_at(ua, ub, xa, span, first_x);
-    s32 fc_q = interpolate_at(fca, fcb, xa, span, first_x);
-    s32 ff_q = interpolate_at(ffa, ffb, xa, span, first_x);
-    s32 bc_q = interpolate_at(bca, bcb, xa, span, first_x);
-    s32 bf_q = interpolate_at(bfa, bfb, xa, span, first_x);
-    const s32 depth_step = interpolation_step(da, db, span);
-    const s32 u_step = interpolation_step(ua, ub, span);
-    const s32 fc_step = interpolation_step(fca, fcb, span);
-    const s32 ff_step = interpolation_step(ffa, ffb, span);
-    const s32 bc_step = interpolation_step(bca, bcb, span);
-    const s32 bf_step = interpolation_step(bfa, bfb, span);
+            if (left > right) return;
 
-    for (u16 sx = first_sample; sx <= last_sample; sx++) {
-        if (!g_column_closed[sx]) {
-            s32 depth = depth_q >> INTERP_SHIFT;
-            const s16 fc = (s16)(fc_q >> INTERP_SHIFT);
-            const s16 ff = (s16)(ff_q >> INTERP_SHIFT);
-            if (depth < 1) depth = 1;
-            u16 wall_depth;
-            if (depth > (s32)SCENE_FAR) wall_depth = SCENE_FAR;
-            else wall_depth = (u16)depth;
-            const u8 tx = (u8)((u_q >> INTERP_SHIFT) & WALL_TEX_DIM_MASK);
-            if (!back) {
-                draw_span(sx, fc, (s16)(ff - 1), wall_depth,
-                          seg->middle_texture, tx);
-                close_column(sx);
-            } else {
-                const s16 bc = (s16)(bc_q >> INTERP_SHIFT);
-                const s16 bf = (s16)(bf_q >> INTERP_SHIFT);
-                const u16 surface_depth = wall_depth > 1 ? (u16)(wall_depth - 1) : 1;
-                if (back->ceiling_height < front->ceiling_height) {
-                    draw_span(sx, fc, (s16)(bc - 1), surface_depth,
-                              seg->upper_texture, tx);
-                    if (bc - 1 > g_ceiling_clip[sx]) {
-                        g_ceiling_clip[sx] = (s16)(bc - 1);
-                    }
-                }
-                if (back->floor_height > front->floor_height) {
-                    if ((seg->side_flags & BSP_RENDER_FLAT_RISER) != 0) {
-                        const u8 color = FREEDOOM_WORLD_SHADE_MAP[
-                            bsp_sectors[seg->back_sector].floor_color & 15];
-                        draw_solid_span(sx, bf, (s16)(ff - 1), surface_depth,
-                                        color);
+            front = bsp_get_sector_state(seg->front_sector);
+            back = bsp_get_sector_state(seg->back_sector);
+            if (!front) return;
+            span = xb - xa;
+            first_sample = (u16)((left + RAY_COL_STRIDE - 1) / RAY_COL_STRIDE);
+            last_sample = (u16)(right / RAY_COL_STRIDE);
+            first_x = (s32)first_sample * RAY_COL_STRIDE;
+            fca = project_world_z(front->ceiling_height, player->view_z, da);
+            fcb = project_world_z(front->ceiling_height, player->view_z, db);
+            ffa = project_world_z(front->floor_height, player->view_z, da);
+            ffb = project_world_z(front->floor_height, player->view_z, db);
+            bca = back ? project_world_z(back->ceiling_height, player->view_z, da) : 0;
+            bcb = back ? project_world_z(back->ceiling_height, player->view_z, db) : 0;
+            bfa = back ? project_world_z(back->floor_height, player->view_z, da) : 0;
+            bfb = back ? project_world_z(back->floor_height, player->view_z, db) : 0;
+
+            depth_q = interpolate_at(da, db, xa, span, first_x);
+            u_q = interpolate_at(ua, ub, xa, span, first_x);
+            fc_q = interpolate_at(fca, fcb, xa, span, first_x);
+            ff_q = interpolate_at(ffa, ffb, xa, span, first_x);
+            bc_q = interpolate_at(bca, bcb, xa, span, first_x);
+            bf_q = interpolate_at(bfa, bfb, xa, span, first_x);
+            depth_step = interpolation_step(da, db, span);
+            u_step = interpolation_step(ua, ub, span);
+            fc_step = interpolation_step(fca, fcb, span);
+            ff_step = interpolation_step(ffa, ffb, span);
+            bc_step = interpolation_step(bca, bcb, span);
+            bf_step = interpolation_step(bfa, bfb, span);
+
+            for (u16 sx = first_sample; sx <= last_sample; sx++) {
+                if (!g_column_closed[sx]) {
+                    s32 depth = depth_q >> INTERP_SHIFT;
+                    const s16 fc = (s16)(fc_q >> INTERP_SHIFT);
+                    const s16 ff = (s16)(ff_q >> INTERP_SHIFT);
+                    u16 wall_depth;
+                    const u8 tx = (u8)((u_q >> INTERP_SHIFT) & WALL_TEX_DIM_MASK);
+
+                    if (depth < 1) depth = 1;
+                    if (depth > (s32)SCENE_FAR) wall_depth = SCENE_FAR;
+                    else wall_depth = (u16)depth;
+
+                    if (!back) {
+                        draw_span(sx, fc, (s16)(ff - 1), wall_depth,
+                                  seg->middle_texture, tx);
+                        close_column(sx);
                     } else {
-                        draw_span(sx, bf, (s16)(ff - 1), surface_depth,
-                                  seg->lower_texture, tx);
+                        const s16 bc = (s16)(bc_q >> INTERP_SHIFT);
+                        const s16 bf = (s16)(bf_q >> INTERP_SHIFT);
+                        const u16 surface_depth = wall_depth > 1 ? (u16)(wall_depth - 1) : 1;
+                        if (back->ceiling_height < front->ceiling_height) {
+                            draw_span(sx, fc, (s16)(bc - 1), surface_depth,
+                                      seg->upper_texture, tx);
+                            if (bc - 1 > g_ceiling_clip[sx]) {
+                                g_ceiling_clip[sx] = (s16)(bc - 1);
+                            }
+                        }
+                        if (back->floor_height > front->floor_height) {
+                            if ((seg->side_flags & BSP_RENDER_FLAT_RISER) != 0) {
+                                const u8 shade_color = FREEDOOM_WORLD_SHADE_MAP[
+                                    bsp_sectors[seg->back_sector].floor_color & 15];
+                                draw_solid_span(sx, bf, (s16)(ff - 1), surface_depth,
+                                                shade_color);
+                            } else {
+                                draw_span(sx, bf, (s16)(ff - 1), surface_depth,
+                                          seg->lower_texture, tx);
+                            }
+                            if (bf < g_floor_clip[sx]) g_floor_clip[sx] = bf;
+                        }
+                        if (g_ceiling_clip[sx] + 1 >= g_floor_clip[sx]) {
+                            close_column(sx);
+                        }
                     }
-                    if (bf < g_floor_clip[sx]) g_floor_clip[sx] = bf;
                 }
-                if (g_ceiling_clip[sx] + 1 >= g_floor_clip[sx]) {
-                    close_column(sx);
-                }
+                depth_q += depth_step;
+                u_q += u_step;
+                fc_q += fc_step;
+                ff_q += ff_step;
+                bc_q += bc_step;
+                bf_q += bf_step;
             }
         }
-        depth_q += depth_step;
-        u_q += u_step;
-        fc_q += fc_step;
-        ff_q += ff_step;
-        bc_q += bc_step;
-        bf_q += bf_step;
     }
-}
-
-static s32 render_seg_near_depth(const SectorRenderContext *context,
-                                 const BspRenderSeg *seg) {
-    const BspVertex *a = &bsp_vertices[seg->v1];
-    const BspVertex *b = &bsp_vertices[seg->v2];
-    const s32 adx = (s32)a->x - context->player->x;
-    const s32 ady = (s32)a->y - context->player->y;
-    const s32 bdx = (s32)b->x - context->player->x;
-    const s32 bdy = (s32)b->y - context->player->y;
-    const s32 da = (adx * context->fwx + ady * context->fwy) >> FX_SHIFT;
-    const s32 db = (bdx * context->fwx + bdy * context->fwy) >> FX_SHIFT;
-    return da < db ? da : db;
 }
 
 static void draw_render_subsector(u16 subsector_id, void *opaque) {
     SectorRenderContext *context = (SectorRenderContext *)opaque;
     const BspRenderSubsector *subsector = &bsp_render_subsectors[subsector_id];
     const u16 end = (u16)(subsector->first_seg + subsector->seg_count);
+
     if (g_visible_subsector_count < MAX_VISIBLE_SUBSECTORS) {
         g_visible_subsectors[g_visible_subsector_count++] = subsector_id;
     }
+
     if (subsector->seg_count <= MAX_SUBSECTOR_SEGS) {
         u16 order[MAX_SUBSECTOR_SEGS];
         s32 depths[MAX_SUBSECTOR_SEGS];
+        RenderSegView views[MAX_SUBSECTOR_SEGS];
         u16 count = 0;
+
         for (u16 i = subsector->first_seg; i < end; i++) {
-            const s32 depth = render_seg_near_depth(context, &bsp_render_segs[i]);
-            u16 insert = count;
-            while (insert > 0 && depths[insert - 1] > depth) {
-                depths[insert] = depths[insert - 1];
+            u16 insert;
+            transform_render_seg(context, &bsp_render_segs[i], &views[count]);
+            depths[count] = views[count].da < views[count].db ?
+                            views[count].da : views[count].db;
+            insert = count;
+            while (insert > 0 && depths[order[insert - 1]] > depths[count]) {
                 order[insert] = order[insert - 1];
                 insert--;
             }
-            depths[insert] = depth;
-            order[insert] = i;
+            order[insert] = count;
             count++;
         }
+
         for (u16 i = 0; i < count; i++) {
-            draw_render_seg(context->player, &bsp_render_segs[order[i]],
-                            context->fwx, context->fwy, context->rx, context->ry);
+            const u16 local_index = order[i];
+            draw_render_seg(context->player,
+                            &bsp_render_segs[subsector->first_seg + local_index],
+                            &views[local_index]);
         }
     } else {
         // Generated maps currently top out at eight segs per SSECTOR. Keep a
         // correctness fallback for hand-authored maps instead of overflowing
         // the small stack-local ordering buffers.
         for (u16 i = subsector->first_seg; i < end; i++) {
-            draw_render_seg(context->player, &bsp_render_segs[i], context->fwx,
-                            context->fwy, context->rx, context->ry);
+            RenderSegView view;
+            transform_render_seg(context, &bsp_render_segs[i], &view);
+            draw_render_seg(context->player, &bsp_render_segs[i], &view);
         }
     }
 }
@@ -487,12 +554,19 @@ static void clear_scene_flat(const PlayerState *player) {
 
 void bsp_sector_cast_frame(const PlayerState *player) {
     SectorRenderContext context;
+    const u16 sector_id = player->sector_id < bsp_sector_count ? player->sector_id : 0;
+    const BspSectorState *base_state = bsp_get_sector_state(sector_id);
+
     clear_scene_flat(player);
     context.player = player;
     context.fwx = fx_cos(player->angle);
     context.fwy = fx_sin(player->angle);
     context.rx = (s16)-context.fwy;
     context.ry = context.fwx;
+    context.base_floor_height = base_state ? base_state->floor_height :
+                                            bsp_sectors[sector_id].floor_height;
+    context.base_floor_color = bsp_sectors[sector_id].floor_color & 15;
+
     bsp_traverse_front_to_back(player, draw_render_subsector, sector_range_closed,
                                sector_all_closed, &context);
     for (u16 i = 0; i < g_visible_subsector_count; i++) {
