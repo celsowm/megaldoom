@@ -1,3 +1,4 @@
+#include <string.h>
 #include "bsp_render.h"
 #include "bsp_map.h"
 #include "bsp_traverse.h"
@@ -13,12 +14,14 @@
 #define MAX_PLANE_VERTICES 10
 #define MAX_VISIBLE_SUBSECTORS 256
 #define MAX_SUBSECTOR_SEGS 16
+#define SECTOR_CLOSED_WORD_COUNT ((RAY_SAMPLE_COLS + 31) / 32)
 
 static u8 g_scene_color[RAY_SAMPLE_COLS][RAY_VIEW_ROWS];
 static u16 g_scene_depth[RAY_SAMPLE_COLS][RAY_VIEW_ROWS];
 static s16 g_ceiling_clip[RAY_SAMPLE_COLS];
 static s16 g_floor_clip[RAY_SAMPLE_COLS];
 static bool g_column_closed[RAY_SAMPLE_COLS];
+static u32 g_closed_words[SECTOR_CLOSED_WORD_COUNT];
 static u16 g_closed_count;
 static u16 g_visible_subsectors[MAX_VISIBLE_SUBSECTORS];
 static u16 g_visible_subsector_count;
@@ -39,9 +42,36 @@ u16 bsp_sector_depth_at(u16 x, u16 y) {
     return (x < RAY_SAMPLE_COLS && y < RAY_VIEW_ROWS) ? g_scene_depth[x][y] : SCENE_FAR;
 }
 
+// The 68000 has native DIVS.W (32-bit dividend / 16-bit divisor). C expressions
+// with an s32 divisor otherwise call the much slower compiler 32/32 helper.
+// Use the native instruction whenever both divisor and quotient fit, retaining
+// the exact C fallback for unusual coordinates.
+static s32 fast_signed_divide(s32 numerator, s32 denominator) {
+    if (denominator != 0 && denominator >= -32768L && denominator <= 32767L) {
+        const s16 divisor = (s16)denominator;
+        s32 min_numerator;
+        s32 max_numerator;
+
+        if (divisor > 0) {
+            min_numerator = -((s32)divisor * 32768L);
+            max_numerator = (s32)divisor * 32767L;
+        } else {
+            min_numerator = (s32)divisor * 32767L;
+            max_numerator = -((s32)divisor * 32768L);
+        }
+
+        if (numerator >= min_numerator && numerator <= max_numerator) {
+            return (s32)divs(numerator, divisor);
+        }
+    }
+
+    return numerator / denominator;
+}
+
 static s16 project_world_z(s16 world_z, s16 view_z, s32 depth) {
     if (depth < 1) depth = 1;
-    return (s16)(RAY_VIEW_CENTER_Y - (((s32)(world_z - view_z) * RAY_PROJ_Y) / depth));
+    return (s16)(RAY_VIEW_CENTER_Y -
+        fast_signed_divide((s32)(world_z - view_z) * RAY_PROJ_Y, depth));
 }
 
 static s32 abs32(s32 value) { return value < 0 ? -value : value; }
@@ -56,12 +86,26 @@ static void draw_span(u16 sx, s16 top, s16 bottom, u16 depth, u8 texture,
     if (bottom >= RAY_VIEW_ROWS) bottom = RAY_VIEW_ROWS - 1;
     if (top > bottom || texture == 0xFF) return;
     if (texture >= FREEDOOM_WALL_TEXTURE_COUNT) texture = MEGALDOOM_TEX_FALLBACK;
-    const s16 height = (s16)(bottom - top + 1);
+
+    // Exact replacement for ((row * WALL_TEX_DIM) / height), but with no
+    // division in the per-pixel loop. The error accumulator produces the same
+    // floor() sequence as the old expression for every span height.
+    const u16 height = (u16)(bottom - top + 1);
+    const u8 *texture_pixels = &FREEDOOM_WALL_TEXTURES[texture][0][0];
+    u16 tex_y = 0;
+    u16 tex_error = 0;
+
     for (s16 y = top; y <= bottom; y++) {
-        const u8 ty = (u8)(((s32)(y - top) * WALL_TEX_DIM / height) & WALL_TEX_DIM_MASK);
         if (depth < g_scene_depth[sx][y]) {
             g_scene_depth[sx][y] = depth;
-            g_scene_color[sx][y] = FREEDOOM_WALL_TEXTURES[texture][ty][tex_x] & 15;
+            g_scene_color[sx][y] =
+                texture_pixels[((tex_y & WALL_TEX_DIM_MASK) * WALL_TEX_DIM) + tex_x] & 15;
+        }
+
+        tex_error = (u16)(tex_error + WALL_TEX_DIM);
+        while (tex_error >= height) {
+            tex_error = (u16)(tex_error - height);
+            tex_y++;
         }
     }
 }
@@ -84,6 +128,7 @@ static void draw_solid_span(u16 sx, s16 top, s16 bottom, u16 depth, u8 color) {
 static void close_column(u16 sx) {
     if (g_column_closed[sx]) return;
     g_column_closed[sx] = TRUE;
+    g_closed_words[sx >> 5] |= (u32)1u << (sx & 31);
     g_ceiling_clip[sx] = RAY_VIEW_ROWS - 1;
     g_floor_clip[sx] = 0;
     g_closed_count++;
@@ -91,11 +136,12 @@ static void close_column(u16 sx) {
 
 static s32 interpolate_at(s32 a, s32 b, s32 xa, s32 span, s32 screen_x) {
     return (a << INTERP_SHIFT) +
-        (((b - a) << INTERP_SHIFT) * (screen_x - xa)) / span;
+        fast_signed_divide(((b - a) << INTERP_SHIFT) * (screen_x - xa), span);
 }
 
 static s32 interpolation_step(s32 a, s32 b, s32 span) {
-    return (((b - a) << INTERP_SHIFT) * RAY_COL_STRIDE) / span;
+    return fast_signed_divide(
+        ((b - a) << INTERP_SHIFT) * RAY_COL_STRIDE, span);
 }
 
 static s16 clamp_screen_x(s32 x) {
@@ -112,7 +158,8 @@ static void add_plane_edge(s16 x0, s16 y0, s16 x1, s16 y1) {
     }
     if (y1 < RAY_VIEW_CENTER_Y || y0 >= RAY_VIEW_ROWS) return;
     const s32 dy = (s32)y1 - y0;
-    const s32 step = (((s32)x1 - x0) << INTERP_SHIFT) / dy;
+    const s32 step = fast_signed_divide(
+        ((s32)x1 - x0) << INTERP_SHIFT, dy);
     s16 start = y0 < RAY_VIEW_CENTER_Y ? RAY_VIEW_CENTER_Y : y0;
     s16 end = y1 >= RAY_VIEW_ROWS ? RAY_VIEW_ROWS - 1 : y1;
     s32 xq = ((s32)x0 << INTERP_SHIFT) + step * (start - y0);
@@ -153,8 +200,9 @@ static void draw_floor_subsector(const SectorRenderContext *context,
         const bool current_inside = input_depth[current] >= SECTOR_NEAR;
         if (previous_inside != current_inside) {
             const s32 denominator = input_depth[current] - input_depth[previous];
-            const s32 t = (((s32)SECTOR_NEAR - input_depth[previous]) << INTERP_SHIFT) /
-                          denominator;
+            const s32 t = fast_signed_divide(
+                ((s32)SECTOR_NEAR - input_depth[previous]) << INTERP_SHIFT,
+                denominator);
             clipped_lat[clipped_count] = input_lat[previous] +
                 (((input_lat[current] - input_lat[previous]) * t) >> INTERP_SHIFT);
             clipped_depth[clipped_count++] = SECTOR_NEAR;
@@ -171,7 +219,7 @@ static void draw_floor_subsector(const SectorRenderContext *context,
     s16 screen_y[MAX_PLANE_VERTICES];
     for (u16 i = 0; i < clipped_count; i++) {
         screen_x[i] = clamp_screen_x(RAY_VIEW_CENTER_X +
-            (clipped_lat[i] * RAY_PROJ_X) / clipped_depth[i]);
+            fast_signed_divide(clipped_lat[i] * RAY_PROJ_X, clipped_depth[i]));
         screen_y[i] = project_world_z(state->floor_height,
                                       context->player->view_z,
                                       clipped_depth[i]);
@@ -225,19 +273,21 @@ static void draw_render_seg(const PlayerState *player, const BspRenderSeg *seg,
 
     if (da < SECTOR_NEAR && db < SECTOR_NEAR) return;
     if (da < SECTOR_NEAR) {
-        const s32 t = (((s32)SECTOR_NEAR - da) << INTERP_SHIFT) / (db - da);
+        const s32 t = fast_signed_divide(
+            ((s32)SECTOR_NEAR - da) << INTERP_SHIFT, db - da);
         la += ((lb - la) * t) >> INTERP_SHIFT;
         ua += ((ub - ua) * t) >> INTERP_SHIFT;
         da = SECTOR_NEAR;
     } else if (db < SECTOR_NEAR) {
-        const s32 t = (((s32)SECTOR_NEAR - db) << INTERP_SHIFT) / (da - db);
+        const s32 t = fast_signed_divide(
+            ((s32)SECTOR_NEAR - db) << INTERP_SHIFT, da - db);
         lb += ((la - lb) * t) >> INTERP_SHIFT;
         ub += ((ua - ub) * t) >> INTERP_SHIFT;
         db = SECTOR_NEAR;
     }
 
-    s32 xa = RAY_VIEW_CENTER_X + (la * RAY_PROJ_X) / da;
-    s32 xb = RAY_VIEW_CENTER_X + (lb * RAY_PROJ_X) / db;
+    s32 xa = RAY_VIEW_CENTER_X + fast_signed_divide(la * RAY_PROJ_X, da);
+    s32 xb = RAY_VIEW_CENTER_X + fast_signed_divide(lb * RAY_PROJ_X, db);
     if (xa == xb) return;
     if (xa > xb) {
         s32 temp = xa; xa = xb; xb = temp;
@@ -380,10 +430,28 @@ static void draw_render_subsector(u16 subsector_id, void *opaque) {
 }
 
 static bool sector_range_closed(u16 left_sample, u16 right_sample, void *context) {
+    u16 word = (u16)(left_sample >> 5);
+    const u16 last_word = (u16)(right_sample >> 5);
     (void)context;
-    for (u16 sx = left_sample; sx <= right_sample; sx++) {
-        if (!g_column_closed[sx]) return FALSE;
+
+    while (word <= last_word) {
+        const u16 word_left = (u16)(word << 5);
+        const u16 word_right = (u16)(word_left + 31);
+        const u16 range_left = left_sample > word_left ? left_sample : word_left;
+        const u16 range_right = right_sample < word_right ? right_sample : word_right;
+        const u16 start_bit = (u16)(range_left & 31);
+        const u16 end_bit = (u16)(range_right & 31);
+        u32 mask = 0xFFFFFFFFu << start_bit;
+
+        if (end_bit < 31) {
+            mask &= (u32)((1u << (end_bit + 1)) - 1u);
+        }
+        if ((g_closed_words[word] & mask) != mask) {
+            return FALSE;
+        }
+        word++;
     }
+
     return TRUE;
 }
 
@@ -395,15 +463,23 @@ static bool sector_all_closed(void *context) {
 static void clear_scene_flat(const PlayerState *player) {
     const u16 sector_id = player->sector_id < bsp_sector_count ? player->sector_id : 0;
     const BspSector *sector = &bsp_sectors[sector_id];
+
+    // Scene depth is always SCENE_FAR at frame start, so a bulk fill replaces
+    // 4,800 scalar u16 assignments. Build one flat colour column and replicate
+    // it across the sampled view with the library's optimized memcpy.
+    memset(g_scene_depth, 0xFF, sizeof(g_scene_depth));
+    memset(g_scene_color[0], sector->ceiling_color, RAY_VIEW_CENTER_Y);
+    memset(&g_scene_color[0][RAY_VIEW_CENTER_Y], sector->floor_color,
+           RAY_VIEW_ROWS - RAY_VIEW_CENTER_Y);
+    for (u16 x = 1; x < RAY_SAMPLE_COLS; x++) {
+        memcpy(g_scene_color[x], g_scene_color[0], RAY_VIEW_ROWS);
+    }
+
+    memset(g_column_closed, 0, sizeof(g_column_closed));
+    memset(g_closed_words, 0, sizeof(g_closed_words));
     for (u16 x = 0; x < RAY_SAMPLE_COLS; x++) {
         g_ceiling_clip[x] = -1;
         g_floor_clip[x] = RAY_VIEW_ROWS;
-        g_column_closed[x] = FALSE;
-        for (u16 y = 0; y < RAY_VIEW_ROWS; y++) {
-            g_scene_depth[x][y] = SCENE_FAR;
-            g_scene_color[x][y] =
-                y < RAY_VIEW_CENTER_Y ? sector->ceiling_color : sector->floor_color;
-        }
     }
     g_closed_count = 0;
     g_visible_subsector_count = 0;
