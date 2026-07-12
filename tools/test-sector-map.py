@@ -22,12 +22,14 @@ def main():
     marker = next(i for i, (name, _) in enumerate(lumps) if name == "E1M1")
     section = dict(lumps[marker + 1:marker + 12])
     expected = {
+        "bsp_vertex_count": len(section["VERTEXES"]) // 4,
         "bsp_sector_count": len(section["SECTORS"]) // 26,
         "bsp_line_count": len(section["LINEDEFS"]) // 14,
         "bsp_render_seg_count": len(section["SEGS"]) // 12,
         "bsp_subsector_count": len(section["SSECTORS"]) // 4,
     }
     assert expected == {
+        "bsp_vertex_count": 467,
         "bsp_sector_count": 85,
         "bsp_line_count": 475,
         "bsp_render_seg_count": 732,
@@ -139,18 +141,26 @@ def main():
     assert all_closed and "g_closed_count >= RAY_SAMPLE_COLS" in all_closed.group(0)
 
     renderer_scene = (ROOT / "src/renderer_scene.c").read_text()
-    sector_tile = re.search(
-        r"static void build_sector_tile\(u16 tile\) \{(.*?)\n\}",
-        renderer_scene, re.S)
-    assert sector_tile
-    assert "REP4[left[py] & 15]" in sector_tile.group(1)
-    assert "REP4[right[py] & 15]" in sector_tile.group(1)
-    assert "for (u16 px" not in sector_tile.group(1)
+    assert "build_sector_tilemap" not in renderer_scene
+    assert "bsp_sector_scene_color" not in renderer_scene
+    assert "bsp_sector_scene_depth" not in renderer_scene
+    assert "memcpy(g_view_tiles, g_base_view_tiles, sizeof(g_view_tiles))" not in renderer_scene
+    assert "g_base_view_tiles[tile_index][row] = g_view_tiles[tile_index][row]" in renderer_scene
+    assert "bsp_sector_depth_block(sample_x, tile_y)" in renderer_scene
     restore = re.search(
         r"static void restore_previous_overlay_tiles\(void\) \{(.*?)\n\}",
         renderer_scene, re.S)
-    assert restore and "overlay_previously_touched(tile)" in restore.group(1)
+    assert restore and "g_overlay_previous_bits[word]" in restore.group(1)
+    assert "g_base_view_tiles[tile][row]" in restore.group(1)
     assert "build_sector_tilemap();" not in restore.group(1)
+
+    assert "g_scene_color" not in sector_renderer
+    assert "memset(g_scene_depth" not in sector_renderer
+    assert "MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[height]" in sector_renderer
+    assert "g_depth_block_generation" in sector_renderer
+    assert "base_sample_rows" in sector_renderer
+    assert "g_vertex_generation" in sector_renderer
+    assert "transform_vertex(context, seg->v1" in sector_renderer
 
     main_source = (ROOT / "src/main.c").read_text()
     exclusive = re.search(

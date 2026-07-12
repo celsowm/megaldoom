@@ -422,15 +422,28 @@ static bool project_box_range(const BspBox *box, s16 *left, s16 *right) {
         return FALSE;
     }
 
-    s32 min_screen = 0x7FFFFFFF;
-    s32 max_screen = -0x7FFFFFFF;
+    s32 min_screen;
+    s32 max_screen;
+    u16 min_ratio_index = 0;
+    u16 max_ratio_index = 0;
     BSP_DBG_INC(boxes_projected);
-    for (u16 i = 0; i < 4; i++) {
-        const s32 screen = RAY_VIEW_CENTER_X +
-                           perspective_divide(laterals[i] * RAY_PROJ_X, depths[i]);
-        if (screen < min_screen) min_screen = screen;
-        if (screen > max_screen) max_screen = screen;
+    // Every depth is positive here. Select the exact min/max lateral/depth
+    // ratios by cross multiplication, then project only those two corners.
+    // The previous loop paid four DIVS operations to discover the same extrema.
+    for (u16 i = 1; i < 4; i++) {
+        if ((laterals[i] * depths[min_ratio_index]) <
+            (laterals[min_ratio_index] * depths[i])) {
+            min_ratio_index = i;
+        }
+        if ((laterals[i] * depths[max_ratio_index]) >
+            (laterals[max_ratio_index] * depths[i])) {
+            max_ratio_index = i;
+        }
     }
+    min_screen = RAY_VIEW_CENTER_X + perspective_divide(
+        laterals[min_ratio_index] * RAY_PROJ_X, depths[min_ratio_index]);
+    max_screen = RAY_VIEW_CENTER_X + perspective_divide(
+        laterals[max_ratio_index] * RAY_PROJ_X, depths[max_ratio_index]);
 
     // Cover integer projection/truncation at box edges and the renderer's
     // horizontal sample stride before making an outside-FOV decision.

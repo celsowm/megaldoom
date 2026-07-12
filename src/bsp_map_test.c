@@ -93,6 +93,7 @@ const BspNode bsp_nodes[] = {
 
 const u16 bsp_root_node = 0;
 const u16 bsp_seg_count = 12;
+const u16 bsp_vertex_count = 8;
 const u16 bsp_line_count = 9;
 const u16 bsp_render_seg_count = 10;
 const u16 bsp_sector_count = 2;

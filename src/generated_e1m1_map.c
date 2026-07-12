@@ -3173,6 +3173,7 @@ const BspNode bsp_nodes[236] = {
 
 const u16 bsp_root_node = 235u;
 const u16 bsp_seg_count = 388u;
+const u16 bsp_vertex_count = 467u;
 const u16 bsp_line_count = 475u;
 const u16 bsp_render_seg_count = 732u;
 const u16 bsp_sector_count = 85u;

@@ -5,6 +5,8 @@
 #include "bsp_traverse.h"
 #include "fixed_math.h"
 #include "generated_assets.h"
+#include "generated_renderer_assets.h"
+#include "renderer_internal.h"
 
 #if BSP_SECTOR_RENDERER
 
@@ -16,9 +18,15 @@
 #define MAX_VISIBLE_SUBSECTORS 256
 #define MAX_SUBSECTOR_SEGS 16
 #define SECTOR_CLOSED_WORD_COUNT ((RAY_SAMPLE_COLS + 31) / 32)
+#define SECTOR_VERTEX_CACHE_CAP 32
 
-static u8 g_scene_color[RAY_SAMPLE_COLS][RAY_VIEW_ROWS];
 static u16 g_scene_depth[RAY_SAMPLE_COLS][RAY_VIEW_ROWS];
+static u8 g_depth_block_generation[RAY_SAMPLE_COLS][VIEW_TILE_H];
+static u8 g_depth_generation;
+static const u16 g_far_depth_block[8] = {
+    SCENE_FAR, SCENE_FAR, SCENE_FAR, SCENE_FAR,
+    SCENE_FAR, SCENE_FAR, SCENE_FAR, SCENE_FAR
+};
 static s16 g_ceiling_clip[RAY_SAMPLE_COLS];
 static s16 g_floor_clip[RAY_SAMPLE_COLS];
 static bool g_column_closed[RAY_SAMPLE_COLS];
@@ -28,6 +36,32 @@ static u16 g_visible_subsectors[MAX_VISIBLE_SUBSECTORS];
 static u16 g_visible_subsector_count;
 static s16 g_plane_left[RAY_VIEW_ROWS];
 static s16 g_plane_right[RAY_VIEW_ROWS];
+static s32 g_vertex_depth[SECTOR_VERTEX_CACHE_CAP];
+static s32 g_vertex_lateral[SECTOR_VERTEX_CACHE_CAP];
+static u16 g_vertex_id[SECTOR_VERTEX_CACHE_CAP];
+static u8 g_vertex_generation[SECTOR_VERTEX_CACHE_CAP];
+static u8 g_transform_generation;
+static const u16 SECTOR_REP4[16] = {
+    0x0000, 0x1111, 0x2222, 0x3333,
+    0x4444, 0x5555, 0x6666, 0x7777,
+    0x8888, 0x9999, 0xAAAA, 0xBBBB,
+    0xCCCC, 0xDDDD, 0xEEEE, 0xFFFF
+};
+#if DEBUG_PERF
+static u32 g_debug_flat_subticks;
+static u32 g_debug_wall_subticks;
+static u32 g_debug_floor_subticks;
+static u32 g_debug_transform_subticks;
+static u32 g_debug_setup_subticks;
+static u32 g_debug_raster_subticks;
+
+u32 bsp_sector_get_debug_flat_subticks(void) { return g_debug_flat_subticks; }
+u32 bsp_sector_get_debug_wall_subticks(void) { return g_debug_wall_subticks; }
+u32 bsp_sector_get_debug_floor_subticks(void) { return g_debug_floor_subticks; }
+u32 bsp_sector_get_debug_transform_subticks(void) { return g_debug_transform_subticks; }
+u32 bsp_sector_get_debug_setup_subticks(void) { return g_debug_setup_subticks; }
+u32 bsp_sector_get_debug_raster_subticks(void) { return g_debug_raster_subticks; }
+#endif
 
 typedef struct {
     const PlayerState *player;
@@ -46,34 +80,90 @@ typedef struct {
     s32 lb;
 } RenderSegView;
 
-const u8 *bsp_sector_scene_color(void) { return &g_scene_color[0][0]; }
-const u16 *bsp_sector_scene_depth(void) { return &g_scene_depth[0][0]; }
-u16 bsp_sector_depth_at(u16 x, u16 y) {
-    return (x < RAY_SAMPLE_COLS && y < RAY_VIEW_ROWS) ? g_scene_depth[x][y] : SCENE_FAR;
+static void transform_vertex(const SectorRenderContext *context, u16 vertex_id,
+                             s32 *depth, s32 *lateral);
+
+const u16 *bsp_sector_depth_block(u16 sample_x, u16 tile_y) {
+    if (sample_x >= RAY_SAMPLE_COLS || tile_y >= VIEW_TILE_H ||
+        g_depth_block_generation[sample_x][tile_y] != g_depth_generation) {
+        return g_far_depth_block;
+    }
+    return &g_scene_depth[sample_x][tile_y * 8];
 }
 
-// The 68000 has native DIVS.W (32-bit dividend / 16-bit divisor). C expressions
-// with an s32 divisor otherwise call the much slower compiler 32/32 helper.
-// Normalize a negative divisor, then use shifts for the quotient-fit guard. The
-// previous guard multiplied the divisor twice for every divide, adding expensive
-// MULS work to one of the hottest renderer helpers.
-static s32 fast_signed_divide(s32 numerator, s32 denominator) {
-    if (denominator != 0 && denominator >= -32767L && denominator <= 32767L) {
-        if (denominator < 0) {
-            if (numerator == (-2147483647L - 1L)) {
-                return numerator / denominator;
-            }
-            numerator = -numerator;
-            denominator = -denominator;
-        }
+u16 bsp_sector_depth_at(u16 x, u16 y) {
+    const u16 *block;
+    if (x >= RAY_SAMPLE_COLS || y >= RAY_VIEW_ROWS) return SCENE_FAR;
+    block = bsp_sector_depth_block(x, (u16)(y >> 3));
+    return block[y & 7];
+}
 
+static u16 *ensure_depth_block(u16 sample_x, u16 tile_y) {
+    u16 *block = &g_scene_depth[sample_x][tile_y * 8];
+    if (g_depth_block_generation[sample_x][tile_y] != g_depth_generation) {
+        u32 *wide = (u32 *)block;
+        wide[0] = 0xFFFFFFFFu;
+        wide[1] = 0xFFFFFFFFu;
+        wide[2] = 0xFFFFFFFFu;
+        wide[3] = 0xFFFFFFFFu;
+        g_depth_block_generation[sample_x][tile_y] = g_depth_generation;
+    }
+    return block;
+}
+
+static u16 *base_sample_rows(u16 sample_x, u16 tile_y) {
+    u32 *tile = g_view_tiles[(tile_y * VIEW_TILE_W) + (sample_x >> 1)];
+    return ((u16 *)tile) + (sample_x & 1);
+}
+
+// Exact unsigned 32/16=32 division using two hardware DIVU.W operations. The
+// high-word quotient and the remainder-fed low-word quotient each fit u16.
+static u32 sector_divu32_16_exact(u32 numerator, u16 denominator) {
+    const u16 high = (u16)(numerator >> 16);
+    const u16 quotient_high = divu(high, denominator);
+    const u16 remainder_high =
+        (u16)(high - ((u32)quotient_high * denominator));
+    const u32 low_numerator =
+        ((u32)remainder_high << 16) | (numerator & 0xFFFFu);
+    const u16 quotient_low = divu(low_numerator, denominator);
+    return ((u32)quotient_high << 16) | quotient_low;
+}
+
+// The 68000 has no native signed 32-bit quotient. Normalize signs and use the
+// exact two-stage 32/16 divider whenever the divisor fits u16; retain the C
+// fallback only for the exceptional wider-divisor and INT_MIN/-1 cases.
+static s32 fast_signed_divide(s32 numerator, s32 denominator) {
+    if (denominator != 0 && denominator >= -32767L && denominator <= 32767L &&
+        !((numerator == (-2147483647L - 1L)) && (denominator < 0))) {
+        s32 normalized_numerator = numerator;
+        s32 normalized_denominator = denominator;
+        if (normalized_denominator < 0) {
+            normalized_numerator = -normalized_numerator;
+            normalized_denominator = -normalized_denominator;
+        }
         {
-            const s32 magnitude_limit = denominator << 15;
-            if (numerator >= -magnitude_limit &&
-                numerator <= magnitude_limit - denominator) {
-                return (s32)divs(numerator, (s16)denominator);
+            const s32 magnitude_limit = normalized_denominator << 15;
+            if (normalized_numerator >= -magnitude_limit &&
+                normalized_numerator <= magnitude_limit - normalized_denominator) {
+                return (s32)divs(normalized_numerator,
+                                 (s16)normalized_denominator);
             }
         }
+    }
+
+    if (denominator != 0 && denominator >= -65535L && denominator <= 65535L &&
+        !((numerator == (-2147483647L - 1L)) && (denominator == -1))) {
+        if (numerator == (-2147483647L - 1L) && denominator == 1) {
+            return numerator;
+        }
+        const bool negative = (bool)((numerator < 0) != (denominator < 0));
+        const u32 numerator_magnitude = (numerator < 0) ?
+            (u32)(-(numerator + 1)) + 1u : (u32)numerator;
+        const u16 denominator_magnitude = (u16)((denominator < 0) ?
+            -denominator : denominator);
+        const u32 quotient =
+            sector_divu32_16_exact(numerator_magnitude, denominator_magnitude);
+        return negative ? -(s32)quotient : (s32)quotient;
     }
 
     return numerator / denominator;
@@ -98,50 +188,65 @@ static void draw_span(u16 sx, s16 top, s16 bottom, u16 depth, u8 texture,
     if (top > bottom || texture == 0xFF) return;
     if (texture >= FREEDOOM_WALL_TEXTURE_COUNT) texture = MEGALDOOM_TEX_FALLBACK;
 
-    // Exact quotient/remainder DDA for floor(row * WALL_TEX_DIM / height).
-    // Splitting WALL_TEX_DIM / height once means the per-pixel loop needs at
-    // most one correction branch. The previous while loop always performed 32
-    // subtraction/increment iterations per span, which was especially costly
-    // for the many short wall slices seen while moving through portals.
     {
         const u16 height = (u16)(bottom - top + 1);
         const u8 *texture_pixels = &FREEDOOM_WALL_TEXTURES[texture][0][0];
-        const u16 tex_step = divu(WALL_TEX_DIM, height);
-        const u16 tex_remainder =
-            (u16)(WALL_TEX_DIM - (tex_step * height));
-        u16 tex_y = 0;
-        u16 tex_error = 0;
+        const u8 *tex_y_rows = MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[height];
+        s16 y = top;
+        u16 relative_y = 0;
 
-        for (s16 y = top; y <= bottom; y++) {
-            if (depth < g_scene_depth[sx][y]) {
-                g_scene_depth[sx][y] = depth;
-                g_scene_color[sx][y] =
-                    texture_pixels[((tex_y & WALL_TEX_DIM_MASK) * WALL_TEX_DIM) +
-                                   tex_x] & 15;
-            }
+        while (y <= bottom) {
+            const u16 tile_y = (u16)(y >> 3);
+            const s16 block_bottom = (s16)(((tile_y + 1) << 3) - 1);
+            const s16 stop = block_bottom < bottom ? block_bottom : bottom;
+            const u16 start_row = (u16)(y & 7);
+            u16 *depth_row = ensure_depth_block(sx, tile_y) + start_row;
+            u16 *color_row = base_sample_rows(sx, tile_y) + (start_row * 2);
+            const u8 *tex_y_row = tex_y_rows + relative_y;
+            u16 count = (u16)(stop - y + 1);
 
-            tex_y = (u16)(tex_y + tex_step);
-            tex_error = (u16)(tex_error + tex_remainder);
-            if (tex_error >= height) {
-                tex_error = (u16)(tex_error - height);
-                tex_y++;
+            while (count-- > 0) {
+                const u8 tex_y = *tex_y_row++ & WALL_TEX_DIM_MASK;
+                if (depth < *depth_row) {
+                    const u8 color =
+                        texture_pixels[(tex_y * WALL_TEX_DIM) + tex_x] & 15;
+                    *depth_row = depth;
+                    *color_row = SECTOR_REP4[color];
+                }
+                depth_row++;
+                color_row += 2;
             }
+            relative_y = (u16)(relative_y + stop - y + 1);
+            y = (s16)(stop + 1);
         }
     }
 }
 
 static void draw_solid_span(u16 sx, s16 top, s16 bottom, u16 depth, u8 color) {
+    const u16 packed_color = SECTOR_REP4[color & 15];
     const s16 clip_top = (s16)(g_ceiling_clip[sx] + 1);
     const s16 clip_bottom = (s16)(g_floor_clip[sx] - 1);
     if (top < clip_top) top = clip_top;
     if (bottom > clip_bottom) bottom = clip_bottom;
     if (top < 0) top = 0;
     if (bottom >= RAY_VIEW_ROWS) bottom = RAY_VIEW_ROWS - 1;
-    for (s16 y = top; y <= bottom; y++) {
-        if (depth < g_scene_depth[sx][y]) {
-            g_scene_depth[sx][y] = depth;
-            g_scene_color[sx][y] = color & 15;
+    while (top <= bottom) {
+        const u16 tile_y = (u16)(top >> 3);
+        const s16 block_bottom = (s16)(((tile_y + 1) << 3) - 1);
+        const s16 stop = block_bottom < bottom ? block_bottom : bottom;
+        const u16 start_row = (u16)(top & 7);
+        u16 *depth_row = ensure_depth_block(sx, tile_y) + start_row;
+        u16 *color_row = base_sample_rows(sx, tile_y) + (start_row * 2);
+        u16 count = (u16)(stop - top + 1);
+        while (count-- > 0) {
+            if (depth < *depth_row) {
+                *depth_row = depth;
+                *color_row = packed_color;
+            }
+            depth_row++;
+            color_row += 2;
         }
+        top = (s16)(stop + 1);
     }
 }
 
@@ -227,11 +332,7 @@ static void draw_floor_subsector(const SectorRenderContext *context,
         if (input_count > MAX_PLANE_VERTICES - 2) input_count = MAX_PLANE_VERTICES - 2;
         for (u16 i = 0; i < input_count; i++) {
             const BspRenderSeg *seg = &bsp_render_segs[subsector->first_seg + i];
-            const BspVertex *vertex = &bsp_vertices[seg->v1];
-            const s32 dx = (s32)vertex->x - context->player->x;
-            const s32 dy = (s32)vertex->y - context->player->y;
-            input_depth[i] = (dx * context->fwx + dy * context->fwy) >> FX_SHIFT;
-            input_lat[i] = (dx * context->rx + dy * context->ry) >> FX_SHIFT;
+            transform_vertex(context, seg->v1, &input_depth[i], &input_lat[i]);
         }
 
         previous = (u16)(input_count - 1);
@@ -283,10 +384,15 @@ static void draw_floor_subsector(const SectorRenderContext *context,
                 const u16 first = (u16)((left + RAY_COL_STRIDE - 1) / RAY_COL_STRIDE);
                 const u16 last = (u16)(right / RAY_COL_STRIDE);
                 for (u16 sx = first; sx <= last; sx++) {
-                    if (y > g_ceiling_clip[sx] && y < g_floor_clip[sx] &&
-                        g_scene_depth[sx][y] == SCENE_FAR) {
-                        g_scene_color[sx][y] = color;
-                        g_scene_depth[sx][y] = PLANE_DEPTH;
+                    if (y > g_ceiling_clip[sx] && y < g_floor_clip[sx]) {
+                        const u16 tile_y = (u16)(y >> 3);
+                        const u16 row = (u16)(y & 7);
+                        u16 *depth_rows = ensure_depth_block(sx, tile_y);
+                        if (depth_rows[row] == SCENE_FAR) {
+                            u16 *color_rows = base_sample_rows(sx, tile_y);
+                            color_rows[row * 2] = SECTOR_REP4[color];
+                            depth_rows[row] = PLANE_DEPTH;
+                        }
                     }
                 }
             }
@@ -294,20 +400,39 @@ static void draw_floor_subsector(const SectorRenderContext *context,
     }
 }
 
+static void transform_vertex(const SectorRenderContext *context, u16 vertex_id,
+                             s32 *depth, s32 *lateral) {
+    const BspVertex *vertex = &bsp_vertices[vertex_id];
+    const u16 cache_slot = (u16)(vertex_id & (SECTOR_VERTEX_CACHE_CAP - 1));
+
+    if (vertex_id < bsp_vertex_count &&
+        g_vertex_generation[cache_slot] == g_transform_generation &&
+        g_vertex_id[cache_slot] == vertex_id) {
+        *depth = g_vertex_depth[cache_slot];
+        *lateral = g_vertex_lateral[cache_slot];
+        return;
+    }
+
+    {
+        const s32 relx = (s32)vertex->x - context->player->x;
+        const s32 rely = (s32)vertex->y - context->player->y;
+        *depth = (relx * context->fwx + rely * context->fwy) >> FX_SHIFT;
+        *lateral = (relx * context->rx + rely * context->ry) >> FX_SHIFT;
+    }
+
+    if (vertex_id < bsp_vertex_count) {
+        g_vertex_depth[cache_slot] = *depth;
+        g_vertex_lateral[cache_slot] = *lateral;
+        g_vertex_id[cache_slot] = vertex_id;
+        g_vertex_generation[cache_slot] = g_transform_generation;
+    }
+}
+
 static void transform_render_seg(const SectorRenderContext *context,
                                  const BspRenderSeg *seg,
                                  RenderSegView *view) {
-    const BspVertex *a = &bsp_vertices[seg->v1];
-    const BspVertex *b = &bsp_vertices[seg->v2];
-    s32 relx = (s32)a->x - context->player->x;
-    s32 rely = (s32)a->y - context->player->y;
-
-    view->da = (relx * context->fwx + rely * context->fwy) >> FX_SHIFT;
-    view->la = (relx * context->rx + rely * context->ry) >> FX_SHIFT;
-    relx = (s32)b->x - context->player->x;
-    rely = (s32)b->y - context->player->y;
-    view->db = (relx * context->fwx + rely * context->fwy) >> FX_SHIFT;
-    view->lb = (relx * context->rx + rely * context->ry) >> FX_SHIFT;
+    transform_vertex(context, seg->v1, &view->da, &view->la);
+    transform_vertex(context, seg->v2, &view->db, &view->lb);
 }
 
 static void draw_render_seg(const PlayerState *player, const BspRenderSeg *seg,
@@ -341,6 +466,9 @@ static void draw_render_seg(const PlayerState *player, const BspRenderSeg *seg,
         db = SECTOR_NEAR;
     }
 
+#if DEBUG_PERF
+    const u32 setup_start = getSubTick();
+#endif
     {
         s32 xa = RAY_VIEW_CENTER_X + fast_signed_divide(la * RAY_PROJ_X, da);
         s32 xb = RAY_VIEW_CENTER_X + fast_signed_divide(lb * RAY_PROJ_X, db);
@@ -377,10 +505,14 @@ static void draw_render_seg(const PlayerState *player, const BspRenderSeg *seg,
             fcb = project_world_z(front->ceiling_height, player->view_z, db);
             ffa = project_world_z(front->floor_height, player->view_z, da);
             ffb = project_world_z(front->floor_height, player->view_z, db);
-            bca = back ? project_world_z(back->ceiling_height, player->view_z, da) : 0;
-            bcb = back ? project_world_z(back->ceiling_height, player->view_z, db) : 0;
-            bfa = back ? project_world_z(back->floor_height, player->view_z, da) : 0;
-            bfb = back ? project_world_z(back->floor_height, player->view_z, db) : 0;
+            bca = back ? ((back->ceiling_height == front->ceiling_height) ? fca :
+                project_world_z(back->ceiling_height, player->view_z, da)) : 0;
+            bcb = back ? ((back->ceiling_height == front->ceiling_height) ? fcb :
+                project_world_z(back->ceiling_height, player->view_z, db)) : 0;
+            bfa = back ? ((back->floor_height == front->floor_height) ? ffa :
+                project_world_z(back->floor_height, player->view_z, da)) : 0;
+            bfb = back ? ((back->floor_height == front->floor_height) ? ffb :
+                project_world_z(back->floor_height, player->view_z, db)) : 0;
 
             depth_q = interpolate_at(da, db, xa, span, first_x);
             u_q = interpolate_at(ua, ub, xa, span, first_x);
@@ -395,6 +527,10 @@ static void draw_render_seg(const PlayerState *player, const BspRenderSeg *seg,
             bc_step = interpolation_step(bca, bcb, span);
             bf_step = interpolation_step(bfa, bfb, span);
 
+#if DEBUG_PERF
+            const u32 raster_start = getSubTick();
+            g_debug_setup_subticks += raster_start - setup_start;
+#endif
             for (u16 sx = first_sample; sx <= last_sample; sx++) {
                 if (!g_column_closed[sx]) {
                     s32 depth = depth_q >> INTERP_SHIFT;
@@ -446,6 +582,9 @@ static void draw_render_seg(const PlayerState *player, const BspRenderSeg *seg,
                 bc_q += bc_step;
                 bf_q += bf_step;
             }
+#if DEBUG_PERF
+            g_debug_raster_subticks += getSubTick() - raster_start;
+#endif
         }
     }
 }
@@ -464,6 +603,9 @@ static void draw_render_subsector(u16 subsector_id, void *opaque) {
         s32 depths[MAX_SUBSECTOR_SEGS];
         RenderSegView views[MAX_SUBSECTOR_SEGS];
         u16 count = 0;
+#if DEBUG_PERF
+        const u32 transform_start = getSubTick();
+#endif
 
         for (u16 i = subsector->first_seg; i < end; i++) {
             u16 insert;
@@ -478,6 +620,9 @@ static void draw_render_subsector(u16 subsector_id, void *opaque) {
             order[insert] = count;
             count++;
         }
+#if DEBUG_PERF
+        g_debug_transform_subticks += getSubTick() - transform_start;
+#endif
 
         for (u16 i = 0; i < count; i++) {
             const u16 local_index = order[i];
@@ -532,15 +677,48 @@ static void clear_scene_flat(const PlayerState *player) {
     const u16 sector_id = player->sector_id < bsp_sector_count ? player->sector_id : 0;
     const BspSector *sector = &bsp_sectors[sector_id];
 
-    // Scene depth is always SCENE_FAR at frame start, so a bulk fill replaces
-    // 4,800 scalar u16 assignments. Build one flat colour column and replicate
-    // it across the sampled view with the library's optimized memcpy.
-    memset(g_scene_depth, 0xFF, sizeof(g_scene_depth));
-    memset(g_scene_color[0], sector->ceiling_color, RAY_VIEW_CENTER_Y);
-    memset(&g_scene_color[0][RAY_VIEW_CENTER_Y], sector->floor_color,
-           RAY_VIEW_ROWS - RAY_VIEW_CENTER_Y);
-    for (u16 x = 1; x < RAY_SAMPLE_COLS; x++) {
-        memcpy(g_scene_color[x], g_scene_color[0], RAY_VIEW_ROWS);
+    // Build the flat background directly in the packed view-tile layout. The
+    // sector renderer writes the same left/right 4px sample halves as the old
+    // colour-buffer packer, so no second full-frame conversion is needed.
+    {
+        const u16 ceiling_half = SECTOR_REP4[sector->ceiling_color & 15];
+        const u16 floor_half = SECTOR_REP4[sector->floor_color & 15];
+        const u32 ceiling_row = ((u32)ceiling_half << 16) | ceiling_half;
+        const u32 floor_row = ((u32)floor_half << 16) | floor_half;
+        const u16 horizon_tile_y = (u16)(RAY_VIEW_CENTER_Y >> 3);
+        const u16 horizon_row = (u16)(RAY_VIEW_CENTER_Y & 7);
+        const u16 ceiling_words = (u16)(horizon_tile_y * VIEW_TILE_W * 8);
+
+        if (ceiling_words > 0) {
+            memsetU32(&g_view_tiles[0][0], ceiling_row, ceiling_words);
+        }
+        if (horizon_row != 0) {
+            for (u16 tile_x = 0; tile_x < VIEW_TILE_W; tile_x++) {
+                u32 *tile = g_view_tiles[(horizon_tile_y * VIEW_TILE_W) + tile_x];
+                memsetU32(tile, ceiling_row, horizon_row);
+                memsetU32(tile + horizon_row, floor_row, (u16)(8 - horizon_row));
+            }
+        }
+        {
+            const u16 first_floor_tile = (u16)(horizon_tile_y + (horizon_row != 0));
+            const u16 floor_words =
+                (u16)((VIEW_TILE_H - first_floor_tile) * VIEW_TILE_W * 8);
+            if (floor_words > 0) {
+                memsetU32(&g_view_tiles[first_floor_tile * VIEW_TILE_W][0],
+                          floor_row, floor_words);
+            }
+        }
+    }
+
+    g_depth_generation++;
+    if (g_depth_generation == 0) {
+        memset(g_depth_block_generation, 0, sizeof(g_depth_block_generation));
+        g_depth_generation = 1;
+    }
+    g_transform_generation++;
+    if (g_transform_generation == 0) {
+        memset(g_vertex_generation, 0, sizeof(g_vertex_generation));
+        g_transform_generation = 1;
     }
 
     memset(g_column_closed, 0, sizeof(g_column_closed));
@@ -557,8 +735,17 @@ void bsp_sector_cast_frame(const PlayerState *player) {
     SectorRenderContext context;
     const u16 sector_id = player->sector_id < bsp_sector_count ? player->sector_id : 0;
     const BspSectorState *base_state = bsp_get_sector_state(sector_id);
+#if DEBUG_PERF
+    u32 stage_start = getSubTick();
+    g_debug_transform_subticks = 0;
+    g_debug_setup_subticks = 0;
+    g_debug_raster_subticks = 0;
+#endif
 
     clear_scene_flat(player);
+#if DEBUG_PERF
+    g_debug_flat_subticks = getSubTick() - stage_start;
+#endif
     context.player = player;
     context.fwx = fx_cos(player->angle);
     context.fwy = fx_sin(player->angle);
@@ -568,11 +755,21 @@ void bsp_sector_cast_frame(const PlayerState *player) {
                                             bsp_sectors[sector_id].floor_height;
     context.base_floor_color = bsp_sectors[sector_id].floor_color & 15;
 
+#if DEBUG_PERF
+    stage_start = getSubTick();
+#endif
     bsp_traverse_front_to_back(player, draw_render_subsector, sector_range_closed,
                                sector_all_closed, &context);
+#if DEBUG_PERF
+    g_debug_wall_subticks = getSubTick() - stage_start;
+    stage_start = getSubTick();
+#endif
     for (u16 i = 0; i < g_visible_subsector_count; i++) {
         draw_floor_subsector(&context, g_visible_subsectors[i]);
     }
+#if DEBUG_PERF
+    g_debug_floor_subticks = getSubTick() - stage_start;
+#endif
 }
 
 #endif

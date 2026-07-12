@@ -75,6 +75,10 @@ static u16 s_debug_total_vblanks;
 void renderer_debug_set_cast_subticks(u32 subticks) {
     s_debug_cast_subticks = subticks;
 }
+
+void renderer_debug_set_total_vblanks(u16 vblanks) {
+    s_debug_total_vblanks = vblanks;
+}
 #endif
 
 void renderer_mark_overlay_tile(u16 tile_index) {
@@ -82,6 +86,9 @@ void renderer_mark_overlay_tile(u16 tile_index) {
     const u32 mask = (u32)1u << (tile_index & 31);
 
     if ((g_overlay_current_bits[word] & mask) == 0) {
+        for (u16 row = 0; row < 8; row++) {
+            g_base_view_tiles[tile_index][row] = g_view_tiles[tile_index][row];
+        }
         g_overlay_current_bits[word] |= mask;
         renderer_mark_tile_dirty(tile_index);
     }
@@ -115,6 +122,7 @@ static void mark_all_view_banks_dirty(void) {
 // Pixel-replication table for the active stride (guarded so the unused one isn't
 // compiled): REP4[c] == c*0x1111 spreads a colour across 4px (stride 4); REP2[c] ==
 // c*0x11 spreads it across 2px (stride 2, four cast columns per 8px tile).
+#if !BSP_SECTOR_RENDERER
 #if RAY_COL_STRIDE == 4
 static const u32 REP4[16] = {
     0x0000, 0x1111, 0x2222, 0x3333, 0x4444, 0x5555, 0x6666, 0x7777,
@@ -130,6 +138,7 @@ static u32 pack_flat_row(u8 color) {
     const u32 replicated = REP2[color & 0x0F];
     return (replicated << 24) | (replicated << 16) | (replicated << 8) | replicated;
 }
+#endif
 #endif
 
 // Precomposed weapon overlay: the weapon bitmap is static per variant (idle /
@@ -220,18 +229,17 @@ static u8 sample_wall_descriptor(const WallColumnDescriptor *descriptor,
 }
 #endif
 #endif
-
+#if !BSP_SECTOR_RENDERER
 static bool overlay_previously_touched(u16 tile_index) {
     const u16 word = (u16)(tile_index >> 5);
     const u32 mask = (u32)1u << (tile_index & 31);
 
     return (bool)((g_overlay_previous_bits[word] & mask) != 0);
 }
+#endif
 
+#if !BSP_SECTOR_RENDERER
 static void commit_base_tile(u16 tile_index, const u32 *tile_rows);
-#if BSP_SECTOR_RENDERER
-static void build_sector_tile(u16 tile_index);
-static void build_sector_tilemap(void);
 #endif
 
 #if (RAY_COL_STRIDE != 4) && (RAY_COL_STRIDE != 2)
@@ -496,9 +504,6 @@ static u32 divu32_16_exact(u32 numerator, u16 denominator) {
 static void draw_projected_billboards(const RayColumn *columns,
                                       const ProjectedBillboard *objects,
                                       u16 object_count) {
-#if BSP_SECTOR_RENDERER
-    const u16 *sector_depth = bsp_sector_scene_depth();
-#endif
     for (u16 i = 0; i < object_count; i++) {
         const ProjectedBillboard *object = &objects[i];
         const s16 height = (s16)(object->bottom - object->top + 1);
@@ -570,15 +575,11 @@ static void draw_projected_billboards(const RayColumn *columns,
             const u16 tile_x = (u16)(col >> 3);
             const u16 shift = (u16)((7 - (col & 7)) * 4);
             const u32 keep_mask = ~((u32)0x0F << shift);
+#if BSP_SECTOR_RENDERER
+            const u16 sample_x = (u16)(wall_col / RAY_COL_STRIDE);
+#endif
 
             if ((s16)tile_x != last_marked_tile_x) {
-                if (last_marked_tile_x >= 0) {
-                    for (u16 overlay_tile_y = 0; overlay_tile_y < VIEW_TILE_H; overlay_tile_y++) {
-                        if ((opaque_tile_rows & ((u16)1u << overlay_tile_y)) != 0) {
-                            renderer_mark_overlay_tile((u16)(overlay_tile_y * VIEW_TILE_W + last_marked_tile_x));
-                        }
-                    }
-                }
                 last_marked_tile_x = (s16)tile_x;
                 opaque_tile_rows = 0;
             }
@@ -588,30 +589,29 @@ static void draw_projected_billboards(const RayColumn *columns,
             while (y < y_end) {
                 const u16 tile_y = (u16)(y >> 3);
                 u32 *tile = g_view_tiles[(tile_y * VIEW_TILE_W) + tile_x];
+#if BSP_SECTOR_RENDERER
+                const u16 *depth_rows = bsp_sector_depth_block(sample_x, tile_y);
+#endif
                 const u16 next_tile_y = (u16)((tile_y + 1) * 8);
                 const u16 stop = (next_tile_y < y_end) ? next_tile_y : y_end;
 
                 for (; y < stop; y++) {
                     const u8 texel = lut[tex.pixels[(tex_y_by_screen_row[y] * tex.w) + tex_x] & 0x0F];
 #if BSP_SECTOR_RENDERER
-                    const u16 sample_x = (u16)(wall_col / RAY_COL_STRIDE);
-                    const bool depth_visible = object->depth <
-                        sector_depth[(sample_x * RAY_VIEW_ROWS) + y];
+                    const bool depth_visible = object->depth < depth_rows[y & 7];
 #else
                     const bool depth_visible = TRUE;
 #endif
                     if (texel != 0 && depth_visible) {
                         const u16 row_y = (u16)(y & 7);
+                        const u16 tile_bit = (u16)1u << tile_y;
+                        if ((opaque_tile_rows & tile_bit) == 0) {
+                            renderer_mark_overlay_tile(
+                                (u16)(tile_y * VIEW_TILE_W + tile_x));
+                            opaque_tile_rows |= tile_bit;
+                        }
                         tile[row_y] = (tile[row_y] & keep_mask) | ((u32)texel << shift);
-                        opaque_tile_rows |= (u16)1u << tile_y;
                     }
-                }
-            }
-        }
-        if (last_marked_tile_x >= 0) {
-            for (u16 overlay_tile_y = 0; overlay_tile_y < VIEW_TILE_H; overlay_tile_y++) {
-                if ((opaque_tile_rows & ((u16)1u << overlay_tile_y)) != 0) {
-                    renderer_mark_overlay_tile((u16)(overlay_tile_y * VIEW_TILE_W + last_marked_tile_x));
                 }
             }
         }
@@ -638,11 +638,11 @@ static void draw_weapon_overlay(bool flash) {
         u32 *dst = base + dst_idx[i];
         const u16 tile_index = (u16)(dst_idx[i] / 8);
 
-        *dst = (*dst & ~clear_masks[i]) | values[i];
         if (tile_index != last_marked_tile) {
             renderer_mark_overlay_tile(tile_index);
             last_marked_tile = tile_index;
         }
+        *dst = (*dst & ~clear_masks[i]) | values[i];
     }
 }
 
@@ -652,8 +652,8 @@ static void draw_overlay_ops(const MegalDoomOverlayRowOp *ops, u16 count) {
     for (u16 i = 0; i < count; i++) {
         const MegalDoomOverlayRowOp *op = &ops[i];
         u32 *dst = base + op->dst;
-        *dst = (*dst & ~op->clear_mask) | op->value;
         renderer_mark_overlay_tile((u16)(op->dst / 8));
+        *dst = (*dst & ~op->clear_mask) | op->value;
     }
 }
 
@@ -683,6 +683,50 @@ static u16 count_view_bank_dirty_runs(u16 bank) {
     }
 
     return runs;
+}
+
+// Predict the number of VDP_loadTileData calls made by the partial uploader.
+// Disjoint dirty runs each need a command, and a run crossing the per-vblank
+// tile budget needs another command after the uploader's VSync split.
+static u16 count_partial_view_bank_commands(u16 bank,
+                                            bool split_across_vblanks) {
+    u16 commands = 0;
+    u16 batch_tiles = 0;
+
+    for (u16 tile = 0; tile < VIEW_TILE_COUNT;) {
+        if (!view_bank_tile_is_dirty(bank, tile)) {
+            tile++;
+            continue;
+        }
+
+        u16 first = tile;
+        while ((tile < VIEW_TILE_COUNT) && view_bank_tile_is_dirty(bank, tile)) {
+            tile++;
+        }
+
+        u16 remaining = (u16)(tile - first);
+        while (remaining > 0) {
+            if (split_across_vblanks &&
+                (batch_tiles == VIEW_DMA_TILES_PER_VBLANK)) {
+                batch_tiles = 0;
+            }
+
+            u16 count = remaining;
+            if (split_across_vblanks) {
+                const u16 available =
+                    (u16)(VIEW_DMA_TILES_PER_VBLANK - batch_tiles);
+                if (count > available) {
+                    count = available;
+                }
+            }
+
+            commands++;
+            remaining = (u16)(remaining - count);
+            batch_tiles = (u16)(batch_tiles + count);
+        }
+    }
+
+    return commands;
 }
 
 static void load_view_tile_run(u16 vram_base, u16 first, u16 count) {
@@ -782,9 +826,26 @@ static void upload_partial_view_bank(u16 bank,
 static bool upload_view_bank(u16 bank, bool split_across_vblanks) {
     const u16 dirty_count = g_view_bank_dirty_count[bank];
     const u16 run_count = count_view_bank_dirty_runs(bank);
-    const bool full_upload = (bool)((dirty_count >= VIEW_DIRTY_FULL_THRESHOLD) ||
-                                    (run_count > VIEW_DIRTY_MAX_RUNS));
+    bool full_upload;
     const u16 vram_base = (u16)(VIEW_TILE_BASE + (bank * VIEW_TILE_COUNT));
+
+    // A base redraw targets the inactive bank, so using both vblanks in the
+    // fixed 30fps budget is safe. Prefer the full two-command upload only when
+    // it issues fewer DMA commands than the exact partial-upload schedule.
+    // Equal-cost contiguous changes remain partial and transfer fewer tiles.
+    if (split_across_vblanks && dirty_count > 0) {
+        const u16 partial_command_count =
+            count_partial_view_bank_commands(bank, TRUE);
+        const u16 full_command_count =
+            (VIEW_TILE_COUNT > VIEW_DMA_TILES_PER_VBLANK) ? 2 : 1;
+        full_upload = (bool)(full_command_count < partial_command_count);
+    } else {
+        // Overlay-only updates target the displayed bank. Preserve their
+        // existing size/fragmentation policy; the two-vblank inactive-bank
+        // optimization must never broaden an active-bank DMA.
+        full_upload = (bool)((dirty_count >= VIEW_DIRTY_FULL_THRESHOLD) ||
+                             (run_count > VIEW_DIRTY_MAX_RUNS));
+    }
 
 #if DEBUG_PERF
     s_debug_upload_dirty_tiles = dirty_count;
@@ -861,11 +922,6 @@ static void build_compass_tilemap(u16 angle) {
 }
 
 static void restore_previous_overlay_tiles(void) {
-#if BSP_SECTOR_RENDERER
-    for (u16 tile = 0; tile < VIEW_TILE_COUNT; tile++) {
-        if (overlay_previously_touched(tile)) build_sector_tile(tile);
-    }
-#else
     for (u16 tile = 0; tile < VIEW_TILE_COUNT; tile++) {
         const u16 word = (u16)(tile >> 5);
         const u32 mask = (u32)1u << (tile & 31);
@@ -878,7 +934,6 @@ static void restore_previous_overlay_tiles(void) {
         }
         renderer_mark_tile_dirty(tile);
     }
-#endif
 }
 
 static void clear_overlay_bits(void) {
@@ -893,6 +948,7 @@ static void finish_overlay_bits(void) {
     }
 }
 
+#if !BSP_SECTOR_RENDERER
 static void commit_base_tile(u16 tile_index, const u32 *tile_rows) {
     // Fold the 8 row comparisons into one difference accumulator instead of
     // branching per row, and copy the new rows in the same pass (writing an
@@ -902,11 +958,7 @@ static void commit_base_tile(u16 tile_index, const u32 *tile_rows) {
     // the first base build (g_base_tiles_valid == FALSE forces a full upload).
     u32 difference =
         (overlay_previously_touched(tile_index) || !g_base_tiles_valid) ? 1u : 0u;
-#if BSP_SECTOR_RENDERER
-    u32 *base_rows = g_view_tiles[tile_index];
-#else
     u32 *base_rows = g_base_view_tiles[tile_index];
-#endif
 
     for (u16 row = 0; row < 8; row++) {
         const u32 row_data = tile_rows[row];
@@ -916,28 +968,6 @@ static void commit_base_tile(u16 tile_index, const u32 *tile_rows) {
 
     if (difference != 0) {
         renderer_mark_tile_dirty(tile_index);
-    }
-}
-
-#if BSP_SECTOR_RENDERER
-static void build_sector_tile(u16 tile) {
-    const u8 *scene = bsp_sector_scene_color();
-    const u16 ty = (u16)(tile / VIEW_TILE_W);
-    const u16 tx = (u16)(tile - ty * VIEW_TILE_W);
-    const u16 left_sample = (u16)(tx * 2);
-    const u16 right_sample = (u16)(left_sample + 1);
-    const u8 *left = scene + left_sample * RAY_VIEW_ROWS + ty * 8;
-    const u8 *right = scene + right_sample * RAY_VIEW_ROWS + ty * 8;
-    u32 rows[8];
-    for (u16 py = 0; py < 8; py++) {
-        rows[py] = (REP4[left[py] & 15] << 16) | REP4[right[py] & 15];
-    }
-    commit_base_tile(tile, rows);
-}
-
-static void build_sector_tilemap(void) {
-    for (u16 tile = 0; tile < VIEW_TILE_COUNT; tile++) {
-        build_sector_tile(tile);
     }
 }
 #endif
@@ -975,8 +1005,11 @@ void renderer_render_scene(const RayColumn *columns,
 
     if (base_dirty) {
         g_upload_requires_bank_swap = TRUE;
+#if DEBUG_PERF
+        stage_start = getSubTick();
+#endif
 #if BSP_SECTOR_RENDERER
-        build_sector_tilemap();
+        mark_all_view_banks_dirty();
 #else
         build_raycast_tilemap(columns, scene_colors, g_view_tiles);
 #endif
@@ -1093,6 +1126,12 @@ static void draw_upload_debug_stats(void) {
     // Row 5 — gameplay spatial queries and lazy BSP ordering. PC/EC are player
     // and enemy collision time, L is LOS time, K/LK are tested candidates, and
     // Sc is time computing node sides not yet cached for this position.
+#if BSP_SECTOR_RENDERER
+    sprintf(text, "St=%04lu Ss=%04lu Sr=%04lu",
+            (unsigned long)bsp_sector_get_debug_transform_subticks(),
+            (unsigned long)bsp_sector_get_debug_setup_subticks(),
+            (unsigned long)bsp_sector_get_debug_raster_subticks());
+#else
     sprintf(text, "PC=%03lu EC=%03lu L=%03lu K=%03u LK=%03u Sc=%03lu",
             (unsigned long)bsp_get_debug_player_collision_subticks(),
             (unsigned long)bsp_get_debug_enemy_collision_subticks(),
@@ -1100,8 +1139,16 @@ static void draw_upload_debug_stats(void) {
             (unsigned int)bsp_get_debug_collision_candidates(),
             (unsigned int)bsp_get_debug_los_candidates(),
             (unsigned long)bsp_get_debug_side_cache_subticks());
+#endif
     VDP_drawTextFill(text, 0, 5, 40);
 
+#if BSP_SECTOR_RENDERER
+    sprintf(text, "Sf=%04lu Sw=%04lu Sp=%04lu",
+            (unsigned long)bsp_sector_get_debug_flat_subticks(),
+            (unsigned long)bsp_sector_get_debug_wall_subticks(),
+            (unsigned long)bsp_sector_get_debug_floor_subticks());
+    VDP_drawTextFill(text, 0, 6, 32);
+#else
     sprintf(text, "O%02u C%02u W%02u D%02u A%02u H%02u M%02u",
             (unsigned int)billboard_get_active_count(),
             (unsigned int)billboard_get_debug_candidate_count(),
@@ -1111,6 +1158,7 @@ static void draw_upload_debug_stats(void) {
             (unsigned int)billboard_get_debug_visibility_cache_hits(),
             (unsigned int)billboard_get_debug_visibility_cache_misses());
     VDP_drawTextFill(text, 0, 6, 40);
+#endif
 }
 #endif
 

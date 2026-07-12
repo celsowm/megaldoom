@@ -966,6 +966,7 @@ def main():
 
     lines.append("const u16 bsp_root_node = %du;" % root)
     lines.append("const u16 bsp_seg_count = %du;" % len(out_segs))
+    lines.append("const u16 bsp_vertex_count = %du;" % len(vertices))
     lines.append("const u16 bsp_line_count = %du;" % len(linedefs))
     lines.append("const u16 bsp_render_seg_count = %du;" % len(render_segs))
     lines.append("const u16 bsp_sector_count = %du;" % len(sectors))

@@ -4,9 +4,7 @@
 #include "generated_renderer_assets.h"
 
 u32 g_view_tiles[VIEW_TILE_COUNT][8];
-#if !BSP_SECTOR_RENDERER
 u32 g_base_view_tiles[VIEW_TILE_COUNT][8];
-#endif
 u16 g_compass_tilemap[COMPASS_W * COMPASS_H];
 u32 g_view_bank_dirty_bits[VIEW_BANK_COUNT][VIEW_DIRTY_WORD_COUNT];
 u16 g_view_bank_dirty_count[VIEW_BANK_COUNT];
@@ -17,7 +15,6 @@ u16 g_view_vram_bank;
 // first time a tile is dirtied this frame.
 static u32 g_frame_modified_bits[VIEW_DIRTY_WORD_COUNT];
 static u16 g_frame_modified_count;
-static u16 s_debug_total_vblanks;
 #endif
 
 
@@ -170,8 +167,8 @@ void set_view_column_color(u16 column, u16 y, u8 color) {
     row &= ~((u32)0x0F << shift);
     row |= ((u32)(color & 0x0F)) << shift;
 
-    g_view_tiles[map_index][row_y] = row;
     renderer_mark_overlay_tile(map_index);
+    g_view_tiles[map_index][row_y] = row;
 }
 
 void renderer_set_bg_pair_tile(u16 x, u16 y, u8 left_color, u8 right_color) {
@@ -200,8 +197,5 @@ u16 renderer_get_frame_modified_count(void) {
     return g_frame_modified_count;
 }
 
-void renderer_debug_set_total_vblanks(u16 vblanks) {
-    s_debug_total_vblanks = vblanks;
-}
 #endif
 

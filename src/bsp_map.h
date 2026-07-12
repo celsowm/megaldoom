@@ -171,6 +171,7 @@ extern const BspSector bsp_sectors[];
 extern const BspNode bsp_nodes[];
 extern const u16 bsp_root_node;
 extern const u16 bsp_seg_count;
+extern const u16 bsp_vertex_count;
 extern const u16 bsp_line_count;
 extern const u16 bsp_render_seg_count;
 extern const u16 bsp_sector_count;
