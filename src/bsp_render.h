@@ -10,6 +10,12 @@
 // depth occlusion are reused unchanged.
 void bsp_init(void);
 void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColors *scene_colors);
+#if BSP_SECTOR_RENDERER
+void bsp_sector_cast_frame(const PlayerState *player);
+const u8 *bsp_sector_scene_color(void);
+const u16 *bsp_sector_scene_depth(void);
+u16 bsp_sector_depth_at(u16 sample_x, u16 y);
+#endif
 void bsp_invalidate_node_cache(void);
 
 #if DEBUG_PERF

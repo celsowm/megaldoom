@@ -82,6 +82,9 @@ static void render_current_view(u16 player_health, bool base_dirty) {
 #endif
     if (base_dirty) {
         bsp_cast_frame(&g_player, g_ray_columns, &g_scene_colors);
+#if BSP_SECTOR_RENDERER
+        bsp_sector_cast_frame(&g_player);
+#endif
     }
 #if DEBUG_PERF
     renderer_debug_set_cast_subticks(base_dirty ? (getSubTick() - cast_start) : 0);
@@ -258,7 +261,12 @@ int main(bool hard) {
             BillboardShotResult shot = BILLBOARD_SHOT_NONE;
 
             if ((shot_cooldown == 0) && (player_ammo > 0)) {
+#if BSP_SECTOR_RENDERER
+                shot = billboard_fire_center(&g_player,
+                    bsp_sector_depth_at(RAY_SAMPLE_COLS / 2, RAY_VIEW_CENTER_Y));
+#else
                 shot = billboard_fire_center(&g_player, g_ray_columns[RAY_VIEW_COLS / 2].depth);
+#endif
                 shot_cooldown = SHOT_COOLDOWN_FRAMES;
                 player_ammo--;
                 g_weapon_flash = WEAPON_FLASH_FRAMES;

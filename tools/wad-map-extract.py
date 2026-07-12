@@ -36,6 +36,12 @@ FALLBACK_TEXTURE = "__FALLBACK__"
 FALLBACK_TEXTURE_SOURCE = "GRAY7"
 WORLD_COLOR_DAMAGE = 14
 WORLD_COLOR_WARNING = 15
+LEGACY_WORLD_PALETTE = [
+    (0x00,0x00,0x00), (0x00,0x00,0x91), (0x48,0x00,0x00), (0x24,0x24,0x00),
+    (0x24,0x24,0x24), (0x48,0x48,0x24), (0x48,0x48,0x48), (0x6D,0x48,0x24),
+    (0xB6,0x24,0x24), (0x6D,0x48,0x48), (0x6D,0x6D,0x48), (0x6D,0x6D,0x6D),
+    (0xB6,0x6D,0x48), (0xB6,0xB6,0xB6), (0xDA,0x24,0x24), (0xDA,0xB6,0x48),
+]
 
 
 def validate_spatial_grid(vertices, segs, grid_min_x, grid_min_y, grid_w,
@@ -329,7 +335,9 @@ def emit_world_assets(path, texture_usage, sectors):
         if not os.path.isfile(texture_path(name)):
             raise FileNotFoundError("Wall texture source not found: %s" % texture_path(name))
 
-    palette = build_world_palette(texture_names, texture_usage, sectors)
+    # The world palette is a shipped visual contract. Extending the texture
+    # catalog must quantize new surfaces into it, never recolor existing art.
+    palette = LEGACY_WORLD_PALETTE
     if len(palette) != 16:
         raise RuntimeError("World palette must contain exactly 16 colors")
     shade_map = build_shade_map(palette)
@@ -530,7 +538,7 @@ def main():
             ceiling=ceiling_h,
             floor_name=clean_name(floor_name),
             ceiling_name=clean_name(ceiling_name),
-            light=max(0, min(255, light)),
+            light=max(0, min(255, light)), special=special, tag=tag,
         ))
 
     sidedefs = []
@@ -545,7 +553,7 @@ def main():
         v1, v2, flags, special, tag, right, left = struct.unpack_from(
             "<HHHHHHH", lines_raw, i * 14)
         linedefs.append(dict(v1=v1, v2=v2, flags=flags, special=special,
-                             right=right, left=left))
+                             tag=tag, right=right, left=left))
 
     segs = []
     for i in range(len(segs_raw) // 12):
@@ -602,6 +610,23 @@ def main():
             front_side = ld["right"]
         return front_side
 
+    def back_side_for(seg):
+        ld = linedefs[seg["ld"]]
+        return ld["left"] if seg["direction"] == 0 else ld["right"]
+
+    def front_normal(seg):
+        """Normal pointing into the SEG front sector in engine y-down space."""
+        ld = linedefs[seg["ld"]]
+        lv1 = verts_up[ld["v1"]]
+        lv2 = verts_up[ld["v2"]]
+        lx = lv2[0] - lv1[0]
+        ly = lv2[1] - lv1[1]
+        if seg["direction"] == 0:
+            nux, nuy = ly, -lx
+        else:
+            nux, nuy = -ly, lx
+        return reduce_normal(nux, -nuy)
+
     def seg_type_and_visual(seg):
         ld = linedefs[seg["ld"]]
         front_side = front_side_for(seg)
@@ -627,29 +652,55 @@ def main():
                     break
         return seg_type, name, xoff, yoff
 
-    # --- Rebuild subsectors with only solid segs, preserving grouping. ------ #
+    # Preserve the complete sector/portal representation alongside the legacy
+    # solid-only stream. The legacy arrays remain available behind the build
+    # flag while consumers migrate to these source-faithful arrays.
+    all_texture_usage = Counter()
+    render_segs = []
+    render_ssectors = []
+    for count, first in ssectors:
+        start = len(render_segs)
+        for k in range(count):
+            seg = segs[first + k]
+            ax, ay = vertices[seg["v1"]]
+            bx, by = vertices[seg["v2"]]
+            if ax == bx and ay == by:
+                continue
+            front_side = front_side_for(seg)
+            back_side = back_side_for(seg)
+            if front_side == 0xFFFF:
+                continue
+            front_sector = sidedefs[front_side]["sector"]
+            back_sector = (sidedefs[back_side]["sector"]
+                           if back_side != 0xFFFF else 0xFFFF)
+            side = sidedefs[front_side]
+            textures = {}
+            for field in ("upper", "lower", "middle"):
+                name = side[field]
+                # Doom commonly stores a step/portal texture only on the side
+                # from which the vertical face is normally visible. Our portal
+                # renderer can see the same riser from either direction, so
+                # retain the opposite sidedef's surface as a rendering fallback.
+                if (not name or name == "-") and back_side != 0xFFFF:
+                    name = sidedefs[back_side][field]
+                if not name or name == "-":
+                    name = None
+                else:
+                    all_texture_usage[name] += 1
+                textures[field] = name
+            nx, ny = front_normal(seg)
+            render_segs.append(dict(
+                v1=seg["v1"], v2=seg["v2"], line_id=seg["ld"],
+                front_sector=front_sector, back_sector=back_sector,
+                nx=nx, ny=ny, tex_u_offset=seg["offset"] + side["xoff"],
+                tex_v_offset=side["yoff"], textures=textures,
+                side_flags=seg["direction"] & 1))
+        render_ssectors.append((start, len(render_segs) - start))
+
+    # --- Rebuild legacy subsectors with only solid segs. -------------------- #
     out_segs = []       # dicts with geometry, exact texture name, offsets and type
     out_ssectors = []   # (first_seg, count, sector_id)
     texture_usage = Counter()
-
-    def front_normal(seg):
-        """Normal pointing into the seg's FRONT sector, in y-down space.
-
-        Deterministic from Doom's linedef direction + seg side (NOT a centroid
-        guess): in y-up, the normal into the right sector is (Ly,-Lx); into the
-        left sector it is (-Ly,Lx). We then negate the y component to match the
-        engine's y-down space.
-        """
-        ld = linedefs[seg["ld"]]
-        lv1 = verts_up[ld["v1"]]
-        lv2 = verts_up[ld["v2"]]
-        lx = lv2[0] - lv1[0]
-        ly = lv2[1] - lv1[1]
-        if seg["direction"] == 0:
-            nux, nuy = ly, -lx   # into right sector (y-up)
-        else:
-            nux, nuy = -ly, lx   # into left sector (y-up)
-        return reduce_normal(nux, -nuy)  # flip y to y-down
 
     for (count, first) in ssectors:
         start = len(out_segs)
@@ -681,6 +732,7 @@ def main():
         raise SystemExit("solid seg count %d exceeds BSP_MAX_SEGS (1024)"
                          % len(out_segs))
 
+    texture_usage.update(all_texture_usage)
     texture_ids, texture_meta, sector_visuals, palette = emit_world_assets(
         args.assets_out, texture_usage, sectors)
     for seg in out_segs:
@@ -690,6 +742,9 @@ def main():
         seg["tex"] = texture_ids[name]
         seg["tex_v"] = ((seg["tex_v_offset"] * WALL_TEX_DIM) //
                         texture_meta[name]["height"]) & (WALL_TEX_DIM - 1)
+    for seg in render_segs:
+        for field, name in seg["textures"].items():
+            seg[field + "_tex"] = texture_ids[name] if name is not None else 0xFF
 
     # --- THINGS / Player 1 start. ------------------------------------------- #
     # Convert every THING into engine y-down coordinates.  The runtime owns the
@@ -729,6 +784,25 @@ def main():
     lines.append("const BspVertex bsp_vertices[%d] = {" % len(vertices))
     for (x, y) in vertices:
         lines.append("    {%d, %d}," % (x, y))
+    lines.append("};")
+    lines.append("")
+
+    lines.append("const BspLine bsp_lines[%d] = {" % len(linedefs))
+    for ld in linedefs:
+        right_sector = (sidedefs[ld["right"]]["sector"] if ld["right"] != 0xFFFF else 0xFFFF)
+        left_sector = (sidedefs[ld["left"]]["sector"] if ld["left"] != 0xFFFF else 0xFFFF)
+        lines.append("    {%d, %d, %du, %du, %du, %du, %du}," % (
+            ld["v1"], ld["v2"], right_sector, left_sector, ld["flags"],
+            ld["special"], ld["tag"]))
+    lines.append("};")
+    lines.append("")
+
+    lines.append("const BspRenderSeg bsp_render_segs[%d] = {" % len(render_segs))
+    for s in render_segs:
+        lines.append("    {%d, %d, %d, %du, %du, %d, %d, %d, %d, %d, %d, %d, %d}," % (
+            s["v1"], s["v2"], s["line_id"], s["front_sector"], s["back_sector"],
+            s["nx"], s["ny"], s["tex_u_offset"], s["tex_v_offset"],
+            s["upper_tex"], s["lower_tex"], s["middle_tex"], s["side_flags"]))
     lines.append("};")
     lines.append("")
 
@@ -809,6 +883,34 @@ def main():
     lines.append("};")
     lines.append("")
 
+    # Sector collision indexes each original linedef exactly once. It shares
+    # the same grid geometry as the legacy seg blockmap.
+    line_grid_cells = [[] for _ in range(grid_w * grid_h)]
+    for line_index, ld in enumerate(linedefs):
+        ax, ay = vertices[ld["v1"]]
+        bx, by = vertices[ld["v2"]]
+        cx0 = (min(ax, bx) - grid_min_x) // grid_cell
+        cx1 = (max(ax, bx) - grid_min_x) // grid_cell
+        cy0 = (min(ay, by) - grid_min_y) // grid_cell
+        cy1 = (max(ay, by) - grid_min_y) // grid_cell
+        for cy in range(cy0, cy1 + 1):
+            for cx in range(cx0, cx1 + 1):
+                line_grid_cells[cy * grid_w + cx].append(line_index)
+    line_grid_offsets = [0]
+    line_grid_indices = []
+    for cell in line_grid_cells:
+        line_grid_indices.extend(cell)
+        line_grid_offsets.append(len(line_grid_indices))
+    lines.append("const u16 bsp_line_grid_cell_offsets[%d] = {" % len(line_grid_offsets))
+    for i in range(0, len(line_grid_offsets), 12):
+        lines.append("    %s," % ",".join(str(v) for v in line_grid_offsets[i:i + 12]))
+    lines.append("};")
+    lines.append("const u16 bsp_line_grid_indices[%d] = {" % len(line_grid_indices))
+    for i in range(0, len(line_grid_indices), 12):
+        lines.append("    %s," % ",".join(str(v) for v in line_grid_indices[i:i + 12]))
+    lines.append("};")
+    lines.append("")
+
     lines.append("const BspSubsector bsp_subsectors[%d] = {" % len(out_ssectors))
     for (first, count, sector_id) in out_ssectors:
         lines.append("    {%d, %d, %d}," % (first, count, sector_id))
@@ -818,6 +920,14 @@ def main():
     lines.append("const BspSectorVisual bsp_sector_visuals[%d] = {" % len(sector_visuals))
     for ceiling_color, floor_color in sector_visuals:
         lines.append("    {%d, %d}," % (ceiling_color, floor_color))
+    lines.append("};")
+    lines.append("")
+
+    lines.append("const BspSector bsp_sectors[%d] = {" % len(sectors))
+    for sector, (ceiling_color, floor_color) in zip(sectors, sector_visuals):
+        lines.append("    {%d, %d, 0, 0, %d, %d, %d, %d, %du}," % (
+            sector["floor"], sector["ceiling"], floor_color, ceiling_color,
+            sector["light"], sector["special"] & 0xFF, sector["tag"]))
     lines.append("};")
     lines.append("")
 
@@ -831,6 +941,10 @@ def main():
 
     lines.append("const u16 bsp_root_node = %du;" % root)
     lines.append("const u16 bsp_seg_count = %du;" % len(out_segs))
+    lines.append("const u16 bsp_line_count = %du;" % len(linedefs))
+    lines.append("const u16 bsp_render_seg_count = %du;" % len(render_segs))
+    lines.append("const u16 bsp_sector_count = %du;" % len(sectors))
+    lines.append("const u16 bsp_subsector_count = %du;" % len(ssectors))
     lines.append("const u16 bsp_node_count = %du;" % len(nodes))
     lines.append("const BspThing bsp_things[%d] = {" % len(out_things))
     for x, y, thing_type, angle, flags in out_things:
@@ -850,7 +964,10 @@ def main():
 
     print("Wrote %s" % out_path)
     print("  vertices : %d" % len(vertices))
-    print("  segs     : %d solid (of %d total)" % (len(out_segs), len(segs)))
+    print("  segs     : %d render, %d legacy solid (of %d source)" %
+          (len(render_segs), len(out_segs), len(segs)))
+    print("  linedefs : %d" % len(linedefs))
+    print("  sectors  : %d" % len(sectors))
     print("  textures : %d exact + fallback" % (len(texture_ids) - 1))
     print("  palette  : %s" % " ".join("%02X%02X%02X" % color for color in palette))
     print("  assets   : %s" % args.assets_out)

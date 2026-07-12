@@ -23,6 +23,10 @@
 // duplicate across the gap. 1 = full 1px detail (heaviest), 2 = 2px (~80 cols),
 // 4 = 4px (~40 cols, original cost). Must divide 8. Lower = sharper but slower.
 #define RAY_COL_STRIDE 4
+#define RAY_SAMPLE_COLS (RAY_VIEW_COLS / RAY_COL_STRIDE)
+#define PLAYER_HEIGHT 56
+#define PLAYER_EYE_HEIGHT 41
+#define PLAYER_MAX_STEP 24
 
 // Wall/door/switch textures are WALL_TEX_DIM x WALL_TEX_DIM palette-index texels
 // (see generated_assets.h). This is the single source of truth for the wall
@@ -39,6 +43,9 @@
 typedef struct {
     s32 x;
     s32 y;
+    s16 z;
+    s16 view_z;
+    u16 sector_id;
     u16 angle;
 } PlayerState;
 

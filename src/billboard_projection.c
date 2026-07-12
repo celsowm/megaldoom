@@ -21,13 +21,13 @@ static u16 billboard_project_one(const PlayerState *player,
                                  const BillboardObject *object,
                                  const BillboardMeasure *measure,
                                  ProjectedBillboard *projected) {
-    const s16 floor_y = (s16)(RAY_VIEW_CENTER_Y +
-        divu((u32)RAY_PROJ_Y * RAY_CAMERA_HEIGHT, (u16)measure->forward));
-    const s16 bottom = floor_y;
-    const s16 top = (s16)(bottom - measure->projected_height + 1);
+    const s16 bottom = (s16)(RAY_VIEW_CENTER_Y -
+        (((s32)(object->z - player->view_z) * RAY_PROJ_Y) / measure->forward));
+    const s16 top = (s16)(RAY_VIEW_CENTER_Y -
+        (((s32)(object->z + measure->type->world_height - player->view_z) * RAY_PROJ_Y) /
+         measure->forward));
     const s16 left = (s16)(measure->center_col - measure->half_w);
     const s16 right = (s16)(measure->center_col + measure->half_w);
-    (void)player;
     projected->left = left;
     projected->right = right;
     projected->top = top;
@@ -106,12 +106,14 @@ u16 billboard_project_scene(const PlayerState *player,
 #if DEBUG_PERF
         s_debug_candidates++;
 #endif
+#if !BSP_SECTOR_RENDERER
         if (!billboard_span_has_visible_block(&measure, columns)) {
 #if DEBUG_PERF
             s_debug_occluded++;
 #endif
             continue;
         }
+#endif
         if (selected < budget) {
             s_order[selected].index = (u8)i;
             s_order[selected].measure = measure;

@@ -1,7 +1,8 @@
 param(
     [string]$GdkPath = $env:GDK,
     [switch]$NoClean,
-    [switch]$DebugPerf
+    [switch]$DebugPerf,
+    [switch]$SectorRenderer
 )
 
 $ErrorActionPreference = "Stop"
@@ -39,13 +40,16 @@ if (-not (Test-Path $Make)) { $Make = "make" }
 # assigns it itself, so it falls through to this environment variable. Object
 # files carry no record of which flags built them, so a define toggle must force
 # a full rebuild or stale .o files silently keep the old behavior.
-if ($DebugPerf) {
-    $env:EXTRA_FLAGS = "-DDEBUG_PERF=1"
+if ($DebugPerf -or $SectorRenderer) {
+    $flags = @()
+    if ($DebugPerf) { $flags += "-DDEBUG_PERF=1" }
+    if ($SectorRenderer) { $flags += "-DBSP_SECTOR_RENDERER=1" }
+    $env:EXTRA_FLAGS = $flags -join " "
     if ($NoClean) {
-        Write-Host "-DebugPerf forces a clean rebuild (object files don't track compiler flags); ignoring -NoClean." -ForegroundColor Yellow
+        Write-Host "Build flags force a clean rebuild; ignoring -NoClean." -ForegroundColor Yellow
         $NoClean = $false
     }
-} elseif ($env:EXTRA_FLAGS -eq "-DDEBUG_PERF=1") {
+} elseif ($env:EXTRA_FLAGS -match "DEBUG_PERF|BSP_SECTOR_RENDERER") {
     # Previous invocation in this shell left DEBUG_PERF on; drop it so a plain
     # rebuild doesn't silently keep the perf overlay.
     Remove-Item Env:\EXTRA_FLAGS

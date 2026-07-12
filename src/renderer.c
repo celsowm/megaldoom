@@ -4,7 +4,9 @@
 #include "generated_renderer_assets.h"
 
 u32 g_view_tiles[VIEW_TILE_COUNT][8];
+#if !BSP_SECTOR_RENDERER
 u32 g_base_view_tiles[VIEW_TILE_COUNT][8];
+#endif
 u16 g_compass_tilemap[COMPASS_W * COMPASS_H];
 u32 g_view_bank_dirty_bits[VIEW_BANK_COUNT][VIEW_DIRTY_WORD_COUNT];
 u16 g_view_bank_dirty_count[VIEW_BANK_COUNT];

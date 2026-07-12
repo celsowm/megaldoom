@@ -40,7 +40,9 @@
 #define HUD_FACE_TILE_Y (HUD_PANEL_Y + 1)
 
 extern u32 g_view_tiles[VIEW_TILE_COUNT][8];
+#if !BSP_SECTOR_RENDERER
 extern u32 g_base_view_tiles[VIEW_TILE_COUNT][8];
+#endif
 extern u32 g_view_bank_dirty_bits[VIEW_BANK_COUNT][VIEW_DIRTY_WORD_COUNT];
 extern u16 g_view_bank_dirty_count[VIEW_BANK_COUNT];
 extern u16 g_view_vram_bank;

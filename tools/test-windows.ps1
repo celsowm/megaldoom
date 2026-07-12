@@ -1,6 +1,7 @@
 param(
     [switch]$NoBuild,
-    [switch]$NoClean
+    [switch]$NoClean,
+    [switch]$SectorRenderer
 )
 
 # Project "test" entry point: build the ROM, then run tools\check-rom.ps1 so
@@ -26,8 +27,13 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
+& python (Join-Path $PSScriptRoot "test-sector-map.py")
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
 if (-not $NoBuild) {
-    & (Join-Path $PSScriptRoot "build-windows.ps1") -NoClean:$NoClean
+    & (Join-Path $PSScriptRoot "build-windows.ps1") -NoClean:$NoClean -SectorRenderer:$SectorRenderer
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Aborting tests: build failed." -ForegroundColor Red
         exit $LASTEXITCODE

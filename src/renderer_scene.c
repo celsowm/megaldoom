@@ -226,6 +226,9 @@ static bool overlay_previously_touched(u16 tile_index) {
 }
 
 static void commit_base_tile(u16 tile_index, const u32 *tile_rows);
+#if BSP_SECTOR_RENDERER
+static void build_sector_tilemap(void);
+#endif
 
 #if (RAY_COL_STRIDE != 4) && (RAY_COL_STRIDE != 2)
 #error "build_raycast_tilemap only implements the RAY_COL_STRIDE == 4 and == 2 packers"
@@ -547,10 +550,10 @@ static void draw_projected_billboards(const RayColumn *columns,
             const u16 wall_col = (u16)(col & ~(RAY_COL_STRIDE - 1));
             // The base image repeats the sampled wall column across this exact
             // block, so billboard depth must use that same sample.
+#if !BSP_SECTOR_RENDERER
             const u16 wall_depth = columns[wall_col].depth;
-            if (object->depth >= wall_depth) {
-                continue;
-            }
+            if (object->depth >= wall_depth) continue;
+#endif
 
             if (tex_x >= tex.w) {
                 tex_x = (u8)(tex.w - 1);
@@ -581,7 +584,13 @@ static void draw_projected_billboards(const RayColumn *columns,
 
                 for (; y < stop; y++) {
                     const u8 texel = lut[tex.pixels[(tex_y_by_screen_row[y] * tex.w) + tex_x] & 0x0F];
-                    if (texel != 0) {
+#if BSP_SECTOR_RENDERER
+                    const bool depth_visible = object->depth < bsp_sector_depth_at(
+                        (u16)(wall_col / RAY_COL_STRIDE), y);
+#else
+                    const bool depth_visible = TRUE;
+#endif
+                    if (texel != 0 && depth_visible) {
                         const u16 row_y = (u16)(y & 7);
                         tile[row_y] = (tile[row_y] & keep_mask) | ((u32)texel << shift);
                         opaque_tile_rows |= (u16)1u << tile_y;
@@ -842,6 +851,9 @@ static void build_compass_tilemap(u16 angle) {
 }
 
 static void restore_previous_overlay_tiles(void) {
+#if BSP_SECTOR_RENDERER
+    build_sector_tilemap();
+#else
     for (u16 tile = 0; tile < VIEW_TILE_COUNT; tile++) {
         const u16 word = (u16)(tile >> 5);
         const u32 mask = (u32)1u << (tile & 31);
@@ -854,6 +866,7 @@ static void restore_previous_overlay_tiles(void) {
         }
         renderer_mark_tile_dirty(tile);
     }
+#endif
 }
 
 static void clear_overlay_bits(void) {
@@ -877,7 +890,11 @@ static void commit_base_tile(u16 tile_index, const u32 *tile_rows) {
     // the first base build (g_base_tiles_valid == FALSE forces a full upload).
     u32 difference =
         (overlay_previously_touched(tile_index) || !g_base_tiles_valid) ? 1u : 0u;
+#if BSP_SECTOR_RENDERER
+    u32 *base_rows = g_view_tiles[tile_index];
+#else
     u32 *base_rows = g_base_view_tiles[tile_index];
+#endif
 
     for (u16 row = 0; row < 8; row++) {
         const u32 row_data = tile_rows[row];
@@ -889,6 +906,29 @@ static void commit_base_tile(u16 tile_index, const u32 *tile_rows) {
         renderer_mark_tile_dirty(tile_index);
     }
 }
+
+#if BSP_SECTOR_RENDERER
+static void build_sector_tilemap(void) {
+    const u8 *scene = bsp_sector_scene_color();
+    for (u16 ty = 0; ty < VIEW_TILE_H; ty++) {
+        for (u16 tx = 0; tx < VIEW_TILE_W; tx++) {
+            const u16 tile = (u16)(ty * VIEW_TILE_W + tx);
+            u32 rows[8];
+            for (u16 py = 0; py < 8; py++) {
+                const u16 y = (u16)(ty * 8 + py);
+                u32 row = 0;
+                for (u16 px = 0; px < 8; px++) {
+                    const u16 screen_x = (u16)(tx * 8 + px);
+                    const u16 sample_x = (u16)(screen_x / RAY_COL_STRIDE);
+                    row = (row << 4) | (scene[sample_x * RAY_VIEW_ROWS + y] & 15);
+                }
+                rows[py] = row;
+            }
+            commit_base_tile(tile, rows);
+        }
+    }
+}
+#endif
 
 static void upload_compass_tilemap(void) {
     if (!g_compass_dirty) {
@@ -923,7 +963,11 @@ void renderer_render_scene(const RayColumn *columns,
 
     if (base_dirty) {
         g_upload_requires_bank_swap = TRUE;
+#if BSP_SECTOR_RENDERER
+        build_sector_tilemap();
+#else
         build_raycast_tilemap(columns, scene_colors, g_view_tiles);
+#endif
 #if RENDERER_REFERENCE_PACKER
         build_raycast_tilemap_reference(columns, scene_colors, g_reference_view_tiles);
         for (u16 tile = 0; tile < VIEW_TILE_COUNT; tile++) {

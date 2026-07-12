@@ -9,11 +9,11 @@
 
 #define PLAYER_RADIUS 32
 
-static bool is_blocked_at(s32 x, s32 y) {
+static bool is_blocked_at(const PlayerState *player, s32 x, s32 y) {
 #if DEBUG_PERF
     bsp_debug_set_query_owner(BSP_QUERY_PLAYER);
 #endif
-    return bsp_circle_blocked(x, y, PLAYER_RADIUS) ||
+    return bsp_circle_blocked_from_sector(x, y, PLAYER_RADIUS, player->sector_id) ||
            billboard_position_blocked(x, y, PLAYER_RADIUS);
 }
 
@@ -22,6 +22,10 @@ void player_init(PlayerState *player, u16 phase_index) {
     (void)phase_index;
     player->x = bsp_player_start_x;
     player->y = bsp_player_start_y;
+    player->sector_id = bsp_find_sector(player->x, player->y);
+    const BspSectorState *sector = bsp_get_sector_state(player->sector_id);
+    player->z = sector ? sector->floor_height : 0;
+    player->view_z = player->z + PLAYER_EYE_HEIGHT;
     player->angle = bsp_player_start_angle;
 }
 
@@ -70,13 +74,16 @@ void player_try_move(PlayerState *player, s16 forward, s16 strafe) {
 
         // One collision query handles the common unobstructed case. Only a
         // blocked diagonal pays for axis-separated retries to preserve sliding.
-        if (!is_blocked_at(next_x, next_y)) {
+        if (!is_blocked_at(player, next_x, next_y)) {
             player->x = next_x;
             player->y = next_y;
         } else {
-            if (!is_blocked_at(next_x, player->y)) player->x = next_x;
-            if (!is_blocked_at(player->x, next_y)) player->y = next_y;
+            if (!is_blocked_at(player, next_x, player->y)) player->x = next_x;
+            if (!is_blocked_at(player, player->x, next_y)) player->y = next_y;
         }
+        player->sector_id = bsp_find_sector(player->x, player->y);
+        const BspSectorState *sector = bsp_get_sector_state(player->sector_id);
+        if (sector) { player->z = sector->floor_height; player->view_z = player->z + PLAYER_EYE_HEIGHT; }
     }
 }
 
@@ -84,11 +91,14 @@ void player_apply_world_push(PlayerState *player, s32 dx, s32 dy) {
     const s32 next_x = player->x + dx;
     const s32 next_y = player->y + dy;
 
-    if (!is_blocked_at(next_x, player->y)) {
+    if (!is_blocked_at(player, next_x, player->y)) {
         player->x = next_x;
     }
 
-    if (!is_blocked_at(player->x, next_y)) {
+    if (!is_blocked_at(player, player->x, next_y)) {
         player->y = next_y;
     }
+    player->sector_id = bsp_find_sector(player->x, player->y);
+    const BspSectorState *sector = bsp_get_sector_state(player->sector_id);
+    if (sector) { player->z = sector->floor_height; player->view_z = player->z + PLAYER_EYE_HEIGHT; }
 }

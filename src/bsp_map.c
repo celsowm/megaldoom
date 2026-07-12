@@ -1,5 +1,6 @@
 #include "bsp_map.h"
 #include "fixed_math.h"
+#include "raycast.h"
 
 // Geometry (bsp_vertices/segs/subsectors/nodes, root, seg count, player start)
 // is provided by the active map data file: src/generated_e1m1_map.c by default,
@@ -15,6 +16,7 @@ static bool g_seg_open[BSP_MAX_SEGS];
 static u16 g_query_seen_generation[BSP_MAX_SEGS];
 static u16 g_query_generation = 1;
 static u16 g_visibility_revision = 1;
+static BspSectorState g_sector_state[BSP_MAX_SECTORS];
 
 #if DEBUG_PERF
 static BspDebugQueryOwner g_query_owner;
@@ -37,6 +39,10 @@ void bsp_map_reset(u16 phase_index) {
     for (u16 i = 0; i < bsp_seg_count; i++) {
         g_seg_open[i] = FALSE;
     }
+    for (u16 i = 0; i < bsp_sector_count && i < BSP_MAX_SECTORS; i++) {
+        g_sector_state[i].floor_height = bsp_sectors[i].floor_height;
+        g_sector_state[i].ceiling_height = bsp_sectors[i].ceiling_height;
+    }
     g_visibility_revision++;
     if (g_visibility_revision == 0) g_visibility_revision = 1;
 }
@@ -46,6 +52,27 @@ bool bsp_seg_is_open(u16 seg_index) {
 }
 
 u16 bsp_get_visibility_revision(void) { return g_visibility_revision; }
+
+const BspSectorState *bsp_get_sector_state(u16 sector_id) {
+    return (sector_id < bsp_sector_count && sector_id < BSP_MAX_SECTORS)
+        ? &g_sector_state[sector_id] : NULL;
+}
+
+u16 bsp_find_subsector(s32 x, s32 y) {
+    u16 child = bsp_root_node;
+    while (!BSP_CHILD_IS_SUBSECTOR(child)) {
+        const BspNode *node = &bsp_nodes[child];
+        const s32 cross = (x - node->px) * node->dy - (y - node->py) * node->dx;
+        child = (cross >= 0) ? node->front : node->back;
+    }
+    child = BSP_CHILD_INDEX(child);
+    return (child < bsp_subsector_count) ? child : 0;
+}
+
+u16 bsp_find_sector(s32 x, s32 y) {
+    const u16 subsector = bsp_find_subsector(x, y);
+    return (subsector < bsp_subsector_count) ? bsp_subsectors[subsector].sector_id : 0;
+}
 
 // Squared distance from point (px, py) to the finite segment of seg s.
 static s32 seg_point_dist2(const BspSeg *s, s32 px, s32 py) {
@@ -109,6 +136,9 @@ static bool grid_cell_valid(s32 cx, s32 cy) {
 }
 
 bool bsp_circle_blocked(s32 x, s32 y, s32 radius) {
+#if BSP_SECTOR_RENDERER
+    return bsp_circle_blocked_from_sector(x, y, radius, bsp_find_sector(x, y));
+#else
     const s32 r2 = radius * radius;
     s32 cx0 = grid_coord(x - radius, bsp_grid_min_x);
     s32 cx1 = grid_coord(x + radius, bsp_grid_min_x);
@@ -163,6 +193,80 @@ bool bsp_circle_blocked(s32 x, s32 y, s32 radius) {
     else g_enemy_collision_subticks += getSubTick() - query_start;
 #endif
     return blocked;
+#endif
+}
+
+static s32 line_point_dist2(const BspLine *line, s32 px, s32 py) {
+    BspSeg shape = {line->v1, line->v2, 0, 0, 0, 0, 0, 0};
+    return seg_point_dist2(&shape, px, py);
+}
+
+static bool line_blocks_from_sector(const BspLine *line, u16 from_sector) {
+    if (line->left_sector == BSP_NO_SECTOR || line->right_sector == BSP_NO_SECTOR ||
+        (line->flags & BSP_LINE_IMPASSABLE) != 0) return TRUE;
+    const u16 destination = (from_sector == line->right_sector)
+        ? line->left_sector : line->right_sector;
+    if (from_sector >= bsp_sector_count || destination >= bsp_sector_count) return TRUE;
+    const BspSectorState *front = &g_sector_state[from_sector];
+    const BspSectorState *back = &g_sector_state[destination];
+    const s16 open_bottom = (front->floor_height > back->floor_height)
+        ? front->floor_height : back->floor_height;
+    const s16 open_top = (front->ceiling_height < back->ceiling_height)
+        ? front->ceiling_height : back->ceiling_height;
+    const s16 step_up = back->floor_height - front->floor_height;
+    return (bool)((open_top - open_bottom < PLAYER_HEIGHT) || (step_up > PLAYER_MAX_STEP));
+}
+
+static bool line_blocks_sight(const BspLine *line) {
+    if (line->left_sector == BSP_NO_SECTOR || line->right_sector == BSP_NO_SECTOR ||
+        (line->flags & BSP_LINE_IMPASSABLE) != 0) return TRUE;
+    const BspSectorState *left = bsp_get_sector_state(line->left_sector);
+    const BspSectorState *right = bsp_get_sector_state(line->right_sector);
+    if (!left || !right) return TRUE;
+    const s16 bottom = (left->floor_height > right->floor_height)
+        ? left->floor_height : right->floor_height;
+    const s16 top = (left->ceiling_height < right->ceiling_height)
+        ? left->ceiling_height : right->ceiling_height;
+    return (bool)(top <= bottom);
+}
+
+bool bsp_circle_blocked_from_sector(s32 x, s32 y, s32 radius, u16 from_sector) {
+#if !BSP_SECTOR_RENDERER
+    (void)from_sector;
+    return bsp_circle_blocked(x, y, radius);
+#else
+    const s32 r2 = radius * radius;
+    s32 cx0 = grid_coord(x - radius, bsp_grid_min_x);
+    s32 cx1 = grid_coord(x + radius, bsp_grid_min_x);
+    s32 cy0 = grid_coord(y - radius, bsp_grid_min_y);
+    s32 cy1 = grid_coord(y + radius, bsp_grid_min_y);
+    if (cx0 < 0) cx0 = 0;
+    if (cy0 < 0) cy0 = 0;
+    if (cx1 >= bsp_grid_width) cx1 = bsp_grid_width - 1;
+    if (cy1 >= bsp_grid_height) cy1 = bsp_grid_height - 1;
+    clear_query_seen();
+    for (s32 cy = cy0; cy <= cy1; cy++) for (s32 cx = cx0; cx <= cx1; cx++) {
+        if (!grid_cell_valid(cx, cy)) continue;
+        const u16 cell = (u16)(cy * bsp_grid_width + cx);
+        for (u16 p = bsp_line_grid_cell_offsets[cell];
+             p < bsp_line_grid_cell_offsets[cell + 1]; p++) {
+            const u16 i = bsp_line_grid_indices[p];
+            if (!mark_query_seg(i)) continue;
+            const BspLine *line = &bsp_lines[i];
+            if (!line_blocks_from_sector(line, from_sector)) continue;
+            const BspVertex *a = &bsp_vertices[line->v1];
+            const BspVertex *b = &bsp_vertices[line->v2];
+            const s16 minx = (a->x < b->x) ? a->x : b->x;
+            const s16 maxx = (a->x > b->x) ? a->x : b->x;
+            const s16 miny = (a->y < b->y) ? a->y : b->y;
+            const s16 maxy = (a->y > b->y) ? a->y : b->y;
+            if (x + radius < minx || x - radius > maxx ||
+                y + radius < miny || y - radius > maxy) continue;
+            if (line_point_dist2(line, x, y) < r2) return TRUE;
+        }
+    }
+    return FALSE;
+#endif
 }
 
 static s32 cross3(s32 ax, s32 ay, s32 bx, s32 by, s32 cx, s32 cy) {
@@ -179,6 +283,22 @@ static bool point_on_segment(s32 ax, s32 ay, s32 bx, s32 by, s32 px, s32 py) {
 }
 
 bool bsp_segment_hits_wall(s32 x0, s32 y0, s32 x1, s32 y1) {
+#if BSP_SECTOR_RENDERER
+    for (u16 i = 0; i < bsp_line_count; i++) {
+        const BspLine *line = &bsp_lines[i];
+        if (!line_blocks_sight(line)) continue;
+        const BspVertex *a = &bsp_vertices[line->v1];
+        const BspVertex *b = &bsp_vertices[line->v2];
+        const s32 d1 = cross3(x0, y0, x1, y1, a->x, a->y);
+        const s32 d2 = cross3(x0, y0, x1, y1, b->x, b->y);
+        const s32 d3 = cross3(a->x, a->y, b->x, b->y, x0, y0);
+        const s32 d4 = cross3(a->x, a->y, b->x, b->y, x1, y1);
+        const bool proper = ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+                            ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+        if (proper) return TRUE;
+    }
+    return FALSE;
+#else
     // Ray AABB, used to reject non-overlapping segs before the 4 cross3 multiplies.
     const s32 ray_minx = (x0 < x1) ? x0 : x1;
     const s32 ray_maxx = (x0 > x1) ? x0 : x1;
@@ -272,6 +392,7 @@ bool bsp_segment_hits_wall(s32 x0, s32 y0, s32 x1, s32 y1) {
     g_los_subticks += getSubTick() - query_start;
 #endif
     return hit;
+#endif
 }
 
 #if DEBUG_PERF

@@ -134,6 +134,9 @@ void billboard_init(u16 phase_index) {
         *object = (BillboardObject){0};
         object->x = bsp_things[i].x;
         object->y = bsp_things[i].y;
+        object->sector_id = bsp_find_sector(object->x, object->y);
+        const BspSectorState *sector = bsp_get_sector_state(object->sector_id);
+        object->z = sector ? sector->floor_height : 0;
         object->type_id = type;
         object->hp = visual; // key color is carried as its visual ID.
         object->active = TRUE;

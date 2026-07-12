@@ -3,6 +3,14 @@
 
 #include <genesis.h>
 
+#ifndef BSP_SECTOR_RENDERER
+#define BSP_SECTOR_RENDERER 0
+#endif
+
+#define BSP_NO_SECTOR 0xFFFFu
+#define BSP_MAX_SECTORS 128
+#define BSP_LINE_IMPASSABLE 0x0001u
+
 // Hand-authored test level for the BSP engine. Coordinates are in world
 // fixed-point units (FX_ONE = 256 units per "cell"). This is now the single
 // source of truth for geometry, collision, doors and the exit switch — the old
@@ -34,6 +42,49 @@ typedef struct {
     u8 texture_id; // exact generated E1M1 texture ID
     u8 type;       // BspSegType
 } BspSeg;
+
+typedef struct {
+    u16 v1;
+    u16 v2;
+    u16 right_sector;
+    u16 left_sector;
+    u16 flags;
+    u16 special;
+    u16 tag;
+} BspLine;
+
+typedef struct {
+    u16 v1;
+    u16 v2;
+    u16 line_id;
+    u16 front_sector;
+    u16 back_sector;
+    s16 nx;
+    s16 ny;
+    s16 tex_u_offset;
+    s16 tex_v_offset;
+    u8 upper_texture;
+    u8 lower_texture;
+    u8 middle_texture;
+    u8 side_flags;
+} BspRenderSeg;
+
+typedef struct {
+    s16 floor_height;
+    s16 ceiling_height;
+    u8 floor_flat;
+    u8 ceiling_flat;
+    u8 floor_color;
+    u8 ceiling_color;
+    u8 light_level;
+    u8 special;
+    u16 tag;
+} BspSector;
+
+typedef struct {
+    s16 floor_height;
+    s16 ceiling_height;
+} BspSectorState;
 
 typedef struct {
     u16 first_seg;
@@ -103,9 +154,16 @@ extern const BspVertex bsp_vertices[];
 extern const BspSeg bsp_segs[];
 extern const BspSubsector bsp_subsectors[];
 extern const BspSectorVisual bsp_sector_visuals[];
+extern const BspLine bsp_lines[];
+extern const BspRenderSeg bsp_render_segs[];
+extern const BspSector bsp_sectors[];
 extern const BspNode bsp_nodes[];
 extern const u16 bsp_root_node;
 extern const u16 bsp_seg_count;
+extern const u16 bsp_line_count;
+extern const u16 bsp_render_seg_count;
+extern const u16 bsp_sector_count;
+extern const u16 bsp_subsector_count;
 extern const u16 bsp_node_count;
 extern const BspThing bsp_things[];
 extern const u16 bsp_thing_count;
@@ -126,6 +184,8 @@ extern const u16 bsp_grid_width;
 extern const u16 bsp_grid_height;
 extern const u16 bsp_grid_cell_offsets[];
 extern const u16 bsp_grid_seg_indices[];
+extern const u16 bsp_line_grid_cell_offsets[];
+extern const u16 bsp_line_grid_indices[];
 
 // Upper bound on BSP nodes across any map, sizing the near/far order cache
 // bit array in bsp_render.c. E1M1 uses 236; the hand map uses 1.
@@ -150,6 +210,11 @@ u16 bsp_get_visibility_revision(void);
 // Collision: is a circle of the given radius at world (x, y) touching a solid
 // (closed) wall segment? Used by player and enemy movement.
 bool bsp_circle_blocked(s32 x, s32 y, s32 radius);
+bool bsp_circle_blocked_from_sector(s32 x, s32 y, s32 radius, u16 from_sector);
+
+u16 bsp_find_subsector(s32 x, s32 y);
+u16 bsp_find_sector(s32 x, s32 y);
+const BspSectorState *bsp_get_sector_state(u16 sector_id);
 
 // Line-of-sight: does the segment (x0,y0)-(x1,y1) cross any solid wall?
 bool bsp_segment_hits_wall(s32 x0, s32 y0, s32 x1, s32 y1);
