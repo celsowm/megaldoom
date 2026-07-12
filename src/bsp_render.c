@@ -597,11 +597,16 @@ void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColor
 }
 
 #if DEBUG_PERF
-u16 bsp_get_debug_nodes_visited(void) { return g_bsp_dbg_nodes_visited; }
-u16 bsp_get_debug_boxes_rejected_cheap(void) { return g_bsp_dbg_boxes_rejected_cheap; }
-u16 bsp_get_debug_boxes_projected(void) { return g_bsp_dbg_boxes_projected; }
-u16 bsp_get_debug_near_fallbacks(void) { return g_bsp_dbg_near_fallbacks; }
-u16 bsp_get_debug_segments_tested(void) { return g_bsp_dbg_segments_tested; }
-u16 bsp_get_debug_segments_drawn(void) { return g_bsp_dbg_segments_drawn; }
-u32 bsp_get_debug_side_cache_subticks(void) { return g_bsp_dbg_side_cache_subticks; }
+// These accessors are consumed only by the optional perf overlay in main.c.
+// Keep them visible across SGDK's LTO link even though this translation unit
+// itself has no callers for them.
+#define BSP_DEBUG_EXPORT __attribute__((used, externally_visible))
+BSP_DEBUG_EXPORT u16 bsp_get_debug_nodes_visited(void) { return g_bsp_dbg_nodes_visited; }
+BSP_DEBUG_EXPORT u16 bsp_get_debug_boxes_rejected_cheap(void) { return g_bsp_dbg_boxes_rejected_cheap; }
+BSP_DEBUG_EXPORT u16 bsp_get_debug_boxes_projected(void) { return g_bsp_dbg_boxes_projected; }
+BSP_DEBUG_EXPORT u16 bsp_get_debug_near_fallbacks(void) { return g_bsp_dbg_near_fallbacks; }
+BSP_DEBUG_EXPORT u16 bsp_get_debug_segments_tested(void) { return g_bsp_dbg_segments_tested; }
+BSP_DEBUG_EXPORT u16 bsp_get_debug_segments_drawn(void) { return g_bsp_dbg_segments_drawn; }
+BSP_DEBUG_EXPORT u32 bsp_get_debug_side_cache_subticks(void) { return g_bsp_dbg_side_cache_subticks; }
+#undef BSP_DEBUG_EXPORT
 #endif

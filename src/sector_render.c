@@ -1,3 +1,4 @@
+#include <genesis.h>
 #include <string.h>
 #include "bsp_render.h"
 #include "bsp_map.h"

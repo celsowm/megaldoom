@@ -167,6 +167,8 @@ void renderer_invalidate_scene(void) {
     mark_all_view_banks_dirty();
 }
 
+// The raycast tile packer is not linked by the sector renderer.
+#if !BSP_SECTOR_RENDERER
 typedef struct {
     u16 top;
     u16 bottom;
@@ -217,6 +219,7 @@ static u8 sample_wall_descriptor(const WallColumnDescriptor *descriptor,
                                descriptor->tex_x]) & 0x0F];
 }
 #endif
+#endif
 
 static bool overlay_previously_touched(u16 tile_index) {
     const u16 word = (u16)(tile_index >> 5);
@@ -239,6 +242,7 @@ static void build_sector_tilemap(void);
 #define RENDERER_REFERENCE_PACKER 0
 #endif
 
+#if !BSP_SECTOR_RENDERER
 #if RAY_COL_STRIDE == 4
 // Pre-shade the 32-texel source column once per sampled ray column. The hot
 // per-screen-pixel loop then performs only the vertical DDA lookup and one u16
@@ -372,6 +376,7 @@ static void build_raycast_tilemap(const RayColumn *columns,
         }
     }
 }
+#endif
 #endif
 
 #if RENDERER_REFERENCE_PACKER

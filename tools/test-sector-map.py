@@ -133,7 +133,9 @@ def main():
         r"static bool sector_range_closed\(.*?\n\}", sector_renderer, re.S)
     all_closed = re.search(
         r"static bool sector_all_closed\(.*?\n\}", sector_renderer, re.S)
-    assert range_closed and "g_column_closed" in range_closed.group(0)
+    # The range query uses the packed bitset, so it can reject a whole span
+    # word-at-a-time instead of scanning each sample column.
+    assert range_closed and "g_closed_words" in range_closed.group(0)
     assert all_closed and "g_closed_count >= RAY_SAMPLE_COLS" in all_closed.group(0)
 
     renderer_scene = (ROOT / "src/renderer_scene.c").read_text()

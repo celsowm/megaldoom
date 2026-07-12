@@ -42,6 +42,7 @@ static u16 billboard_project_one(const PlayerState *player,
 // drawable when any sampled block it covers is in front of that block's wall;
 // individual pixels are still z-tested while rasterizing. This avoids making a
 // wide sprite vanish merely because its centre lies behind a pillar.
+#if !BSP_SECTOR_RENDERER
 static bool billboard_span_has_visible_block(const BillboardMeasure *measure,
                                              const RayColumn *columns) {
     s16 left = (s16)(measure->center_col - measure->half_w);
@@ -62,6 +63,7 @@ static bool billboard_span_has_visible_block(const BillboardMeasure *measure,
     }
     return FALSE;
 }
+#endif
 
 u16 billboard_project_scene(const PlayerState *player,
                             const RayColumn *columns,

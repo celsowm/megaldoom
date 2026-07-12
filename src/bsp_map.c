@@ -196,6 +196,7 @@ bool bsp_circle_blocked(s32 x, s32 y, s32 radius) {
 #endif
 }
 
+#if BSP_SECTOR_RENDERER
 static s32 line_point_dist2(const BspLine *line, s32 px, s32 py) {
     BspSeg shape = {line->v1, line->v2, 0, 0, 0, 0, 0, 0};
     return seg_point_dist2(&shape, px, py);
@@ -229,6 +230,7 @@ static bool line_blocks_sight(const BspLine *line) {
         ? left->ceiling_height : right->ceiling_height;
     return (bool)(top <= bottom);
 }
+#endif
 
 bool bsp_circle_blocked_from_sector(s32 x, s32 y, s32 radius, u16 from_sector) {
 #if !BSP_SECTOR_RENDERER
@@ -273,6 +275,7 @@ static s32 cross3(s32 ax, s32 ay, s32 bx, s32 by, s32 cx, s32 cy) {
     return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
 }
 
+#if !BSP_SECTOR_RENDERER
 static bool point_on_segment(s32 ax, s32 ay, s32 bx, s32 by, s32 px, s32 py) {
     const s32 min_x = (ax < bx) ? ax : bx;
     const s32 max_x = (ax > bx) ? ax : bx;
@@ -281,6 +284,7 @@ static bool point_on_segment(s32 ax, s32 ay, s32 bx, s32 by, s32 px, s32 py) {
     return (bool)((px >= min_x) && (px <= max_x) &&
                   (py >= min_y) && (py <= max_y));
 }
+#endif
 
 bool bsp_segment_hits_wall(s32 x0, s32 y0, s32 x1, s32 y1) {
 #if BSP_SECTOR_RENDERER
