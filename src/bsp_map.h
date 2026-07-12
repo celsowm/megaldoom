@@ -10,6 +10,8 @@
 #define BSP_NO_SECTOR 0xFFFFu
 #define BSP_MAX_SECTORS 128
 #define BSP_LINE_IMPASSABLE 0x0001u
+#define BSP_RENDER_SIDE_REVERSED 0x01u
+#define BSP_RENDER_FLAT_RISER 0x02u
 
 // Hand-authored test level for the BSP engine. Coordinates are in world
 // fixed-point units (FX_ONE = 256 units per "cell"). This is now the single
@@ -66,7 +68,7 @@ typedef struct {
     u8 upper_texture;
     u8 lower_texture;
     u8 middle_texture;
-    u8 side_flags;
+    u8 side_flags; // BSP_RENDER_* flags
 } BspRenderSeg;
 
 typedef struct {
@@ -91,6 +93,14 @@ typedef struct {
     u16 seg_count;
     u16 sector_id;
 } BspSubsector;
+
+// Source-faithful render-seg range for one Doom SSECTOR.  This is parallel to
+// bsp_subsectors, whose ranges address the legacy solid-only seg stream.
+typedef struct {
+    u16 first_seg;
+    u16 seg_count;
+    u16 sector_id;
+} BspRenderSubsector;
 
 typedef struct {
     u8 ceiling_color;
@@ -156,6 +166,7 @@ extern const BspSubsector bsp_subsectors[];
 extern const BspSectorVisual bsp_sector_visuals[];
 extern const BspLine bsp_lines[];
 extern const BspRenderSeg bsp_render_segs[];
+extern const BspRenderSubsector bsp_render_subsectors[];
 extern const BspSector bsp_sectors[];
 extern const BspNode bsp_nodes[];
 extern const u16 bsp_root_node;

@@ -16,7 +16,7 @@
 // Translation uses velocity ramps for inertia instead of instant on/off. These are
 // per-iteration values: player_try_move runs once per main-loop iteration regardless
 // of vsync count, so fewer iterations/sec means less real-world speed unless
-// compensated. The cadence is now TARGET_FRAME_VSYNCS=3 (20fps = 20 iterations/sec,
+// compensated. The cadence follows TARGET_FRAME_VSYNCS (currently 2 = 30 iterations/sec,
 // 2/3 of the old 30fps), so the magnitudes are scaled by 3/2 relative to the 30fps
 // baseline to preserve the same real-world walk/strafe speed. player_try_move
 // sub-steps the displacement (PLAYER_MOVE_SUBSTEP), so the larger per-iteration step

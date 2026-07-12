@@ -53,12 +53,9 @@ static u8 map_thing_type(u16 doom_type, u8 *visual) {
         case 2019: *visual = BILLBOARD_VISUAL_BLUE_ARMOR; return BILLBOARD_TYPE_BLUE_ARMOR;
         case 2007: *visual = BILLBOARD_VISUAL_CLIP; return BILLBOARD_TYPE_CLIP;
         case 2048: *visual = BILLBOARD_VISUAL_AMMO_BOX; return BILLBOARD_TYPE_AMMO_BOX;
-        case 34: *visual = BILLBOARD_VISUAL_CANDLE; return BILLBOARD_TYPE_CANDLE;
-        case 35: case 44: case 45: *visual = BILLBOARD_VISUAL_CANDELABRA; return BILLBOARD_TYPE_CANDELABRA;
-        case 48: *visual = BILLBOARD_VISUAL_ELEC; return BILLBOARD_TYPE_ELEC;
-        case 2028: *visual = BILLBOARD_VISUAL_COLUMN; return BILLBOARD_TYPE_COLUMN;
+        // Decorative THINGS are deliberately omitted on the Mega Drive. They
+        // consume projection, LOS, draw and collision time without gameplay.
         case 2035: *visual = BILLBOARD_VISUAL_BARREL; return BILLBOARD_TYPE_BARREL;
-        case 43: *visual = BILLBOARD_VISUAL_TREE; return BILLBOARD_TYPE_TREE;
         case 9: case 3001: case 3004: *visual = BILLBOARD_VISUAL_DUMMY; return BILLBOARD_TYPE_DUMMY;
         default: return 0xFF;
     }

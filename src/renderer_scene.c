@@ -227,6 +227,7 @@ static bool overlay_previously_touched(u16 tile_index) {
 
 static void commit_base_tile(u16 tile_index, const u32 *tile_rows);
 #if BSP_SECTOR_RENDERER
+static void build_sector_tile(u16 tile_index);
 static void build_sector_tilemap(void);
 #endif
 
@@ -490,6 +491,9 @@ static u32 divu32_16_exact(u32 numerator, u16 denominator) {
 static void draw_projected_billboards(const RayColumn *columns,
                                       const ProjectedBillboard *objects,
                                       u16 object_count) {
+#if BSP_SECTOR_RENDERER
+    const u16 *sector_depth = bsp_sector_scene_depth();
+#endif
     for (u16 i = 0; i < object_count; i++) {
         const ProjectedBillboard *object = &objects[i];
         const s16 height = (s16)(object->bottom - object->top + 1);
@@ -585,8 +589,9 @@ static void draw_projected_billboards(const RayColumn *columns,
                 for (; y < stop; y++) {
                     const u8 texel = lut[tex.pixels[(tex_y_by_screen_row[y] * tex.w) + tex_x] & 0x0F];
 #if BSP_SECTOR_RENDERER
-                    const bool depth_visible = object->depth < bsp_sector_depth_at(
-                        (u16)(wall_col / RAY_COL_STRIDE), y);
+                    const u16 sample_x = (u16)(wall_col / RAY_COL_STRIDE);
+                    const bool depth_visible = object->depth <
+                        sector_depth[(sample_x * RAY_VIEW_ROWS) + y];
 #else
                     const bool depth_visible = TRUE;
 #endif
@@ -852,7 +857,9 @@ static void build_compass_tilemap(u16 angle) {
 
 static void restore_previous_overlay_tiles(void) {
 #if BSP_SECTOR_RENDERER
-    build_sector_tilemap();
+    for (u16 tile = 0; tile < VIEW_TILE_COUNT; tile++) {
+        if (overlay_previously_touched(tile)) build_sector_tile(tile);
+    }
 #else
     for (u16 tile = 0; tile < VIEW_TILE_COUNT; tile++) {
         const u16 word = (u16)(tile >> 5);
@@ -908,24 +915,24 @@ static void commit_base_tile(u16 tile_index, const u32 *tile_rows) {
 }
 
 #if BSP_SECTOR_RENDERER
-static void build_sector_tilemap(void) {
+static void build_sector_tile(u16 tile) {
     const u8 *scene = bsp_sector_scene_color();
-    for (u16 ty = 0; ty < VIEW_TILE_H; ty++) {
-        for (u16 tx = 0; tx < VIEW_TILE_W; tx++) {
-            const u16 tile = (u16)(ty * VIEW_TILE_W + tx);
-            u32 rows[8];
-            for (u16 py = 0; py < 8; py++) {
-                const u16 y = (u16)(ty * 8 + py);
-                u32 row = 0;
-                for (u16 px = 0; px < 8; px++) {
-                    const u16 screen_x = (u16)(tx * 8 + px);
-                    const u16 sample_x = (u16)(screen_x / RAY_COL_STRIDE);
-                    row = (row << 4) | (scene[sample_x * RAY_VIEW_ROWS + y] & 15);
-                }
-                rows[py] = row;
-            }
-            commit_base_tile(tile, rows);
-        }
+    const u16 ty = (u16)(tile / VIEW_TILE_W);
+    const u16 tx = (u16)(tile - ty * VIEW_TILE_W);
+    const u16 left_sample = (u16)(tx * 2);
+    const u16 right_sample = (u16)(left_sample + 1);
+    const u8 *left = scene + left_sample * RAY_VIEW_ROWS + ty * 8;
+    const u8 *right = scene + right_sample * RAY_VIEW_ROWS + ty * 8;
+    u32 rows[8];
+    for (u16 py = 0; py < 8; py++) {
+        rows[py] = (REP4[left[py] & 15] << 16) | REP4[right[py] & 15];
+    }
+    commit_base_tile(tile, rows);
+}
+
+static void build_sector_tilemap(void) {
+    for (u16 tile = 0; tile < VIEW_TILE_COUNT; tile++) {
+        build_sector_tile(tile);
     }
 }
 #endif

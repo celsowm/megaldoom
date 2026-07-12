@@ -63,6 +63,11 @@ const BspRenderSeg bsp_render_segs[] = {
     {6,5,2,1,0,1,0,0,0,0,0,MEGALDOOM_TEX_DOOR3,1},
 };
 
+const BspRenderSubsector bsp_render_subsectors[] = {
+    {0, 6, 0}, // 0 west
+    {6, 4, 1}, // 1 east
+};
+
 const BspSubsector bsp_subsectors[] = {
     {0, 6, 0}, // 0 west
     {6, 6, 1}, // 1 east

@@ -21,7 +21,8 @@
 // 3 = 20fps). A steady cadence is what makes movement feel uniform; the lock only pays
 // off when a redraw reliably finishes within this many vblanks. Tune from the DEBUG_PERF
 // CPU-load% while moving (turn right + go north): load under ~95% -> 1 holds 60; under
-// ~185% -> 2 holds 30; otherwise 3 holds a rock-steady 20. Default 3 targets 20fps.
+// ~185% -> 2 holds 30; otherwise 3 holds a rock-steady 20. Default 2 targets 30fps
+// after removing the duplicate legacy+sector cast.
 // TARGET_FRAME_VSYNCS is defined in player_controller.h (shared with the movement ramp).
 
 // Perf diagnostics overlay (FPS + CPU load + frame-load cursor). Set to 0 (or
@@ -81,9 +82,10 @@ static void render_current_view(u16 player_health, bool base_dirty) {
     const u32 cast_start = getSubTick();
 #endif
     if (base_dirty) {
-        bsp_cast_frame(&g_player, g_ray_columns, &g_scene_colors);
 #if BSP_SECTOR_RENDERER
         bsp_sector_cast_frame(&g_player);
+#else
+        bsp_cast_frame(&g_player, g_ray_columns, &g_scene_colors);
 #endif
     }
 #if DEBUG_PERF

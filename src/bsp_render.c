@@ -1,5 +1,6 @@
 #include "bsp_render.h"
 #include "bsp_map.h"
+#include "bsp_traverse.h"
 #include "fixed_math.h"
 #include "generated_assets.h"
 
@@ -41,6 +42,10 @@ static bool g_sample_solid[BSP_SAMPLE_COLS];
 static u32 g_solid_words[BSP_SOLID_WORD_COUNT];
 static u16 g_solid_count;
 static RayColumn *g_columns;
+static BspTraverseLeafFn g_visit_leaf;
+static BspTraverseRangeClosedFn g_range_closed;
+static BspTraverseAllClosedFn g_all_closed;
+static void *g_traverse_context;
 
 // --- Near/far order cache (Patch 3.2) ---------------------------------------
 // The front/back traversal order at each BSP node depends only on the player's
@@ -460,22 +465,19 @@ static void render_boxed_child(u16 child, const BspBox *box) {
     // column in the child's conservative range is already filled front-to-back,
     // no geometry in that child can change the frame. Test the range one word at
     // a time; rotation can make many child boxes cover most of the view.
-    if (!solid_sample_range_filled(left_sample, right_sample)) {
+    if (!g_range_closed(left_sample, right_sample, g_traverse_context)) {
         render_node(child);
     }
 }
 
 static void render_node(u16 child) {
-    if (g_solid_count >= BSP_SAMPLE_COLS) {
+    if (g_all_closed(g_traverse_context)) {
         return; // whole view already filled front-to-back
     }
 
     BSP_DBG_INC(nodes_visited);
     if (BSP_CHILD_IS_SUBSECTOR(child)) {
-        const BspSubsector *ss = &bsp_subsectors[BSP_CHILD_INDEX(child)];
-        for (u16 i = 0; i < ss->seg_count; i++) {
-            draw_seg((u16)(ss->first_seg + i));
-        }
+        g_visit_leaf(BSP_CHILD_INDEX(child), g_traverse_context);
         return;
     }
 
@@ -505,6 +507,55 @@ static void render_node(u16 child) {
     }
 }
 
+void bsp_traverse_front_to_back(const PlayerState *player,
+                                BspTraverseLeafFn visit_leaf,
+                                BspTraverseRangeClosedFn range_closed,
+                                BspTraverseAllClosedFn all_closed,
+                                void *context) {
+    BSP_DBG_RESET();
+    g_fwx = fx_cos(player->angle);
+    g_fwy = fx_sin(player->angle);
+    g_rx = (s16)-g_fwy;
+    g_ry = g_fwx;
+    g_px = player->x;
+    g_py = player->y;
+    g_visit_leaf = visit_leaf;
+    g_range_closed = range_closed;
+    g_all_closed = all_closed;
+    g_traverse_context = context;
+
+    if (!g_node_cache_valid || g_px != g_node_cache_px || g_py != g_node_cache_py) {
+        g_position_generation++;
+        if (g_position_generation == 0) {
+            for (u16 i = 0; i < BSP_MAX_NODES; i++) g_node_side_generation[i] = 0;
+            g_position_generation = 1;
+        }
+        g_node_cache_px = g_px;
+        g_node_cache_py = g_py;
+        g_node_cache_valid = TRUE;
+    }
+
+    render_node(bsp_root_node);
+}
+
+static void legacy_visit_leaf(u16 subsector_id, void *context) {
+    const BspSubsector *ss = &bsp_subsectors[subsector_id];
+    (void)context;
+    for (u16 i = 0; i < ss->seg_count; i++) {
+        draw_seg((u16)(ss->first_seg + i));
+    }
+}
+
+static bool legacy_range_closed(u16 left_sample, u16 right_sample, void *context) {
+    (void)context;
+    return solid_sample_range_filled(left_sample, right_sample);
+}
+
+static bool legacy_all_closed(void *context) {
+    (void)context;
+    return g_solid_count >= BSP_SAMPLE_COLS;
+}
+
 void bsp_invalidate_node_cache(void) {
     g_node_cache_valid = FALSE;
 }
@@ -519,33 +570,7 @@ void bsp_init(void) {
 }
 
 void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColors *scene_colors) {
-    BSP_DBG_RESET();
-    g_fwx = fx_cos(player->angle);
-    g_fwy = fx_sin(player->angle);
-    // Right axis = forward rotated +90deg: (cos(a+90), sin(a+90)) = (-sin(a),
-    // cos(a)). Deriving it from the already-loaded forward basis drops two trig
-    // lookups per frame and is byte-exact: the generated Q8 sine table satisfies
-    // g_sin_table[(a+ANGLE_90)&MASK] == -g_sin_table[a] (half-period antisymmetry,
-    // verified across all four quadrants in fx_init_tables).
-    g_rx = (s16)-g_fwy;
-    g_ry = g_fwx;
-    g_px = player->x;
-    g_py = player->y;
     g_columns = columns;
-
-    // Rebuild the near/far order cache only when the player's position changed
-    // since the last cast. Pure rotation reuses the cached bits, saving a
-    // cross product (2 multiplies + subtract) per node visited.
-    if (!g_node_cache_valid || g_px != g_node_cache_px || g_py != g_node_cache_py) {
-        g_position_generation++;
-        if (g_position_generation == 0) {
-            for (u16 i = 0; i < BSP_MAX_NODES; i++) g_node_side_generation[i] = 0;
-            g_position_generation = 1;
-        }
-        g_node_cache_px = g_px;
-        g_node_cache_py = g_py;
-        g_node_cache_valid = TRUE;
-    }
 
     scene_colors->ceiling_color = BSP_CEILING_COLOR;
     scene_colors->floor_color = BSP_FLOOR_COLOR;
@@ -567,7 +592,8 @@ void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColor
         columns[c].shade = 0;
     }
 
-    render_node(bsp_root_node);
+    bsp_traverse_front_to_back(player, legacy_visit_leaf, legacy_range_closed,
+                               legacy_all_closed, NULL);
 }
 
 #if DEBUG_PERF

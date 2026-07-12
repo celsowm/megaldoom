@@ -481,6 +481,10 @@ LOCKED_DOOR_SPECIALS = {26, 27, 28, 32, 33, 34}
 EXIT_SPECIALS = {11, 51}
 
 LINE_FLAG_IMPASSABLE = 0x0001
+PLAYER_HEIGHT = 56
+PLAYER_MAX_STEP = 24
+BSP_RENDER_SIDE_REVERSED = 0x01
+BSP_RENDER_FLAT_RISER = 0x02
 
 
 def reduce_normal(nx, ny):
@@ -674,14 +678,28 @@ def main():
             back_sector = (sidedefs[back_side]["sector"]
                            if back_side != 0xFFFF else 0xFFFF)
             side = sidedefs[front_side]
+            flat_riser = False
+            if back_sector != 0xFFFF:
+                front_floor = sectors[front_sector]["floor"]
+                back_floor = sectors[back_sector]["floor"]
+                open_bottom = max(front_floor, back_floor)
+                open_top = min(sectors[front_sector]["ceiling"],
+                               sectors[back_sector]["ceiling"])
+                floor_delta = abs(back_floor - front_floor)
+                flat_riser = (
+                    not (linedefs[seg["ld"]]["flags"] & LINE_FLAG_IMPASSABLE)
+                    and open_top - open_bottom >= PLAYER_HEIGHT
+                    and 1 <= floor_delta <= PLAYER_MAX_STEP
+                )
             textures = {}
             for field in ("upper", "lower", "middle"):
-                name = side[field]
+                name = None if (field == "lower" and flat_riser) else side[field]
                 # Doom commonly stores a step/portal texture only on the side
                 # from which the vertical face is normally visible. Our portal
                 # renderer can see the same riser from either direction, so
                 # retain the opposite sidedef's surface as a rendering fallback.
-                if (not name or name == "-") and back_side != 0xFFFF:
+                if (field != "lower" or not flat_riser) and \
+                        (not name or name == "-") and back_side != 0xFFFF:
                     name = sidedefs[back_side][field]
                 if not name or name == "-":
                     name = None
@@ -694,7 +712,9 @@ def main():
                 front_sector=front_sector, back_sector=back_sector,
                 nx=nx, ny=ny, tex_u_offset=seg["offset"] + side["xoff"],
                 tex_v_offset=side["yoff"], textures=textures,
-                side_flags=seg["direction"] & 1))
+                side_flags=((BSP_RENDER_SIDE_REVERSED
+                            if seg["direction"] & 1 else 0) |
+                            (BSP_RENDER_FLAT_RISER if flat_riser else 0))))
         render_ssectors.append((start, len(render_segs) - start))
 
     # --- Rebuild legacy subsectors with only solid segs. -------------------- #
@@ -761,9 +781,8 @@ def main():
     # Y-down flip: negate the start Y and mirror the angle about the x-axis.
     start_y = -start_y
     start_angle = (256 - (round(start_angle_deg * 256 / 360) & 255)) & 255
-    curated_thing_types = {5, 6, 9, 13, 34, 35, 43, 44, 45, 46, 47, 48,
-                           2007, 2011, 2012, 2014, 2015, 2018, 2019, 2028,
-                           2035, 2046, 2048, 3001, 3004}
+    curated_thing_types = {5, 6, 9, 13, 2007, 2011, 2012, 2014, 2015,
+                           2018, 2019, 2035, 2048, 3001, 3004}
     supported_things = sum(1 for _, _, thing_type, _, _ in out_things
                            if thing_type in curated_thing_types)
 
@@ -803,6 +822,12 @@ def main():
             s["v1"], s["v2"], s["line_id"], s["front_sector"], s["back_sector"],
             s["nx"], s["ny"], s["tex_u_offset"], s["tex_v_offset"],
             s["upper_tex"], s["lower_tex"], s["middle_tex"], s["side_flags"]))
+    lines.append("};")
+    lines.append("")
+
+    lines.append("const BspRenderSubsector bsp_render_subsectors[%d] = {" % len(render_ssectors))
+    for index, (first, count) in enumerate(render_ssectors):
+        lines.append("    {%d, %d, %d}," % (first, count, out_ssectors[index][2]))
     lines.append("};")
     lines.append("")
 

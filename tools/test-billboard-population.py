@@ -10,12 +10,11 @@ MAP_SOURCE = ROOT / "src" / "generated_e1m1_map.c"
 RUNTIME_SOURCE = ROOT / "src" / "billboard.c"
 
 CURATED_TYPES = {
-    5, 6, 9, 13, 34, 35, 43, 44, 45, 46, 47, 48,
-    2007, 2011, 2012, 2014, 2015, 2018, 2019, 2028,
-    2035, 2046, 2048, 3001, 3004,
+    5, 6, 9, 13, 2007, 2011, 2012, 2014, 2015, 2018, 2019,
+    2035, 2048, 3001, 3004,
 }
 ENEMY_TYPES = {9, 3001, 3004}
-DECOR_TYPES = {34, 35, 43, 44, 45, 46, 47, 48, 2028, 2035, 2046}
+BARREL_TYPES = {2035}
 MEDIUM_FLAG = 0x0002
 NOT_SINGLE_PLAYER_FLAG = 0x0010
 
@@ -53,19 +52,19 @@ def main() -> int:
             + ", ".join(map(str, missing_mappings))
         )
     enemies = sum(thing[2] in ENEMY_TYPES for thing in runtime)
-    decor = sum(thing[2] in DECOR_TYPES for thing in runtime)
-    items = len(runtime) - enemies - decor
+    barrels = sum(thing[2] in BARREL_TYPES for thing in runtime)
+    items = len(runtime) - enemies - barrels
 
-    actual = (len(curated), len(runtime), enemies, items, decor)
-    expected = (102, 70, 6, 46, 18)
+    actual = (len(curated), len(runtime), enemies, items, barrels)
+    expected = (87, 58, 6, 46, 6)
     if actual != expected:
         raise ValueError(
             "unexpected billboard population "
-            f"curated/runtime/enemies/items/decor={actual}, expected={expected}"
+            f"curated/runtime/enemies/items/barrels={actual}, expected={expected}"
         )
 
-    print("ok    billboard population: 102 curated, 70 medium single-player "
-          "(6 enemies, 46 items, 18 decor); all eligible types map at runtime")
+    print("ok    billboard population: 87 useful, 58 medium single-player "
+          "(6 enemies, 46 items, 6 barrels, 0 decor)")
     return 0
 
 
