@@ -12,6 +12,21 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+& python (Join-Path $PSScriptRoot "test-flat-map-converter.py")
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
+& python (Join-Path $PSScriptRoot "test-flat-map-policy.py")
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
+& python (Join-Path $PSScriptRoot "test-keyed-runtime.py")
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
 & python (Join-Path $PSScriptRoot "test-billboard-layout.py")
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
