@@ -33,6 +33,9 @@ u32 bsp_sector_get_debug_floor_subticks(void);
 u32 bsp_sector_get_debug_transform_subticks(void);
 u32 bsp_sector_get_debug_setup_subticks(void);
 u32 bsp_sector_get_debug_raster_subticks(void);
+u16 bsp_sector_get_debug_rejected_segments(void);
+u16 bsp_sector_get_debug_closed_ranges(void);
+u16 bsp_sector_get_debug_raster_samples(void);
 #endif
 #endif
 

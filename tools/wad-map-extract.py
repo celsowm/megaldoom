@@ -307,6 +307,42 @@ def build_shade_map(palette):
     return result
 
 
+def build_shade_lut(palette, levels=4):
+    """Build deterministic progressively-darker palette-index shade levels."""
+    shade_map = build_shade_map(palette)
+    result = [list(range(len(palette)))]
+    for _ in range(1, levels):
+        result.append([shade_map[index] for index in result[-1]])
+    return result
+
+
+def build_wall_base_colors(texture_names, palette):
+    """Reduce each wall material to one representative PAL3 colour.
+
+    The runtime sector renderer never samples the source texture. Interactive
+    materials are assigned distinct nearest colours so doors, locked doors and
+    switches remain readable after the solid-shade conversion.
+    """
+    allowed = range(1, WORLD_COLOR_DAMAGE)
+    colors = []
+    averages = {}
+    for name in texture_names:
+        average = md_color(image_average(texture_path(name)))
+        averages[name] = average
+        colors.append(nearest_palette_index(average, palette, allowed))
+
+    used = set()
+    for name in ("DOOR3", "BIGDOOR2", "SW1STRTN"):
+        if name not in texture_names:
+            continue
+        index = texture_names.index(name)
+        candidates = [candidate for candidate in allowed if candidate not in used]
+        colors[index] = nearest_palette_index(
+            averages[name], palette, candidates or allowed)
+        used.add(colors[index])
+    return colors
+
+
 def convert_texture(path, palette):
     with Image.open(path) as image:
         resized = image.convert("RGB").resize((WALL_TEX_DIM, WALL_TEX_DIM), Image.Resampling.BOX)
@@ -341,6 +377,8 @@ def emit_world_assets(path, texture_usage, sectors):
     if len(palette) != 16:
         raise RuntimeError("World palette must contain exactly 16 colors")
     shade_map = build_shade_map(palette)
+    shade_lut = build_shade_lut(palette)
+    wall_base_colors = build_wall_base_colors(texture_names, palette)
     texture_ids = {name: index for index, name in enumerate(texture_names)}
     texture_meta = {}
     converted = []
@@ -385,6 +423,18 @@ def emit_world_assets(path, texture_usage, sectors):
         "",
         "static const u8 FREEDOOM_WORLD_SHADE_MAP[16] = {",
         "    " + ", ".join(str(value) for value in shade_map),
+        "};",
+        "",
+        "#define FREEDOOM_WORLD_SHADE_LEVELS 4",
+        "static const u8 FREEDOOM_WORLD_SHADE_LUT[FREEDOOM_WORLD_SHADE_LEVELS][16] = {",
+    ])
+    for level in shade_lut:
+        lines.append("    {" + ", ".join(str(value) for value in level) + "},")
+    lines.extend([
+        "};",
+        "",
+        "static const u8 FREEDOOM_WALL_BASE_COLOR[FREEDOOM_WALL_TEXTURE_COUNT] = {",
+        "    " + ", ".join(str(value) for value in wall_base_colors),
         "};",
         "",
         "static const s8 FREEDOOM_WALL_TEXTURE_USHIFT[FREEDOOM_WALL_TEXTURE_COUNT] = {",

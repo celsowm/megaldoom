@@ -42,6 +42,11 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
+& python (Join-Path $PSScriptRoot "test-sector-shades.py")
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
 if (-not $NoBuild) {
     & (Join-Path $PSScriptRoot "build-windows.ps1") -NoClean:$NoClean -SectorRenderer:$SectorRenderer
     if ($LASTEXITCODE -ne 0) {

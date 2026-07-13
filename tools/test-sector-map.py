@@ -132,7 +132,7 @@ def main():
     assert "g_floor_clip[sx] = bf" in sector_renderer
     assert "g_closed_count++" in sector_renderer
     range_closed = re.search(
-        r"static bool sector_range_closed\(.*?\n\}", sector_renderer, re.S)
+        r"static bool sector_range_closed\([^;]*?\)\s*\{.*?\n\}", sector_renderer, re.S)
     all_closed = re.search(
         r"static bool sector_all_closed\(.*?\n\}", sector_renderer, re.S)
     # The range query uses the packed bitset, so it can reject a whole span
@@ -156,7 +156,8 @@ def main():
 
     assert "g_scene_color" not in sector_renderer
     assert "memset(g_scene_depth" not in sector_renderer
-    assert "MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[height]" in sector_renderer
+    assert "FREEDOOM_WORLD_SHADE_LUT[level]" in sector_renderer
+    assert "FREEDOOM_WALL_TEXTURES" not in sector_renderer
     assert "g_depth_block_generation" in sector_renderer
     assert "base_sample_rows" in sector_renderer
     assert "g_vertex_generation" in sector_renderer

@@ -96,12 +96,6 @@ def main():
             selected_max = i
     assert (selected_min, selected_max) == (min_index, max_index)
 
-    # The runtime clips first and indexes the generated table with the clipped
-    # height, exactly matching floor(relative_y * 32 / height).
-    clipped_top, clipped_bottom = 5, 11
-    height = clipped_bottom - clipped_top + 1
-    assert [rel * 32 // height for rel in range(height)] == [0, 4, 9, 13, 18, 22, 27]
-
     lazy = LazyDepth(sample_cols, tile_h)
     assert lazy.block(3, 4) == [SCENE_FAR] * 8
     lazy.ensure(3, 4)[2] = 77
@@ -128,7 +122,11 @@ def main():
 
     assert "g_scene_color" not in sector
     assert "memset(g_scene_depth" not in sector
-    assert "MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[height]" in sector
+    assert "FREEDOOM_WORLD_SHADE_LUT[level]" in sector
+    assert "FREEDOOM_WALL_BASE_COLOR[texture]" in sector
+    assert "FREEDOOM_WALL_TEXTURES" not in sector
+    assert "MEGALDOOM_WALL_TEX_Y_BY_HEIGHT" not in sector
+    assert "u_q" not in sector and "u_step" not in sector
     assert "color_rows[row * 2] = SECTOR_REP4[color]" in sector
     assert "g_depth_block_generation" in sector
     assert "g_vertex_generation" in sector

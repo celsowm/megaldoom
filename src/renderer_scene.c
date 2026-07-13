@@ -1148,6 +1148,11 @@ static void draw_upload_debug_stats(void) {
             (unsigned long)bsp_sector_get_debug_wall_subticks(),
             (unsigned long)bsp_sector_get_debug_floor_subticks());
     VDP_drawTextFill(text, 0, 6, 32);
+    sprintf(text, "Sj=%03u Sc=%03u Sx=%03u",
+            (unsigned int)bsp_sector_get_debug_rejected_segments(),
+            (unsigned int)bsp_sector_get_debug_closed_ranges(),
+            (unsigned int)bsp_sector_get_debug_raster_samples());
+    VDP_drawTextFill(text, 0, 7, 32);
 #else
     sprintf(text, "O%02u C%02u W%02u D%02u A%02u H%02u M%02u",
             (unsigned int)billboard_get_active_count(),
