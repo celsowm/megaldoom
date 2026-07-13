@@ -22,6 +22,11 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
+& python (Join-Path $PSScriptRoot "test-flat-route.py")
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
 & python (Join-Path $PSScriptRoot "test-keyed-runtime.py")
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
