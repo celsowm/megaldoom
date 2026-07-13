@@ -6,7 +6,7 @@
   "scripts": {
     "build": "pwsh -NoProfile -File tools/build-windows.ps1",
     "test": "pwsh -NoProfile -File tools/test-windows.ps1",
-    "test:flat-map": "python tools/test-flat-map-converter.py && python tools/test-flat-map-policy.py && python tools/test-keyed-runtime.py",
+    "test:flat-map": "python tools/test-flat-map-converter.py && python tools/test-flat-map-policy.py && python tools/test-flat-route.py && python tools/test-keyed-runtime.py",
     "check": "pwsh -NoProfile -File tools/check-rom.ps1",
     "assets": "pwsh -NoProfile -File tools/convert-freedoom-assets.ps1",
     "assets:flat-map": "pwsh -NoProfile -File tools/convert-flat-map.ps1",
