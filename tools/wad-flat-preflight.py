@@ -26,6 +26,14 @@ base = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = base
 SPEC.loader.exec_module(base)
 
+ROUTE_PATH = Path(__file__).with_name("wad-flat-route.py")
+ROUTE_SPEC = importlib.util.spec_from_file_location("wad_flat_route", ROUTE_PATH)
+if ROUTE_SPEC is None or ROUTE_SPEC.loader is None:
+    raise RuntimeError(f"cannot load {ROUTE_PATH}")
+route = importlib.util.module_from_spec(ROUTE_SPEC)
+sys.modules[ROUTE_SPEC.name] = route
+ROUTE_SPEC.loader.exec_module(route)
+
 
 def normalize_for_textured_legacy(model: Any) -> dict[str, list[int]]:
     """Make the analyser graph match wad-map-extract.py exactly."""
@@ -72,8 +80,20 @@ def normalize_for_textured_legacy(model: Any) -> dict[str, list[int]]:
 def build_plan(wad_path: str, map_name: str) -> dict[str, Any]:
     wad = base.WadFile(wad_path)
     model = base.parse_map(wad, map_name.upper())
+    suppressed_keys = route.suppress_unspawned_keys(model)
     changes = normalize_for_textured_legacy(model)
     plan = base.build_conversion_plan(model, map_name, os.path.basename(wad_path))
+    navigation = route.verify_route(model, plan["player_start"])
+    plan["navigation_proof"] = navigation
+    for thing_index in suppressed_keys:
+        plan["diagnostics"].append(
+            {
+                "level": "warning",
+                "code": "KEY_NOT_SPAWNED_BY_RUNTIME",
+                "thing_index": thing_index,
+                "message": "key is filtered by medium/single-player flags or the 112-object runtime cap",
+            }
+        )
     for linedef in changes["closed_portals"]:
         plan["diagnostics"].append(
             {
@@ -107,7 +127,22 @@ def build_plan(wad_path: str, map_name: str) -> dict[str, Any]:
     plan["summary"]["unsupported_closed_portals"] = len(changes["closed_portals"])
     plan["summary"]["non_emitted_door_specials"] = len(changes["open_door_specials"])
     plan["summary"]["non_emitted_exit_specials"] = len(changes["open_exit_specials"])
+    plan["summary"]["suppressed_runtime_keys"] = len(suppressed_keys)
+    plan["summary"]["semantic_progression_playable"] = bool(plan["progression"]["playable"])
+    plan["summary"]["constructive_route_playable"] = bool(navigation["playable"])
+    plan["summary"]["playable"] = bool(
+        plan["progression"]["playable"] and navigation["playable"]
+    )
+    if not navigation["playable"]:
+        plan["diagnostics"].append(
+            {
+                "level": "error",
+                "code": "NO_CONSTRUCTIVE_COMPLETION_ROUTE",
+                "message": navigation["reason"],
+            }
+        )
     plan["contracts"]["progression_matches_generated_collision"] = True
+    plan["contracts"]["constructive_collision_route_required"] = True
     return plan
 
 
@@ -142,13 +177,14 @@ def main(argv: list[str] | None = None) -> int:
             "  sectors={sectors} linedefs={linedefs} doors={doors} keys={keys} "
             "flattened-height-portals={height_portals_flattened} "
             "closed-portals={unsupported_closed_portals} "
-            "non-emitted-specials={non_emitted_door_specials}/{non_emitted_exit_specials}".format(**summary)
+            "non-emitted-specials={non_emitted_door_specials}/{non_emitted_exit_specials} "
+            "suppressed-keys={suppressed_runtime_keys}".format(**summary)
         )
         print("  progression: " + ("PLAYABLE" if summary["playable"] else "UNPLAYABLE"))
         if plan["progression"].get("route"):
             print(f"  validated route transitions: {len(plan['progression']['route'])}")
 
-    if not plan["progression"]["playable"] and not args.allow_unplayable:
+    if not plan["summary"]["playable"] and not args.allow_unplayable:
         return 3
     return 0
 
