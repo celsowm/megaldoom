@@ -27,35 +27,54 @@ sys.modules[SPEC.name] = base
 SPEC.loader.exec_module(base)
 
 
-def normalize_for_textured_legacy(model: Any) -> list[int]:
-    """Make the analyser's graph match wad-map-extract.py's solid-line policy."""
-    closed: list[int] = []
+def normalize_for_textured_legacy(model: Any) -> dict[str, list[int]]:
+    """Make the analyser graph match wad-map-extract.py exactly."""
+    changes = {
+        "closed_portals": [],
+        "open_door_specials": [],
+        "open_exit_specials": [],
+    }
     for index, linedef in enumerate(model.linedefs):
-        if linedef["left"] == base.NO_SIDE or linedef["right"] == base.NO_SIDE:
-            continue
-        if linedef["special"] in base.DOOR_SPECIALS:
-            continue
-        if linedef["flags"] & base.LINE_FLAG_IMPASSABLE:
-            continue
-        right_sector = model.sidedefs[linedef["right"]]["sector"]
-        left_sector = model.sidedefs[linedef["left"]]["sector"]
-        right = model.sectors[right_sector]
-        left = model.sectors[left_sector]
-        opening = min(right["ceiling"], left["ceiling"]) - max(
-            right["floor"], left["floor"]
+        one_sided = (
+            linedef["left"] == base.NO_SIDE or linedef["right"] == base.NO_SIDE
         )
-        if opening <= 0:
+        impassable = bool(linedef["flags"] & base.LINE_FLAG_IMPASSABLE)
+        opening = 0
+        if not one_sided:
+            right_sector = model.sidedefs[linedef["right"]]["sector"]
+            left_sector = model.sidedefs[linedef["left"]]["sector"]
+            right = model.sectors[right_sector]
+            left = model.sectors[left_sector]
+            opening = min(right["ceiling"], left["ceiling"]) - max(
+                right["floor"], left["floor"]
+            )
+
+        emitted_as_seg = one_sided or impassable or opening <= 0
+        special = linedef["special"]
+        if special in base.DOOR_SPECIALS and not emitted_as_seg:
+            # The legacy extractor skips this line, so it cannot be an
+            # interactive/keyed edge in the proof.
+            linedef["special"] = 0
+            changes["open_door_specials"].append(index)
+            continue
+        if special in base.EXIT_SPECIALS and not emitted_as_seg:
+            # No BspSeg means the runtime has no usable exit at this line.
+            linedef["special"] = 0
+            changes["open_exit_specials"].append(index)
+            continue
+        if (not one_sided and not impassable and opening <= 0 and
+                special not in base.DOOR_SPECIALS):
             linedef["flags"] |= base.LINE_FLAG_IMPASSABLE
-            closed.append(index)
-    return closed
+            changes["closed_portals"].append(index)
+    return changes
 
 
 def build_plan(wad_path: str, map_name: str) -> dict[str, Any]:
     wad = base.WadFile(wad_path)
     model = base.parse_map(wad, map_name.upper())
-    closed = normalize_for_textured_legacy(model)
+    changes = normalize_for_textured_legacy(model)
     plan = base.build_conversion_plan(model, map_name, os.path.basename(wad_path))
-    for linedef in closed:
+    for linedef in changes["closed_portals"]:
         plan["diagnostics"].append(
             {
                 "level": "warning",
@@ -67,7 +86,27 @@ def build_plan(wad_path: str, map_name: str) -> dict[str, Any]:
                 ),
             }
         )
-    plan["summary"]["unsupported_closed_portals"] = len(closed)
+    for linedef in changes["open_door_specials"]:
+        plan["diagnostics"].append(
+            {
+                "level": "warning",
+                "code": "NON_EMITTED_DOOR_SPECIAL",
+                "linedef": linedef,
+                "message": "door special lies on a passable line skipped by the legacy extractor",
+            }
+        )
+    for linedef in changes["open_exit_specials"]:
+        plan["diagnostics"].append(
+            {
+                "level": "error",
+                "code": "NON_EMITTED_EXIT_SPECIAL",
+                "linedef": linedef,
+                "message": "exit special lies on a line that produces no runtime segment",
+            }
+        )
+    plan["summary"]["unsupported_closed_portals"] = len(changes["closed_portals"])
+    plan["summary"]["non_emitted_door_specials"] = len(changes["open_door_specials"])
+    plan["summary"]["non_emitted_exit_specials"] = len(changes["open_exit_specials"])
     plan["contracts"]["progression_matches_generated_collision"] = True
     return plan
 
@@ -102,7 +141,8 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "  sectors={sectors} linedefs={linedefs} doors={doors} keys={keys} "
             "flattened-height-portals={height_portals_flattened} "
-            "closed-portals={unsupported_closed_portals}".format(**summary)
+            "closed-portals={unsupported_closed_portals} "
+            "non-emitted-specials={non_emitted_door_specials}/{non_emitted_exit_specials}".format(**summary)
         )
         print("  progression: " + ("PLAYABLE" if summary["playable"] else "UNPLAYABLE"))
         if plan["progression"].get("route"):
