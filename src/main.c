@@ -124,7 +124,6 @@ int main(bool hard) {
     u32 frame = 0;
     bool base_dirty = TRUE;
     bool overlay_dirty = TRUE;
-    bool pending_upload = FALSE;
     bool level_cleared = FALSE;
     u16 phase_index = 0;
     u16 player_health = PLAYER_MAX_HEALTH;
@@ -168,6 +167,9 @@ int main(bool hard) {
         // but now it IS fed to the turn controller so rotation stays time-correct.
         const u32 cur_vtimer = vtimer;
         u16 elapsed_frames = (u16)(cur_vtimer - prev_vtimer);
+#if DEBUG_PERF
+        const u32 gameplay_start = getSubTick();
+#endif
 
 #if DEBUG_PERF
         bsp_debug_reset_query_stats();
@@ -312,6 +314,9 @@ int main(bool hard) {
             }
         }
 
+#if DEBUG_PERF
+        renderer_debug_set_gameplay_subticks(getSubTick() - gameplay_start);
+#endif
         sync_hud(frame, phase_index, player_health, player_armor, player_ammo,
                  player_keys, shot_cooldown, action_status, shot_status, level_cleared);
         renderer_draw_hud(&g_hud);
@@ -319,16 +324,19 @@ int main(bool hard) {
 #if DEBUG_PERF
         // Once per iteration (SYS_getFPS counts calls/sec). Row 0 of BG_A is free.
         // Clear first so a shrinking number (e.g. "426%" -> "25%") leaves no junk.
-        VDP_clearText(0, 0, 20);
+        // SYS_getFPS counts calls, so keep the FPS call once per game frame.
+        // The larger CPU-load field can update less often.
         VDP_showFPS(FALSE, 1, 0);
-        VDP_showCPULoad(10, 0);
+        if ((frame & 7) == 0) {
+            VDP_showCPULoad(10, 0);
+        }
 #endif
 
         if (base_dirty || overlay_dirty) {
             render_current_view(player_health, base_dirty);
             base_dirty = FALSE;
             overlay_dirty = FALSE;
-            pending_upload = TRUE;
+            renderer_queue_scene_upload();
         }
 
         // Enter vblank first, then push the freshly built frame to VRAM so the
@@ -337,12 +345,11 @@ int main(bool hard) {
         // frame is shown for the same duration, keeping motion uniform instead of
         // stuttering between 60 and 30fps.
         VDP_waitVSync();
-        if (pending_upload) {
-            renderer_upload_scene();
-            pending_upload = FALSE;
-        }
-        while ((u16)(vtimer - cur_vtimer) < TARGET_FRAME_VSYNCS) {
+        renderer_upload_scene_step();
+        while (renderer_scene_upload_pending() ||
+               ((u16)(vtimer - cur_vtimer) < TARGET_FRAME_VSYNCS)) {
             VDP_waitVSync();
+            renderer_upload_scene_step();
         }
 #if DEBUG_PERF
         // Total VBlanks consumed by this iteration (target = TARGET_FRAME_VSYNCS,

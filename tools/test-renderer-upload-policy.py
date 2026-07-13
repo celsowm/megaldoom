@@ -96,14 +96,20 @@ def main():
                        batch_limit, full_threshold, max_runs, False)
 
     assert "count_partial_view_bank_commands" in scene
-    assert "full_command_count < partial_command_count" in scene
-    assert "split_across_vblanks && dirty_count > 0" in scene
+    assert "full_commands < partial_commands" in scene
+    assert "swap && dirty_count > 0" in scene
+    assert "void renderer_queue_scene_upload" in scene
+    assert "void renderer_upload_scene_step" in scene
+    assert "bool renderer_scene_upload_pending" in scene
+    assert "u16 budget = VIEW_DMA_TILES_PER_VBLANK" in scene
+    assert not re.search(r"(?m)^\s*VDP_waitVSync\s*\(", scene)
+    assert scene.index("finish_view_upload();") > scene.index("dbg_wait_dma();")
     assert scene.count("static u16 s_debug_total_vblanks;") == 1
     assert "static u16 s_debug_total_vblanks;" not in renderer
     assert "void renderer_debug_set_total_vblanks" in scene
     assert "void renderer_debug_set_total_vblanks" not in renderer
 
-    print("ok    renderer upload policy: fragmented inactive banks prefer fewer DMA commands")
+    print("ok    renderer upload policy: VBlank-stepped DMA and deferred bank swap")
 
 
 if __name__ == "__main__":

@@ -46,6 +46,30 @@ extern u16 g_view_bank_dirty_count[VIEW_BANK_COUNT];
 extern u16 g_view_vram_bank;
 extern u16 g_compass_tilemap[COMPASS_W * COMPASS_H];
 
+#if DEBUG_PERF
+typedef struct {
+    u16 upload_dirty_tiles;
+    u16 upload_tiles;
+    u16 upload_runs;
+    bool upload_full;
+    bool upload_swap;
+    u32 gameplay_subticks;
+    u32 cast_subticks;
+    u32 pack_subticks;
+    u32 projection_subticks;
+    u32 billboard_subticks;
+    u32 weapon_subticks;
+    u32 upload_prepare_subticks;
+    u32 dma_wait_subticks;
+    u16 total_vblanks;
+    u16 max_vblanks;
+    u16 missed_deadlines;
+} RendererPerfSnapshot;
+
+RendererPerfSnapshot renderer_get_perf_snapshot(void);
+void renderer_draw_perf_overlay(bool frame_complete);
+#endif
+
 void set_view_pair_tile(u16 x, u16 y, u8 left_color, u8 right_color);
 void set_view_column_color(u16 column, u16 y, u8 color);
 void renderer_mark_tile_dirty(u16 tile_index);

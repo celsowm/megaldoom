@@ -131,5 +131,14 @@ bool billboard_measure_object(const PlayerState *player, s16 cos_a, s16 sin_a,
 void billboard_visibility_begin(const PlayerState *player);
 bool billboard_has_line_of_sight(u16 index, const PlayerState *player);
 void billboard_invalidate_object_visibility(u16 index);
+void billboard_registry_reset(void);
+void billboard_registry_add(u16 index);
+void billboard_registry_deactivate(u16 index);
+void billboard_registry_enemy_died(u16 index);
+const u8 *billboard_registry_active_indices(void);
+const u8 *billboard_registry_enemy_indices(void);
+u16 billboard_registry_active_count(void);
+u16 billboard_registry_enemy_count(void);
+u16 billboard_registry_living_enemy_count(void);
 
 #endif

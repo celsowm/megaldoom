@@ -114,6 +114,7 @@ bool billboard_measure_object(const PlayerState *player, s16 cos_a, s16 sin_a,
 void billboard_init(u16 phase_index) {
     u16 count = 0;
     (void)phase_index;
+    billboard_registry_reset();
     for (u16 i = 0; i < BILLBOARD_OBJECT_COUNT; i++) g_billboards[i].active = FALSE;
     for (u16 i = 0; i < bsp_thing_count && count < BILLBOARD_OBJECT_COUNT; i++) {
         const u16 flags = bsp_things[i].flags;
@@ -127,7 +128,8 @@ void billboard_init(u16 phase_index) {
         }
         const u8 type = map_thing_type(bsp_things[i].type, &visual);
         if (type == 0xFF) continue;
-        BillboardObject *object = &g_billboards[count++];
+        const u16 object_index = count++;
+        BillboardObject *object = &g_billboards[object_index];
         *object = (BillboardObject){0};
         object->x = bsp_things[i].x;
         object->y = bsp_things[i].y;
@@ -137,6 +139,7 @@ void billboard_init(u16 phase_index) {
         object->home_x = object->x;
         object->home_y = object->y;
         if (type != BILLBOARD_TYPE_KEY) object->hp = billboard_get_type(type)->hit_points;
+        billboard_registry_add(object_index);
     }
     g_collected_count = 0;
     g_pickup_counts.bonus = 0;
@@ -200,14 +203,17 @@ void billboard_invalidate_object_visibility(u16 index) {
 BillboardPickupResult billboard_collect_near(s32 x, s32 y) {
     BillboardPickupResult result = {FALSE, BILLBOARD_EFFECT_NONE, 0, BSP_KEY_NONE,
                                     BILLBOARD_PICKUP_NONE};
-    for (u16 i = 0; i < BILLBOARD_OBJECT_COUNT; i++) {
+    const u8 *indices = billboard_registry_active_indices();
+    const u16 active_count = billboard_registry_active_count();
+    for (u16 slot = 0; slot < active_count; slot++) {
+        const u16 i = indices[slot];
         BillboardObject *object = &g_billboards[i];
         const BillboardType *type = billboard_get_type(object->type_id);
         if (!object->active || !type->collectible) continue;
         const s32 dx = object->x - x;
         const s32 dy = object->y - y;
         if ((dx * dx) + (dy * dy) > BILLBOARD_COLLECT_RADIUS_SQ) continue;
-        object->active = FALSE;
+        billboard_registry_deactivate(i);
         result.collected = TRUE;
         result.effect = type->effect;
         if (type->effect == BILLBOARD_EFFECT_HEALTH) {
@@ -232,7 +238,10 @@ BillboardPickupResult billboard_collect_near(s32 x, s32 y) {
 }
 
 bool billboard_position_blocked(s32 x, s32 y, s32 radius) {
-    for (u16 i = 0; i < BILLBOARD_OBJECT_COUNT; i++) {
+    const u8 *indices = billboard_registry_active_indices();
+    const u16 active_count = billboard_registry_active_count();
+    for (u16 slot = 0; slot < active_count; slot++) {
+        const u16 i = indices[slot];
         const BillboardObject *object = &g_billboards[i];
         const BillboardType *type = billboard_get_type(object->type_id);
         if (!object->active || !type->blocking) continue;
@@ -250,8 +259,8 @@ bool billboard_position_blocked(s32 x, s32 y, s32 radius) {
 u16 billboard_get_collected_count(void) { return g_collected_count; }
 BillboardPickupCounts billboard_get_pickup_counts(void) { return g_pickup_counts; }
 BillboardPickupKind billboard_get_last_pickup_kind(void) { return g_last_pickup_kind; }
-u16 billboard_get_enemy_count(void) { u16 n = 0; for (u16 i = 0; i < BILLBOARD_OBJECT_COUNT; i++) if (g_billboards[i].active && g_billboards[i].type_id == BILLBOARD_TYPE_DUMMY && g_billboards[i].life_state == ENEMY_ALIVE) n++; return n; }
-u16 billboard_get_active_count(void) { u16 n = 0; for (u16 i = 0; i < BILLBOARD_OBJECT_COUNT; i++) if (g_billboards[i].active) n++; return n; }
+u16 billboard_get_enemy_count(void) { return billboard_registry_living_enemy_count(); }
+u16 billboard_get_active_count(void) { return billboard_registry_active_count(); }
 #if DEBUG_PERF
 u16 billboard_get_debug_prop_collision_candidates(void) { return g_debug_prop_collision_candidates; }
 u16 billboard_get_debug_visibility_cache_hits(void) { return g_debug_visibility_cache_hits; }

@@ -265,16 +265,20 @@ BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player) {
     billboard_visibility_begin(player);
     s_simulated_enemy_count = 0;
 
-    for (u16 i = 0; i < BILLBOARD_OBJECT_COUNT; i++) {
+    const u8 *enemy_indices = billboard_registry_enemy_indices();
+    const u16 enemy_count = billboard_registry_enemy_count();
+    for (u16 slot = 0; slot < enemy_count; slot++) {
+        const u16 i = enemy_indices[slot];
         BillboardObject *object = &g_billboards[i];
-        const s32 dx = player->x - object->x;
-        const s32 dy = player->y - object->y;
-        const s32 dist_sq = (dx * dx) + (dy * dy);
-        const u16 hits_before = update.hits;
 
         if (!object->active || (object->type_id != BILLBOARD_TYPE_DUMMY)) {
             continue;
         }
+
+        const s32 dx = player->x - object->x;
+        const s32 dy = player->y - object->y;
+        const s32 dist_sq = (dx * dx) + (dy * dy);
+        const u16 hits_before = update.hits;
 
         const bool was_visible = enemy_affects_view(i, object, player, cos_a, sin_a);
         const bool changed = update_dummy(i, object, player, &update.hits);

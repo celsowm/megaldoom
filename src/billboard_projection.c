@@ -89,7 +89,10 @@ u16 billboard_project_scene(const PlayerState *player,
         return 0;
     }
 
-    for (u16 i = 0; i < BILLBOARD_OBJECT_COUNT; i++) {
+    const u8 *active_indices = billboard_registry_active_indices();
+    const u16 active_count = billboard_registry_active_count();
+    for (u16 slot = 0; slot < active_count; slot++) {
+        const u16 i = active_indices[slot];
         BillboardMeasure measure;
 
         if (!billboard_measure_object(player, cos_a, sin_a, &g_billboards[i], &measure)) {

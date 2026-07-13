@@ -4,6 +4,7 @@
 #include "generated_billboard_assets.h"
 #include "generated_hud_assets.h"
 #include "generated_renderer_assets.h"
+#include "player_controller.h"
 
 // Flat billboard-texture descriptor. Storing the pixels as a plain const u8* (a
 // [rows][cols] array decays cleanly) lets one draw loop sample sprites of any size:
@@ -47,28 +48,37 @@ static u16 g_last_compass_angle = 0xFFFF;
 static bool g_base_tiles_valid = FALSE;
 static bool g_upload_requires_bank_swap = FALSE;
 static bool g_compass_dirty = TRUE;
+static bool g_base_built_this_frame = FALSE;
+
+typedef struct {
+    bool pending;
+    bool full;
+    bool swap;
+    u16 bank;
+    u16 cursor;
+} ViewUploadState;
+
+static ViewUploadState g_view_upload;
 
 #if DEBUG_PERF
 static u16 s_debug_upload_dirty_tiles;
 static u16 s_debug_upload_tiles;
 static u16 s_debug_upload_runs;
-static u16 s_debug_upload_bank;
 static bool s_debug_upload_full;
 static bool s_debug_upload_swap;
 static u32 s_debug_cast_subticks;
+static u32 s_debug_gameplay_subticks;
 static u32 s_debug_pack_subticks;
+static u32 s_debug_projection_subticks;
 static u32 s_debug_billboard_subticks;
 static u32 s_debug_weapon_overlay_subticks;
-static u32 s_debug_overlay_subticks;
-// Upload cost decomposition: prepare = CPU time issuing DMA (run-walk +
-// VDP_loadTileData); dma_wait = time blocked inside VDP_waitDMACompletion();
-// awaited_vblanks = VDP_waitVSync() calls inside the uploader. The total
-// upload "time" is never collapsed into one metric so CPU vs DMA vs
-// deliberately-awaited VBlanks stay separable.
+// Upload cost decomposition: CPU time issuing DMA versus time blocked in
+// VDP_waitDMACompletion(). VBlank waits belong exclusively to main.c.
 static u32 s_debug_upload_prepare_subticks;
 static u32 s_debug_dma_wait_subticks;
-static u16 s_debug_awaited_vblanks_in_upload;
 static u16 s_debug_total_vblanks;
+static u16 s_debug_max_vblanks;
+static u16 s_debug_missed_deadlines;
 #endif
 
 #if DEBUG_PERF
@@ -76,8 +86,26 @@ void renderer_debug_set_cast_subticks(u32 subticks) {
     s_debug_cast_subticks = subticks;
 }
 
+void renderer_debug_set_gameplay_subticks(u32 subticks) {
+    s_debug_gameplay_subticks = subticks;
+}
+
 void renderer_debug_set_total_vblanks(u16 vblanks) {
     s_debug_total_vblanks = vblanks;
+    if (vblanks > s_debug_max_vblanks) s_debug_max_vblanks = vblanks;
+    if (vblanks > TARGET_FRAME_VSYNCS) s_debug_missed_deadlines++;
+}
+
+RendererPerfSnapshot renderer_get_perf_snapshot(void) {
+    return (RendererPerfSnapshot){
+        s_debug_upload_dirty_tiles, s_debug_upload_tiles, s_debug_upload_runs,
+        s_debug_upload_full, s_debug_upload_swap,
+        s_debug_gameplay_subticks, s_debug_cast_subticks, s_debug_pack_subticks,
+        s_debug_projection_subticks, s_debug_billboard_subticks,
+        s_debug_weapon_overlay_subticks, s_debug_upload_prepare_subticks,
+        s_debug_dma_wait_subticks, s_debug_total_vblanks, s_debug_max_vblanks,
+        s_debug_missed_deadlines
+    };
 }
 #endif
 
@@ -86,8 +114,10 @@ void renderer_mark_overlay_tile(u16 tile_index) {
     const u32 mask = (u32)1u << (tile_index & 31);
 
     if ((g_overlay_current_bits[word] & mask) == 0) {
-        for (u16 row = 0; row < 8; row++) {
-            g_base_view_tiles[tile_index][row] = g_view_tiles[tile_index][row];
+        if (!g_base_built_this_frame) {
+            for (u16 row = 0; row < 8; row++) {
+                g_view_tiles[tile_index][row] = g_base_view_tiles[tile_index][row];
+            }
         }
         g_overlay_current_bits[word] |= mask;
         renderer_mark_tile_dirty(tile_index);
@@ -159,6 +189,8 @@ void renderer_scene_init(void) {
     g_base_tiles_valid = FALSE;
     g_upload_requires_bank_swap = FALSE;
     g_compass_dirty = TRUE;
+    g_base_built_this_frame = FALSE;
+    g_view_upload = (ViewUploadState){FALSE, FALSE, FALSE, 0, 0};
     mark_all_view_banks_dirty();
 }
 
@@ -167,6 +199,7 @@ void renderer_invalidate_scene(void) {
     g_base_tiles_valid = FALSE;
     g_upload_requires_bank_swap = FALSE;
     g_compass_dirty = TRUE;
+    g_base_built_this_frame = FALSE;
     for (u16 i = 0; i < VIEW_DIRTY_WORD_COUNT; i++) {
         g_overlay_previous_bits[i] = 0;
         g_overlay_current_bits[i] = 0;
@@ -632,143 +665,113 @@ static void load_view_tile_run(u16 vram_base, u16 first, u16 count) {
 }
 
 #if DEBUG_PERF
-// Wrap the blocking DMA-completion / VBlank waits so CPU time spent issuing
-// DMA, time spent blocked inside VDP_waitDMACompletion(), and VBlanks
-// deliberately awaited by the uploader are accounted separately. Patch 5 will
-// remove the internal VDP_waitVSync() calls; until then this measures them.
 static void dbg_wait_dma(void) {
     const u32 t = getSubTick();
     VDP_waitDMACompletion();
     s_debug_dma_wait_subticks += getSubTick() - t;
 }
-static void dbg_wait_vsync_upload(void) {
-    VDP_waitVSync();
-    s_debug_awaited_vblanks_in_upload++;
-}
 #else
-#define dbg_wait_dma()            VDP_waitDMACompletion()
-#define dbg_wait_vsync_upload()   VDP_waitVSync()
+#define dbg_wait_dma() VDP_waitDMACompletion()
 #endif
 
-static void upload_full_view_bank(u16 vram_base, bool split_across_vblanks) {
-    if (!split_across_vblanks) {
-        load_view_tile_run(vram_base, 0, VIEW_TILE_COUNT);
-        dbg_wait_dma();
-        return;
-    }
-
-    load_view_tile_run(vram_base, 0, VIEW_DMA_TILES_PER_VBLANK);
-    dbg_wait_dma();
-    dbg_wait_vsync_upload();
-    load_view_tile_run(vram_base,
-                       VIEW_DMA_TILES_PER_VBLANK,
-                       (u16)(VIEW_TILE_COUNT - VIEW_DMA_TILES_PER_VBLANK));
-    dbg_wait_dma();
-}
-
-static void upload_partial_view_bank(u16 bank,
-                                     u16 vram_base,
-                                     bool split_across_vblanks) {
-    u16 batch_tiles = 0;
-
-    for (u16 tile = 0; tile < VIEW_TILE_COUNT;) {
-        if (!view_bank_tile_is_dirty(bank, tile)) {
-            tile++;
-            continue;
-        }
-
-        u16 first = tile;
-        while ((tile < VIEW_TILE_COUNT) && view_bank_tile_is_dirty(bank, tile)) {
-            tile++;
-        }
-
-        u16 remaining = (u16)(tile - first);
-        while (remaining > 0) {
-            if (split_across_vblanks &&
-                (batch_tiles == VIEW_DMA_TILES_PER_VBLANK)) {
-                dbg_wait_dma();
-                dbg_wait_vsync_upload();
-                batch_tiles = 0;
-            }
-
-            u16 count = remaining;
-            if (split_across_vblanks) {
-                const u16 available =
-                    (u16)(VIEW_DMA_TILES_PER_VBLANK - batch_tiles);
-                if (count > available) {
-                    count = available;
-                }
-            }
-
-            load_view_tile_run(vram_base, first, count);
-            first = (u16)(first + count);
-            remaining = (u16)(remaining - count);
-            batch_tiles = (u16)(batch_tiles + count);
+static void clear_view_bank_dirty_range(u16 bank, u16 first, u16 end) {
+    for (u16 tile = first; tile < end; tile++) {
+        const u16 word = (u16)(tile >> 5);
+        const u32 mask = (u32)1u << (tile & 31);
+        if ((g_view_bank_dirty_bits[bank][word] & mask) != 0) {
+            g_view_bank_dirty_bits[bank][word] &= ~mask;
+            g_view_bank_dirty_count[bank]--;
         }
     }
-
-    dbg_wait_dma();
 }
 
-static bool upload_view_bank(u16 bank, bool split_across_vblanks) {
+static bool choose_full_view_upload(u16 bank, bool swap) {
     const u16 dirty_count = g_view_bank_dirty_count[bank];
-    const u16 run_count = count_view_bank_dirty_runs(bank);
-    bool full_upload;
-    const u16 vram_base = (u16)(VIEW_TILE_BASE + (bank * VIEW_TILE_COUNT));
-
-    // A base redraw targets the inactive bank, so using both vblanks in the
-    // fixed 30fps budget is safe. Prefer the full two-command upload only when
-    // it issues fewer DMA commands than the exact partial-upload schedule.
-    // Equal-cost contiguous changes remain partial and transfer fewer tiles.
-    if (split_across_vblanks && dirty_count > 0) {
-        const u16 partial_command_count =
-            count_partial_view_bank_commands(bank, TRUE);
-        const u16 full_command_count =
+    if (swap && dirty_count > 0) {
+        const u16 partial_commands = count_partial_view_bank_commands(bank, TRUE);
+        const u16 full_commands =
             (VIEW_TILE_COUNT > VIEW_DMA_TILES_PER_VBLANK) ? 2 : 1;
-        full_upload = (bool)(full_command_count < partial_command_count);
-    } else {
-        // Overlay-only updates target the displayed bank. Preserve their
-        // existing size/fragmentation policy; the two-vblank inactive-bank
-        // optimization must never broaden an active-bank DMA.
-        full_upload = (bool)((dirty_count >= VIEW_DIRTY_FULL_THRESHOLD) ||
-                             (run_count > VIEW_DIRTY_MAX_RUNS));
+        return (bool)(full_commands < partial_commands);
     }
+    return (bool)((dirty_count >= VIEW_DIRTY_FULL_THRESHOLD) ||
+                  (count_view_bank_dirty_runs(bank) > VIEW_DIRTY_MAX_RUNS));
+}
 
+void renderer_queue_scene_upload(void) {
+    const bool swap = g_upload_requires_bank_swap;
+    const u16 bank = swap ? (u16)(g_view_vram_bank ^ 1) : g_view_vram_bank;
+
+    g_upload_requires_bank_swap = FALSE;
+    g_view_upload.pending = (bool)(g_view_bank_dirty_count[bank] != 0);
+    g_view_upload.full = choose_full_view_upload(bank, swap);
+    g_view_upload.swap = swap;
+    g_view_upload.bank = bank;
+    g_view_upload.cursor = 0;
 #if DEBUG_PERF
-    s_debug_upload_dirty_tiles = dirty_count;
+    s_debug_upload_dirty_tiles = g_view_bank_dirty_count[bank];
     s_debug_upload_tiles = 0;
     s_debug_upload_runs = 0;
-    s_debug_upload_bank = bank;
-    s_debug_upload_full = full_upload;
-    s_debug_upload_swap = split_across_vblanks;
+    s_debug_upload_full = g_view_upload.full;
+    s_debug_upload_swap = swap;
+    s_debug_upload_prepare_subticks = 0;
+    s_debug_dma_wait_subticks = 0;
 #endif
-
-    if (dirty_count == 0) {
-        return FALSE;
-    }
-
-    // Decide partial versus full before issuing any DMA. The previous path only
-    // discovered excessive fragmentation after already scheduling partial runs.
-    if (full_upload) {
-        upload_full_view_bank(vram_base, split_across_vblanks);
-    } else {
-        upload_partial_view_bank(bank, vram_base, split_across_vblanks);
-    }
-
-    // No bank is declared current until every DMA targeting it has finished.
-    clear_view_bank_dirty_bits(bank);
-    return TRUE;
 }
 
-static void upload_view_tilemap(void) {
-    if (g_upload_requires_bank_swap) {
-        const u16 next_bank = (u16)(g_view_vram_bank ^ 1);
-        if (upload_view_bank(next_bank, TRUE)) {
-            renderer_set_view_vram_bank(next_bank);
-        }
-        g_upload_requires_bank_swap = FALSE;
+bool renderer_scene_upload_pending(void) {
+    return g_view_upload.pending;
+}
+
+static void finish_view_upload(void) {
+    g_view_upload.pending = FALSE;
+    if (g_view_upload.full) {
+        clear_view_bank_dirty_bits(g_view_upload.bank);
+    }
+    if (g_view_upload.swap) {
+        renderer_set_view_vram_bank(g_view_upload.bank);
+    }
+}
+
+static void upload_view_tilemap_step(void) {
+    u16 budget = VIEW_DMA_TILES_PER_VBLANK;
+    const u16 start_cursor = g_view_upload.cursor;
+    const u16 vram_base =
+        (u16)(VIEW_TILE_BASE + (g_view_upload.bank * VIEW_TILE_COUNT));
+
+    if (!g_view_upload.pending) return;
+
+    if (g_view_upload.full) {
+        const u16 remaining = (u16)(VIEW_TILE_COUNT - g_view_upload.cursor);
+        const u16 count = (remaining < budget) ? remaining : budget;
+        load_view_tile_run(vram_base, g_view_upload.cursor, count);
+        g_view_upload.cursor = (u16)(g_view_upload.cursor + count);
     } else {
-        upload_view_bank(g_view_vram_bank, FALSE);
+        while ((g_view_upload.cursor < VIEW_TILE_COUNT) && (budget > 0)) {
+            while ((g_view_upload.cursor < VIEW_TILE_COUNT) &&
+                   !view_bank_tile_is_dirty(g_view_upload.bank, g_view_upload.cursor)) {
+                g_view_upload.cursor++;
+            }
+            if (g_view_upload.cursor >= VIEW_TILE_COUNT) break;
+
+            const u16 first = g_view_upload.cursor;
+            while ((g_view_upload.cursor < VIEW_TILE_COUNT) &&
+                   view_bank_tile_is_dirty(g_view_upload.bank, g_view_upload.cursor) &&
+                   ((u16)(g_view_upload.cursor - first) < budget)) {
+                g_view_upload.cursor++;
+            }
+            const u16 count = (u16)(g_view_upload.cursor - first);
+            load_view_tile_run(vram_base, first, count);
+            budget = (u16)(budget - count);
+        }
+    }
+
+    dbg_wait_dma();
+    if (!g_view_upload.full) {
+        clear_view_bank_dirty_range(g_view_upload.bank, start_cursor,
+                                    g_view_upload.cursor);
+    }
+    if (g_view_upload.cursor >= VIEW_TILE_COUNT) {
+        finish_view_upload();
     }
 }
 
@@ -887,9 +890,13 @@ void renderer_render_scene(const RayColumn *columns,
     ProjectedBillboard objects[BILLBOARD_MAX_PROJECTED_OBJECTS];
     const u16 object_count = billboard_project_scene(
         player, columns, objects, BILLBOARD_MAX_PROJECTED_OBJECTS);
+#if DEBUG_PERF
+    s_debug_projection_subticks = getSubTick() - stage_start;
+#endif
 
     if (base_dirty) {
         g_upload_requires_bank_swap = TRUE;
+        g_base_built_this_frame = TRUE;
 #if DEBUG_PERF
         stage_start = getSubTick();
 #endif
@@ -903,6 +910,7 @@ void renderer_render_scene(const RayColumn *columns,
         stage_start = getSubTick();
 #endif
     } else {
+        g_base_built_this_frame = FALSE;
         restore_previous_overlay_tiles();
 #if DEBUG_PERF
         s_debug_pack_subticks = 0;
@@ -911,8 +919,7 @@ void renderer_render_scene(const RayColumn *columns,
 
     clear_overlay_bits();
 #if DEBUG_PERF
-    const u32 overlay_stage = getSubTick();
-    const u32 bb_start = overlay_stage;
+    const u32 bb_start = getSubTick();
 #endif
     draw_projected_billboards(columns, objects, object_count);
 #if DEBUG_PERF
@@ -929,98 +936,16 @@ void renderer_render_scene(const RayColumn *columns,
     finish_overlay_bits();
 #if DEBUG_PERF
     s_debug_weapon_overlay_subticks = getSubTick() - wpn_start;
-    s_debug_overlay_subticks = getSubTick() - overlay_stage;
 #endif
 }
 
-// Push the frame built by renderer_render_scene to VRAM. Call this right after a
-// VDP_waitVSync so the ~9.6KB view-tile DMA runs at the fast vblank rate instead
-// of stalling the CPU mid active-display (its old call site).
+void renderer_upload_scene_step(void) {
 #if DEBUG_PERF
-static void draw_upload_debug_stats(void) {
-    char text[44];
-
-    // Row 1 — VBlank cadence (the key 2-vs-3 VBlank indicator). V = total
-    // VBlanks consumed by the last iteration (set one frame late from main.c);
-    // Vup = VBlanks deliberately awaited inside the uploader (Patch 5 drives
-    // this to 0). mode = size [N]one/[P]artial/[F]ull + bank [A]ctive/[I]nactive.
-    const char size_c = (s_debug_upload_dirty_tiles == 0) ? 'N'
-                        : (s_debug_upload_full ? 'F' : 'P');
-    const char bank_c = s_debug_upload_swap ? 'I' : 'A';
-    sprintf(text, "V=%u Vup=%u %c-%c",
-            (unsigned int)s_debug_total_vblanks,
-            (unsigned int)s_debug_awaited_vblanks_in_upload,
-            size_c, bank_c);
-    VDP_drawTextFill(text, 0, 1, 24);
-
-    // Row 2 — CPU cost before the first VBlank, decomposed (subticks).
-    // C=cast, P=pack, B=billboard, W=weapon+damage/low-health overlays.
-    sprintf(text, "C=%04lu P=%04lu B=%04lu W=%04lu",
-            (unsigned long)s_debug_cast_subticks,
-            (unsigned long)s_debug_pack_subticks,
-            (unsigned long)s_debug_billboard_subticks,
-            (unsigned long)s_debug_weapon_overlay_subticks);
-    VDP_drawTextFill(text, 0, 2, 32);
-
-    // Row 3 — DMA work. D=dirty tiles, U=uploaded tiles, R=DMA runs,
-    // M=tiles modified (distinct CPU writes this frame), Up=DMA-issue CPU
-    // subticks, Ud=time blocked in VDP_waitDMACompletion().
-    sprintf(text, "D=%03u U=%03u R=%02u M=%03u Up=%04lu Ud=%04lu",
-            (unsigned int)s_debug_upload_dirty_tiles,
-            (unsigned int)s_debug_upload_tiles,
-            (unsigned int)s_debug_upload_runs,
-            (unsigned int)renderer_get_frame_modified_count(),
-            (unsigned long)s_debug_upload_prepare_subticks,
-            (unsigned long)s_debug_dma_wait_subticks);
-    VDP_drawTextFill(text, 0, 3, 40);
-
-    // Row 4 — BSP traversal. N=nodes visited, R=cheap rejects (half-plane,
-    // no division), P=boxes projected (4 divs), F=near-plane fallbacks,
-    // S=segs tested/drawn.
-    sprintf(text, "N=%03u R=%03u P=%03u F=%03u S=%03u/%03u",
-            (unsigned int)bsp_get_debug_nodes_visited(),
-            (unsigned int)bsp_get_debug_boxes_rejected_cheap(),
-            (unsigned int)bsp_get_debug_boxes_projected(),
-            (unsigned int)bsp_get_debug_near_fallbacks(),
-            (unsigned int)bsp_get_debug_segments_tested(),
-            (unsigned int)bsp_get_debug_segments_drawn());
-    VDP_drawTextFill(text, 0, 4, 40);
-
-    // Row 5 — gameplay spatial queries and lazy BSP ordering. PC/EC are player
-    // and enemy collision time, L is LOS time, K/LK are tested candidates, and
-    // Sc is time computing node sides not yet cached for this position.
-    sprintf(text, "PC=%03lu EC=%03lu L=%03lu K=%03u LK=%03u Sc=%03lu",
-            (unsigned long)bsp_get_debug_player_collision_subticks(),
-            (unsigned long)bsp_get_debug_enemy_collision_subticks(),
-            (unsigned long)bsp_get_debug_los_subticks(),
-            (unsigned int)bsp_get_debug_collision_candidates(),
-            (unsigned int)bsp_get_debug_los_candidates(),
-            (unsigned long)bsp_get_debug_side_cache_subticks());
-    VDP_drawTextFill(text, 0, 5, 40);
-
-    sprintf(text, "O%02u C%02u W%02u D%02u A%02u H%02u M%02u",
-            (unsigned int)billboard_get_active_count(),
-            (unsigned int)billboard_get_debug_candidate_count(),
-            (unsigned int)billboard_get_debug_occluded_count(),
-            (unsigned int)billboard_get_debug_projected_count(),
-            (unsigned int)billboard_get_debug_simulated_enemy_count(),
-            (unsigned int)billboard_get_debug_visibility_cache_hits(),
-            (unsigned int)billboard_get_debug_visibility_cache_misses());
-    VDP_drawTextFill(text, 0, 6, 40);
-}
+    const bool was_pending = g_view_upload.pending;
 #endif
-
-void renderer_upload_scene(void) {
-#if DEBUG_PERF
-    // Reset the upload cost accumulators so each iteration's numbers are
-    // independent. (dirty_tiles/full/swap are set inside upload_view_bank.)
-    s_debug_upload_prepare_subticks = 0;
-    s_debug_dma_wait_subticks = 0;
-    s_debug_awaited_vblanks_in_upload = 0;
-#endif
-    upload_view_tilemap();
+    upload_view_tilemap_step();
     upload_compass_tilemap();
 #if DEBUG_PERF
-    draw_upload_debug_stats();
+    renderer_draw_perf_overlay((bool)(was_pending && !g_view_upload.pending));
 #endif
 }

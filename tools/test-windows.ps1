@@ -26,6 +26,11 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
+& python (Join-Path $PSScriptRoot "test-billboard-registry.py")
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
 & python (Join-Path $PSScriptRoot "test-sector-map.py")
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE

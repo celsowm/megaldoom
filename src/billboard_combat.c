@@ -44,22 +44,14 @@ static void push_dummy_on_hit(u16 index, BillboardObject *object, const PlayerSt
 }
 
 u16 billboard_get_target_count(void) {
-    u16 count = 0;
-
-    for (u16 i = 0; i < BILLBOARD_OBJECT_COUNT; i++) {
-        const BillboardObject *object = &g_billboards[i];
-        const BillboardType *type = billboard_get_type(object->type_id);
-
-        if (object->active && type->targetable && (object->life_state == ENEMY_ALIVE)) {
-            count++;
-        }
-    }
-
-    return count;
+    return billboard_registry_living_enemy_count();
 }
 
 u16 billboard_get_target_health(void) {
-    for (u16 i = 0; i < BILLBOARD_OBJECT_COUNT; i++) {
+    const u8 *indices = billboard_registry_enemy_indices();
+    const u16 enemy_count = billboard_registry_enemy_count();
+    for (u16 slot = 0; slot < enemy_count; slot++) {
+        const u16 i = indices[slot];
         const BillboardObject *object = &g_billboards[i];
         const BillboardType *type = billboard_get_type(object->type_id);
 
@@ -81,7 +73,10 @@ BillboardShotResult billboard_fire_center(const PlayerState *player, u16 wall_de
     const s16 cos_a = fx_cos(player->angle);
     const s16 sin_a = fx_sin(player->angle);
 
-    for (u16 i = 0; i < BILLBOARD_OBJECT_COUNT; i++) {
+    const u8 *indices = billboard_registry_enemy_indices();
+    const u16 enemy_count = billboard_registry_enemy_count();
+    for (u16 slot = 0; slot < enemy_count; slot++) {
+        const u16 i = indices[slot];
         BillboardObject *object = &g_billboards[i];
         BillboardMeasure measure;
 
@@ -125,13 +120,13 @@ BillboardShotResult billboard_fire_center(const PlayerState *player, u16 wall_de
     // other targetable billboards (decor) still just deactivate on kill.
     if (best_object->type_id == BILLBOARD_TYPE_DUMMY) {
         best_object->hp = 0;
-        best_object->life_state = ENEMY_DYING;
+        billboard_registry_enemy_died(best_index);
         best_object->death_index = 0;
         best_object->death_timer = ENEMY_DEATH_HOLD;
         return BILLBOARD_SHOT_KILL;
     }
 
-    best_object->active = FALSE;
+    billboard_registry_deactivate(best_index);
     best_object->hp = 0;
     return BILLBOARD_SHOT_KILL;
 }
