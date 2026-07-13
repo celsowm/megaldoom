@@ -122,7 +122,6 @@ static void mark_all_view_banks_dirty(void) {
 // Pixel-replication table for the active stride (guarded so the unused one isn't
 // compiled): REP4[c] == c*0x1111 spreads a colour across 4px (stride 4); REP2[c] ==
 // c*0x11 spreads it across 2px (stride 2, four cast columns per 8px tile).
-#if !BSP_SECTOR_RENDERER
 #if RAY_COL_STRIDE == 4
 static const u32 REP4[16] = {
     0x0000, 0x1111, 0x2222, 0x3333, 0x4444, 0x5555, 0x6666, 0x7777,
@@ -139,13 +138,12 @@ static u32 pack_flat_row(u8 color) {
     return (replicated << 24) | (replicated << 16) | (replicated << 8) | replicated;
 }
 #endif
-#endif
 
 // Precomposed weapon overlay: the weapon bitmap is static per variant (idle /
 // fire), so instead of re-testing ~72x54 pixels every redraw we bake, once at
 // init, one (dst, clear_mask, value) op per affected tile-row. Drawing then
 // becomes a handful of hundred u32 read-modify-writes: dst = (dst & ~clear) | val.
-// Result is byte-identical to the old per-pixel loop (each nibble is written by
+// Result matches the direct pixel composition (each nibble is written by
 // exactly one weapon pixel; transparent pixels leave clear/val bits at 0).
 // Stored as a struct-of-arrays to keep .bss tiny (MD has only 64KB RAM shared by
 // heap + stack): a u16 flat index into g_view_tiles[][] plus the packed weapon
@@ -176,8 +174,6 @@ void renderer_invalidate_scene(void) {
     mark_all_view_banks_dirty();
 }
 
-// The raycast tile packer is not linked by the sector renderer.
-#if !BSP_SECTOR_RENDERER
 typedef struct {
     u16 top;
     u16 bottom;
@@ -228,29 +224,20 @@ static u8 sample_wall_descriptor(const WallColumnDescriptor *descriptor,
                                descriptor->tex_x]) & 0x0F];
 }
 #endif
-#endif
-#if !BSP_SECTOR_RENDERER
 static bool overlay_previously_touched(u16 tile_index) {
     const u16 word = (u16)(tile_index >> 5);
     const u32 mask = (u32)1u << (tile_index & 31);
 
     return (bool)((g_overlay_previous_bits[word] & mask) != 0);
 }
-#endif
 
-#if !BSP_SECTOR_RENDERER
 static void commit_base_tile(u16 tile_index, const u32 *tile_rows);
-#endif
 
 #if (RAY_COL_STRIDE != 4) && (RAY_COL_STRIDE != 2)
-#error "build_raycast_tilemap only implements the RAY_COL_STRIDE == 4 and == 2 packers"
+#error "build_bsp_tilemap only implements the RAY_COL_STRIDE == 4 and == 2 packers"
 #endif
 
-#ifndef RENDERER_REFERENCE_PACKER
-#define RENDERER_REFERENCE_PACKER 0
-#endif
 
-#if !BSP_SECTOR_RENDERER
 #if RAY_COL_STRIDE == 4
 // Pre-shade the 32-texel source column once per sampled ray column. The hot
 // per-screen-pixel loop then performs only the vertical DDA lookup and one u16
@@ -265,7 +252,7 @@ static void build_packed_wall_column(const WallColumnDescriptor *descriptor,
     }
 }
 
-static void build_raycast_tilemap(const RayColumn *columns,
+static void build_bsp_tilemap(const RayColumn *columns,
                                    const RaySceneColors *scene_colors,
                                    u32 target[][8]) {
     // Each 8px-wide tile column maps to two cast columns (px 0 and 4), each
@@ -307,7 +294,7 @@ static void build_raycast_tilemap(const RayColumn *columns,
             } else {
                 // Mixed band: resolve each of the 8 rows directly from the two
                 // pre-shaded columns. Output is byte-identical to the old
-                // strip-based packer (each row == (strip_a[py]<<16)|strip_b[py]).
+                // two sampled columns (each row packs the left/right samples).
                 for (u16 row = 0; row < 8; row++) {
                     const u16 py = (u16)(pixel_y + row);
                     u16 val_a;
@@ -338,7 +325,7 @@ static void build_raycast_tilemap(const RayColumn *columns,
     }
 }
 #else /* RAY_COL_STRIDE == 2 */
-static void build_raycast_tilemap(const RayColumn *columns,
+static void build_bsp_tilemap(const RayColumn *columns,
                                   const RaySceneColors *scene_colors,
                                   u32 target[][8]) {
     // Each 8px-wide tile column maps to four cast columns (px 0, 2, 4, 6), each
@@ -385,95 +372,7 @@ static void build_raycast_tilemap(const RayColumn *columns,
     }
 }
 #endif
-#endif
 
-#if RENDERER_REFERENCE_PACKER
-// Test-only implementation of the previous strip-based packer. A validation
-// build can compare this buffer with the direct descriptor packer; release builds
-// compile it out, so it consumes neither ROM nor work RAM.
-static void build_column_strip_reference(const RayColumn *column,
-                                         const RaySceneColors *scene_colors,
-                                         u8 *strip) {
-    const u16 wall_h = column->height;
-    const u16 top = (u16)((VIEW_PIXEL_H - wall_h) / 2);
-    const u16 bottom = (u16)(top + wall_h);
-    const u8 tid = (u8)((column->texture_id < FREEDOOM_WALL_TEXTURE_COUNT) ?
-                            column->texture_id : MEGALDOOM_TEX_FALLBACK);
-    const u8 (*tex)[WALL_TEX_DIM] = FREEDOOM_WALL_TEXTURES[tid];
-    u16 fog_level = (u16)(column->depth >> FOG_SHIFT) + (column->shade ? 1u : 0u);
-    if (fog_level > (SHADE_LEVELS - 1)) {
-        fog_level = SHADE_LEVELS - 1;
-    }
-    const u8 *shade_map = g_shade_luts[fog_level];
-    const u8 *ty_table = MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[wall_h];
-    const u8 tex_x = (u8)(column->tex_x & WALL_TEX_DIM_MASK);
-    u16 y = 0;
-
-    for (; y < top; y++) {
-        strip[y] = scene_colors->ceiling_color;
-    }
-    for (; y < bottom; y++) {
-        strip[y] = shade_map[tex[(ty_table[y - top] + column->tex_y) & WALL_TEX_DIM_MASK]
-                                [tex_x] & 0x0F];
-    }
-    for (; y < VIEW_PIXEL_H; y++) {
-        strip[y] = scene_colors->floor_color;
-    }
-}
-
-#if RAY_COL_STRIDE == 2
-static void build_raycast_tilemap_reference(const RayColumn *columns,
-                                            const RaySceneColors *scene_colors,
-                                            u32 target[][8]) {
-    u8 strip_a[VIEW_PIXEL_H];
-    u8 strip_b[VIEW_PIXEL_H];
-    u8 strip_c[VIEW_PIXEL_H];
-    u8 strip_d[VIEW_PIXEL_H];
-
-    for (u16 tile_x = 0; tile_x < VIEW_TILE_W; tile_x++) {
-        const u16 base_col = (u16)(tile_x * 8);
-        build_column_strip_reference(&columns[base_col], scene_colors, strip_a);
-        build_column_strip_reference(&columns[base_col + 2], scene_colors, strip_b);
-        build_column_strip_reference(&columns[base_col + 4], scene_colors, strip_c);
-        build_column_strip_reference(&columns[base_col + 6], scene_colors, strip_d);
-
-        for (u16 tile_y = 0; tile_y < VIEW_TILE_H; tile_y++) {
-            const u16 tile_index = (u16)((tile_y * VIEW_TILE_W) + tile_x);
-            u16 pixel_y = (u16)(tile_y * 8);
-            for (u16 row = 0; row < 8; row++, pixel_y++) {
-                target[tile_index][row] =
-                    (REP2[strip_a[pixel_y]] << 24) | (REP2[strip_b[pixel_y]] << 16) |
-                    (REP2[strip_c[pixel_y]] << 8) | REP2[strip_d[pixel_y]];
-            }
-        }
-    }
-}
-#else /* RAY_COL_STRIDE == 4 */
-static void build_raycast_tilemap_reference(const RayColumn *columns,
-                                            const RaySceneColors *scene_colors,
-                                            u32 target[][8]) {
-    u8 strip_a[VIEW_PIXEL_H];
-    u8 strip_b[VIEW_PIXEL_H];
-
-    for (u16 tile_x = 0; tile_x < VIEW_TILE_W; tile_x++) {
-        const u16 base_col = (u16)(tile_x * 8);
-        build_column_strip_reference(&columns[base_col], scene_colors, strip_a);
-        build_column_strip_reference(&columns[base_col + 4], scene_colors, strip_b);
-
-        for (u16 tile_y = 0; tile_y < VIEW_TILE_H; tile_y++) {
-            const u16 tile_index = (u16)((tile_y * VIEW_TILE_W) + tile_x);
-            u16 pixel_y = (u16)(tile_y * 8);
-            for (u16 row = 0; row < 8; row++, pixel_y++) {
-                target[tile_index][row] =
-                    (REP4[strip_a[pixel_y]] << 16) | REP4[strip_b[pixel_y]];
-            }
-        }
-    }
-}
-#endif
-
-static u32 g_reference_view_tiles[VIEW_TILE_COUNT][8];
-#endif
 
 // Exact 32/16=32 unsigned division using two DIVU.W steps (base-65536 long
 // division). Produces the same integer quotient as the '/' operator, so it can
@@ -564,10 +463,8 @@ static void draw_projected_billboards(const RayColumn *columns,
             const u16 wall_col = (u16)(col & ~(RAY_COL_STRIDE - 1));
             // The base image repeats the sampled wall column across this exact
             // block, so billboard depth must use that same sample.
-#if !BSP_SECTOR_RENDERER
             const u16 wall_depth = columns[wall_col].depth;
             if (object->depth >= wall_depth) continue;
-#endif
 
             if (tex_x >= tex.w) {
                 tex_x = (u8)(tex.w - 1);
@@ -575,9 +472,6 @@ static void draw_projected_billboards(const RayColumn *columns,
             const u16 tile_x = (u16)(col >> 3);
             const u16 shift = (u16)((7 - (col & 7)) * 4);
             const u32 keep_mask = ~((u32)0x0F << shift);
-#if BSP_SECTOR_RENDERER
-            const u16 sample_x = (u16)(wall_col / RAY_COL_STRIDE);
-#endif
 
             if ((s16)tile_x != last_marked_tile_x) {
                 last_marked_tile_x = (s16)tile_x;
@@ -589,19 +483,12 @@ static void draw_projected_billboards(const RayColumn *columns,
             while (y < y_end) {
                 const u16 tile_y = (u16)(y >> 3);
                 u32 *tile = g_view_tiles[(tile_y * VIEW_TILE_W) + tile_x];
-#if BSP_SECTOR_RENDERER
-                const u16 *depth_rows = bsp_sector_depth_block(sample_x, tile_y);
-#endif
                 const u16 next_tile_y = (u16)((tile_y + 1) * 8);
                 const u16 stop = (next_tile_y < y_end) ? next_tile_y : y_end;
 
                 for (; y < stop; y++) {
                     const u8 texel = lut[tex.pixels[(tex_y_by_screen_row[y] * tex.w) + tex_x] & 0x0F];
-#if BSP_SECTOR_RENDERER
-                    const bool depth_visible = object->depth < depth_rows[y & 7];
-#else
                     const bool depth_visible = TRUE;
-#endif
                     if (texel != 0 && depth_visible) {
                         const u16 row_y = (u16)(y & 7);
                         const u16 tile_bit = (u16)1u << tile_y;
@@ -948,7 +835,6 @@ static void finish_overlay_bits(void) {
     }
 }
 
-#if !BSP_SECTOR_RENDERER
 static void commit_base_tile(u16 tile_index, const u32 *tile_rows) {
     // Fold the 8 row comparisons into one difference accumulator instead of
     // branching per row, and copy the new rows in the same pass (writing an
@@ -970,7 +856,6 @@ static void commit_base_tile(u16 tile_index, const u32 *tile_rows) {
         renderer_mark_tile_dirty(tile_index);
     }
 }
-#endif
 
 static void upload_compass_tilemap(void) {
     if (!g_compass_dirty) {
@@ -1008,29 +893,7 @@ void renderer_render_scene(const RayColumn *columns,
 #if DEBUG_PERF
         stage_start = getSubTick();
 #endif
-#if BSP_SECTOR_RENDERER
-        mark_all_view_banks_dirty();
-#else
-        build_raycast_tilemap(columns, scene_colors, g_view_tiles);
-#endif
-#if RENDERER_REFERENCE_PACKER
-        build_raycast_tilemap_reference(columns, scene_colors, g_reference_view_tiles);
-        for (u16 tile = 0; tile < VIEW_TILE_COUNT; tile++) {
-            for (u16 row = 0; row < 8; row++) {
-                if (g_view_tiles[tile][row] != g_reference_view_tiles[tile][row]) {
-                    // Keep the reference output in validation builds so a visual
-                    // comparison remains safe even when the optimized path differs.
-                    for (u16 copy_tile = 0; copy_tile < VIEW_TILE_COUNT; copy_tile++) {
-                        for (u16 copy_row = 0; copy_row < 8; copy_row++) {
-                            g_view_tiles[copy_tile][copy_row] = g_reference_view_tiles[copy_tile][copy_row];
-                        }
-                    }
-                    tile = VIEW_TILE_COUNT;
-                    break;
-                }
-            }
-        }
-#endif
+        build_bsp_tilemap(columns, scene_colors, g_view_tiles);
         g_base_tiles_valid = TRUE;
         for (u16 i = 0; i < VIEW_DIRTY_WORD_COUNT; i++) {
             g_overlay_previous_bits[i] = 0;
@@ -1126,12 +989,6 @@ static void draw_upload_debug_stats(void) {
     // Row 5 — gameplay spatial queries and lazy BSP ordering. PC/EC are player
     // and enemy collision time, L is LOS time, K/LK are tested candidates, and
     // Sc is time computing node sides not yet cached for this position.
-#if BSP_SECTOR_RENDERER
-    sprintf(text, "St=%04lu Ss=%04lu Sr=%04lu",
-            (unsigned long)bsp_sector_get_debug_transform_subticks(),
-            (unsigned long)bsp_sector_get_debug_setup_subticks(),
-            (unsigned long)bsp_sector_get_debug_raster_subticks());
-#else
     sprintf(text, "PC=%03lu EC=%03lu L=%03lu K=%03u LK=%03u Sc=%03lu",
             (unsigned long)bsp_get_debug_player_collision_subticks(),
             (unsigned long)bsp_get_debug_enemy_collision_subticks(),
@@ -1139,21 +996,8 @@ static void draw_upload_debug_stats(void) {
             (unsigned int)bsp_get_debug_collision_candidates(),
             (unsigned int)bsp_get_debug_los_candidates(),
             (unsigned long)bsp_get_debug_side_cache_subticks());
-#endif
     VDP_drawTextFill(text, 0, 5, 40);
 
-#if BSP_SECTOR_RENDERER
-    sprintf(text, "Sf=%04lu Sw=%04lu Sp=%04lu",
-            (unsigned long)bsp_sector_get_debug_flat_subticks(),
-            (unsigned long)bsp_sector_get_debug_wall_subticks(),
-            (unsigned long)bsp_sector_get_debug_floor_subticks());
-    VDP_drawTextFill(text, 0, 6, 32);
-    sprintf(text, "Sj=%03u Sc=%03u Sx=%03u",
-            (unsigned int)bsp_sector_get_debug_rejected_segments(),
-            (unsigned int)bsp_sector_get_debug_closed_ranges(),
-            (unsigned int)bsp_sector_get_debug_raster_samples());
-    VDP_drawTextFill(text, 0, 7, 32);
-#else
     sprintf(text, "O%02u C%02u W%02u D%02u A%02u H%02u M%02u",
             (unsigned int)billboard_get_active_count(),
             (unsigned int)billboard_get_debug_candidate_count(),
@@ -1163,7 +1007,6 @@ static void draw_upload_debug_stats(void) {
             (unsigned int)billboard_get_debug_visibility_cache_hits(),
             (unsigned int)billboard_get_debug_visibility_cache_misses());
     VDP_drawTextFill(text, 0, 6, 40);
-#endif
 }
 #endif
 

@@ -1,7 +1,6 @@
 param(
     [switch]$NoBuild,
-    [switch]$NoClean,
-    [switch]$SectorRenderer
+    [switch]$NoClean
 )
 
 # Project "test" entry point: build the ROM, then run tools\check-rom.ps1 so
@@ -32,23 +31,23 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
+& python (Join-Path $PSScriptRoot "test-flat-progression.py")
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
+& python (Join-Path $PSScriptRoot "test-real-map-certificates.py")
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
 & python (Join-Path $PSScriptRoot "test-renderer-upload-policy.py")
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-& python (Join-Path $PSScriptRoot "test-sector-tile-pipeline.py")
-if ($LASTEXITCODE -ne 0) {
-    exit $LASTEXITCODE
-}
-
-& python (Join-Path $PSScriptRoot "test-sector-shades.py")
-if ($LASTEXITCODE -ne 0) {
-    exit $LASTEXITCODE
-}
-
 if (-not $NoBuild) {
-    & (Join-Path $PSScriptRoot "build-windows.ps1") -NoClean:$NoClean -SectorRenderer:$SectorRenderer
+    & (Join-Path $PSScriptRoot "build-windows.ps1") -NoClean:$NoClean
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Aborting tests: build failed." -ForegroundColor Red
         exit $LASTEXITCODE

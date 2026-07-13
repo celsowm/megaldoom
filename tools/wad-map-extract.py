@@ -1,24 +1,20 @@
 #!/usr/bin/env python3
-"""Extract a Doom map's BSP geometry from DOOM1.WAD and emit C arrays for the
-megaldoom lean BSP engine.
+"""Parse, flatten, certify and atomically emit a Doom map for MegalDoom.
 
 Doom's prebuilt VERTEXES/SEGS/SSECTORS/NODES map almost 1:1 onto our Bsp*
 structs (even the 0x8000 subsector-leaf bit is identical), so we convert them
 directly -- no on-device node builder needed.
 
-The renderer is uniform-height: a line is either a full-height solid wall or an
-open gap. We therefore emit a SEG only when its linedef is "solid":
-  - one-sided (faces the void), OR
-  - two-sided but IMPASSABLE-flagged, OR
-  - two-sided with a closed opening (min ceiling <= max floor -> shut door / solid).
-Everything else (normal doorways, steps, ledges, drop-offs) is skipped -> a
-passable gap. Same set drives render and collision, so no clip-through / no
-soft-locks.
+The runtime is deliberately one level high. Structural walls, grouped doors,
+switches, colored locks and exits survive; height-only stairs, lifts, ledges and
+drop-offs become open passages. Before either generated file is replaced, an
+offline navigation proof must find a medium-skill single-player route to an exit.
 
 Usage: python tools/wad-map-extract.py [--map E1M1] [--wad DOOM1.WAD]
 """
 
 import argparse
+from array import array
 from collections import Counter
 import math
 import os
@@ -316,33 +312,6 @@ def build_shade_lut(palette, levels=4):
     return result
 
 
-def build_wall_base_colors(texture_names, palette):
-    """Reduce each wall material to one representative PAL3 colour.
-
-    The runtime sector renderer never samples the source texture. Interactive
-    materials are assigned distinct nearest colours so doors, locked doors and
-    switches remain readable after the solid-shade conversion.
-    """
-    allowed = range(1, WORLD_COLOR_DAMAGE)
-    colors = []
-    averages = {}
-    for name in texture_names:
-        average = md_color(image_average(texture_path(name)))
-        averages[name] = average
-        colors.append(nearest_palette_index(average, palette, allowed))
-
-    used = set()
-    for name in ("DOOR3", "BIGDOOR2", "SW1STRTN"):
-        if name not in texture_names:
-            continue
-        index = texture_names.index(name)
-        candidates = [candidate for candidate in allowed if candidate not in used]
-        colors[index] = nearest_palette_index(
-            averages[name], palette, candidates or allowed)
-        used.add(colors[index])
-    return colors
-
-
 def convert_texture(path, palette):
     with Image.open(path) as image:
         resized = image.convert("RGB").resize((WALL_TEX_DIM, WALL_TEX_DIM), Image.Resampling.BOX)
@@ -350,18 +319,17 @@ def convert_texture(path, palette):
                  for x in range(WALL_TEX_DIM)] for y in range(WALL_TEX_DIM)]
 
 
-def texture_shift(size):
-    if size >= WALL_TEX_DIM:
-        ratio = size // WALL_TEX_DIM
-        sign = 1
-        exact = ratio * WALL_TEX_DIM == size
-    else:
-        ratio = WALL_TEX_DIM // size
-        sign = -1
-        exact = ratio * size == WALL_TEX_DIM
-    if not exact or ratio & (ratio - 1):
-        raise ValueError("Texture dimension %d is not WALL_TEX_DIM times a power of two" % size)
-    return sign * (ratio.bit_length() - 1)
+def texture_u_scale_q12(size):
+    """Map Doom's source-width repeat into the 32-column runtime texture.
+
+    Doom textures are not restricted to power-of-two widths (E1M2 uses a
+    24-pixel-wide material).  A fixed-point scale keeps their world-space
+    repeat period without requiring a division in the renderer's column loop.
+    Rounding upward makes exact source-width boundaries wrap deterministically.
+    """
+    if size <= 0:
+        raise ValueError("Invalid texture width %d" % size)
+    return (WALL_TEX_DIM * 4096 + size - 1) // size
 
 
 def emit_world_assets(path, texture_usage, sectors):
@@ -378,7 +346,6 @@ def emit_world_assets(path, texture_usage, sectors):
         raise RuntimeError("World palette must contain exactly 16 colors")
     shade_map = build_shade_map(palette)
     shade_lut = build_shade_lut(palette)
-    wall_base_colors = build_wall_base_colors(texture_names, palette)
     texture_ids = {name: index for index, name in enumerate(texture_names)}
     texture_meta = {}
     converted = []
@@ -386,7 +353,11 @@ def emit_world_assets(path, texture_usage, sectors):
         source = texture_path(name)
         with Image.open(source) as image:
             width, height = image.size
-        texture_meta[name] = dict(width=width, height=height, ushift=texture_shift(width))
+        texture_meta[name] = dict(
+            width=width,
+            height=height,
+            u_scale_q12=texture_u_scale_q12(width),
+        )
         converted.append(convert_texture(source, palette))
 
     sector_visuals = []
@@ -433,12 +404,8 @@ def emit_world_assets(path, texture_usage, sectors):
     lines.extend([
         "};",
         "",
-        "static const u8 FREEDOOM_WALL_BASE_COLOR[FREEDOOM_WALL_TEXTURE_COUNT] = {",
-        "    " + ", ".join(str(value) for value in wall_base_colors),
-        "};",
-        "",
-        "static const s8 FREEDOOM_WALL_TEXTURE_USHIFT[FREEDOOM_WALL_TEXTURE_COUNT] = {",
-        "    " + ", ".join(str(texture_meta[name]["ushift"]) for name in texture_names),
+        "static const u16 FREEDOOM_WALL_TEXTURE_USCALE_Q12[FREEDOOM_WALL_TEXTURE_COUNT] = {",
+        "    " + ", ".join(str(texture_meta[name]["u_scale_q12"]) for name in texture_names),
         "};",
         "",
         "static const u16 FREEDOOM_WALL_TEXTURE_WIDTH[FREEDOOM_WALL_TEXTURE_COUNT] = {",
@@ -520,21 +487,345 @@ def _is_map_marker(name):
     return name.startswith("MAP") and name[3:].isdigit()
 
 
-# BspSegType (must match src/bsp_map.h)
+# Flat runtime contract (must match src/bsp_map.h / billboard_internal.h).
 SEG_WALL = 0
 SEG_DOOR = 1
-SEG_LOCKED_DOOR = 2
-SEG_EXIT = 3
+SEG_EXIT = 2
+SEG_SWITCH = 3
+SEG_TRIGGER = 4
+SEG_FLAG_DIRECT_USE = 0x01
 
-DOOR_SPECIALS = {1, 26, 27, 28, 31, 32, 33, 34, 117, 118}
-LOCKED_DOOR_SPECIALS = {26, 27, 28, 32, 33, 34}
+KEY_NONE = 0
+KEY_BLUE = 1
+KEY_YELLOW = 2
+KEY_RED = 4
+DOOR_GROUP_NONE = 0xFF
+MAX_DOOR_GROUPS = 64
+# Doom's collision diameter is 32 map units; the radius is therefore 16.  Keep
+# this synchronized with PLAYER_COLLISION_RADIUS in src/raycast.h.
+PLAYER_RADIUS = 16
+NAV_STEP = 16
+PICKUP_RADIUS = 128
+USE_RADIUS = 256
+BILLBOARD_OBJECT_COUNT = 112
+DOOM_THING_SKILL_MEDIUM = 0x0002
+DOOM_THING_NOT_SINGLE_PLAYER = 0x0010
+
+DIRECT_DOOR_SPECIALS = {1, 26, 27, 28, 31, 32, 33, 34, 117, 118}
+REMOTE_DOOR_SPECIALS = {2, 3, 4, 16, 29, 42, 46, 61, 63, 75, 76, 86, 90, 103}
+DOOR_SPECIALS = DIRECT_DOOR_SPECIALS | REMOTE_DOOR_SPECIALS
+LOCKED_DOOR_KEYS = {
+    26: KEY_BLUE, 32: KEY_BLUE,
+    27: KEY_YELLOW, 34: KEY_YELLOW,
+    28: KEY_RED, 33: KEY_RED,
+}
 EXIT_SPECIALS = {11, 51}
+TELEPORT_SPECIALS = {39, 97, 125, 126}
+BOSS_TRIGGER_MAPS = {"E1M8", "E2M8", "E3M8", "E4M6", "E4M8"}
 
 LINE_FLAG_IMPASSABLE = 0x0001
-PLAYER_HEIGHT = 56
-PLAYER_MAX_STEP = 24
-BSP_RENDER_SIDE_REVERSED = 0x01
-BSP_RENDER_FLAT_RISER = 0x02
+
+RUNTIME_THING_TYPES = {5, 6, 9, 13, 2007, 2011, 2012, 2014, 2015,
+                       2018, 2019, 2035, 2048, 3001, 3004}
+KEY_THING_MASK = {5: KEY_BLUE, 6: KEY_YELLOW, 13: KEY_RED}
+BLOCKING_THING_RADIUS = {2035: 20}
+
+
+def point_segment_dist2(ax, ay, bx, by, px, py):
+    abx = bx - ax
+    aby = by - ay
+    apx = px - ax
+    apy = py - ay
+    ab2 = abx * abx + aby * aby
+    if ab2 <= 0:
+        cx, cy = ax, ay
+    else:
+        dot = apx * abx + apy * aby
+        if dot <= 0:
+            cx, cy = ax, ay
+        elif dot >= ab2:
+            cx, cy = bx, by
+        else:
+            cx = ax + (abx * dot) // ab2
+            cy = ay + (aby * dot) // ab2
+    dx = px - cx
+    dy = py - cy
+    return dx * dx + dy * dy
+
+
+def runtime_things(things):
+    result = []
+    for thing in things:
+        x, y, thing_type, angle, flags = thing
+        if not (flags & DOOM_THING_SKILL_MEDIUM) or flags & DOOM_THING_NOT_SINGLE_PLAYER:
+            continue
+        if thing_type not in RUNTIME_THING_TYPES:
+            continue
+        if len(result) >= BILLBOARD_OBJECT_COUNT:
+            break
+        result.append(thing)
+    return result
+
+
+def certify_flat_progression(vertices, segs, things, start_x, start_y):
+    """Prove a concrete medium/single-player route through the emitted flat map."""
+    exits = [(index, seg) for index, seg in enumerate(segs)
+             if seg["type"] == SEG_EXIT]
+    if not exits:
+        raise ValueError("no supported exit linedef (special 11/51) survives flattening")
+
+    active_things = runtime_things(things)
+    source_key_mask = KEY_NONE
+    medium_key_mask = KEY_NONE
+    for _, _, thing_type, _, flags in things:
+        key_bit = KEY_THING_MASK.get(thing_type, KEY_NONE)
+        source_key_mask |= key_bit
+        if ((flags & DOOM_THING_SKILL_MEDIUM) and
+                not (flags & DOOM_THING_NOT_SINGLE_PLAYER)):
+            medium_key_mask |= key_bit
+    keys = [(x, y, KEY_THING_MASK[thing_type])
+            for x, y, thing_type, _, _ in active_things
+            if thing_type in KEY_THING_MASK]
+    blockers = [(x, y, BLOCKING_THING_RADIUS[thing_type])
+                for x, y, thing_type, _, _ in active_things
+                if thing_type in BLOCKING_THING_RADIUS]
+    available_key_mask = KEY_NONE
+    for _, _, key_bit in keys:
+        available_key_mask |= key_bit
+    interactions = [seg for seg in segs
+                    if seg["type"] in (SEG_SWITCH, SEG_TRIGGER) or
+                    (seg["type"] == SEG_DOOR and
+                     seg.get("flags", 0) & SEG_FLAG_DIRECT_USE)]
+
+    min_x = (min(x for x, _ in vertices) // NAV_STEP) * NAV_STEP
+    min_y = (min(y for _, y in vertices) // NAV_STEP) * NAV_STEP
+    max_x = ((max(x for x, _ in vertices) + NAV_STEP - 1) // NAV_STEP) * NAV_STEP
+    max_y = ((max(y for _, y in vertices) + NAV_STEP - 1) // NAV_STEP) * NAV_STEP
+    width = ((max_x - min_x) // NAV_STEP) + 1
+    height = ((max_y - min_y) // NAV_STEP) + 1
+
+    broad_cell = 256
+    broad_w = ((max_x - min_x) // broad_cell) + 1
+    broad_h = ((max_y - min_y) // broad_cell) + 1
+    broad = [[] for _ in range(broad_w * broad_h)]
+    for index, seg in enumerate(segs):
+        ax, ay = vertices[seg["v1"]]
+        bx, by = vertices[seg["v2"]]
+        cx0 = max(0, (min(ax, bx) - PLAYER_RADIUS - min_x) // broad_cell)
+        cx1 = min(broad_w - 1, (max(ax, bx) + PLAYER_RADIUS - min_x) // broad_cell)
+        cy0 = max(0, (min(ay, by) - PLAYER_RADIUS - min_y) // broad_cell)
+        cy1 = min(broad_h - 1, (max(ay, by) + PLAYER_RADIUS - min_y) // broad_cell)
+        for cy in range(cy0, cy1 + 1):
+            for cx in range(cx0, cx1 + 1):
+                broad[cy * broad_w + cx].append(index)
+
+    grid_collision_state = bytearray(width * height)  # 0 unknown, 1 clear, 2 static wall
+    grid_door_groups = array("Q", [0]) * (width * height)
+    group_keys = {}
+    for seg in segs:
+        if seg["type"] == SEG_DOOR:
+            group_keys[seg["door_group"]] = seg["required_key"]
+
+    def collision_components(px, py):
+        if px < min_x or px > max_x or py < min_y or py > max_y:
+            return True, 0
+        cx = min(broad_w - 1, max(0, (px - min_x) // broad_cell))
+        cy = min(broad_h - 1, max(0, (py - min_y) // broad_cell))
+        door_groups = 0
+        for index in broad[cy * broad_w + cx]:
+            seg = segs[index]
+            if seg["type"] == SEG_TRIGGER:
+                continue
+            ax, ay = vertices[seg["v1"]]
+            bx, by = vertices[seg["v2"]]
+            if point_segment_dist2(ax, ay, bx, by, px, py) < PLAYER_RADIUS ** 2:
+                if seg["type"] == SEG_DOOR:
+                    door_groups |= 1 << seg["door_group"]
+                else:
+                    return True, door_groups
+        for ox, oy, radius in blockers:
+            dx = px - ox
+            dy = py - oy
+            if dx * dx + dy * dy < (PLAYER_RADIUS + radius) ** 2:
+                return True, door_groups
+        return False, door_groups
+
+    def blocked(px, py, key_mask, opened_groups):
+        aligned = ((px - min_x) % NAV_STEP == 0 and
+                   (py - min_y) % NAV_STEP == 0 and
+                   min_x <= px <= max_x and min_y <= py <= max_y)
+        if aligned:
+            index = ((py - min_y) // NAV_STEP) * width + \
+                ((px - min_x) // NAV_STEP)
+            if grid_collision_state[index] == 0:
+                static, door_groups = collision_components(px, py)
+                grid_collision_state[index] = 2 if static else 1
+                grid_door_groups[index] = door_groups
+            if grid_collision_state[index] == 2:
+                return True
+            door_groups = grid_door_groups[index]
+        else:
+            static, door_groups = collision_components(px, py)
+            if static:
+                return True
+
+        if not door_groups:
+            return False
+        key_allowed = 0
+        for group, required in group_keys.items():
+            if required == KEY_NONE or key_mask & required == required:
+                key_allowed |= 1 << group
+        allowed = opened_groups & key_allowed
+        return bool(door_groups & ~allowed)
+
+    def exit_reached(px, py):
+        for exit_index, seg in exits:
+            ax, ay = vertices[seg["v1"]]
+            bx, by = vertices[seg["v2"]]
+            if point_segment_dist2(ax, ay, bx, by, px, py) <= USE_RADIUS ** 2:
+                return exit_index
+        return None
+
+    seed_x = min(max_x, max(min_x, round((start_x - min_x) / NAV_STEP) * NAV_STEP + min_x))
+    seed_y = min(max_y, max(min_y, round((start_y - min_y) / NAV_STEP) * NAV_STEP + min_y))
+    if (blocked(start_x, start_y, KEY_NONE, 0) or
+            blocked(seed_x, seed_y, KEY_NONE, 0)):
+        raise ValueError("player start is blocked in emitted flat geometry")
+
+    cell_count = width * height
+    visited = [bytearray(cell_count) for _ in range(8)]
+    visited_counts = [0] * 8
+    opened_by_key = [0] * 8
+    queue = array("I")
+    queue_head = 0
+    epochs = [0] * 8
+
+    def queue_entry(index, key_mask):
+        return ((epochs[key_mask] * 8 + key_mask) * cell_count) + index
+
+    seed = ((seed_y - min_y) // NAV_STEP) * width + ((seed_x - min_x) // NAV_STEP)
+    visited[KEY_NONE][seed] = 1
+    visited_counts[KEY_NONE] = 1
+    queue.append(queue_entry(seed, KEY_NONE))
+    reached_masks = set()
+    reached_open_groups = 0
+    directions = ((NAV_STEP, 0), (-NAV_STEP, 0), (0, NAV_STEP), (0, -NAV_STEP),
+                  (NAV_STEP, NAV_STEP), (NAV_STEP, -NAV_STEP),
+                  (-NAV_STEP, NAV_STEP), (-NAV_STEP, -NAV_STEP))
+
+    while queue_head < len(queue):
+        encoded = queue[queue_head]
+        queue_head += 1
+        index = encoded % cell_count
+        state = encoded // cell_count
+        key_mask = state & 7
+        if (state >> 3) != epochs[key_mask]:
+            continue
+        px = min_x + (index % width) * NAV_STEP
+        py = min_y + (index // width) * NAV_STEP
+        opened_groups = opened_by_key[key_mask]
+        reached_masks.add(key_mask)
+        reached_open_groups |= opened_groups
+        exit_index = exit_reached(px, py)
+        if exit_index is not None:
+            return {
+                "reachable": True,
+                "key_mask": key_mask,
+                "available_keys": available_key_mask,
+                "reached_masks": sorted(reached_masks),
+                "opened_groups": opened_groups,
+                "exit_index": exit_index,
+                "states": sum(visited_counts),
+            }
+
+        collected = key_mask
+        for key_x, key_y, key_bit in keys:
+            dx = px - key_x
+            dy = py - key_y
+            if dx * dx + dy * dy <= PICKUP_RADIUS ** 2:
+                collected |= key_bit
+        if collected != key_mask:
+            index = ((py - min_y) // NAV_STEP) * width + ((px - min_x) // NAV_STEP)
+            groups_changed = ((opened_by_key[collected] | opened_groups) !=
+                              opened_by_key[collected])
+            opened_by_key[collected] |= opened_groups
+            if groups_changed:
+                # More-open geometry is monotonic and movement is reversible.
+                # Restart this mask from the concrete current position instead
+                # of duplicating its entire reached component in the queue.
+                epochs[collected] += 1
+                visited[collected] = bytearray(cell_count)
+                visited_counts[collected] = 0
+            if not visited[collected][index]:
+                visited[collected][index] = 1
+                visited_counts[collected] += 1
+                queue.append(queue_entry(index, collected))
+
+        # Remote switches are monotonic for the proof: opening a group can only
+        # add routes, and the runtime can reproduce the same sequence with use.
+        newly_opened = opened_groups
+        for interaction in interactions:
+            required = interaction["required_key"]
+            if required != KEY_NONE and key_mask & required != required:
+                continue
+            ax, ay = vertices[interaction["v1"]]
+            bx, by = vertices[interaction["v2"]]
+            if point_segment_dist2(ax, ay, bx, by, px, py) <= USE_RADIUS ** 2:
+                newly_opened |= 1 << interaction["door_group"]
+        if newly_opened != opened_groups:
+            opened_by_key[key_mask] = newly_opened
+            reached_open_groups |= newly_opened
+            # Opening only removes collision. The current position remains a
+            # valid seed for the whole previously reached undirected component,
+            # so restart this mask compactly instead of enqueuing every cell.
+            epochs[key_mask] += 1
+            current_index = index
+            visited[key_mask] = bytearray(cell_count)
+            visited[key_mask][current_index] = 1
+            visited_counts[key_mask] = 1
+            queue.append(queue_entry(current_index, key_mask))
+            opened_groups = newly_opened
+
+        for dx, dy in directions:
+            nx, ny = px + dx, py + dy
+            if blocked(nx, ny, key_mask, opened_groups):
+                continue
+            if dx and dy:
+                if (blocked(px + dx, py, key_mask, opened_groups) or
+                        blocked(px, py + dy, key_mask, opened_groups)):
+                    continue
+            index = ((ny - min_y) // NAV_STEP) * width + ((nx - min_x) // NAV_STEP)
+            if visited[key_mask][index]:
+                continue
+            visited[key_mask][index] = 1
+            visited_counts[key_mask] += 1
+            queue.append(queue_entry(index, key_mask))
+
+        # Drop processed storage periodically; array('I') keeps the frontier at
+        # four bytes per cell instead of Python tuple/object overhead.
+        if queue_head >= 262144 and queue_head * 2 >= len(queue):
+            queue = array("I", queue[queue_head:])
+            queue_head = 0
+
+    required = 0
+    for seg in segs:
+        required |= seg.get("required_key", KEY_NONE)
+    missing = required & ~available_key_mask
+    detail = "exit unreachable after %d navigation states; reached key masks=%s" % (
+        sum(visited_counts), sorted(reached_masks))
+    if reached_open_groups:
+        detail += "; opened door groups=0x%X" % reached_open_groups
+    if missing:
+        detail += "; missing required key mask=0x%02X" % missing
+        filtered = missing & source_key_mask & ~available_key_mask
+        if filtered:
+            reasons = []
+            if filtered & ~medium_key_mask:
+                reasons.append("skill/single-player filter")
+            if filtered & medium_key_mask:
+                reasons.append("runtime object cap")
+            detail += " (discarded by %s)" % " and ".join(reasons)
+    raise ValueError(detail)
 
 
 def reduce_normal(nx, ny):
@@ -551,6 +842,8 @@ def main():
     ap.add_argument("--map", default="E1M1")
     ap.add_argument("--out", default=None)
     ap.add_argument("--assets-out", default=DEFAULT_ASSET_OUT)
+    ap.add_argument("--certify-only", action="store_true",
+                    help="parse/classify/certify and report without emitting files")
     args = ap.parse_args()
 
     wad = WadFile(args.wad)
@@ -642,20 +935,97 @@ def main():
                           front_box=left_box, back_box=right_box,
                           front=left_child, back=right_child))
 
-    # --- Classify each linedef as solid (wall) or open (gap). --------------- #
-    def line_solid(ld):
+    def line_sector_ids(ld):
+        result = []
+        for side_id in (ld["right"], ld["left"]):
+            if side_id != 0xFFFF:
+                result.append(sidedefs[side_id]["sector"])
+        return result
+
+    def line_opening(ld):
+        sector_ids = line_sector_ids(ld)
+        if len(sector_ids) != 2:
+            return None
+        first, second = (sectors[index] for index in sector_ids)
+        return min(first["ceiling"], second["ceiling"]) - \
+            max(first["floor"], second["floor"])
+
+    # Door actions identify physical door sectors before heights are discarded.
+    # All sectors targeted by one remote tag deliberately share one runtime
+    # group: Doom opens them together, so every emitted face must change state
+    # together as well. Direct doors use the narrow/closed adjacent sector.
+    remote_tags = sorted({ld["tag"] for ld in linedefs
+                          if ld["special"] in REMOTE_DOOR_SPECIALS and ld["tag"]})
+    sector_door_group = {}
+    remote_tag_group = {}
+    next_door_group = 0
+    for tag in remote_tags:
+        tagged = [index for index, sector in enumerate(sectors)
+                  if sector["tag"] == tag]
+        existing = sorted({sector_door_group[index] for index in tagged
+                           if index in sector_door_group})
+        group = existing[0] if existing else next_door_group
+        if not existing:
+            next_door_group += 1
+        remote_tag_group[tag] = group
+        for sector_id in tagged:
+            sector_door_group[sector_id] = group
+
+    direct_line_sector = {}
+    for line_id, ld in enumerate(linedefs):
+        if ld["special"] not in DIRECT_DOOR_SPECIALS:
+            continue
+        candidates = line_sector_ids(ld)
+        if not candidates:
+            continue
+        sector_id = min(candidates, key=lambda index:
+            (sectors[index]["ceiling"] - sectors[index]["floor"], index))
+        direct_line_sector[line_id] = sector_id
+        if sector_id not in sector_door_group:
+            sector_door_group[sector_id] = next_door_group
+            next_door_group += 1
+
+    line_door_group = {}
+    for line_id, ld in enumerate(linedefs):
+        candidates = [sector_id for sector_id in line_sector_ids(ld)
+                      if sector_id in sector_door_group]
+        group = None
+        if candidates and (line_opening(ld) is not None and line_opening(ld) <= 0):
+            sector_id = min(candidates, key=lambda index:
+                (sectors[index]["ceiling"] - sectors[index]["floor"], index))
+            group = sector_door_group[sector_id]
+        elif line_id in direct_line_sector:
+            group = sector_door_group[direct_line_sector[line_id]]
+        if group is not None:
+            line_door_group[line_id] = group
+
+    remote_line_group = {
+        line_id: remote_tag_group[ld["tag"]]
+        for line_id, ld in enumerate(linedefs)
+        if ld["special"] in REMOTE_DOOR_SPECIALS and ld["tag"] in remote_tag_group
+    }
+
+    if next_door_group > MAX_DOOR_GROUPS:
+        raise SystemExit("door group count %d exceeds BSP_MAX_DOORS (%d)" %
+                         (next_door_group, MAX_DOOR_GROUPS))
+
+    group_required_key = [KEY_NONE] * next_door_group
+    for line_id, group in line_door_group.items():
+        group_required_key[group] |= LOCKED_DOOR_KEYS.get(
+            linedefs[line_id]["special"], KEY_NONE)
+
+    # --- Classify each linedef in the flattened world. ---------------------- #
+    def line_solid(line_id, ld):
         if ld["left"] == 0xFFFF:
-            return True  # one-sided
+            return True
         if ld["flags"] & LINE_FLAG_IMPASSABLE:
             return True
-        rs = sidedefs[ld["right"]]["sector"] if ld["right"] != 0xFFFF else None
-        ls = sidedefs[ld["left"]]["sector"] if ld["left"] != 0xFFFF else None
-        if rs is None or ls is None:
+        if (ld["special"] in EXIT_SPECIALS or line_id in line_door_group or
+                line_id in remote_line_group):
             return True
-        rf, rc = sectors[rs]["floor"], sectors[rs]["ceiling"]
-        lf, lc = sectors[ls]["floor"], sectors[ls]["ceiling"]
-        opening = min(rc, lc) - max(rf, lf)
-        return opening <= 0
+        # Every remaining two-sided height transition becomes an open gap. This
+        # deliberately removes stairs, lifts, ledges and closed height tricks.
+        return False
 
     def front_side_for(seg):
         ld = linedefs[seg["ld"]]
@@ -684,14 +1054,25 @@ def main():
     def seg_type_and_visual(seg):
         ld = linedefs[seg["ld"]]
         front_side = front_side_for(seg)
+        back_side = back_side_for(seg)
         seg_type = SEG_WALL
+        door_group = DOOR_GROUP_NONE
+        required_key = KEY_NONE
+        flags = 0
         if ld["special"] in EXIT_SPECIALS:
             seg_type = SEG_EXIT
-        elif ld["special"] in DOOR_SPECIALS:
-            if ld["special"] in LOCKED_DOOR_SPECIALS:
-                seg_type = SEG_LOCKED_DOOR
-            else:
-                seg_type = SEG_DOOR
+        elif seg["ld"] in remote_line_group:
+            structurally_solid = (ld["left"] == 0xFFFF or
+                                  bool(ld["flags"] & LINE_FLAG_IMPASSABLE))
+            seg_type = SEG_SWITCH if structurally_solid else SEG_TRIGGER
+            door_group = remote_line_group[seg["ld"]]
+            required_key = group_required_key[door_group]
+        elif seg["ld"] in line_door_group:
+            seg_type = SEG_DOOR
+            door_group = line_door_group[seg["ld"]]
+            required_key = group_required_key[door_group]
+            if ld["special"] in DIRECT_DOOR_SPECIALS:
+                flags |= SEG_FLAG_DIRECT_USE
 
         name = FALLBACK_TEXTURE
         xoff = seg["offset"]
@@ -700,88 +1081,32 @@ def main():
             side = sidedefs[front_side]
             xoff += side["xoff"]
             yoff = side["yoff"]
-            for candidate in (side["middle"], side["lower"], side["upper"]):
-                if candidate and candidate != "-":
-                    name = candidate
+            side_ids = [front_side]
+            if back_side != 0xFFFF:
+                side_ids.append(back_side)
+            fields = ("middle", "upper", "lower") if seg_type in (SEG_DOOR, SEG_SWITCH) \
+                else ("middle", "lower", "upper")
+            for side_id in side_ids:
+                candidate_side = sidedefs[side_id]
+                for field in fields:
+                    candidate = candidate_side[field]
+                    if candidate and candidate != "-":
+                        name = candidate
+                        break
+                if name != FALLBACK_TEXTURE:
                     break
-        return seg_type, name, xoff, yoff
+        return seg_type, name, xoff, yoff, door_group, required_key, flags
 
-    # Preserve the complete sector/portal representation alongside the legacy
-    # solid-only stream. The legacy arrays remain available behind the build
-    # flag while consumers migrate to these source-faithful arrays.
-    all_texture_usage = Counter()
-    render_segs = []
-    render_ssectors = []
-    for count, first in ssectors:
-        start = len(render_segs)
-        for k in range(count):
-            seg = segs[first + k]
-            ax, ay = vertices[seg["v1"]]
-            bx, by = vertices[seg["v2"]]
-            if ax == bx and ay == by:
-                continue
-            front_side = front_side_for(seg)
-            back_side = back_side_for(seg)
-            if front_side == 0xFFFF:
-                continue
-            front_sector = sidedefs[front_side]["sector"]
-            back_sector = (sidedefs[back_side]["sector"]
-                           if back_side != 0xFFFF else 0xFFFF)
-            side = sidedefs[front_side]
-            flat_riser = False
-            if back_sector != 0xFFFF:
-                front_floor = sectors[front_sector]["floor"]
-                back_floor = sectors[back_sector]["floor"]
-                open_bottom = max(front_floor, back_floor)
-                open_top = min(sectors[front_sector]["ceiling"],
-                               sectors[back_sector]["ceiling"])
-                floor_delta = abs(back_floor - front_floor)
-                flat_riser = (
-                    not (linedefs[seg["ld"]]["flags"] & LINE_FLAG_IMPASSABLE)
-                    and open_top - open_bottom >= PLAYER_HEIGHT
-                    and 1 <= floor_delta <= PLAYER_MAX_STEP
-                )
-            textures = {}
-            for field in ("upper", "lower", "middle"):
-                name = None if (field == "lower" and flat_riser) else side[field]
-                # Doom commonly stores a step/portal texture only on the side
-                # from which the vertical face is normally visible. Our portal
-                # renderer can see the same riser from either direction, so
-                # retain the opposite sidedef's surface as a rendering fallback.
-                if (field != "lower" or not flat_riser) and \
-                        (not name or name == "-") and back_side != 0xFFFF:
-                    name = sidedefs[back_side][field]
-                if not name or name == "-":
-                    name = None
-                else:
-                    all_texture_usage[name] += 1
-                textures[field] = name
-            nx, ny = front_normal(seg)
-            render_segs.append(dict(
-                v1=seg["v1"], v2=seg["v2"], line_id=seg["ld"],
-                front_sector=front_sector, back_sector=back_sector,
-                nx=nx, ny=ny, tex_u_offset=seg["offset"] + side["xoff"],
-                tex_v_offset=side["yoff"], textures=textures,
-                side_flags=((BSP_RENDER_SIDE_REVERSED
-                            if seg["direction"] & 1 else 0) |
-                            (BSP_RENDER_FLAT_RISER if flat_riser else 0))))
-        render_ssectors.append((start, len(render_segs) - start))
-
-    # --- Rebuild legacy subsectors with only solid segs. -------------------- #
+    # --- Rebuild subsectors with only flat solid/interactive segs. ---------- #
     out_segs = []       # dicts with geometry, exact texture name, offsets and type
-    out_ssectors = []   # (first_seg, count, sector_id)
+    out_ssectors = []   # (first_seg, count)
     texture_usage = Counter()
 
     for (count, first) in ssectors:
         start = len(out_segs)
-        sector_id = 0
-        if count:
-            source_side = front_side_for(segs[first])
-            if source_side != 0xFFFF:
-                sector_id = sidedefs[source_side]["sector"]
         for k in range(count):
             seg = segs[first + k]
-            if not line_solid(linedefs[seg["ld"]]):
+            if not line_solid(seg["ld"], linedefs[seg["ld"]]):
                 continue
             ax, ay = vertices[seg["v1"]]
             bx, by = vertices[seg["v2"]]
@@ -790,31 +1115,21 @@ def main():
             nx, ny = front_normal(seg)
             if nx == 0 and ny == 0:
                 continue  # degenerate linedef
-            stype, texture_name, tex_u_offset, tex_v_offset = seg_type_and_visual(seg)
+            stype, texture_name, tex_u_offset, tex_v_offset, door_group, required_key, flags = \
+                seg_type_and_visual(seg)
             texture_usage[texture_name] += 1
             out_segs.append(dict(v1=seg["v1"], v2=seg["v2"],
                                 nx=nx, ny=ny, texture_name=texture_name,
                                 tex_u_offset=tex_u_offset, tex_v_offset=tex_v_offset,
-                                type=stype))
-        out_ssectors.append((start, len(out_segs) - start, sector_id))
+                                type=stype, door_group=door_group,
+                                required_key=required_key, flags=flags))
+        out_ssectors.append((start, len(out_segs) - start))
 
-    if len(out_segs) > 1024:
-        raise SystemExit("solid seg count %d exceeds BSP_MAX_SEGS (1024)"
+    if len(out_segs) > 2048:
+        raise SystemExit("solid seg count %d exceeds BSP_MAX_SEGS (2048)"
                          % len(out_segs))
-
-    texture_usage.update(all_texture_usage)
-    texture_ids, texture_meta, sector_visuals, palette = emit_world_assets(
-        args.assets_out, texture_usage, sectors)
-    for seg in out_segs:
-        name = seg["texture_name"]
-        if not -32768 <= seg["tex_u_offset"] <= 32767:
-            raise SystemExit("texture U offset out of s16 range: %d" % seg["tex_u_offset"])
-        seg["tex"] = texture_ids[name]
-        seg["tex_v"] = ((seg["tex_v_offset"] * WALL_TEX_DIM) //
-                        texture_meta[name]["height"]) & (WALL_TEX_DIM - 1)
-    for seg in render_segs:
-        for field, name in seg["textures"].items():
-            seg[field + "_tex"] = texture_ids[name] if name is not None else 0xFF
+    if len(nodes) > 640:
+        raise SystemExit("node count %d exceeds BSP_MAX_NODES (640)" % len(nodes))
 
     # --- THINGS / Player 1 start. ------------------------------------------- #
     # Convert every THING into engine y-down coordinates.  The runtime owns the
@@ -831,10 +1146,75 @@ def main():
     # Y-down flip: negate the start Y and mirror the angle about the x-axis.
     start_y = -start_y
     start_angle = (256 - (round(start_angle_deg * 256 / 360) & 255)) & 255
-    curated_thing_types = {5, 6, 9, 13, 2007, 2011, 2012, 2014, 2015,
-                           2018, 2019, 2035, 2048, 3001, 3004}
     supported_things = sum(1 for _, _, thing_type, _, _ in out_things
-                           if thing_type in curated_thing_types)
+                           if thing_type in RUNTIME_THING_TYPES)
+
+    try:
+        certificate = certify_flat_progression(
+            vertices, out_segs, out_things, start_x, start_y)
+    except ValueError as error:
+        unsupported = sorted({ld["special"] for ld in linedefs
+                              if ld["special"] in TELEPORT_SPECIALS})
+        mechanics = []
+        if unsupported:
+            mechanics.append("teleport specials %s" % unsupported)
+        if mapn in BOSS_TRIGGER_MAPS:
+            mechanics.append("boss-death trigger")
+        suffix = "; unsupported mandatory mechanics present: %s" % \
+            ", ".join(mechanics) if mechanics else ""
+        raise SystemExit("Map %s cannot be certified: %s%s" %
+                         (mapn, error, suffix))
+
+    # Resolve any blank face from another face in the same physical door group.
+    group_textures = {}
+    for seg in out_segs:
+        if seg["type"] == SEG_DOOR and seg["texture_name"] != FALLBACK_TEXTURE:
+            group_textures.setdefault(seg["door_group"], seg["texture_name"])
+    for seg in out_segs:
+        if seg["type"] == SEG_DOOR and seg["texture_name"] == FALLBACK_TEXTURE:
+            replacement = group_textures.get(seg["door_group"])
+            if replacement:
+                texture_usage[FALLBACK_TEXTURE] -= 1
+                texture_usage[replacement] += 1
+                seg["texture_name"] = replacement
+
+    required_key_mask = KEY_NONE
+    for key_mask in group_required_key:
+        required_key_mask |= key_mask
+    door_face_counts = Counter(seg["door_group"] for seg in out_segs
+                               if seg["type"] == SEG_DOOR)
+    fallback_door_faces = sum(1 for seg in out_segs
+                              if seg["type"] == SEG_DOOR and
+                              seg["texture_name"] == FALLBACK_TEXTURE)
+
+    if args.certify_only:
+        print("Map %s flat progression certified" % mapn)
+        print("  doors    : %d groups, faces=%s" %
+              (next_door_group, dict(sorted(door_face_counts.items()))))
+        print("  keys     : available=0x%02X required=0x%02X reached=%s" %
+              (certificate["available_keys"], required_key_mask,
+               certificate["reached_masks"]))
+        print("  exit     : seg %d with key mask=0x%02X after %d states" %
+              (certificate["exit_index"], certificate["key_mask"],
+               certificate["states"]))
+        print("  textures : %d door faces still require fallback" %
+              fallback_door_faces)
+        return
+
+    asset_temp = args.assets_out + ".tmp"
+    map_temp = out_path + ".tmp"
+    for temp_path in (asset_temp, map_temp):
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+    texture_ids, texture_meta, _sector_visuals, palette = emit_world_assets(
+        asset_temp, texture_usage, sectors)
+    for seg in out_segs:
+        name = seg["texture_name"]
+        if not -32768 <= seg["tex_u_offset"] <= 32767:
+            raise SystemExit("texture U offset out of s16 range: %d" % seg["tex_u_offset"])
+        seg["tex"] = texture_ids[name]
+        seg["tex_v"] = ((seg["tex_v_offset"] * WALL_TEX_DIM) //
+                        texture_meta[name]["height"]) & (WALL_TEX_DIM - 1)
 
     root = (len(nodes) - 1) if nodes else 0x8000
 
@@ -856,36 +1236,12 @@ def main():
     lines.append("};")
     lines.append("")
 
-    lines.append("const BspLine bsp_lines[%d] = {" % len(linedefs))
-    for ld in linedefs:
-        right_sector = (sidedefs[ld["right"]]["sector"] if ld["right"] != 0xFFFF else 0xFFFF)
-        left_sector = (sidedefs[ld["left"]]["sector"] if ld["left"] != 0xFFFF else 0xFFFF)
-        lines.append("    {%d, %d, %du, %du, %du, %du, %du}," % (
-            ld["v1"], ld["v2"], right_sector, left_sector, ld["flags"],
-            ld["special"], ld["tag"]))
-    lines.append("};")
-    lines.append("")
-
-    lines.append("const BspRenderSeg bsp_render_segs[%d] = {" % len(render_segs))
-    for s in render_segs:
-        lines.append("    {%d, %d, %d, %du, %du, %d, %d, %d, %d, %d, %d, %d, %d}," % (
-            s["v1"], s["v2"], s["line_id"], s["front_sector"], s["back_sector"],
-            s["nx"], s["ny"], s["tex_u_offset"], s["tex_v_offset"],
-            s["upper_tex"], s["lower_tex"], s["middle_tex"], s["side_flags"]))
-    lines.append("};")
-    lines.append("")
-
-    lines.append("const BspRenderSubsector bsp_render_subsectors[%d] = {" % len(render_ssectors))
-    for index, (first, count) in enumerate(render_ssectors):
-        lines.append("    {%d, %d, %d}," % (first, count, out_ssectors[index][2]))
-    lines.append("};")
-    lines.append("")
-
     lines.append("const BspSeg bsp_segs[%d] = {" % len(out_segs))
     for s in out_segs:
-        lines.append("    {%d, %d, %d, %d, %d, %d, %d, %d}," % (
+        lines.append("    {%d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d}," % (
             s["v1"], s["v2"], s["nx"], s["ny"], s["tex_u_offset"],
-            s["tex_v"], s["tex"], s["type"]))
+            s["tex_v"], s["tex"], s["type"], s["door_group"], s["required_key"],
+            s["flags"]))
     lines.append("};")
     lines.append("")
 
@@ -958,51 +1314,9 @@ def main():
     lines.append("};")
     lines.append("")
 
-    # Sector collision indexes each original linedef exactly once. It shares
-    # the same grid geometry as the legacy seg blockmap.
-    line_grid_cells = [[] for _ in range(grid_w * grid_h)]
-    for line_index, ld in enumerate(linedefs):
-        ax, ay = vertices[ld["v1"]]
-        bx, by = vertices[ld["v2"]]
-        cx0 = (min(ax, bx) - grid_min_x) // grid_cell
-        cx1 = (max(ax, bx) - grid_min_x) // grid_cell
-        cy0 = (min(ay, by) - grid_min_y) // grid_cell
-        cy1 = (max(ay, by) - grid_min_y) // grid_cell
-        for cy in range(cy0, cy1 + 1):
-            for cx in range(cx0, cx1 + 1):
-                line_grid_cells[cy * grid_w + cx].append(line_index)
-    line_grid_offsets = [0]
-    line_grid_indices = []
-    for cell in line_grid_cells:
-        line_grid_indices.extend(cell)
-        line_grid_offsets.append(len(line_grid_indices))
-    lines.append("const u16 bsp_line_grid_cell_offsets[%d] = {" % len(line_grid_offsets))
-    for i in range(0, len(line_grid_offsets), 12):
-        lines.append("    %s," % ",".join(str(v) for v in line_grid_offsets[i:i + 12]))
-    lines.append("};")
-    lines.append("const u16 bsp_line_grid_indices[%d] = {" % len(line_grid_indices))
-    for i in range(0, len(line_grid_indices), 12):
-        lines.append("    %s," % ",".join(str(v) for v in line_grid_indices[i:i + 12]))
-    lines.append("};")
-    lines.append("")
-
     lines.append("const BspSubsector bsp_subsectors[%d] = {" % len(out_ssectors))
-    for (first, count, sector_id) in out_ssectors:
-        lines.append("    {%d, %d, %d}," % (first, count, sector_id))
-    lines.append("};")
-    lines.append("")
-
-    lines.append("const BspSectorVisual bsp_sector_visuals[%d] = {" % len(sector_visuals))
-    for ceiling_color, floor_color in sector_visuals:
-        lines.append("    {%d, %d}," % (ceiling_color, floor_color))
-    lines.append("};")
-    lines.append("")
-
-    lines.append("const BspSector bsp_sectors[%d] = {" % len(sectors))
-    for sector, (ceiling_color, floor_color) in zip(sectors, sector_visuals):
-        lines.append("    {%d, %d, 0, 0, %d, %d, %d, %d, %du}," % (
-            sector["floor"], sector["ceiling"], floor_color, ceiling_color,
-            sector["light"], sector["special"] & 0xFF, sector["tag"]))
+    for first, count in out_ssectors:
+        lines.append("    {%d, %d}," % (first, count))
     lines.append("};")
     lines.append("")
 
@@ -1017,11 +1331,9 @@ def main():
     lines.append("const u16 bsp_root_node = %du;" % root)
     lines.append("const u16 bsp_seg_count = %du;" % len(out_segs))
     lines.append("const u16 bsp_vertex_count = %du;" % len(vertices))
-    lines.append("const u16 bsp_line_count = %du;" % len(linedefs))
-    lines.append("const u16 bsp_render_seg_count = %du;" % len(render_segs))
-    lines.append("const u16 bsp_sector_count = %du;" % len(sectors))
     lines.append("const u16 bsp_subsector_count = %du;" % len(ssectors))
     lines.append("const u16 bsp_node_count = %du;" % len(nodes))
+    lines.append("const u16 bsp_door_count = %du;" % next_door_group)
     lines.append("const BspThing bsp_things[%d] = {" % len(out_things))
     for x, y, thing_type, angle, flags in out_things:
         lines.append("    {%d, %d, %du, %du, %du}," %
@@ -1035,13 +1347,15 @@ def main():
     lines.append("#endif // !BSP_USE_HAND_MAP")
     lines.append("")
 
-    with open(out_path, "w", newline="\n") as fh:
+    with open(map_temp, "w", newline="\n") as fh:
         fh.write("\n".join(lines))
+    os.replace(asset_temp, args.assets_out)
+    os.replace(map_temp, out_path)
 
     print("Wrote %s" % out_path)
     print("  vertices : %d" % len(vertices))
-    print("  segs     : %d render, %d legacy solid (of %d source)" %
-          (len(render_segs), len(out_segs), len(segs)))
+    print("  segs     : %d flat solid/interactive (of %d source)" %
+          (len(out_segs), len(segs)))
     print("  linedefs : %d" % len(linedefs))
     print("  sectors  : %d" % len(sectors))
     print("  textures : %d exact + fallback" % (len(texture_ids) - 1))
@@ -1055,6 +1369,13 @@ def main():
         start_x, start_y, start_angle_deg, start_angle))
     print("  things   : %d raw, %d curated, %d skipped" %
           (len(out_things), supported_things, len(out_things) - supported_things))
+    print("  doors    : %d groups, faces=%s, fallback faces=%d" %
+          (next_door_group, dict(sorted(door_face_counts.items())), fallback_door_faces))
+    print("  keys     : available=0x%02X required=0x%02X reached=%s" %
+          (certificate["available_keys"], required_key_mask,
+           certificate["reached_masks"]))
+    print("  certified: exit seg %d reachable with key mask=0x%02X after %d states" %
+          (certificate["exit_index"], certificate["key_mask"], certificate["states"]))
 
 
 if __name__ == "__main__":

@@ -3,15 +3,14 @@
 
 #include <genesis.h>
 
-#ifndef BSP_SECTOR_RENDERER
-#define BSP_SECTOR_RENDERER 0
-#endif
+#define BSP_KEY_NONE 0x00u
+#define BSP_KEY_BLUE 0x01u
+#define BSP_KEY_YELLOW 0x02u
+#define BSP_KEY_RED 0x04u
+#define BSP_KEY_ALL (BSP_KEY_BLUE | BSP_KEY_YELLOW | BSP_KEY_RED)
 
-#define BSP_NO_SECTOR 0xFFFFu
-#define BSP_MAX_SECTORS 128
-#define BSP_LINE_IMPASSABLE 0x0001u
-#define BSP_RENDER_SIDE_REVERSED 0x01u
-#define BSP_RENDER_FLAT_RISER 0x02u
+#define BSP_DOOR_GROUP_NONE 0xFFu
+#define BSP_MAX_DOORS 64
 
 // Hand-authored test level for the BSP engine. Coordinates are in world
 // fixed-point units (FX_ONE = 256 units per "cell"). This is now the single
@@ -26,9 +25,12 @@ typedef struct {
 typedef enum {
     BSP_SEG_WALL = 0,
     BSP_SEG_DOOR = 1,
-    BSP_SEG_LOCKED_DOOR = 2,
-    BSP_SEG_EXIT = 3
+    BSP_SEG_EXIT = 2,
+    BSP_SEG_SWITCH = 3,
+    BSP_SEG_TRIGGER = 4
 } BspSegType;
+
+#define BSP_SEG_FLAG_DIRECT_USE 0x01u
 
 // One-sided wall segment. (nx, ny) is the front-facing normal pointing into the
 // room interior (-1/0/1 for the axis-aligned test walls); the seg is drawn and
@@ -43,69 +45,15 @@ typedef struct {
     u8 tex_v_offset;
     u8 texture_id; // exact generated E1M1 texture ID
     u8 type;       // BspSegType
+    u8 door_group; // shared state for every face of one physical door
+    u8 required_key; // BSP_KEY_* bit, or BSP_KEY_NONE
+    u8 flags;      // BSP_SEG_FLAG_* interaction metadata
 } BspSeg;
 
 typedef struct {
-    u16 v1;
-    u16 v2;
-    u16 right_sector;
-    u16 left_sector;
-    u16 flags;
-    u16 special;
-    u16 tag;
-} BspLine;
-
-typedef struct {
-    u16 v1;
-    u16 v2;
-    u16 line_id;
-    u16 front_sector;
-    u16 back_sector;
-    s16 nx;
-    s16 ny;
-    s16 tex_u_offset;
-    s16 tex_v_offset;
-    u8 upper_texture;
-    u8 lower_texture;
-    u8 middle_texture;
-    u8 side_flags; // BSP_RENDER_* flags
-} BspRenderSeg;
-
-typedef struct {
-    s16 floor_height;
-    s16 ceiling_height;
-    u8 floor_flat;
-    u8 ceiling_flat;
-    u8 floor_color;
-    u8 ceiling_color;
-    u8 light_level;
-    u8 special;
-    u16 tag;
-} BspSector;
-
-typedef struct {
-    s16 floor_height;
-    s16 ceiling_height;
-} BspSectorState;
-
-typedef struct {
     u16 first_seg;
     u16 seg_count;
-    u16 sector_id;
 } BspSubsector;
-
-// Source-faithful render-seg range for one Doom SSECTOR.  This is parallel to
-// bsp_subsectors, whose ranges address the legacy solid-only seg stream.
-typedef struct {
-    u16 first_seg;
-    u16 seg_count;
-    u16 sector_id;
-} BspRenderSubsector;
-
-typedef struct {
-    u8 ceiling_color;
-    u8 floor_color;
-} BspSectorVisual;
 
 typedef struct {
     s16 min_x;
@@ -148,9 +96,13 @@ typedef enum {
     DOOR_ACTION_TOGGLED = 1,
     DOOR_ACTION_LOCKED = 2,
     DOOR_ACTION_UNLOCKED = 3,
-    DOOR_ACTION_EXIT = 4,
-    DOOR_ACTION_EXIT_LOCKED = 5
+    DOOR_ACTION_EXIT = 4
 } DoorActionResult;
+
+typedef struct {
+    DoorActionResult action;
+    u8 required_key;
+} BspUseResult;
 
 // Define BSP_USE_HAND_MAP to compile the hand-authored two-room test map
 // (src/bsp_map_test.c) instead of the imported E1M1 geometry
@@ -158,25 +110,18 @@ typedef enum {
 // #define BSP_USE_HAND_MAP
 
 // Upper bound on solid segs across any map, for the door-state array.
-#define BSP_MAX_SEGS 1024
+#define BSP_MAX_SEGS 2048
 
 extern const BspVertex bsp_vertices[];
 extern const BspSeg bsp_segs[];
 extern const BspSubsector bsp_subsectors[];
-extern const BspSectorVisual bsp_sector_visuals[];
-extern const BspLine bsp_lines[];
-extern const BspRenderSeg bsp_render_segs[];
-extern const BspRenderSubsector bsp_render_subsectors[];
-extern const BspSector bsp_sectors[];
 extern const BspNode bsp_nodes[];
 extern const u16 bsp_root_node;
 extern const u16 bsp_seg_count;
 extern const u16 bsp_vertex_count;
-extern const u16 bsp_line_count;
-extern const u16 bsp_render_seg_count;
-extern const u16 bsp_sector_count;
 extern const u16 bsp_subsector_count;
 extern const u16 bsp_node_count;
+extern const u16 bsp_door_count;
 extern const BspThing bsp_things[];
 extern const u16 bsp_thing_count;
 
@@ -196,12 +141,10 @@ extern const u16 bsp_grid_width;
 extern const u16 bsp_grid_height;
 extern const u16 bsp_grid_cell_offsets[];
 extern const u16 bsp_grid_seg_indices[];
-extern const u16 bsp_line_grid_cell_offsets[];
-extern const u16 bsp_line_grid_indices[];
 
 // Upper bound on BSP nodes across any map, sizing the near/far order cache
 // bit array in bsp_render.c. E1M1 uses 236; the hand map uses 1.
-#define BSP_MAX_NODES 256
+#define BSP_MAX_NODES 640
 
 // Player 1 start, supplied by the active map's data file.
 extern const s32 bsp_player_start_x;
@@ -222,11 +165,6 @@ u16 bsp_get_visibility_revision(void);
 // Collision: is a circle of the given radius at world (x, y) touching a solid
 // (closed) wall segment? Used by player and enemy movement.
 bool bsp_circle_blocked(s32 x, s32 y, s32 radius);
-bool bsp_circle_blocked_from_sector(s32 x, s32 y, s32 radius, u16 from_sector);
-
-u16 bsp_find_subsector(s32 x, s32 y);
-u16 bsp_find_sector(s32 x, s32 y);
-const BspSectorState *bsp_get_sector_state(u16 sector_id);
 
 // Line-of-sight: does the segment (x0,y0)-(x1,y1) cross any solid wall?
 bool bsp_segment_hits_wall(s32 x0, s32 y0, s32 x1, s32 y1);
@@ -246,6 +184,7 @@ void bsp_debug_reset_query_stats(void);
 #endif
 
 // Interact with whatever door / exit switch is directly in front of the player.
-DoorActionResult bsp_use_in_front(s32 x, s32 y, u16 angle, bool has_key, bool *consumed_key);
+// Keys are persistent bits: use never consumes owned_keys.
+BspUseResult bsp_use_in_front(s32 x, s32 y, u16 angle, u8 owned_keys);
 
 #endif

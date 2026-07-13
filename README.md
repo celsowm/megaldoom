@@ -2,20 +2,24 @@
 
 MegalDoom is a tiny SGDK prototype for a Mega Drive / Genesis Doom-like, originally inspired by the DoomGeo approach, but rewritten around Mega Drive constraints.
 
-This version still uses SGDK's software `BMP` engine so the early milestones can focus on map, camera, collision, raycasting and gameplay state before moving to a proper VDP/tile renderer. SGDK's bitmap mode is useful for prototypes, but it is not the final renderer target.
+MegalDoom renders through a single flat-BSP pipeline tailored to the Mega Drive
+VDP: the WAD converter emits textured wall segments and grouped doors, the BSP
+caster fills the view columns, and the tile packer writes them directly to the
+background plane. There is no software-BMP, DDA grid, sector-height, or
+reference-renderer fallback in the product.
 
 ## Current state
 
 - SGDK project layout.
-- Hardcoded mutable 16x16 map.
+- Converted single-level Doom maps, starting with E1M1.
 - 1024-step Q8 sine table, no runtime float math.
 - Player movement, strafing and wall collision.
-- DDA raycaster with 64 columns, 4 pixels each.
-- Per-column fish-eye correction.
-- Precomputed DDA reciprocal tables for runtime cast speed.
-- Fake 64x64 procedural wall patterns.
-- Different wall types: stone, door and tech wall.
-- Action button for doors.
+- One textured flat-BSP cast per frame, packed directly into VDP tiles.
+- Real Doom wall, door and switch textures extracted from the WAD.
+- Grouped doors with persistent blue, yellow and red key bits.
+- Action button opens/closes a complete Doom door group.
+- Flat conversion opens former height-only transitions while keeping structural walls.
+- Converter certification rejects maps without a proven start-to-key-to-exit route.
 - Generated E1M1 pickups, enemies and blocking decorative billboards (candles,
   lamp/column props and barrels) with depth-buffer occlusion.
 - Functional health, armor, keys and pistol-ammo pickups.
@@ -37,12 +41,9 @@ This version still uses SGDK's software `BMP` engine so the early milestones can
 
 ## What is not included yet
 
-- WAD import.
-- Real Doom textures.
-- Animated doors.
+- General support for every Doom special (unsupported required mechanics fail conversion explicitly).
 - Real enemy AI.
 - Hardware sprite weapon/enemies.
-- Tilemap/VDP optimized renderer.
 
 ## Controls
 

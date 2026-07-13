@@ -5,9 +5,9 @@
 #include "fixed_math.h"
 
 #define RENDERER_VERSION_TEXT "MEGALDOOM REWRITE GATE 73"
-// Tile-grid dimensions alias the raycaster view geometry (single source of
+// Tile-grid dimensions alias the BSP view geometry (single source of
 // truth in raycast.h, included via renderer.h) so the renderer g_view_tiles
-// layout can never drift from what the raycaster/billboard/projector assume.
+// layout can never drift from what the BSP caster/billboard/projector assume.
 #define VIEW_TILE_W RAY_VIEW_TILE_W
 #define VIEW_TILE_H RAY_VIEW_TILE_H
 #define VIEW_TILE_COUNT (VIEW_TILE_W * VIEW_TILE_H)

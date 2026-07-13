@@ -5,7 +5,7 @@
 #include "generated_assets.h"
 
 // draw_seg only computes the height/texture fields at columns on a RAY_COL_STRIDE
-// boundary, matching the columns build_raycast_tilemap actually samples. That
+// boundary, matching the columns build_bsp_tilemap actually samples. That
 // relies on the stride being a power of two (the (x & (STRIDE-1)) test).
 #if (RAY_COL_STRIDE & (RAY_COL_STRIDE - 1)) != 0
 #error "draw_seg's strided-column optimization requires RAY_COL_STRIDE to be a power of two"
@@ -13,7 +13,7 @@
 
 // --- Projection constants ---------------------------------------------------
 // View is RAY_VIEW_COLS (160) px wide; center column is 80. PROJ is tuned so the
-// horizontal field of view matches the raycaster's 48 degrees:
+// horizontal field of view is 48 degrees:
 //   at the screen edge, |lateral/depth| = tan(24deg) ~= 0.445 maps to +/-80,
 //   so PROJ = 80 / 0.445 ~= 180.
 // Division-free frustum-rejection half-plane scales. screen = center +
@@ -195,7 +195,7 @@ static void draw_seg(u16 seg_index) {
     s32 latB = (relx * g_rx + rely * g_ry) >> FX_SHIFT;
 
     // Texture coordinate along the wall (world units), repeating every 256 px
-    // like the raycaster. u goes 0 -> wall_length from v1 -> v2. The wall
+    // like the BSP projection. u goes 0 -> wall_length from v1 -> v2. The wall
     // length is precomputed in ROM (bsp_seg_wall_len) so we avoid two vertex
     // lookups and two abs calls per seg visit.
     const s32 wall_len = bsp_seg_wall_len[seg_index];
@@ -249,12 +249,10 @@ static void draw_seg(u16 seg_index) {
     const u8 tid = (seg->texture_id < FREEDOOM_WALL_TEXTURE_COUNT) ?
                        seg->texture_id : MEGALDOOM_TEX_FALLBACK;
     const u8 shade = (seg->ny != 0) ? 1 : 0; // N/S walls use the shaded copy
-    // Per-texture horizontal repeat: the WALL_TEX_DIM-wide texture must span one full
-    // period of the source Doom texture (Doom maps 1 texel == 1 world unit), so it
-    // repeats every source_width world units instead of a fixed 256. The shift is
-    // log2(source_width / WALL_TEX_DIM), derived here from the source widths so it
-    // tracks WALL_TEX_DIM automatically instead of being a hand-baked table.
-    const s8 ushift = FREEDOOM_WALL_TEXTURE_USHIFT[tid];
+    // Doom textures may have arbitrary widths (including 24 pixels).  Scale
+    // world-space U into the 32-column runtime copy while preserving the source
+    // repeat period.  Q12 avoids a division in the sampled-column loop.
+    const u16 u_scale_q12 = FREEDOOM_WALL_TEXTURE_USCALE_Q12[tid];
 
     s32 x0 = xL;
     s32 x1 = xR - 1;
@@ -304,8 +302,7 @@ static void draw_seg(u16 seg_index) {
 
         col->height = (u16)height;
         col->depth = (u16)depth_col;
-        const s32 scaled_u = (ushift >= 0) ? (u_col >> ushift) :
-                                               (u_col * ((s32)1 << -ushift));
+        const s32 scaled_u = (u_col * (s32)u_scale_q12) >> 12;
         col->tex_x = (u8)(scaled_u & WALL_TEX_DIM_MASK);
         col->tex_y = seg->tex_v_offset;
         col->texture_id = tid;
@@ -551,7 +548,7 @@ void bsp_traverse_front_to_back(const PlayerState *player,
     render_node(bsp_root_node);
 }
 
-static void legacy_visit_leaf(u16 subsector_id, void *context) {
+static void bsp_visit_leaf(u16 subsector_id, void *context) {
     const BspSubsector *ss = &bsp_subsectors[subsector_id];
     (void)context;
     for (u16 i = 0; i < ss->seg_count; i++) {
@@ -559,12 +556,12 @@ static void legacy_visit_leaf(u16 subsector_id, void *context) {
     }
 }
 
-static bool legacy_range_closed(u16 left_sample, u16 right_sample, void *context) {
+static bool bsp_range_closed(u16 left_sample, u16 right_sample, void *context) {
     (void)context;
     return solid_sample_range_filled(left_sample, right_sample);
 }
 
-static bool legacy_all_closed(void *context) {
+static bool bsp_all_closed(void *context) {
     (void)context;
     return g_solid_count >= BSP_SAMPLE_COLS;
 }
@@ -605,8 +602,8 @@ void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColor
         columns[c].shade = 0;
     }
 
-    bsp_traverse_front_to_back(player, legacy_visit_leaf, legacy_range_closed,
-                               legacy_all_closed, NULL);
+    bsp_traverse_front_to_back(player, bsp_visit_leaf, bsp_range_closed,
+                               bsp_all_closed, NULL);
 }
 
 #if DEBUG_PERF

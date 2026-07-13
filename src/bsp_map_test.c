@@ -23,64 +23,24 @@ const BspVertex bsp_vertices[] = {
 
 const BspSeg bsp_segs[] = {
     // --- West subsector (interior center ~ (640,1024)) ---
-    {0, 4, 0, 1, 0, 0, MEGALDOOM_TEX_STARTAN3, BSP_SEG_WALL},
-    {4, 5, -1, 0, 0, 0, MEGALDOOM_TEX_SUPPORT2, BSP_SEG_WALL},
-    {5, 6, -1, 0, 0, 0, MEGALDOOM_TEX_DOOR3, BSP_SEG_DOOR},
-    {6, 7, -1, 0, 0, 0, MEGALDOOM_TEX_SUPPORT2, BSP_SEG_WALL},
-    {3, 7, 0, -1, 0, 0, MEGALDOOM_TEX_STARTAN3, BSP_SEG_WALL},
-    {0, 3, 1, 0, 0, 0, MEGALDOOM_TEX_BROWN1, BSP_SEG_WALL},
+    {0, 4, 0, 1, 0, 0, MEGALDOOM_TEX_STARTAN3, BSP_SEG_WALL, BSP_DOOR_GROUP_NONE, BSP_KEY_NONE, 0},
+    {4, 5, -1, 0, 0, 0, MEGALDOOM_TEX_SUPPORT2, BSP_SEG_WALL, BSP_DOOR_GROUP_NONE, BSP_KEY_NONE, 0},
+    {5, 6, -1, 0, 0, 0, MEGALDOOM_TEX_DOOR3, BSP_SEG_DOOR, 0, BSP_KEY_NONE, BSP_SEG_FLAG_DIRECT_USE},
+    {6, 7, -1, 0, 0, 0, MEGALDOOM_TEX_SUPPORT2, BSP_SEG_WALL, BSP_DOOR_GROUP_NONE, BSP_KEY_NONE, 0},
+    {3, 7, 0, -1, 0, 0, MEGALDOOM_TEX_STARTAN3, BSP_SEG_WALL, BSP_DOOR_GROUP_NONE, BSP_KEY_NONE, 0},
+    {0, 3, 1, 0, 0, 0, MEGALDOOM_TEX_BROWN1, BSP_SEG_WALL, BSP_DOOR_GROUP_NONE, BSP_KEY_NONE, 0},
     // --- East subsector (interior center ~ (1408,1024)) ---
-    {4, 1, 0, 1, 0, 0, MEGALDOOM_TEX_COMPTILE, BSP_SEG_WALL},
-    {1, 2, -1, 0, 0, 0, MEGALDOOM_TEX_SW1STRTN, BSP_SEG_EXIT},
-    {7, 2, 0, -1, 0, 0, MEGALDOOM_TEX_COMPTILE, BSP_SEG_WALL},
-    {4, 5, 1, 0, 0, 0, MEGALDOOM_TEX_SUPPORT2, BSP_SEG_WALL},
-    {5, 6, 1, 0, 0, 0, MEGALDOOM_TEX_DOOR3, BSP_SEG_DOOR},
-    {6, 7, 1, 0, 0, 0, MEGALDOOM_TEX_SUPPORT2, BSP_SEG_WALL},
-};
-
-const BspLine bsp_lines[] = {
-    {0, 4, 0, BSP_NO_SECTOR, 0, 0, 0},
-    {4, 5, 0, BSP_NO_SECTOR, 0, 0, 0},
-    {5, 6, 0, 1, 0, 1, 0},
-    {6, 7, 0, BSP_NO_SECTOR, 0, 0, 0},
-    {3, 7, 0, BSP_NO_SECTOR, 0, 0, 0},
-    {0, 3, 0, BSP_NO_SECTOR, 0, 0, 0},
-    {4, 1, 1, BSP_NO_SECTOR, 0, 0, 0},
-    {1, 2, 1, BSP_NO_SECTOR, 0, 11, 0},
-    {7, 2, 1, BSP_NO_SECTOR, 0, 0, 0},
-};
-
-const BspRenderSeg bsp_render_segs[] = {
-    {0,4,0,0,BSP_NO_SECTOR,0,1,0,0,0,0,MEGALDOOM_TEX_STARTAN3,0},
-    {4,5,1,0,BSP_NO_SECTOR,-1,0,0,0,0,0,MEGALDOOM_TEX_SUPPORT2,0},
-    {5,6,2,0,1,-1,0,0,0,0,0,MEGALDOOM_TEX_DOOR3,0},
-    {6,7,3,0,BSP_NO_SECTOR,-1,0,0,0,0,0,MEGALDOOM_TEX_SUPPORT2,0},
-    {3,7,4,0,BSP_NO_SECTOR,0,-1,0,0,0,0,MEGALDOOM_TEX_STARTAN3,0},
-    {0,3,5,0,BSP_NO_SECTOR,1,0,0,0,0,0,MEGALDOOM_TEX_BROWN1,0},
-    {4,1,6,1,BSP_NO_SECTOR,0,1,0,0,0,0,MEGALDOOM_TEX_COMPTILE,0},
-    {1,2,7,1,BSP_NO_SECTOR,-1,0,0,0,0,0,MEGALDOOM_TEX_SW1STRTN,0},
-    {7,2,8,1,BSP_NO_SECTOR,0,-1,0,0,0,0,MEGALDOOM_TEX_COMPTILE,0},
-    {6,5,2,1,0,1,0,0,0,0,0,MEGALDOOM_TEX_DOOR3,1},
-};
-
-const BspRenderSubsector bsp_render_subsectors[] = {
-    {0, 6, 0}, // 0 west
-    {6, 4, 1}, // 1 east
+    {4, 1, 0, 1, 0, 0, MEGALDOOM_TEX_COMPTILE, BSP_SEG_WALL, BSP_DOOR_GROUP_NONE, BSP_KEY_NONE, 0},
+    {1, 2, -1, 0, 0, 0, MEGALDOOM_TEX_SW1STRTN, BSP_SEG_EXIT, BSP_DOOR_GROUP_NONE, BSP_KEY_NONE, 0},
+    {7, 2, 0, -1, 0, 0, 0, MEGALDOOM_TEX_COMPTILE, BSP_SEG_WALL, BSP_DOOR_GROUP_NONE, BSP_KEY_NONE, 0},
+    {4, 5, 1, 0, 0, 0, MEGALDOOM_TEX_SUPPORT2, BSP_SEG_WALL, BSP_DOOR_GROUP_NONE, BSP_KEY_NONE, 0},
+    {5, 6, 1, 0, 0, 0, MEGALDOOM_TEX_DOOR3, BSP_SEG_DOOR, 0, BSP_KEY_NONE, BSP_SEG_FLAG_DIRECT_USE},
+    {6, 7, 1, 0, 0, 0, MEGALDOOM_TEX_SUPPORT2, BSP_SEG_WALL, BSP_DOOR_GROUP_NONE, BSP_KEY_NONE, 0},
 };
 
 const BspSubsector bsp_subsectors[] = {
-    {0, 6, 0}, // 0 west
-    {6, 6, 1}, // 1 east
-};
-
-const BspSectorVisual bsp_sector_visuals[] = {
-    {6, 4},
-    {11, 6},
-};
-
-const BspSector bsp_sectors[] = {
-    {0, 256, 0, 0, 4, 6, 192, 0, 0},
-    {0, 256, 0, 0, 6, 11, 192, 0, 0},
+    {0, 6}, // 0 west
+    {6, 6}, // 1 east
 };
 
 const BspNode bsp_nodes[] = {
@@ -94,11 +54,9 @@ const BspNode bsp_nodes[] = {
 const u16 bsp_root_node = 0;
 const u16 bsp_seg_count = 12;
 const u16 bsp_vertex_count = 8;
-const u16 bsp_line_count = 9;
-const u16 bsp_render_seg_count = 10;
-const u16 bsp_sector_count = 2;
 const u16 bsp_subsector_count = 2;
 const u16 bsp_node_count = 1u;
+const u16 bsp_door_count = 1u;
 const BspThing bsp_things[] = {
     {640, 1024, 1u, 0u, 0u},
     {1408, 1024, 2028u, 0u, 0u},
@@ -124,14 +82,6 @@ const u16 bsp_grid_seg_indices[48] = {
     0,5,0,0,0,1,6,9,6,6,6,7,5,1,9,7,5,1,2,9,10,7,5,2,3,10,11,7,5,3,11,7,
     5,3,11,7,4,5,4,4,3,4,8,11,8,8,7,8,
 };
-const u16 bsp_line_grid_cell_offsets[50] = {
-    0,2,3,4,7,8,9,11,12,12,12,14,14,14,15,16,16,16,19,19,19,20,21,21,21,
-    24,24,24,25,26,26,26,28,28,28,29,30,30,30,32,32,32,33,35,36,37,40,41,42,44,
-};
-const u16 bsp_line_grid_indices[44] = {
-    0,5,0,0,0,1,6,6,6,7,5,1,7,5,1,7,5,1,2,7,5,2,7,5,2,3,7,5,3,7,5,3,7,4,5,4,4,3,4,8,8,8,7,8,
-};
-
 const s32 bsp_player_start_x = 2 * FX_ONE + (FX_ONE / 2); // 640
 const s32 bsp_player_start_y = 4 * FX_ONE;                // 1024, aligned with door
 const u16 bsp_player_start_angle = 0;                     // face east toward door

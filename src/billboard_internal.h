@@ -89,8 +89,6 @@ typedef struct {
 typedef struct {
     s32 x;
     s32 y;
-    s16 z;
-    u16 sector_id;
     u8 type_id;
     u8 hp;
     bool active;

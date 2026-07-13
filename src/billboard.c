@@ -131,9 +131,6 @@ void billboard_init(u16 phase_index) {
         *object = (BillboardObject){0};
         object->x = bsp_things[i].x;
         object->y = bsp_things[i].y;
-        object->sector_id = bsp_find_sector(object->x, object->y);
-        const BspSectorState *sector = bsp_get_sector_state(object->sector_id);
-        object->z = sector ? sector->floor_height : 0;
         object->type_id = type;
         object->hp = visual; // key color is carried as its visual ID.
         object->active = TRUE;
@@ -143,7 +140,6 @@ void billboard_init(u16 phase_index) {
     }
     g_collected_count = 0;
     g_pickup_counts.bonus = 0;
-    g_pickup_counts.key = 0;
     g_last_pickup_kind = BILLBOARD_PICKUP_NONE;
     g_visibility_context_valid = FALSE;
     g_visibility_generation = 1;
@@ -202,7 +198,8 @@ void billboard_invalidate_object_visibility(u16 index) {
 }
 
 BillboardPickupResult billboard_collect_near(s32 x, s32 y) {
-    BillboardPickupResult result = {FALSE, BILLBOARD_EFFECT_NONE, 0, BILLBOARD_PICKUP_NONE};
+    BillboardPickupResult result = {FALSE, BILLBOARD_EFFECT_NONE, 0, BSP_KEY_NONE,
+                                    BILLBOARD_PICKUP_NONE};
     for (u16 i = 0; i < BILLBOARD_OBJECT_COUNT; i++) {
         BillboardObject *object = &g_billboards[i];
         const BillboardType *type = billboard_get_type(object->type_id);
@@ -222,9 +219,10 @@ BillboardPickupResult billboard_collect_near(s32 x, s32 y) {
         }
         else if (type->effect == BILLBOARD_EFFECT_AMMO) result.amount = (object->type_id == BILLBOARD_TYPE_AMMO_BOX) ? 20 : 10;
         else if (type->effect == BILLBOARD_EFFECT_KEY) {
-            result.amount = 1;
+            if (object->hp == BILLBOARD_VISUAL_BLUE_KEY) result.key_mask = BSP_KEY_BLUE;
+            else if (object->hp == BILLBOARD_VISUAL_YELLOW_KEY) result.key_mask = BSP_KEY_YELLOW;
+            else if (object->hp == BILLBOARD_VISUAL_RED_KEY) result.key_mask = BSP_KEY_RED;
             result.kind = BILLBOARD_PICKUP_KEY;
-            g_pickup_counts.key++;
         } else { result.kind = BILLBOARD_PICKUP_BONUS; g_pickup_counts.bonus++; }
         g_collected_count++;
         g_last_pickup_kind = result.kind;
@@ -249,7 +247,6 @@ bool billboard_position_blocked(s32 x, s32 y, s32 radius) {
     return FALSE;
 }
 
-bool billboard_consume_key(void) { if (!g_pickup_counts.key) return FALSE; g_pickup_counts.key--; return TRUE; }
 u16 billboard_get_collected_count(void) { return g_collected_count; }
 BillboardPickupCounts billboard_get_pickup_counts(void) { return g_pickup_counts; }
 BillboardPickupKind billboard_get_last_pickup_kind(void) { return g_last_pickup_kind; }

@@ -8,8 +8,8 @@
 // 3 = 20fps. Shared by the main-loop pad wait (main.c) and the movement ramp
 // (player_controller.c) so the time-correct dt scaling below stays in sync with
 // the real cadence. See main.c for the tuning rationale (turning is the worst
-// case: full cast + 300-tile bank-swap upload).  The sector renderer no longer
-// runs the legacy cast first, so two vblanks are again a sustainable target;
+// case: full cast + 300-tile bank-swap upload). The single textured BSP path
+// keeps two vblanks a sustainable target;
 // the uploader may consume one of them while splitting a full bank safely.
 #define TARGET_FRAME_VSYNCS 2
 

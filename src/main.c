@@ -22,7 +22,7 @@
 // off when a redraw reliably finishes within this many vblanks. Tune from the DEBUG_PERF
 // CPU-load% while moving (turn right + go north): load under ~95% -> 1 holds 60; under
 // ~185% -> 2 holds 30; otherwise 3 holds a rock-steady 20. Default 2 targets 30fps
-// after removing the duplicate legacy+sector cast.
+// after consolidating rendering into the single BSP cast.
 // TARGET_FRAME_VSYNCS is defined in player_controller.h (shared with the movement ramp).
 
 // Perf diagnostics overlay (FPS + CPU load + frame-load cursor). Set to 0 (or
@@ -55,6 +55,7 @@ static void sync_hud(u32 frame,
                      u16 player_health,
                      u16 player_armor,
                      u16 player_ammo,
+                     u8 player_keys,
                      u16 shot_cooldown,
                      DoorActionResult action_status,
                      BillboardShotResult shot_status,
@@ -65,6 +66,7 @@ static void sync_hud(u32 frame,
     g_hud.health_percent = (u16)((player_health * 100u) / PLAYER_MAX_HEALTH);
     g_hud.armor = player_armor;
     g_hud.ammo = player_ammo;
+    g_hud.key_mask = player_keys;
     g_hud.shot_cooldown = shot_cooldown;
     g_hud.enemy_count = billboard_get_enemy_count();
     g_hud.target_count = billboard_get_target_count();
@@ -82,11 +84,7 @@ static void render_current_view(u16 player_health, bool base_dirty) {
     const u32 cast_start = getSubTick();
 #endif
     if (base_dirty) {
-#if BSP_SECTOR_RENDERER
-        bsp_sector_cast_frame(&g_player);
-#else
         bsp_cast_frame(&g_player, g_ray_columns, &g_scene_colors);
-#endif
     }
 #if DEBUG_PERF
     renderer_debug_set_cast_subticks(base_dirty ? (getSubTick() - cast_start) : 0);
@@ -98,7 +96,8 @@ static void render_current_view(u16 player_health, bool base_dirty) {
 }
 
 static void reset_level(u16 phase_index, bool *level_cleared, u16 *shot_cooldown,
-                        u16 *player_health, u16 *player_armor, u16 *player_ammo, u32 *frame) {
+                        u16 *player_health, u16 *player_armor, u16 *player_ammo,
+                        u8 *player_keys, u32 *frame) {
     bsp_map_reset(phase_index);
     billboard_init(phase_index);
     player_init(&g_player, phase_index);
@@ -111,12 +110,13 @@ static void reset_level(u16 phase_index, bool *level_cleared, u16 *shot_cooldown
     *player_health = PLAYER_MAX_HEALTH;
     *player_armor = 0;
     *player_ammo = PLAYER_START_AMMO;
+    *player_keys = BSP_KEY_NONE;
     *frame = 0;
 
     renderer_invalidate_scene();
     renderer_draw_static_screen();
     sync_hud(*frame, phase_index, *player_health, *player_armor, *player_ammo,
-             *shot_cooldown, DOOR_ACTION_NONE, BILLBOARD_SHOT_NONE, FALSE);
+             *player_keys, *shot_cooldown, DOOR_ACTION_NONE, BILLBOARD_SHOT_NONE, FALSE);
     renderer_draw_hud(&g_hud);
 }
 
@@ -130,6 +130,7 @@ int main(bool hard) {
     u16 player_health = PLAYER_MAX_HEALTH;
     u16 player_armor = 0;
     u16 player_ammo = PLAYER_START_AMMO;
+    u8 player_keys = BSP_KEY_NONE;
     u16 shot_cooldown = 0;
     u32 prev_vtimer = vtimer;
 
@@ -151,7 +152,8 @@ int main(bool hard) {
     Z80_loadDriver(Z80_DRIVER_XGM2, TRUE);
     XGM2_play(test_music);
 
-    reset_level(phase_index, &level_cleared, &shot_cooldown, &player_health, &player_armor, &player_ammo, &frame);
+    reset_level(phase_index, &level_cleared, &shot_cooldown, &player_health,
+                &player_armor, &player_ammo, &player_keys, &frame);
 
 #if DEBUG_PERF
     // Scanline cursor (sprite 0): top = 0% load, bottom = 100% load, averaged.
@@ -200,7 +202,8 @@ int main(bool hard) {
             control = player_controller_update(&g_player, elapsed_frames);
         } else if ((JOY_readJoypad(JOY_1) & BUTTON_START) != 0) {
             phase_index = (u16)((phase_index + 1) & 1);
-            reset_level(phase_index, &level_cleared, &shot_cooldown, &player_health, &player_armor, &player_ammo, &frame);
+            reset_level(phase_index, &level_cleared, &shot_cooldown, &player_health,
+                        &player_armor, &player_ammo, &player_keys, &frame);
             base_dirty = TRUE;
             overlay_dirty = TRUE;
         }
@@ -221,6 +224,8 @@ int main(bool hard) {
                     if (player_armor > PLAYER_MAX_ARMOR) player_armor = PLAYER_MAX_ARMOR;
                 } else if (pickup.effect == BILLBOARD_EFFECT_AMMO) {
                     player_ammo = (u16)((player_ammo + pickup.amount > 99) ? 99 : player_ammo + pickup.amount);
+                } else if (pickup.effect == BILLBOARD_EFFECT_KEY) {
+                    player_keys = (u8)(player_keys | pickup.key_mask);
                 }
                 overlay_dirty = TRUE;
                 XGM2_playPCM(sfx_pickup, sizeof(sfx_pickup), SOUND_PCM_CH2);
@@ -228,29 +233,18 @@ int main(bool hard) {
         }
 
         if ((control & PLAYER_CONTROL_USE) != 0) {
-            const bool has_key = billboard_get_pickup_counts().key > 0;
-            const u16 target_count = billboard_get_target_count();
-            bool consumed_key = FALSE;
-            DoorActionResult action =
-                bsp_use_in_front(g_player.x, g_player.y, g_player.angle, has_key, &consumed_key);
-
-            if ((action == DOOR_ACTION_EXIT) && (target_count > 0)) {
-                action = DOOR_ACTION_EXIT_LOCKED;
-            }
+            const BspUseResult use =
+                bsp_use_in_front(g_player.x, g_player.y, g_player.angle, player_keys);
+            const DoorActionResult action = use.action;
 
             action_status = action;
 
             if (action != DOOR_ACTION_NONE) {
-                if (consumed_key) {
-                    billboard_consume_key();
-                }
                 if (action == DOOR_ACTION_EXIT) {
                     level_cleared = TRUE;
                 }
-                if (action != DOOR_ACTION_EXIT_LOCKED) {
-                    base_dirty = TRUE;
-                    overlay_dirty = TRUE;
-                }
+                base_dirty = TRUE;
+                overlay_dirty = TRUE;
                 // Door / platform move sound on PCM channel 3. A toggle or a
                 // key-unlock moves the door; a locked bump stays silent.
                 if ((action == DOOR_ACTION_TOGGLED) || (action == DOOR_ACTION_UNLOCKED)) {
@@ -263,12 +257,7 @@ int main(bool hard) {
             BillboardShotResult shot = BILLBOARD_SHOT_NONE;
 
             if ((shot_cooldown == 0) && (player_ammo > 0)) {
-#if BSP_SECTOR_RENDERER
-                shot = billboard_fire_center(&g_player,
-                    bsp_sector_depth_at(RAY_SAMPLE_COLS / 2, RAY_VIEW_CENTER_Y));
-#else
                 shot = billboard_fire_center(&g_player, g_ray_columns[RAY_VIEW_COLS / 2].depth);
-#endif
                 shot_cooldown = SHOT_COOLDOWN_FRAMES;
                 player_ammo--;
                 g_weapon_flash = WEAPON_FLASH_FRAMES;
@@ -305,7 +294,9 @@ int main(bool hard) {
                 player_armor = (u16)(player_armor - armor_absorb);
                 if (player_health <= damage) {
                     XGM2_playPCM(sfx_player_death, sizeof(sfx_player_death), SOUND_PCM_CH2);
-                    reset_level(phase_index, &level_cleared, &shot_cooldown, &player_health, &player_armor, &player_ammo, &frame);
+                    reset_level(phase_index, &level_cleared, &shot_cooldown,
+                                &player_health, &player_armor, &player_ammo,
+                                &player_keys, &frame);
                     base_dirty = TRUE;
                     overlay_dirty = TRUE;
                 } else {
@@ -322,7 +313,7 @@ int main(bool hard) {
         }
 
         sync_hud(frame, phase_index, player_health, player_armor, player_ammo,
-                 shot_cooldown, action_status, shot_status, level_cleared);
+                 player_keys, shot_cooldown, action_status, shot_status, level_cleared);
         renderer_draw_hud(&g_hud);
 
 #if DEBUG_PERF

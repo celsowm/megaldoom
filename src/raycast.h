@@ -3,7 +3,7 @@
 
 #include <genesis.h>
 
-// View geometry — single source of truth for the render viewport. The raycaster,
+// View geometry — single source of truth for the render viewport. The BSP caster,
 // billboard and renderer all derive from these: VIEW_TILE_W/H in
 // renderer_internal.h alias RAY_VIEW_TILE_W/H, and the billboard projector
 // centres sprites on RAY_VIEW_COLS/ROWS. 8px tiles (Mega Drive hardware).
@@ -19,6 +19,10 @@
 #define RAY_PROJ_Y RAY_VIEW_ROWS
 #define RAY_WORLD_WALL_HEIGHT 256
 #define RAY_CAMERA_HEIGHT (RAY_WORLD_WALL_HEIGHT / 2)
+// Doom's player is 32 map units wide. Using that value as a radius makes real
+// Doom doorways (notably E1M2) geometrically impossible, so runtime and offline
+// certification share the canonical 16-unit radius.
+#define PLAYER_COLLISION_RADIUS 16
 // Horizontal render granularity: cast/sample one wall column every N pixels and
 // duplicate across the gap. 1 = full 1px detail (heaviest), 2 = 2px (~80 cols),
 // 4 = 4px (~40 cols, original cost). Must divide 8. Lower = sharper but slower.
@@ -43,9 +47,6 @@
 typedef struct {
     s32 x;
     s32 y;
-    s16 z;
-    s16 view_z;
-    u16 sector_id;
     u16 angle;
 } PlayerState;
 

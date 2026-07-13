@@ -18,6 +18,7 @@ typedef struct {
     u16 target_count;
     u16 target_health;
     BillboardPickupCounts pickups;
+    u8 key_mask;
     BillboardPickupKind last_pickup;
     DoorActionResult action_status;
     BillboardShotResult shot_status;

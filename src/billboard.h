@@ -40,7 +40,6 @@ typedef struct {
 
 typedef struct {
     u16 bonus;
-    u16 key;
 } BillboardPickupCounts;
 
 typedef struct {
@@ -67,6 +66,7 @@ typedef struct {
     bool collected;
     u8 effect;
     u16 amount;
+    u8 key_mask;
     BillboardPickupKind kind;
 } BillboardPickupResult;
 
@@ -85,7 +85,6 @@ typedef struct {
 
 void billboard_init(u16 phase_index);
 BillboardPickupResult billboard_collect_near(s32 x, s32 y);
-bool billboard_consume_key(void);
 u16 billboard_get_collected_count(void);
 BillboardPickupCounts billboard_get_pickup_counts(void);
 BillboardPickupKind billboard_get_last_pickup_kind(void);
