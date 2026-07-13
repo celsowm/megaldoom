@@ -16,7 +16,7 @@ if (-not [IO.Path]::IsPathRooted($AssetsOutPath)) { $AssetsOutPath = Join-Path $
 if (-not $PlanOutPath) { $PlanOutPath = Join-Path $Root ("out\{0}-flat-plan.json" -f $Map.ToLower()) }
 elseif (-not [IO.Path]::IsPathRooted($PlanOutPath)) { $PlanOutPath = Join-Path $Root $PlanOutPath }
 
-& python (Join-Path $PSScriptRoot "wad-flat-playable.py") `
+& python (Join-Path $PSScriptRoot "wad-flat-preflight.py") `
     --wad $WadPath --map $Map --out $PlanOutPath
 if ($LASTEXITCODE -ne 0) {
     throw "Flat-map progression preflight failed; generated geometry was not replaced."
