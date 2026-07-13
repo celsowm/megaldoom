@@ -29,20 +29,32 @@ def model(opening: int, special: int = 0, flags: int = 0):
 
 def main() -> None:
     closed = model(0)
-    assert module.normalize_for_textured_legacy(closed) == [0]
+    changes = module.normalize_for_textured_legacy(closed)
+    assert changes["closed_portals"] == [0]
     assert closed.linedefs[0]["flags"] & module.base.LINE_FLAG_IMPASSABLE
 
     open_portal = model(1)
-    assert module.normalize_for_textured_legacy(open_portal) == []
+    assert not any(module.normalize_for_textured_legacy(open_portal).values())
     assert open_portal.linedefs[0]["flags"] == 0
 
-    door = model(0, special=26)
-    assert module.normalize_for_textured_legacy(door) == []
+    closed_door = model(0, special=26)
+    assert not any(module.normalize_for_textured_legacy(closed_door).values())
+    assert closed_door.linedefs[0]["special"] == 26
+
+    open_door = model(1, special=26)
+    changes = module.normalize_for_textured_legacy(open_door)
+    assert changes["open_door_specials"] == [0]
+    assert open_door.linedefs[0]["special"] == 0
+
+    open_exit = model(1, special=11)
+    changes = module.normalize_for_textured_legacy(open_exit)
+    assert changes["open_exit_specials"] == [0]
+    assert open_exit.linedefs[0]["special"] == 0
 
     impassable = model(32, flags=module.base.LINE_FLAG_IMPASSABLE)
-    assert module.normalize_for_textured_legacy(impassable) == []
+    assert not any(module.normalize_for_textured_legacy(impassable).values())
 
-    print("ok    preflight collision policy matches the textured legacy extractor")
+    print("ok    preflight topology matches every legacy solid-line case")
 
 
 if __name__ == "__main__":
