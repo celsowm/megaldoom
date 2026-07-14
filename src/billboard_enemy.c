@@ -214,8 +214,7 @@ static bool enemy_affects_view(u16 index, const BillboardObject *object,
     BillboardMeasure measure;
 
     if (!billboard_measure_object(player, cos_a, sin_a, object, &measure)) return FALSE;
-    if ((measure.center_col + measure.half_w < 0) ||
-        (measure.center_col - measure.half_w >= RAY_VIEW_COLS)) return FALSE;
+    if ((measure.right < 0) || (measure.left >= RAY_VIEW_COLS)) return FALSE;
     return billboard_has_line_of_sight(index, player);
 }
 

@@ -466,18 +466,18 @@ static void draw_projected_billboards(const RayColumn *columns,
         u8 tex_y_by_screen_row[VIEW_PIXEL_H];
         s16 y0 = object->top;
         s16 y1 = object->bottom;
-        u32 tex_x_acc = 0;
+        u32 tex_x_acc = (u32)object->atlas_x << 8;
         u32 tex_x_step;
+        const u8 atlas_x_last = (u8)(object->atlas_x + object->atlas_w - 1);
         s16 last_marked_tile_x = -1;
         u16 opaque_tile_rows = 0;
 
         if ((height <= 0) || (width <= 0)) {
             continue;
         }
-        // tex_x_step = (tex.w<<8)/width; width <= 2*half_w+1 (<= 25) and tex.w
-        // <= 24, so the quotient (<= 6144) fits u16 and DIVU.W is exact,
-        // avoiding the slow 32-bit unsigned-division helper.
-        tex_x_step = divu((u32)tex.w << 8, (u16)width);
+        // Sample only the occupied atlas rectangle. Transparent letterbox padding
+        // must not alter the WAD patch's projected size or origin.
+        tex_x_step = divu((u32)object->atlas_w << 8, (u16)width);
 
         if (y0 < 0) {
             y0 = 0;
@@ -491,16 +491,19 @@ static void draw_projected_billboards(const RayColumn *columns,
 
         // Approximate floor(rel_y * tex.h / height) with one setup divide and a
         // fixed-point DDA instead of a 68k divide for every visible sprite row.
-        u32 tex_y_acc = ((u32)(y0 - object->top) * tex.h) << 16;
-        // tex_y_step = (tex.h<<16)/height is Q16; for a 48px enemy the numerator
+        // tex_y_step = (crop.h<<16)/height is Q16; for a 48px enemy the numerator
         // is 3,145,728 and small projected heights make the quotient exceed 16
         // bits, so a single DIVU.W cannot hold it. The two-stage divider produces
         // the exact same quotient as '/'.
-        const u32 tex_y_step = divu32_16_exact((u32)tex.h << 16, (u16)height);
+        const u32 tex_y_step = divu32_16_exact((u32)object->atlas_h << 16,
+                                               (u16)height);
+        u32 tex_y_acc = ((u32)object->atlas_y << 16) +
+                        ((u32)(y0 - object->top) * tex_y_step);
+        const u8 atlas_y_last = (u8)(object->atlas_y + object->atlas_h - 1);
         for (s16 y = y0; y <= y1; y++) {
             u8 tex_y = (u8)(tex_y_acc >> 16);
-            if (tex_y >= tex.h) {
-                tex_y = (u8)(tex.h - 1);
+            if (tex_y > atlas_y_last) {
+                tex_y = atlas_y_last;
             }
             tex_y_by_screen_row[y] = tex_y;
             tex_y_acc += tex_y_step;
@@ -519,8 +522,8 @@ static void draw_projected_billboards(const RayColumn *columns,
             const u16 wall_depth = columns[wall_col].depth;
             if (object->depth >= wall_depth) continue;
 
-            if (tex_x >= tex.w) {
-                tex_x = (u8)(tex.w - 1);
+            if (tex_x > atlas_x_last) {
+                tex_x = atlas_x_last;
             }
             const u16 tile_x = (u16)(col >> 3);
             const u16 shift = (u16)((7 - (col & 7)) * 4);

@@ -20,20 +20,17 @@ static u16 s_debug_projected;
 static u16 billboard_project_one(const BillboardObject *object,
                                  const BillboardMeasure *measure,
                                  ProjectedBillboard *projected) {
-    const s16 bottom = (s16)(RAY_VIEW_CENTER_Y -
-        (((s32)-PLAYER_EYE_HEIGHT * RAY_PROJ_Y) / measure->forward));
-    const s16 top = (s16)(RAY_VIEW_CENTER_Y -
-        (((s32)(measure->type->world_height - PLAYER_EYE_HEIGHT) * RAY_PROJ_Y) /
-         measure->forward));
-    const s16 left = (s16)(measure->center_col - measure->half_w);
-    const s16 right = (s16)(measure->center_col + measure->half_w);
-    projected->left = left;
-    projected->right = right;
-    projected->top = top;
-    projected->bottom = bottom;
+    projected->left = measure->left;
+    projected->right = measure->right;
+    projected->top = measure->top;
+    projected->bottom = measure->bottom;
     projected->depth = (u16)measure->forward;
     projected->visual_id = billboard_get_object_visual_id(object, measure->type);
     projected->frame = billboard_get_object_frame(object);
+    projected->atlas_x = measure->atlas_x;
+    projected->atlas_y = measure->atlas_y;
+    projected->atlas_w = measure->atlas_w;
+    projected->atlas_h = measure->atlas_h;
     return 1;
 }
 
@@ -43,8 +40,8 @@ static u16 billboard_project_one(const BillboardObject *object,
 // wide sprite vanish merely because its centre lies behind a pillar.
 static bool billboard_span_has_visible_block(const BillboardMeasure *measure,
                                              const RayColumn *columns) {
-    s16 left = (s16)(measure->center_col - measure->half_w);
-    s16 right = (s16)(measure->center_col + measure->half_w);
+    s16 left = measure->left;
+    s16 right = measure->right;
 
     if (right < 0 || left >= RAY_VIEW_COLS) {
         return FALSE;
@@ -98,8 +95,7 @@ u16 billboard_project_scene(const PlayerState *player,
         if (!billboard_measure_object(player, cos_a, sin_a, &g_billboards[i], &measure)) {
             continue;
         }
-        if ((measure.center_col + measure.half_w < 0) ||
-            (measure.center_col - measure.half_w >= RAY_VIEW_COLS)) {
+        if ((measure.right < 0) || (measure.left >= RAY_VIEW_COLS)) {
 #if DEBUG_PERF
             s_debug_culled++;
 #endif

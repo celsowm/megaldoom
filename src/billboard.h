@@ -36,6 +36,10 @@ typedef struct {
     u16 depth;
     u8 visual_id;
     u8 frame;
+    u8 atlas_x;
+    u8 atlas_y;
+    u8 atlas_w;
+    u8 atlas_h;
 } ProjectedBillboard;
 
 typedef struct {

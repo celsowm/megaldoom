@@ -31,6 +31,10 @@
 #define BILLBOARD_TYPE_DUMMY 15
 #define BILLBOARD_TYPE_COUNT 16
 #define BILLBOARD_PROP_RADIUS 16
+#define BILLBOARD_ENEMY_WORLD_WIDTH 34
+#define BILLBOARD_ENEMY_WORLD_HEIGHT 102
+#define BILLBOARD_ENEMY_ATLAS_WIDTH 24
+#define BILLBOARD_ENEMY_ATLAS_HEIGHT 48
 
 #define DUMMY_MOVE_STEP (FX_ONE / 8)
 #define DUMMY_MOVE_INTERVAL 5
@@ -78,13 +82,23 @@ typedef struct {
     u8 effect;
     u8 hit_points;
     u8 radius;
-    u16 world_width;
-    u16 world_height;
     s32 max_depth;
     bool collectible;
     bool targetable;
     bool blocking;
 } BillboardType;
+
+typedef struct {
+    s16 source_w;
+    s16 source_h;
+    s16 left_offset;
+    s16 top_offset;
+    u8 atlas_x;
+    u8 atlas_y;
+    u8 atlas_w;
+    u8 atlas_h;
+    bool uses_wad_origin;
+} BillboardGeometry;
 
 typedef struct {
     s32 x;
@@ -116,6 +130,14 @@ typedef struct {
     s16 center_col;
     s16 half_w;
     s16 projected_height;
+    s16 left;
+    s16 right;
+    s16 top;
+    s16 bottom;
+    u8 atlas_x;
+    u8 atlas_y;
+    u8 atlas_w;
+    u8 atlas_h;
 } BillboardMeasure;
 
 extern BillboardObject g_billboards[];

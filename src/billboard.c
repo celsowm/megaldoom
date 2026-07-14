@@ -1,23 +1,25 @@
 #include "billboard_internal.h"
+#include "generated_billboard_geometry.h"
 
-// type: visual, effect, HP, radius, world width/height, max depth, collectible, targetable, blocking
+// type: visual, effect, HP, radius, max depth, collectible, targetable, blocking.
+// Item/prop render geometry comes from the Doom patch metadata, not this table.
 static const BillboardType BILLBOARD_TYPES[BILLBOARD_TYPE_COUNT] = {
-    {BILLBOARD_VISUAL_BONUS,       BILLBOARD_EFFECT_HEALTH, 1, 20, 23,  68, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
-    {BILLBOARD_VISUAL_BLUE_KEY,    BILLBOARD_EFFECT_KEY,    1, 20, 23,  68, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
-    {BILLBOARD_VISUAL_STIMPACK,    BILLBOARD_EFFECT_HEALTH, 1, 20, 23,  68, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
-    {BILLBOARD_VISUAL_MEDIKIT,     BILLBOARD_EFFECT_HEALTH, 1, 24, 23,  68, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
-    {BILLBOARD_VISUAL_ARMOR_BONUS, BILLBOARD_EFFECT_ARMOR,  1, 16, 23,  68, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
-    {BILLBOARD_VISUAL_GREEN_ARMOR, BILLBOARD_EFFECT_ARMOR,  1, 28, 23,  68, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
-    {BILLBOARD_VISUAL_BLUE_ARMOR,  BILLBOARD_EFFECT_ARMOR,  1, 28, 23,  68, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
-    {BILLBOARD_VISUAL_CLIP,        BILLBOARD_EFFECT_AMMO,   1, 18, 23,  68, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
-    {BILLBOARD_VISUAL_AMMO_BOX,    BILLBOARD_EFFECT_AMMO,   1, 24, 23,  68, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
-    {BILLBOARD_VISUAL_CANDLE,      BILLBOARD_EFFECT_NONE,   1, BILLBOARD_PROP_RADIUS, 28,  85, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
-    {BILLBOARD_VISUAL_CANDELABRA,  BILLBOARD_EFFECT_NONE,   1, BILLBOARD_PROP_RADIUS, 28,  85, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
-    {BILLBOARD_VISUAL_COLUMN,      BILLBOARD_EFFECT_NONE,   1, 16, 28,  85, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
-    {BILLBOARD_VISUAL_ELEC,        BILLBOARD_EFFECT_NONE,   1, 16, 85, 256, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
-    {BILLBOARD_VISUAL_BARREL,      BILLBOARD_EFFECT_NONE,   1, 20, 28,  85, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
-    {BILLBOARD_VISUAL_TREE,        BILLBOARD_EFFECT_NONE,   1, 48, 28,  85, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
-    {BILLBOARD_VISUAL_DUMMY,       BILLBOARD_EFFECT_NONE,   3, 24, 34, 102, BILLBOARD_MAX_DEPTH, FALSE, TRUE,  FALSE},
+    {BILLBOARD_VISUAL_BONUS,       BILLBOARD_EFFECT_HEALTH, 1, 20, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
+    {BILLBOARD_VISUAL_BLUE_KEY,    BILLBOARD_EFFECT_KEY,    1, 20, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
+    {BILLBOARD_VISUAL_STIMPACK,    BILLBOARD_EFFECT_HEALTH, 1, 20, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
+    {BILLBOARD_VISUAL_MEDIKIT,     BILLBOARD_EFFECT_HEALTH, 1, 24, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
+    {BILLBOARD_VISUAL_ARMOR_BONUS, BILLBOARD_EFFECT_ARMOR,  1, 16, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
+    {BILLBOARD_VISUAL_GREEN_ARMOR, BILLBOARD_EFFECT_ARMOR,  1, 28, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
+    {BILLBOARD_VISUAL_BLUE_ARMOR,  BILLBOARD_EFFECT_ARMOR,  1, 28, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
+    {BILLBOARD_VISUAL_CLIP,        BILLBOARD_EFFECT_AMMO,   1, 18, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
+    {BILLBOARD_VISUAL_AMMO_BOX,    BILLBOARD_EFFECT_AMMO,   1, 24, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
+    {BILLBOARD_VISUAL_CANDLE,      BILLBOARD_EFFECT_NONE,   1, BILLBOARD_PROP_RADIUS, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
+    {BILLBOARD_VISUAL_CANDELABRA,  BILLBOARD_EFFECT_NONE,   1, BILLBOARD_PROP_RADIUS, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
+    {BILLBOARD_VISUAL_COLUMN,      BILLBOARD_EFFECT_NONE,   1, 16, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
+    {BILLBOARD_VISUAL_ELEC,        BILLBOARD_EFFECT_NONE,   1, 16, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
+    {BILLBOARD_VISUAL_BARREL,      BILLBOARD_EFFECT_NONE,   1, 20, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
+    {BILLBOARD_VISUAL_TREE,        BILLBOARD_EFFECT_NONE,   1, 48, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
+    {BILLBOARD_VISUAL_DUMMY,       BILLBOARD_EFFECT_NONE,   3, 24, BILLBOARD_MAX_DEPTH, FALSE, TRUE,  FALSE},
 };
 
 BillboardObject g_billboards[BILLBOARD_OBJECT_COUNT];
@@ -90,6 +92,63 @@ static s32 bb_divs(s32 numerator, s32 denominator) {
     return numerator / denominator;
 }
 
+#define BILLBOARD_SCALE_SHIFT 12
+// BSP walls use a 256-unit visual height while Doom's authored wall/sprite
+// baseline is 128 units. Double WAD patch geometry so props retain their native
+// proportions without appearing half-sized against the rendered architecture.
+#define BILLBOARD_WORLD_GEOMETRY_SCALE 2
+
+static s32 billboard_muls_word(s16 left, s16 right) {
+    s32 result = left;
+    __asm__ volatile (
+        "muls.w %1,%0"
+        : "+d" (result)
+        : "d" (right)
+        : "cc");
+    return result;
+}
+
+static s16 billboard_project_q12(s16 value, u16 scale_q12) {
+    s32 product = billboard_muls_word(value, (s16)scale_q12);
+    if (product < 0) return (s16)-((-product) >> BILLBOARD_SCALE_SHIFT);
+    return (s16)(product >> BILLBOARD_SCALE_SHIFT);
+}
+
+static s16 billboard_project_world_q12(s16 value, u16 scale_q12) {
+    return billboard_project_q12((s16)(value + value), scale_q12);
+}
+
+static void billboard_get_geometry(const BillboardObject *object,
+                                   const BillboardType *type,
+                                   BillboardGeometry *geometry) {
+    const u8 visual_id = billboard_get_object_visual_id(object, type);
+    if (visual_id < FREEDOOM_BILLBOARD_WORLD_GEOMETRY_COUNT) {
+        const s16 *source = FREEDOOM_BILLBOARD_WORLD_GEOMETRY[visual_id];
+        geometry->source_w = source[FREEDOOM_BILLBOARD_GEOMETRY_SOURCE_W];
+        geometry->source_h = source[FREEDOOM_BILLBOARD_GEOMETRY_SOURCE_H];
+        geometry->left_offset = source[FREEDOOM_BILLBOARD_GEOMETRY_LEFT_OFFSET];
+        geometry->top_offset = source[FREEDOOM_BILLBOARD_GEOMETRY_TOP_OFFSET];
+        geometry->atlas_x = (u8)source[FREEDOOM_BILLBOARD_GEOMETRY_ATLAS_X];
+        geometry->atlas_y = (u8)source[FREEDOOM_BILLBOARD_GEOMETRY_ATLAS_Y];
+        geometry->atlas_w = (u8)source[FREEDOOM_BILLBOARD_GEOMETRY_ATLAS_W];
+        geometry->atlas_h = (u8)source[FREEDOOM_BILLBOARD_GEOMETRY_ATLAS_H];
+        geometry->uses_wad_origin = TRUE;
+        return;
+    }
+
+    // Preserve the established enemy size and bottom-centred anchor. This pass
+    // intentionally changes only static world items and props.
+    geometry->source_w = BILLBOARD_ENEMY_WORLD_WIDTH;
+    geometry->source_h = BILLBOARD_ENEMY_WORLD_HEIGHT;
+    geometry->left_offset = BILLBOARD_ENEMY_WORLD_WIDTH / 2;
+    geometry->top_offset = BILLBOARD_ENEMY_WORLD_HEIGHT;
+    geometry->atlas_x = 0;
+    geometry->atlas_y = 0;
+    geometry->atlas_w = BILLBOARD_ENEMY_ATLAS_WIDTH;
+    geometry->atlas_h = BILLBOARD_ENEMY_ATLAS_HEIGHT;
+    geometry->uses_wad_origin = FALSE;
+}
+
 bool billboard_measure_object(const PlayerState *player, s16 cos_a, s16 sin_a,
                               const BillboardObject *object, BillboardMeasure *measure) {
     if (!object->active) return FALSE;
@@ -99,15 +158,60 @@ bool billboard_measure_object(const PlayerState *player, s16 cos_a, s16 sin_a,
     const s32 forward = (((s32)cos_a * dx) + ((s32)sin_a * dy)) >> FX_SHIFT;
     const s32 side = (((s32)cos_a * dy) - ((s32)sin_a * dx)) >> FX_SHIFT;
     if ((forward <= BILLBOARD_MIN_DEPTH) || (forward >= type->max_depth)) return FALSE;
+    BillboardGeometry geometry;
+    billboard_get_geometry(object, type, &geometry);
     measure->type = type;
     measure->forward = forward;
     measure->side = side;
     measure->center_col = (s16)(RAY_VIEW_CENTER_X + bb_divs(side * RAY_PROJ_X, forward));
-    measure->half_w = (s16)(divu((u32)type->world_width * RAY_PROJ_X, (u16)forward) / 2);
-    if (measure->half_w < 1) measure->half_w = 1;
-    measure->projected_height = (s16)divu((u32)type->world_height * RAY_PROJ_Y,
-                                           (u16)forward);
-    if (measure->projected_height < 1) measure->projected_height = 1;
+    measure->atlas_x = geometry.atlas_x;
+    measure->atlas_y = geometry.atlas_y;
+    measure->atlas_w = geometry.atlas_w;
+    measure->atlas_h = geometry.atlas_h;
+
+    if (geometry.uses_wad_origin) {
+        // Two native DIVU.W operations per object produce the Q12 screen scale.
+        // All patch edges then use MULS.W + shifts, avoiding any extra divisions.
+        const u16 scale_x_q12 = divu((u32)RAY_PROJ_X << BILLBOARD_SCALE_SHIFT,
+                                     (u16)forward);
+        const u16 scale_y_q12 = divu((u32)RAY_PROJ_Y << BILLBOARD_SCALE_SHIFT,
+                                     (u16)forward);
+        const s16 origin_y = (s16)(RAY_VIEW_CENTER_Y +
+            billboard_project_q12(RAY_CAMERA_HEIGHT, scale_y_q12));
+        const s16 right_extent = billboard_project_world_q12(
+            (s16)(geometry.source_w - geometry.left_offset), scale_x_q12);
+        // Sprite pixels must use one focal scale on both axes or the 23x32 Doom
+        // barrel is crushed into a bucket by RAY_PROJ_Y/RAY_PROJ_X (120/180).
+        // The wall-camera scale remains correct only for locating the floor origin.
+        const s16 bottom_extent = billboard_project_world_q12(
+            (s16)(geometry.source_h - geometry.top_offset), scale_x_q12);
+
+        measure->left = (s16)(measure->center_col -
+            billboard_project_world_q12(geometry.left_offset, scale_x_q12));
+        measure->right = (s16)(measure->center_col + right_extent - 1);
+        measure->top = (s16)(origin_y -
+            billboard_project_world_q12(geometry.top_offset, scale_x_q12));
+        measure->bottom = (s16)(origin_y + bottom_extent - 1);
+        if (measure->right < measure->left) measure->right = measure->left;
+        if (measure->bottom < measure->top) measure->bottom = measure->top;
+        measure->half_w = (s16)(measure->center_col - measure->left);
+        if ((measure->right - measure->center_col) > measure->half_w) {
+            measure->half_w = (s16)(measure->right - measure->center_col);
+        }
+        measure->projected_height = (s16)(measure->bottom - measure->top + 1);
+    } else {
+        measure->half_w = (s16)(divu((u32)BILLBOARD_ENEMY_WORLD_WIDTH * RAY_PROJ_X,
+                                     (u16)forward) / 2);
+        if (measure->half_w < 1) measure->half_w = 1;
+        measure->projected_height = (s16)divu(
+            (u32)BILLBOARD_ENEMY_WORLD_HEIGHT * RAY_PROJ_Y, (u16)forward);
+        if (measure->projected_height < 1) measure->projected_height = 1;
+        measure->left = (s16)(measure->center_col - measure->half_w);
+        measure->right = (s16)(measure->center_col + measure->half_w);
+        measure->bottom = (s16)(RAY_VIEW_CENTER_Y -
+            (((s32)-PLAYER_EYE_HEIGHT * RAY_PROJ_Y) / forward));
+        measure->top = (s16)(measure->bottom - measure->projected_height);
+    }
     return TRUE;
 }
 

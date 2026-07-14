@@ -17,6 +17,8 @@ CENTER_Y = 60
 PROJ_X = 180
 PROJ_Y = 120
 CAMERA_HEIGHT = 128
+SCALE_SHIFT = 12
+WORLD_GEOMETRY_SCALE = 2
 STRIDE = 4
 
 
@@ -32,6 +34,27 @@ def span_visible(forward: int, left: int, right: int, depths: list[int]) -> bool
     first = left & ~(STRIDE - 1)
     last = right & ~(STRIDE - 1)
     return any(forward < depths[col] for col in range(first, last + 1, STRIDE))
+
+
+def projected_q12(value: int, scale: int) -> int:
+    product = value * scale
+    return -(abs(product) >> SCALE_SHIFT) if product < 0 else product >> SCALE_SHIFT
+
+
+def project_patch(forward: int, center: int, width: int, height: int,
+                  left_offset: int, top_offset: int) -> tuple[int, int, int, int, int]:
+    sx = (PROJ_X << SCALE_SHIFT) // forward
+    sy = (PROJ_Y << SCALE_SHIFT) // forward
+    origin_y = CENTER_Y + projected_q12(CAMERA_HEIGHT, sy)
+    left = center - projected_q12(left_offset * WORLD_GEOMETRY_SCALE, sx)
+    right = center + projected_q12(
+        (width - left_offset) * WORLD_GEOMETRY_SCALE, sx) - 1
+    # Sprite width and height share one focal scale. Only its world-floor origin
+    # uses the wall camera's vertical projection.
+    top = origin_y - projected_q12(top_offset * WORLD_GEOMETRY_SCALE, sx)
+    bottom = origin_y + projected_q12(
+        (height - top_offset) * WORLD_GEOMETRY_SCALE, sx) - 1
+    return left, max(left, right), top, max(top, bottom), origin_y
 
 
 def main() -> int:
@@ -57,6 +80,18 @@ def main() -> int:
         raise ValueError("billboard rasterizer must use the rendered wall block depth")
     if "next_wall_col" in scene:
         raise ValueError("billboard rasterizer still samples the next wall block")
+    if "RAY_CAMERA_HEIGHT" not in billboard or "BILLBOARD_SCALE_SHIFT 12" not in billboard:
+        raise ValueError("world billboards are not using the shared Q12 render camera")
+    if "#define BILLBOARD_WORLD_GEOMETRY_SCALE 2" not in billboard:
+        raise ValueError("world billboard scale no longer matches 256-unit BSP walls")
+    if "geometry.top_offset, scale_x_q12" not in billboard:
+        raise ValueError("sprite height is no longer using the width focal scale")
+    if "FREEDOOM_BILLBOARD_WORLD_GEOMETRY" not in billboard:
+        raise ValueError("world billboard projection is not source-geometry driven")
+    if "object->atlas_w << 8" not in scene or "object->atlas_h << 16" not in scene:
+        raise ValueError("billboard rasterizer is not sampling the generated atlas crop")
+    if "BILLBOARD_ENEMY_WORLD_WIDTH" not in billboard or "uses_wad_origin = FALSE" not in billboard:
+        raise ValueError("enemy legacy geometry is no longer isolated")
 
     # Three successive turns preserve the exact wall/billboard horizontal law.
     # The changing side coordinate models a fixed prop as the camera rotates.
@@ -82,16 +117,34 @@ def main() -> int:
     if not span_visible(128, 80, 83, depths):
         raise ValueError("neighbouring wall block leaked into current sprite block")
 
-    near, far = 192, 384
-    near_bottom = CENTER_Y + (PROJ_Y * CAMERA_HEIGHT // near)
-    far_bottom = CENTER_Y + (PROJ_Y * CAMERA_HEIGHT // far)
-    item_near_h = PROJ_Y * 68 // near
-    item_far_h = PROJ_Y * 68 // far
-    tall_near_h = PROJ_Y * 256 // near
-    if not (near_bottom > far_bottom and item_near_h > item_far_h and tall_near_h > item_near_h):
-        raise ValueError("floor projection or billboard scale regression")
+    near_barrel = project_patch(192, CENTER_X, 23, 32, 10, 28)
+    far_barrel = project_patch(384, CENTER_X, 23, 32, 10, 28)
+    if not ((near_barrel[1] - near_barrel[0]) > (far_barrel[1] - far_barrel[0]) and
+            (near_barrel[3] - near_barrel[2]) > (far_barrel[3] - far_barrel[2])):
+        raise ValueError("native barrel size does not shrink with depth")
+    if near_barrel[0] == CENTER_X - (near_barrel[1] - CENTER_X):
+        raise ValueError("asymmetric Doom left offset was lost")
+    if near_barrel[3] < near_barrel[4]:
+        raise ValueError("barrel no longer extends below its Doom origin")
+    if (near_barrel[1] - near_barrel[0] + 1) < 40:
+        raise ValueError("barrel regressed to tiny 1:1 WAD geometry")
+    barrel_w = near_barrel[1] - near_barrel[0] + 1
+    barrel_h = near_barrel[3] - near_barrel[2] + 1
+    if abs((barrel_h * 23) - (barrel_w * 32)) > 32:
+        raise ValueError("barrel source aspect was crushed into a bucket")
 
-    print("ok    shared billboard projection, span z-test, and floor anchoring")
+    blue_key = project_patch(192, CENTER_X, 14, 16, 7, 19)
+    if blue_key[3] >= blue_key[4]:
+        raise ValueError("blue key top offset no longer lifts it above the floor origin")
+
+    # Precise projected bounds, rather than a symmetric half-width, drive edge
+    # clipping and span occlusion.
+    edge_clip = project_patch(128, -4, 28, 19, 13, 19)
+    edge_depths = [0x7FFF] * VIEW_W
+    if edge_clip[1] < 0 or not span_visible(128, edge_clip[0], edge_clip[1], edge_depths):
+        raise ValueError("partially on-screen item was incorrectly clipped")
+
+    print("ok    native billboard geometry, crop sampling, span z-test, and WAD anchoring")
     return 0
 
 

@@ -1,12 +1,15 @@
 """Regression check for floor-anchored generated world billboard assets."""
 
 from pathlib import Path
+import json
 import re
 import sys
 
 
 ROOT = Path(__file__).resolve().parent.parent
 HEADER = ROOT / "src" / "generated_billboard_assets.h"
+GEOMETRY_HEADER = ROOT / "src" / "generated_billboard_geometry.h"
+OFFSETS = ROOT / "res" / "originaldoom" / "sprites" / "_offsets.json"
 PUBLIC_HEADER = ROOT / "src" / "billboard.h"
 EXPECTED_TEXTURES = 17
 WORLD_HEIGHT = 48
@@ -14,6 +17,11 @@ EXPECTED_NAMES = [
     "BONUS", "BLUE_KEY", "YELLOW_KEY", "RED_KEY", "STIMPACK", "MEDIKIT",
     "ARMOR_BONUS", "GREEN_ARMOR", "BLUE_ARMOR", "CLIP", "AMMO_BOX",
     "CANDLE", "CANDELABRA", "COLUMN", "ELEC", "BARREL", "TREE",
+]
+EXPECTED_SPRITES = [
+    "BON1A0", "BKEYA0", "YKEYA0", "RKEYA0", "STIMA0", "MEDIA0",
+    "BON2A0", "ARM1A0", "ARM2A0", "CLIPA0", "AMMOA0", "CANDA0",
+    "CBRAA0", "COLUA0", "ELECA0", "BAR1A0", "TREDA0",
 ]
 
 
@@ -34,6 +42,8 @@ def balanced_initializer(text: str, marker: str) -> str:
 
 def main() -> int:
     text = HEADER.read_text(encoding="utf-8")
+    geometry_text = GEOMETRY_HEADER.read_text(encoding="utf-8")
+    offsets = json.loads(OFFSETS.read_text(encoding="utf-8"))
     count_match = re.search(r"#define FREEDOOM_BILLBOARD_WORLD_TEXTURE_COUNT\s+(\d+)", text)
     if not count_match or int(count_match.group(1)) != EXPECTED_TEXTURES:
         raise ValueError("unexpected world billboard texture count")
@@ -65,7 +75,44 @@ def main() -> int:
         if not any(sprite_rows[-1]):
             raise ValueError(f"world billboard {texture} is not anchored to the floor row")
 
-    print(f"ok    {EXPECTED_TEXTURES} generated world billboards are floor-anchored")
+    geometry_body = balanced_initializer(
+        geometry_text, "FREEDOOM_BILLBOARD_WORLD_GEOMETRY")
+    geometry_rows = [
+        [int(value) for value in re.findall(r"-?\d+", row)]
+        for row in re.findall(r"\{([^{}]+)\}", geometry_body)
+    ]
+    if len(geometry_rows) != EXPECTED_TEXTURES or any(
+            len(row) != 8 for row in geometry_rows):
+        raise ValueError("generated billboard geometry dimensions changed")
+
+    for index, sprite_name in enumerate(EXPECTED_SPRITES):
+        source = offsets[sprite_name]
+        width, height, left, top, atlas_x, atlas_y, atlas_w, atlas_h = geometry_rows[index]
+        expected_source = [source["width"], source["height"],
+                           source["leftOffset"], source["topOffset"]]
+        if [width, height, left, top] != expected_source:
+            raise ValueError(f"{sprite_name} WAD geometry metadata drifted")
+
+        scale = min(24 / width, 48 / height)
+        expected_w = max(1, round(width * scale))
+        expected_h = max(1, round(height * scale))
+        expected_x = round((24 - expected_w) / 2)
+        expected_y = 48 - expected_h
+        if [atlas_x, atlas_y, atlas_w, atlas_h] != [
+                expected_x, expected_y, expected_w, expected_h]:
+            raise ValueError(f"{sprite_name} atlas crop metadata drifted")
+
+    expected_examples = {
+        "BKEYA0": (14, 16),
+        "CLIPA0": (9, 11),
+        "BAR1A0": (23, 32),
+    }
+    for name, dimensions in expected_examples.items():
+        source = offsets[name]
+        if (source["width"], source["height"]) != dimensions:
+            raise ValueError(f"{name} no longer has the expected Doom dimensions")
+
+    print(f"ok    {EXPECTED_TEXTURES} world billboards preserve WAD geometry and atlas crops")
     return 0
 
 
