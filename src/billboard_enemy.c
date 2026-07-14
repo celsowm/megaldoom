@@ -255,6 +255,68 @@ static bool update_dummy(u16 index, BillboardObject *object, const PlayerState *
     return moved;
 }
 
+// Step the barrel explosion animation one frame. Mirrors advance_death(): a
+// barrel stays in each BEXP pose for BARREL_DEATH_HOLD frames, advances to the
+// next, and on the final frame is dropped from the registry (stopping rendering
+// and releasing collision). Called from main.c via billboard_update_barrels().
+static void advance_barrel_death(u16 index, BillboardObject *object) {
+    if (object->life_state != ENEMY_DYING) {
+        return;
+    }
+    if (object->death_timer > 0) {
+        object->death_timer--;
+        return;
+    }
+    if ((object->death_index + 1) < BARREL_DEATH_FRAME_COUNT) {
+        object->death_index++;
+        object->death_timer = BARREL_DEATH_HOLD;
+    } else {
+        billboard_registry_deactivate(index);
+    }
+}
+
+BillboardEnemyUpdate billboard_update_barrels(const PlayerState *player) {
+    BillboardEnemyUpdate update = {FALSE, 0, 0, 0};
+    (void)player;
+
+    // Snapshot the target list first: advance_barrel_death can call
+    // billboard_registry_deactivate at the end of an animation, which mutates
+    // s_target_indices[] in place (shifts entries left, decrements the count).
+    // Iterating the live array would then skip a barrel or read past the end.
+    u8 snapshot[BILLBOARD_OBJECT_COUNT];
+    const u8 *target_indices = billboard_registry_target_indices();
+    const u16 target_count = billboard_registry_target_count();
+    for (u16 i = 0; i < target_count; i++) snapshot[i] = target_indices[i];
+
+    for (u16 slot = 0; slot < target_count; slot++) {
+        const u16 i = snapshot[slot];
+        BillboardObject *object = &g_billboards[i];
+
+        if (!object->active || (object->type_id != BILLBOARD_TYPE_BARREL)) {
+            continue;
+        }
+        if (object->life_state != ENEMY_DYING) {
+            continue;
+        }
+
+        const u8 prev_frame = billboard_get_object_frame(object);
+        const bool was_active = object->active;
+        advance_barrel_death(i, object);
+        // The deactivate on the last BEXP frame does not change death_index, so
+        // the frame-comparison below would miss the off-screen transition. The
+        // active->inactive flip is itself the signal that the renderer must
+        // redraw so the final BEXP pose is cleared instead of left frozen.
+        if (!object->active && was_active) {
+            update.moved = TRUE;
+        }
+        if (billboard_get_object_frame(object) != prev_frame) {
+            update.moved = TRUE;
+        }
+    }
+
+    return update;
+}
+
 BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player) {
     BillboardEnemyUpdate update = {FALSE, 0, 0, 0};
     s32 best_hit_dist = 0x7FFFFFFF;

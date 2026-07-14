@@ -1,5 +1,6 @@
 #include <genesis.h>
 #include "billboard.h"
+#include "billboard_explosion.h"
 #include "bsp_map.h"
 #include "bsp_render.h"
 #include "fixed_math.h"
@@ -274,13 +275,55 @@ int main(bool hard) {
                 } else if (shot == BILLBOARD_SHOT_KILL) {
                     XGM2_playPCM(sfx_enemy_death, sizeof(sfx_enemy_death), SOUND_PCM_CH3);
                 }
+                // BILLBOARD_SHOT_EXPLOSION: SFX bake (Doom BAREXP PCM) is a
+                // deferred sub-step; the chain AoE + player damage hook
+                // beneath this block are wired so the gameplay effect ships
+                // immediately, the literal explosion sound follows.
 
-                if ((shot == BILLBOARD_SHOT_DAMAGE) || (shot == BILLBOARD_SHOT_KILL)) {
+                if ((shot == BILLBOARD_SHOT_DAMAGE) || (shot == BILLBOARD_SHOT_KILL) ||
+                    (shot == BILLBOARD_SHOT_EXPLOSION)) {
                     overlay_dirty = TRUE;
                 }
             }
 
             shot_status = shot;
+        }
+
+        if (!level_cleared) {
+            // Barrel explosion player splash damage. Symmetric to enemy_update
+            // below but reads the cached BarrelExplosionResult from the most
+            // recent fire-center that returned BILLBOARD_SHOT_EXPLOSION. Hits
+            // arriving during g_player_invuln are absorbed (no damage), matching
+            // the i-frames the enemy path just set; this means explosions and
+            // drill attacks on the same frame share one invuln window, which is
+            // faithful to Doom and avoids a frame-1 40-HP combined hit.
+            if ((shot_status == BILLBOARD_SHOT_EXPLOSION) && (g_player_invuln == 0)) {
+                const BarrelExplosionResult explosion = billboard_get_last_explosion_result();
+                if (explosion.player_hits > 0) {
+                    const u16 damage_per_hit = PLAYER_HIT_DAMAGE;
+                    const u16 total_damage = (u16)(damage_per_hit * explosion.player_hits);
+                    const u16 armor_absorb = (u16)(((total_damage / 3) < player_armor) ? (total_damage / 3) : player_armor);
+                    const u16 damage = (u16)(total_damage - armor_absorb);
+                    player_armor = (u16)(player_armor - armor_absorb);
+                    if (player_health <= damage) {
+                        XGM2_playPCM(sfx_player_death, sizeof(sfx_player_death), SOUND_PCM_CH2);
+                        reset_level(phase_index, &level_cleared, &shot_cooldown,
+                                    &player_health, &player_armor, &player_ammo,
+                                    &player_keys, &frame);
+                        base_dirty = TRUE;
+                        overlay_dirty = TRUE;
+                    } else {
+                        player_apply_world_push(&g_player,
+                                                (s32)explosion.push_x * PLAYER_HIT_PUSH_STEP,
+                                                (s32)explosion.push_y * PLAYER_HIT_PUSH_STEP);
+                        player_health = (u16)(player_health - damage);
+                        g_player_damage_flash = PLAYER_DAMAGE_FLASH_FRAMES;
+                        g_player_invuln = PLAYER_INVULN_FRAMES;
+                        overlay_dirty = TRUE;
+                        XGM2_playPCM(sfx_player_pain, sizeof(sfx_player_pain), SOUND_PCM_CH2);
+                    }
+                }
+            }
         }
 
         if (!level_cleared) {
@@ -311,6 +354,18 @@ int main(bool hard) {
                     overlay_dirty = TRUE;
                     XGM2_playPCM(sfx_player_pain, sizeof(sfx_player_pain), SOUND_PCM_CH2);
                 }
+            }
+        }
+
+        if (!level_cleared) {
+            // Drive the BEXP animation cycle for any detonating barrels and drop
+            // them from the registry when the last frame finishes. .moved reuses
+            // the same overlay_dirty path so the engine redraws while a barrel
+            // is mid-explosion without forcing a full base rebuild.
+            const BillboardEnemyUpdate barrel_update = billboard_update_barrels(&g_player);
+
+            if (barrel_update.moved) {
+                overlay_dirty = TRUE;
             }
         }
 

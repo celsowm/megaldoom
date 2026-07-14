@@ -25,7 +25,8 @@ typedef enum {
     BILLBOARD_VISUAL_BARREL = 15,
     BILLBOARD_VISUAL_TREE = 16,
     BILLBOARD_VISUAL_DUMMY = 17,
-    BILLBOARD_VISUAL_DUMMY_DAMAGED = 18
+    BILLBOARD_VISUAL_DUMMY_DAMAGED = 18,
+    BILLBOARD_VISUAL_BARREL_EXPLODING = 19
 } BillboardVisualId;
 
 typedef struct {
@@ -77,7 +78,8 @@ typedef struct {
 typedef enum {
     BILLBOARD_SHOT_NONE = 0,
     BILLBOARD_SHOT_DAMAGE = 1,
-    BILLBOARD_SHOT_KILL = 2
+    BILLBOARD_SHOT_KILL = 2,
+    BILLBOARD_SHOT_EXPLOSION = 3
 } BillboardShotResult;
 
 typedef struct {
@@ -98,6 +100,7 @@ u16 billboard_get_target_count(void);
 u16 billboard_get_target_health(void);
 BillboardShotResult billboard_fire_center(const PlayerState *player, u16 wall_depth);
 BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player);
+BillboardEnemyUpdate billboard_update_barrels(const PlayerState *player);
 bool billboard_position_blocked(s32 x, s32 y, s32 radius);
 #if DEBUG_PERF
 u16 billboard_get_debug_culled_count(void);

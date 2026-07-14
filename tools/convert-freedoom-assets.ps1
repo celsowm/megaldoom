@@ -752,6 +752,21 @@ foreach ($name in $EnemyFrameNames) {
     $enemyFrameRows = Convert-Image $enemyFramePath $BillboardEnemyW $BillboardEnemyH $true
     $enemyFrameBlocks.Add("    {" + "`r`n" + ($enemyFrameRows -join ",`r`n") + "`r`n    }")
 }
+# Barrel explosion (BEXPA0..E0): 5 frames at the same 24x48 box as the enemy
+# atlas. Mirrors FREEDOOM_BILLBOARD_ENEMY_FRAMES so the renderer can index them
+# via renderer_scene.c::get_billboard_texture() using a dedicated visual_id.
+$BarrelExplosionFrameNames = @("BEXPA0", "BEXPB0", "BEXPC0", "BEXPD0", "BEXPE0")
+$barrelExplosionFrameBlocks = New-Object System.Collections.Generic.List[string]
+foreach ($name in $BarrelExplosionFrameNames) {
+    $barrelExplosionFramePath = Join-Path $Root (Join-Path $EnemySpritesDir "$name.png")
+    if (-not (Test-Path $barrelExplosionFramePath)) {
+        throw "Barrel explosion frame source not found: $barrelExplosionFramePath"
+    }
+    $barrelExplosionFrameRows = Convert-Image $barrelExplosionFramePath $BillboardEnemyW $BillboardEnemyH $true
+    $barrelExplosionFrameBlocks.Add("    {" + "`r`n" + ($barrelExplosionFrameRows -join ",`r`n") + "`r`n    }")
+}
+$barrelExplosionFrameCount = $BarrelExplosionFrameNames.Count
+
 $enemyFrameCount = $EnemyFrameNames.Count
 $relativeSource = $TexturePath.Replace("\", "/")
 $relativeWallBrownSource = $WallBrownTexturePath.Replace("\", "/")
@@ -817,6 +832,14 @@ $($enemyFrameBlocks -join ",`r`n")
 
 // Back-compat alias: frame 0 is the standing/idle pose (POSSA1).
 #define FREEDOOM_BILLBOARD_ENEMY_TEXTURE FREEDOOM_BILLBOARD_ENEMY_FRAMES[0]
+
+// Barrel explosion sequence (BEXPA0..E0): 5 frames matched to the engine's
+// BILLBOARD_VISUAL_BARREL_EXPLODING visual. Rendered via the same frame-index
+// path as the enemy frames in renderer_scene.c::get_billboard_texture().
+#define FREEDOOM_BILLBOARD_BARREL_EXPLOSION_FRAME_COUNT $barrelExplosionFrameCount
+static const u8 FREEDOOM_BILLBOARD_BARREL_EXPLOSION_FRAMES[FREEDOOM_BILLBOARD_BARREL_EXPLOSION_FRAME_COUNT][$BillboardEnemyH][$BillboardEnemyW] = {
+$($barrelExplosionFrameBlocks -join ",`r`n")
+};
 
 #endif
 "@

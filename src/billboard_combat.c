@@ -1,4 +1,5 @@
 #include "billboard_internal.h"
+#include "billboard_explosion.h"
 #include "bsp_map.h"
 
 #define ENEMY_RADIUS 24
@@ -73,9 +74,9 @@ BillboardShotResult billboard_fire_center(const PlayerState *player, u16 wall_de
     const s16 cos_a = fx_cos(player->angle);
     const s16 sin_a = fx_sin(player->angle);
 
-    const u8 *indices = billboard_registry_enemy_indices();
-    const u16 enemy_count = billboard_registry_enemy_count();
-    for (u16 slot = 0; slot < enemy_count; slot++) {
+    const u8 *indices = billboard_registry_target_indices();
+    const u16 target_count = billboard_registry_target_count();
+    for (u16 slot = 0; slot < target_count; slot++) {
         const u16 i = indices[slot];
         BillboardObject *object = &g_billboards[i];
         BillboardMeasure measure;
@@ -88,6 +89,12 @@ BillboardShotResult billboard_fire_center(const PlayerState *player, u16 wall_de
         }
         // A dying/dead enemy is a corpse: not a valid target anymore.
         if ((object->type_id == BILLBOARD_TYPE_DUMMY) && (object->life_state != ENEMY_ALIVE)) {
+            continue;
+        }
+        // A barrel that is already detonating is removed from the active list
+        // by billboard_apply_explosion; this guard is defensive in case the
+        // AoE worklist visits the original shot barrel during the same call.
+        if ((object->type_id == BILLBOARD_TYPE_BARREL) && (object->life_state != ENEMY_ALIVE)) {
             continue;
         }
         if (measure.forward >= wall_depth) {
@@ -105,7 +112,43 @@ BillboardShotResult billboard_fire_center(const PlayerState *player, u16 wall_de
         }
     }
 
+    // Point-blank barrel rescue: billboard_measure_object rejects anything
+    // within BILLBOARD_MIN_DEPTH (32u) of the camera, so a barrel you are
+    // literally pressed against can never be aim-acquired by the loop above.
+    // Doom's pistol still detonates such barrels (the player ends up taking
+    // splash damage), so fall back to a small Euclidean check around the
+    // player and detonate the closest live barrel found. Keep this AFTER the
+    // aim scan so aimed hits always win over proximity when both apply.
     if (best_object == NULL) {
+        s32 closest_dist_sq = BILLBOARD_POINT_BLANK_RADIUS_SQ;
+        BillboardObject *closest_barrel = NULL;
+        u16 closest_index = 0;
+        for (u16 slot = 0; slot < target_count; slot++) {
+            const u16 i = indices[slot];
+            BillboardObject *object = &g_billboards[i];
+            if (!object->active || (object->type_id != BILLBOARD_TYPE_BARREL)) {
+                continue;
+            }
+            if (object->life_state != ENEMY_ALIVE) {
+                continue;
+            }
+            const s32 dx = object->x - player->x;
+            const s32 dy = object->y - player->y;
+            const s32 dist_sq = (dx * dx) + (dy * dy);
+            if (dist_sq < closest_dist_sq) {
+                closest_dist_sq = dist_sq;
+                closest_barrel = object;
+                closest_index = i;
+            }
+        }
+        if (closest_barrel != NULL) {
+            closest_barrel->life_state = ENEMY_DYING;
+            closest_barrel->hp = 0;
+            closest_barrel->death_index = 0;
+            closest_barrel->death_timer = BARREL_DEATH_HOLD;
+            billboard_apply_explosion(player, closest_barrel->x, closest_barrel->y);
+            return BILLBOARD_SHOT_EXPLOSION;
+        }
         return BILLBOARD_SHOT_NONE;
     }
 
@@ -117,13 +160,26 @@ BillboardShotResult billboard_fire_center(const PlayerState *player, u16 wall_de
     }
 
     // Enemies play a death animation and leave a corpse instead of vanishing;
-    // other targetable billboards (decor) still just deactivate on kill.
+    // barrels detonate immediately and apply AoE splash via billboard_apply_explosion.
     if (best_object->type_id == BILLBOARD_TYPE_DUMMY) {
         best_object->hp = 0;
         billboard_registry_enemy_died(best_index);
         best_object->death_index = 0;
         best_object->death_timer = ENEMY_DEATH_HOLD;
         return BILLBOARD_SHOT_KILL;
+    }
+
+    if (best_object->type_id == BILLBOARD_TYPE_BARREL) {
+        // Flag the shot barrel as detonating and let billboard_update_barrels()
+        // play the BEXP animation over the next few frames before pulling it
+        // out of the registry. The AoE itself is applied immediately so chain
+        // reactions and player damage land in one tick.
+        best_object->life_state = ENEMY_DYING;
+        best_object->hp = 0;
+        best_object->death_index = 0;
+        best_object->death_timer = BARREL_DEATH_HOLD;
+        billboard_apply_explosion(player, best_object->x, best_object->y);
+        return BILLBOARD_SHOT_EXPLOSION;
     }
 
     billboard_registry_deactivate(best_index);

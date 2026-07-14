@@ -17,7 +17,7 @@ static const BillboardType BILLBOARD_TYPES[BILLBOARD_TYPE_COUNT] = {
     {BILLBOARD_VISUAL_CANDELABRA,  BILLBOARD_EFFECT_NONE,   1, BILLBOARD_PROP_RADIUS, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
     {BILLBOARD_VISUAL_COLUMN,      BILLBOARD_EFFECT_NONE,   1, 16, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
     {BILLBOARD_VISUAL_ELEC,        BILLBOARD_EFFECT_NONE,   1, 16, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
-    {BILLBOARD_VISUAL_BARREL,      BILLBOARD_EFFECT_NONE,   1, 20, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
+    {BILLBOARD_VISUAL_BARREL,      BILLBOARD_EFFECT_NONE,   1, 20, BILLBOARD_MAX_DEPTH, FALSE, TRUE,  TRUE},
     {BILLBOARD_VISUAL_TREE,        BILLBOARD_EFFECT_NONE,   1, 48, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
     {BILLBOARD_VISUAL_DUMMY,       BILLBOARD_EFFECT_NONE,   3, 24, BILLBOARD_MAX_DEPTH, FALSE, TRUE,  FALSE},
 };
@@ -69,10 +69,27 @@ const BillboardType *billboard_get_type(u8 type_id) {
 
 u8 billboard_get_object_visual_id(const BillboardObject *object, const BillboardType *type) {
     (void)type;
-    return object->type_id == BILLBOARD_TYPE_KEY ? object->hp : type->visual_id;
+    if (object->type_id == BILLBOARD_TYPE_KEY) return object->hp;
+    // A detonating barrel swaps to the BEXP animation frames. Geometry lookup
+    // below still falls back to the static BAR1 slot's world footprint (all 5
+    // BEXP frames share BAR1's 23x32 source canvas dimensions; the slight
+    // growth of later BEXP frames is clipped into that silhouette by the
+    // atlas baker -- faithful enough for a single-use chain explosion).
+    if ((object->type_id == BILLBOARD_TYPE_BARREL) && (object->life_state != ENEMY_ALIVE)) {
+        return BILLBOARD_VISUAL_BARREL_EXPLODING;
+    }
+    return type->visual_id;
 }
 
 u8 billboard_get_object_frame(const BillboardObject *object) {
+    if (object->type_id == BILLBOARD_TYPE_BARREL) {
+        if (object->life_state == ENEMY_DYING) {
+            u8 index = object->death_index;
+            if (index >= BARREL_DEATH_FRAME_COUNT) index = (u8)(BARREL_DEATH_FRAME_COUNT - 1);
+            return index;
+        }
+        return 0;
+    }
     if (object->type_id != BILLBOARD_TYPE_DUMMY) return 0;
     if (object->life_state != ENEMY_ALIVE) {
         u8 index = object->death_index;
@@ -125,7 +142,14 @@ static s16 billboard_project_world_q12(s16 value, u16 scale_q12) {
 static void billboard_get_geometry(const BillboardObject *object,
                                    const BillboardType *type,
                                    BillboardGeometry *geometry) {
-    const u8 visual_id = billboard_get_object_visual_id(object, type);
+    u8 visual_id = billboard_get_object_visual_id(object, type);
+    // Per-object visual overrides (BARREL_EXPLODING frames) are pixel-source
+    // swaps only -- their world footprint still uses the static prop slot's
+    // geometry so a detonating barrel keeps BAR1's 23x32 silhouette and the
+    // renderer never falls through to the generic enemy 34x102 fallback.
+    if (visual_id >= FREEDOOM_BILLBOARD_WORLD_GEOMETRY_COUNT) {
+        visual_id = type->visual_id;
+    }
     if (visual_id < FREEDOOM_BILLBOARD_WORLD_GEOMETRY_COUNT) {
         const s16 *source = FREEDOOM_BILLBOARD_WORLD_GEOMETRY[visual_id];
         geometry->source_w = source[FREEDOOM_BILLBOARD_GEOMETRY_SOURCE_W];

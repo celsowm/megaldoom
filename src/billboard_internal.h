@@ -13,6 +13,15 @@
 #define BILLBOARD_OBJECT_COUNT 112
 #define BILLBOARD_COLLECT_RADIUS (FX_ONE / 2)
 #define BILLBOARD_COLLECT_RADIUS_SQ (BILLBOARD_COLLECT_RADIUS * BILLBOARD_COLLECT_RADIUS)
+// Point-blank barrel detonation fallback. billboard_measure_object rejects
+// anything within BILLBOARD_MIN_DEPTH of the camera forward axis, but a barrel
+// you are pressed against must still be shootable in Doom fashion: the Euclidean
+// fallback in billboard_fire_center detonates the nearest live barrel inside
+// this radius when the aim scan picks nothing. Player+barrel collision radii
+// sum to 36u; ~2.5x that (90u) keeps the trigger tolerant without detonating
+// barrels across the room when the player shoots blank walls.
+#define BILLBOARD_POINT_BLANK_RADIUS 90
+#define BILLBOARD_POINT_BLANK_RADIUS_SQ (BILLBOARD_POINT_BLANK_RADIUS * BILLBOARD_POINT_BLANK_RADIUS)
 #define BILLBOARD_TYPE_BONUS 0
 #define BILLBOARD_TYPE_KEY 1
 #define BILLBOARD_TYPE_STIMPACK 2
@@ -59,6 +68,28 @@
 #define DUMMY_SEPARATION_RANGE_SQ (DUMMY_SEPARATION_RANGE * DUMMY_SEPARATION_RANGE)
 #define DUMMY_LAST_SEEN_RANGE (FX_ONE / 8)
 #define DUMMY_LAST_SEEN_RANGE_SQ (DUMMY_LAST_SEEN_RANGE * DUMMY_LAST_SEEN_RANGE)
+
+// Barrel explosion sequence (5 BEXP frames A0..E0). Indexing mirrors the
+// enemy death frames: billboard_get_object_frame returns 0..4 for dying
+// barrels and billboard_get_object_visual_id flips to
+// BILLBOARD_VISUAL_BARREL_EXPLODING so renderer_scene.c draws from
+// FREEDOOM_BILLBOARD_BARREL_EXPLOSION_FRAMES instead of the static BAR1 slot.
+// Hold is 2 frames per pose at the locked 30fps cadence -> 5 * 2 * 2 = 20 vblanks
+// = ~0.33s end-to-end, matching Doom's 3-tic BEXP burst rather than the slow
+// 5-frame corpse hold used by the enemy death animation.
+#define BARREL_DEATH_FRAME_COUNT 5
+#define BARREL_DEATH_HOLD 2
+
+// Barrel explosion AoE. Doom barrels detonate on death at 128 map units;
+// the squared form mirrors billboard_position_blocked's convention so the
+// inner loop uses one MULU.W per pair instead of a sqrt. Map and runtime
+// coordinates share FX_ONE==256 scaling (bsp_map.h:16), so 128 is literal.
+#define BARREL_EXPLOSION_RADIUS 128
+#define BARREL_EXPLOSION_RADIUS_SQ (BARREL_EXPLOSION_RADIUS * BARREL_EXPLOSION_RADIUS)
+#define BARREL_EXPLOSION_DAMAGE 20
+// Per-explosion worklist cap. E1M1's largest barrel cluster is 3; this still
+// bounds worst-case chains without unbounded recursion.
+#define BARREL_EXPLOSION_MAX_CHAIN 8
 
 // Enemy life state (BillboardObject.life_state).
 #define ENEMY_ALIVE 0
@@ -159,8 +190,10 @@ void billboard_registry_deactivate(u16 index);
 void billboard_registry_enemy_died(u16 index);
 const u8 *billboard_registry_active_indices(void);
 const u8 *billboard_registry_enemy_indices(void);
+const u8 *billboard_registry_target_indices(void);
 u16 billboard_registry_active_count(void);
 u16 billboard_registry_enemy_count(void);
+u16 billboard_registry_target_count(void);
 u16 billboard_registry_living_enemy_count(void);
 
 #endif

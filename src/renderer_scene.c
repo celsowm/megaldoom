@@ -23,6 +23,11 @@ static BillboardTex get_billboard_texture(u8 visual_id, u8 frame) {
             return (BillboardTex){(const u8 *)FREEDOOM_BILLBOARD_ENEMY_FRAMES[f],
                                   FREEDOOM_BILLBOARD_ENEMY_W, FREEDOOM_BILLBOARD_ENEMY_H};
         }
+        case BILLBOARD_VISUAL_BARREL_EXPLODING: {
+            const u8 f = (frame < FREEDOOM_BILLBOARD_BARREL_EXPLOSION_FRAME_COUNT) ? frame : 0;
+            return (BillboardTex){(const u8 *)FREEDOOM_BILLBOARD_BARREL_EXPLOSION_FRAMES[f],
+                                  FREEDOOM_BILLBOARD_ENEMY_W, FREEDOOM_BILLBOARD_ENEMY_H};
+        }
         default:
             if (visual_id < FREEDOOM_BILLBOARD_WORLD_TEXTURE_COUNT) {
                 return (BillboardTex){(const u8 *)FREEDOOM_BILLBOARD_WORLD_TEXTURES[visual_id],
