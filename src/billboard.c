@@ -96,7 +96,11 @@ static s32 bb_divs(s32 numerator, s32 denominator) {
 // BSP walls use a 256-unit visual height while Doom's authored wall/sprite
 // baseline is 128 units. Double WAD patch geometry so props retain their native
 // proportions without appearing half-sized against the rendered architecture.
-#define BILLBOARD_WORLD_GEOMETRY_SCALE 2
+// BSP walls use a 256-unit visual height while Doom's authored wall/sprite
+// baseline is 128 units, so patch geometry is first doubled (native 2x match).
+// A further 1.5x growth makes barrels and pickups read larger on screen
+// without touching enemies or walls. Effective scale is 2 * 1.5 = 3.
+#define BILLBOARD_WORLD_GEOMETRY_SCALE 3
 
 static s32 billboard_muls_word(s16 left, s16 right) {
     s32 result = left;
@@ -115,7 +119,7 @@ static s16 billboard_project_q12(s16 value, u16 scale_q12) {
 }
 
 static s16 billboard_project_world_q12(s16 value, u16 scale_q12) {
-    return billboard_project_q12((s16)(value + value), scale_q12);
+    return billboard_project_q12((s16)(value * BILLBOARD_WORLD_GEOMETRY_SCALE), scale_q12);
 }
 
 static void billboard_get_geometry(const BillboardObject *object,

@@ -18,7 +18,7 @@ PROJ_X = 180
 PROJ_Y = 120
 CAMERA_HEIGHT = 128
 SCALE_SHIFT = 12
-WORLD_GEOMETRY_SCALE = 2
+WORLD_GEOMETRY_SCALE = 3
 STRIDE = 4
 
 
@@ -82,7 +82,7 @@ def main() -> int:
         raise ValueError("billboard rasterizer still samples the next wall block")
     if "RAY_CAMERA_HEIGHT" not in billboard or "BILLBOARD_SCALE_SHIFT 12" not in billboard:
         raise ValueError("world billboards are not using the shared Q12 render camera")
-    if "#define BILLBOARD_WORLD_GEOMETRY_SCALE 2" not in billboard:
+    if "#define BILLBOARD_WORLD_GEOMETRY_SCALE 3" not in billboard:
         raise ValueError("world billboard scale no longer matches 256-unit BSP walls")
     if "geometry.top_offset, scale_x_q12" not in billboard:
         raise ValueError("sprite height is no longer using the width focal scale")
