@@ -43,6 +43,20 @@ def main():
         match = re.search(rf"const u16 {symbol} = (\d+)u;", generated)
         assert match and int(match.group(1)) == value, (symbol, match)
 
+    vertices = [tuple(map(int, values)) for values in re.findall(
+        r"\{\s*(-?\d+),\s*(-?\d+)\s*\}",
+        declaration(generated, "BspVertex", "bsp_vertices"))]
+    expected_bounds = {
+        "bsp_map_min_x": min(x for x, _ in vertices),
+        "bsp_map_min_y": min(y for _, y in vertices),
+        "bsp_map_max_x": max(x for x, _ in vertices),
+        "bsp_map_max_y": max(y for _, y in vertices),
+    }
+    for symbol, value in expected_bounds.items():
+        assert re.search(rf"const s16 {symbol} = {value};", generated), symbol
+        assert f'lines.append("const s16 {symbol}' in Path(
+            extractor.__file__).read_text()
+
     rows = []
     for row in re.findall(r"\{([^{}]+)\}", declaration(
             generated, "BspSeg", "bsp_segs")):

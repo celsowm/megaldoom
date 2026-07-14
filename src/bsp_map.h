@@ -142,6 +142,15 @@ extern const u16 bsp_grid_height;
 extern const u16 bsp_grid_cell_offsets[];
 extern const u16 bsp_grid_seg_indices[];
 
+// Exact generated vertex bounds. The renderer uses these once per frame to
+// prove that every camera-relative coordinate fits a signed word before taking
+// the native 68000 MULS.W path; cameras outside that envelope retain the exact
+// 32-bit fallback.
+extern const s16 bsp_map_min_x;
+extern const s16 bsp_map_min_y;
+extern const s16 bsp_map_max_x;
+extern const s16 bsp_map_max_y;
+
 // Upper bound on BSP nodes across any map, sizing the near/far order cache
 // bit array in bsp_render.c. E1M1 uses 236; the hand map uses 1.
 #define BSP_MAX_NODES 640

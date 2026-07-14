@@ -974,6 +974,10 @@ const u16 bsp_grid_seg_indices[561] = {
     371,372,373,375,376,377,380,382,383,384,385,358,
     360,372,374,378,379,380,381,378,379,
 };
+const s16 bsp_map_min_x = -768;
+const s16 bsp_map_min_y = 2048;
+const s16 bsp_map_max_x = 3808;
+const s16 bsp_map_max_y = 4864;
 
 const BspSubsector bsp_subsectors[237] = {
     {0, 3},

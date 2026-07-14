@@ -1312,6 +1312,10 @@ def main():
     for i in range(0, len(grid_indices), 12):
         lines.append("    %s," % ",".join(str(v) for v in grid_indices[i:i + 12]))
     lines.append("};")
+    lines.append("const s16 bsp_map_min_x = %d;" % min(x for x, _ in vertices))
+    lines.append("const s16 bsp_map_min_y = %d;" % min(y for _, y in vertices))
+    lines.append("const s16 bsp_map_max_x = %d;" % max(x for x, _ in vertices))
+    lines.append("const s16 bsp_map_max_y = %d;" % max(y for _, y in vertices))
     lines.append("")
 
     lines.append("const BspSubsector bsp_subsectors[%d] = {" % len(out_ssectors))

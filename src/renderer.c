@@ -9,6 +9,7 @@ u16 g_compass_tilemap[COMPASS_W * COMPASS_H];
 u32 g_view_bank_dirty_bits[VIEW_BANK_COUNT][VIEW_DIRTY_WORD_COUNT];
 u16 g_view_bank_dirty_count[VIEW_BANK_COUNT];
 u16 g_view_vram_bank;
+u16 g_view_dirty_bank_mask;
 #if DEBUG_PERF
 // Distinct-tile-modified accounting for the perf overlay. Deduplicated per
 // frame via g_frame_modified_bits; renderer_mark_tile_dirty sets a bit the
@@ -127,9 +128,11 @@ void renderer_mark_tile_dirty(u16 tile_index) {
     const u16 word = (u16)(tile_index >> 5);
     const u32 mask = (u32)1u << (tile_index & 31);
 
-    // A CPU-side tile mutation makes both VRAM copies potentially stale. Each
-    // bank clears its own bit only after that bank's DMA has completed.
+    // Overlay-only redraws mutate the displayed bank in place. Base redraws
+    // prepare an unconditional full upload to the inactive bank up front and
+    // set this mask to zero, avoiding 300 redundant per-tile bitmap updates.
     for (u16 bank = 0; bank < VIEW_BANK_COUNT; bank++) {
+        if ((g_view_dirty_bank_mask & (1u << bank)) == 0) continue;
         if ((g_view_bank_dirty_bits[bank][word] & mask) == 0) {
             g_view_bank_dirty_bits[bank][word] |= mask;
             g_view_bank_dirty_count[bank]++;
@@ -143,6 +146,29 @@ void renderer_mark_tile_dirty(u16 tile_index) {
         g_frame_modified_bits[word] |= mask;
         g_frame_modified_count++;
     }
+#endif
+}
+
+void renderer_prepare_full_base_upload(void) {
+    const u16 target_bank = (u16)(g_view_vram_bank ^ 1u);
+
+    for (u16 bank = 0; bank < VIEW_BANK_COUNT; bank++) {
+        for (u16 word = 0; word < VIEW_DIRTY_WORD_COUNT; word++) {
+            g_view_bank_dirty_bits[bank][word] = 0;
+        }
+        g_view_bank_dirty_count[bank] = 0;
+    }
+    for (u16 tile = 0; tile < VIEW_TILE_COUNT; tile++) {
+        const u16 word = (u16)(tile >> 5);
+        g_view_bank_dirty_bits[target_bank][word] |= (u32)1u << (tile & 31);
+    }
+    g_view_bank_dirty_count[target_bank] = VIEW_TILE_COUNT;
+    g_view_dirty_bank_mask = 0;
+#if DEBUG_PERF
+    for (u16 word = 0; word < VIEW_DIRTY_WORD_COUNT; word++) {
+        g_frame_modified_bits[word] = 0xFFFFFFFFu;
+    }
+    g_frame_modified_count = VIEW_TILE_COUNT;
 #endif
 }
 
@@ -182,6 +208,7 @@ void renderer_init(void) {
     init_pair_tiles();
     init_hud_tiles();
     init_view_tilemap();
+    g_view_dirty_bank_mask = 0;
     renderer_scene_init();
 }
 

@@ -16,39 +16,45 @@ def count_runs(dirty):
     return sum(tile == 0 or tile - 1 not in dirty for tile in dirty)
 
 
-def count_partial_commands(dirty, tile_count, batch_limit, split):
-    commands = 0
-    batch_tiles = 0
-    tile = 0
-    while tile < tile_count:
-        if tile not in dirty:
-            tile += 1
-            continue
-        first = tile
-        while tile < tile_count and tile in dirty:
-            tile += 1
-        remaining = tile - first
-        while remaining:
-            if split and batch_tiles == batch_limit:
-                batch_tiles = 0
-            count = remaining
-            if split:
-                count = min(count, batch_limit - batch_tiles)
-            commands += 1
-            remaining -= count
-            batch_tiles += count
-    return commands
-
-
-def choose_full(dirty, tile_count, batch_limit, full_threshold,
-                max_runs, split):
+def choose_overlay_full(dirty, full_threshold, max_runs):
     if not dirty:
         return False
-    if split:
-        partial = count_partial_commands(dirty, tile_count, batch_limit, True)
-        full = 2 if tile_count > batch_limit else 1
-        return full < partial
     return len(dirty) >= full_threshold or count_runs(dirty) > max_runs
+
+
+class UploadModel:
+    """Small state model for the renderer's private double-buffer policy."""
+
+    def __init__(self, tile_count, batch_limit):
+        self.tile_count = tile_count
+        self.batch_limit = batch_limit
+        self.active_bank = 0
+        self.dirty = [set(), set()]
+        self.pending_bank = None
+        self.swap = False
+
+    def queue_base(self):
+        target = self.active_bank ^ 1
+        self.dirty = [set(), set()]
+        self.dirty[target] = set(range(self.tile_count))
+        self.pending_bank = target
+        self.swap = True
+
+    def queue_overlay(self, tiles):
+        self.dirty[self.active_bank].update(tiles)
+        self.pending_bank = self.active_bank
+        self.swap = False
+
+    def upload_step(self):
+        bank = self.pending_bank
+        uploaded = set(sorted(self.dirty[bank])[:self.batch_limit])
+        self.dirty[bank] -= uploaded
+        if not self.dirty[bank]:
+            if self.swap:
+                self.active_bank = bank
+            self.pending_bank = None
+            self.swap = False
+        return bank, uploaded
 
 
 def main():
@@ -74,30 +80,71 @@ def main():
         for offset in range(12)
     }
 
-    assert not choose_full(empty, tile_count, batch_limit,
-                           full_threshold, max_runs, True)
-    assert not choose_full(contiguous_below, tile_count, batch_limit,
-                           full_threshold, max_runs, True)
-    assert choose_full(fragmented_below, tile_count, batch_limit,
-                       full_threshold, max_runs, True)
-    assert not choose_full(contiguous_above, tile_count, batch_limit,
-                           full_threshold, max_runs, True)
-    assert not choose_full(contiguous_over_legacy_threshold, tile_count,
-                           batch_limit, full_threshold, max_runs, True)
+    assert not choose_overlay_full(empty, full_threshold, max_runs)
+    assert not choose_overlay_full(contiguous_below, full_threshold, max_runs)
+    assert choose_overlay_full(fragmented_below, full_threshold, max_runs)
+    assert not choose_overlay_full(contiguous_above, full_threshold, max_runs)
+    assert choose_overlay_full(contiguous_over_legacy_threshold,
+                               full_threshold, max_runs)
     assert len(fragmented_above) == 180
     assert count_runs(fragmented_above) == 15
-    assert choose_full(fragmented_above, tile_count, batch_limit,
-                       full_threshold, max_runs, True)
-    # Active-bank uploads retain the existing thresholds and never use the new
-    # inactive-bank two-vblank optimization.
-    assert not choose_full(fragmented_above, tile_count, batch_limit,
-                           full_threshold, max_runs, False)
-    assert choose_full(contiguous_over_legacy_threshold, tile_count,
-                       batch_limit, full_threshold, max_runs, False)
+    assert not choose_overlay_full(fragmented_above, full_threshold, max_runs)
 
-    assert "count_partial_view_bank_commands" in scene
-    assert "full_commands < partial_commands" in scene
-    assert "swap && dirty_count > 0" in scene
+    # A base redraw always targets the inactive bank and cannot become visible
+    # until both 150-tile upload steps have completed.
+    model = UploadModel(tile_count, batch_limit)
+    model.queue_base()
+    assert model.pending_bank == 1
+    assert len(model.dirty[1]) == tile_count
+    bank, first_batch = model.upload_step()
+    assert bank == 1 and len(first_batch) == batch_limit
+    assert model.active_bank == 0 and model.pending_bank == 1
+    bank, second_batch = model.upload_step()
+    assert bank == 1 and len(second_batch) == tile_count - batch_limit
+    assert first_batch.isdisjoint(second_batch)
+    assert model.active_bank == 1 and model.pending_bank is None
+
+    # Overlay-only work mutates only the displayed bank and never swaps it.
+    overlay_tiles = {7, 8, 41}
+    model.queue_overlay(overlay_tiles)
+    bank, uploaded = model.upload_step()
+    assert bank == 1 and uploaded == overlay_tiles
+    assert model.active_bank == 1 and model.pending_bank is None
+
+    # A consecutive base redraw overwrites the other bank completely. Lazy
+    # snapshots then restore the new base, not an overlay from the old bank.
+    snapshot_valid = set()
+    base_tiles = {7: "base-a"}
+    snapshot_valid.add(7)
+    snapshot = {7: base_tiles[7]}
+    base_tiles[7] = "base-a+overlay"
+    model.queue_base()
+    model.upload_step()
+    assert model.active_bank == 1
+    model.upload_step()
+    assert model.active_bank == 0
+    snapshot_valid.clear()
+    base_tiles[7] = "base-b"
+    if 7 not in snapshot_valid:
+        snapshot[7] = base_tiles[7]
+        snapshot_valid.add(7)
+    base_tiles[7] = "base-b+overlay"
+    base_tiles[7] = snapshot[7]
+    assert base_tiles[7] == "base-b"
+
+    assert "count_partial_view_bank_commands" not in scene
+    assert "g_view_upload.full = swap ? TRUE" in scene
+    assert "renderer_prepare_full_base_upload();" in scene
+    assert "g_view_dirty_bank_mask = (u16)(1u << g_view_vram_bank)" in scene
+    assert "g_view_dirty_bank_mask = 0" in renderer
+    assert "g_view_bank_dirty_count[target_bank] = VIEW_TILE_COUNT" in renderer
+    assert "if ((g_view_dirty_bank_mask & (1u << bank)) == 0) continue" in renderer
+    assert "difference |= (base_rows[row] ^ row_data)" not in scene
+    assert "store_base_tile" not in scene
+    assert "g_base_snapshot_valid_bits" in scene
+    assert "g_base_view_tiles[tile_index][row] = g_view_tiles[tile_index][row]" in scene
+    assert scene.index("g_base_snapshot_valid_bits[i] = 0") < scene.index(
+        "build_bsp_tilemap(columns, scene_colors, g_view_tiles)")
     assert "void renderer_queue_scene_upload" in scene
     assert "void renderer_upload_scene_step" in scene
     assert "bool renderer_scene_upload_pending" in scene
@@ -109,7 +156,7 @@ def main():
     assert "void renderer_debug_set_total_vblanks" in scene
     assert "void renderer_debug_set_total_vblanks" not in renderer
 
-    print("ok    renderer upload policy: VBlank-stepped DMA and deferred bank swap")
+    print("ok    renderer upload policy: full base swap plus active-bank overlays")
 
 
 if __name__ == "__main__":

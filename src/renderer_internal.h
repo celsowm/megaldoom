@@ -44,6 +44,7 @@ extern u32 g_base_view_tiles[VIEW_TILE_COUNT][8];
 extern u32 g_view_bank_dirty_bits[VIEW_BANK_COUNT][VIEW_DIRTY_WORD_COUNT];
 extern u16 g_view_bank_dirty_count[VIEW_BANK_COUNT];
 extern u16 g_view_vram_bank;
+extern u16 g_view_dirty_bank_mask;
 extern u16 g_compass_tilemap[COMPASS_W * COMPASS_H];
 
 #if DEBUG_PERF
@@ -76,6 +77,7 @@ void renderer_mark_tile_dirty(u16 tile_index);
 void renderer_mark_overlay_tile(u16 tile_index);
 void renderer_set_bg_pair_tile(u16 x, u16 y, u8 left_color, u8 right_color);
 void renderer_set_view_vram_bank(u16 bank);
+void renderer_prepare_full_base_upload(void);
 void renderer_scene_init(void);
 
 #if DEBUG_PERF

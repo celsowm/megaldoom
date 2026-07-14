@@ -74,6 +74,12 @@ void renderer_draw_perf_overlay(bool frame_complete) {
             (unsigned int)billboard_get_debug_visibility_cache_hits(),
             (unsigned int)billboard_get_debug_visibility_cache_misses());
     VDP_drawTextFill(text, 0, 7, 40);
+
+    sprintf(text, "Bx=%04lu Sr=%04lu Sc=%04lu",
+            (unsigned long)bsp_get_debug_box_projection_subticks(),
+            (unsigned long)bsp_get_debug_segment_raster_subticks(),
+            (unsigned long)bsp_get_debug_side_cache_subticks());
+    VDP_drawTextFill(text, 0, 8, 40);
 }
 
 #endif

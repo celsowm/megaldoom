@@ -44,8 +44,8 @@ static BillboardTex get_billboard_texture(u8 visual_id, u8 frame) {
 static u8 g_shade_luts[SHADE_LEVELS][16];
 static u32 g_overlay_previous_bits[VIEW_DIRTY_WORD_COUNT];
 static u32 g_overlay_current_bits[VIEW_DIRTY_WORD_COUNT];
+static u32 g_base_snapshot_valid_bits[VIEW_DIRTY_WORD_COUNT];
 static u16 g_last_compass_angle = 0xFFFF;
-static bool g_base_tiles_valid = FALSE;
 static bool g_upload_requires_bank_swap = FALSE;
 static bool g_compass_dirty = TRUE;
 static bool g_base_built_this_frame = FALSE;
@@ -114,7 +114,15 @@ void renderer_mark_overlay_tile(u16 tile_index) {
     const u32 mask = (u32)1u << (tile_index & 31);
 
     if ((g_overlay_current_bits[word] & mask) == 0) {
-        if (!g_base_built_this_frame) {
+        if ((g_base_snapshot_valid_bits[word] & mask) == 0) {
+            // Capture the pristine base lazily. A full base redraw invalidates
+            // every snapshot; only tiles actually touched by a billboard or
+            // weapon pay this 8-row copy instead of all 300 tiles every frame.
+            for (u16 row = 0; row < 8; row++) {
+                g_base_view_tiles[tile_index][row] = g_view_tiles[tile_index][row];
+            }
+            g_base_snapshot_valid_bits[word] |= mask;
+        } else if (!g_base_built_this_frame) {
             for (u16 row = 0; row < 8; row++) {
                 g_view_tiles[tile_index][row] = g_base_view_tiles[tile_index][row];
             }
@@ -136,16 +144,12 @@ static void build_shade_luts(void) {
     }
 }
 
-static void mark_all_view_banks_dirty(void) {
+static void clear_all_view_banks_dirty(void) {
     for (u16 bank = 0; bank < VIEW_BANK_COUNT; bank++) {
         for (u16 word = 0; word < VIEW_DIRTY_WORD_COUNT; word++) {
             g_view_bank_dirty_bits[bank][word] = 0;
         }
-        for (u16 tile = 0; tile < VIEW_TILE_COUNT; tile++) {
-            const u16 word = (u16)(tile >> 5);
-            g_view_bank_dirty_bits[bank][word] |= (u32)1u << (tile & 31);
-        }
-        g_view_bank_dirty_count[bank] = VIEW_TILE_COUNT;
+        g_view_bank_dirty_count[bank] = 0;
     }
 }
 
@@ -157,6 +161,16 @@ static const u32 REP4[16] = {
     0x0000, 0x1111, 0x2222, 0x3333, 0x4444, 0x5555, 0x6666, 0x7777,
     0x8888, 0x9999, 0xAAAA, 0xBBBB, 0xCCCC, 0xDDDD, 0xEEEE, 0xFFFF,
 };
+static u16 g_packed_shade_luts[SHADE_LEVELS][16];
+
+static void build_packed_shade_luts(void) {
+    for (u16 level = 0; level < SHADE_LEVELS; level++) {
+        for (u16 color = 0; color < 16; color++) {
+            g_packed_shade_luts[level][color] =
+                (u16)REP4[g_shade_luts[level][color]];
+        }
+    }
+}
 #else /* RAY_COL_STRIDE == 2 */
 static const u32 REP2[16] = {
     0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
@@ -185,26 +199,34 @@ static u32 pack_flat_row(u8 color) {
 // use 331 (idle) / 277 (fire). The builder guards against overflow.
 void renderer_scene_init(void) {
     build_shade_luts();
+#if RAY_COL_STRIDE == 4
+    build_packed_shade_luts();
+#endif
     g_last_compass_angle = 0xFFFF;
-    g_base_tiles_valid = FALSE;
     g_upload_requires_bank_swap = FALSE;
     g_compass_dirty = TRUE;
     g_base_built_this_frame = FALSE;
     g_view_upload = (ViewUploadState){FALSE, FALSE, FALSE, 0, 0};
-    mark_all_view_banks_dirty();
+    for (u16 i = 0; i < VIEW_DIRTY_WORD_COUNT; i++) {
+        g_overlay_previous_bits[i] = 0;
+        g_overlay_current_bits[i] = 0;
+        g_base_snapshot_valid_bits[i] = 0;
+    }
+    clear_all_view_banks_dirty();
 }
 
 void renderer_invalidate_scene(void) {
     g_last_compass_angle = 0xFFFF;
-    g_base_tiles_valid = FALSE;
     g_upload_requires_bank_swap = FALSE;
     g_compass_dirty = TRUE;
     g_base_built_this_frame = FALSE;
     for (u16 i = 0; i < VIEW_DIRTY_WORD_COUNT; i++) {
         g_overlay_previous_bits[i] = 0;
         g_overlay_current_bits[i] = 0;
+        g_base_snapshot_valid_bits[i] = 0;
     }
-    mark_all_view_banks_dirty();
+    clear_all_view_banks_dirty();
+    g_view_dirty_bank_mask = 0;
 }
 
 typedef struct {
@@ -212,6 +234,9 @@ typedef struct {
     u16 bottom;
     const u8 *texture;
     const u8 *shade_map;
+#if RAY_COL_STRIDE == 4
+    const u16 *packed_shade_map;
+#endif
     const u8 *vertical_samples;
     u8 tex_x;
     u8 tex_y;
@@ -236,8 +261,14 @@ static WallColumnDescriptor describe_wall_column(const RayColumn *column) {
     const u8 *ty_table = MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[wall_h];
     const u8 tex_x = (u8)(column->tex_x & WALL_TEX_DIM_MASK);
 
+#if RAY_COL_STRIDE == 4
+    return (WallColumnDescriptor){top, bottom, (const u8 *)tex, shade_map,
+                                  g_packed_shade_luts[fog_level], ty_table,
+                                  tex_x, column->tex_y};
+#else
     return (WallColumnDescriptor){top, bottom, (const u8 *)tex, shade_map, ty_table,
                                   tex_x, column->tex_y};
+#endif
 }
 
 #if RAY_COL_STRIDE == 2
@@ -257,15 +288,6 @@ static u8 sample_wall_descriptor(const WallColumnDescriptor *descriptor,
                                descriptor->tex_x]) & 0x0F];
 }
 #endif
-static bool overlay_previously_touched(u16 tile_index) {
-    const u16 word = (u16)(tile_index >> 5);
-    const u32 mask = (u32)1u << (tile_index & 31);
-
-    return (bool)((g_overlay_previous_bits[word] & mask) != 0);
-}
-
-static void commit_base_tile(u16 tile_index, const u32 *tile_rows);
-
 #if (RAY_COL_STRIDE != 4) && (RAY_COL_STRIDE != 2)
 #error "build_bsp_tilemap only implements the RAY_COL_STRIDE == 4 and == 2 packers"
 #endif
@@ -279,9 +301,9 @@ static void commit_base_tile(u16 tile_index, const u32 *tile_rows);
 static void build_packed_wall_column(const WallColumnDescriptor *descriptor,
                                      u16 packed_texels[WALL_TEX_DIM]) {
     for (u16 tex_y = 0; tex_y < WALL_TEX_DIM; tex_y++) {
-        const u8 texel = descriptor->shade_map[
-            descriptor->texture[(tex_y * WALL_TEX_DIM) + descriptor->tex_x] & 0x0F];
-        packed_texels[tex_y] = (u16)REP4[texel];
+        const u8 texel = descriptor->texture[
+            (tex_y * WALL_TEX_DIM) + descriptor->tex_x] & 0x0F;
+        packed_texels[tex_y] = descriptor->packed_shade_map[texel];
     }
 }
 
@@ -353,7 +375,6 @@ static void build_bsp_tilemap(const RayColumn *columns,
                     tile[row] = ((u32)val_a << 16) | val_b;
                 }
             }
-            commit_base_tile(tile_index, tile);
         }
     }
 }
@@ -400,7 +421,6 @@ static void build_bsp_tilemap(const RayColumn *columns,
                     (REP2[sample_wall_descriptor(&column_c, scene_colors, pixel_y)] << 8) |
                     REP2[sample_wall_descriptor(&column_d, scene_colors, pixel_y)];
             }
-            commit_base_tile(tile_index, target[tile_index]);
         }
     }
 }
@@ -605,50 +625,6 @@ static u16 count_view_bank_dirty_runs(u16 bank) {
     return runs;
 }
 
-// Predict the number of VDP_loadTileData calls made by the partial uploader.
-// Disjoint dirty runs each need a command, and a run crossing the per-vblank
-// tile budget needs another command after the uploader's VSync split.
-static u16 count_partial_view_bank_commands(u16 bank,
-                                            bool split_across_vblanks) {
-    u16 commands = 0;
-    u16 batch_tiles = 0;
-
-    for (u16 tile = 0; tile < VIEW_TILE_COUNT;) {
-        if (!view_bank_tile_is_dirty(bank, tile)) {
-            tile++;
-            continue;
-        }
-
-        u16 first = tile;
-        while ((tile < VIEW_TILE_COUNT) && view_bank_tile_is_dirty(bank, tile)) {
-            tile++;
-        }
-
-        u16 remaining = (u16)(tile - first);
-        while (remaining > 0) {
-            if (split_across_vblanks &&
-                (batch_tiles == VIEW_DMA_TILES_PER_VBLANK)) {
-                batch_tiles = 0;
-            }
-
-            u16 count = remaining;
-            if (split_across_vblanks) {
-                const u16 available =
-                    (u16)(VIEW_DMA_TILES_PER_VBLANK - batch_tiles);
-                if (count > available) {
-                    count = available;
-                }
-            }
-
-            commands++;
-            remaining = (u16)(remaining - count);
-            batch_tiles = (u16)(batch_tiles + count);
-        }
-    }
-
-    return commands;
-}
-
 static void load_view_tile_run(u16 vram_base, u16 first, u16 count) {
 #if DEBUG_PERF
     const u32 issue_start = getSubTick();
@@ -685,14 +661,8 @@ static void clear_view_bank_dirty_range(u16 bank, u16 first, u16 end) {
     }
 }
 
-static bool choose_full_view_upload(u16 bank, bool swap) {
+static bool choose_full_view_upload(u16 bank) {
     const u16 dirty_count = g_view_bank_dirty_count[bank];
-    if (swap && dirty_count > 0) {
-        const u16 partial_commands = count_partial_view_bank_commands(bank, TRUE);
-        const u16 full_commands =
-            (VIEW_TILE_COUNT > VIEW_DMA_TILES_PER_VBLANK) ? 2 : 1;
-        return (bool)(full_commands < partial_commands);
-    }
     return (bool)((dirty_count >= VIEW_DIRTY_FULL_THRESHOLD) ||
                   (count_view_bank_dirty_runs(bank) > VIEW_DIRTY_MAX_RUNS));
 }
@@ -703,7 +673,7 @@ void renderer_queue_scene_upload(void) {
 
     g_upload_requires_bank_swap = FALSE;
     g_view_upload.pending = (bool)(g_view_bank_dirty_count[bank] != 0);
-    g_view_upload.full = choose_full_view_upload(bank, swap);
+    g_view_upload.full = swap ? TRUE : choose_full_view_upload(bank);
     g_view_upload.swap = swap;
     g_view_upload.bank = bank;
     g_view_upload.cursor = 0;
@@ -838,28 +808,6 @@ static void finish_overlay_bits(void) {
     }
 }
 
-static void commit_base_tile(u16 tile_index, const u32 *tile_rows) {
-    // Fold the 8 row comparisons into one difference accumulator instead of
-    // branching per row, and copy the new rows in the same pass (writing an
-    // unchanged value is a no-op but removes the per-row branch and the re-read
-    // of just-written data). The tile is dirty if any row changed, an overlay had
-    // previously touched it (so the erase must re-upload the base), or this is
-    // the first base build (g_base_tiles_valid == FALSE forces a full upload).
-    u32 difference =
-        (overlay_previously_touched(tile_index) || !g_base_tiles_valid) ? 1u : 0u;
-    u32 *base_rows = g_base_view_tiles[tile_index];
-
-    for (u16 row = 0; row < 8; row++) {
-        const u32 row_data = tile_rows[row];
-        difference |= (base_rows[row] ^ row_data);
-        base_rows[row] = row_data;
-    }
-
-    if (difference != 0) {
-        renderer_mark_tile_dirty(tile_index);
-    }
-}
-
 static void upload_compass_tilemap(void) {
     if (!g_compass_dirty) {
         return;
@@ -897,11 +845,14 @@ void renderer_render_scene(const RayColumn *columns,
     if (base_dirty) {
         g_upload_requires_bank_swap = TRUE;
         g_base_built_this_frame = TRUE;
+        renderer_prepare_full_base_upload();
+        for (u16 i = 0; i < VIEW_DIRTY_WORD_COUNT; i++) {
+            g_base_snapshot_valid_bits[i] = 0;
+        }
 #if DEBUG_PERF
         stage_start = getSubTick();
 #endif
         build_bsp_tilemap(columns, scene_colors, g_view_tiles);
-        g_base_tiles_valid = TRUE;
         for (u16 i = 0; i < VIEW_DIRTY_WORD_COUNT; i++) {
             g_overlay_previous_bits[i] = 0;
         }
@@ -911,6 +862,7 @@ void renderer_render_scene(const RayColumn *columns,
 #endif
     } else {
         g_base_built_this_frame = FALSE;
+        g_view_dirty_bank_mask = (u16)(1u << g_view_vram_bank);
         restore_previous_overlay_tiles();
 #if DEBUG_PERF
         s_debug_pack_subticks = 0;

@@ -19,6 +19,8 @@ u16 bsp_get_debug_near_fallbacks(void);
 u16 bsp_get_debug_segments_tested(void);
 u16 bsp_get_debug_segments_drawn(void);
 u32 bsp_get_debug_side_cache_subticks(void);
+u32 bsp_get_debug_box_projection_subticks(void);
+u32 bsp_get_debug_segment_raster_subticks(void);
 #endif
 
 #endif
