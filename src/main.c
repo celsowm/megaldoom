@@ -185,6 +185,11 @@ int main(bool hard) {
         }
         // elapsed_frames is fed to player_controller_update below so turning is time-correct.
 
+        if (bsp_update_doors(elapsed_frames)) {
+            base_dirty = TRUE;
+            overlay_dirty = TRUE;
+        }
+
         if (shot_cooldown > 0) {
             shot_cooldown--;
         }
@@ -213,6 +218,10 @@ int main(bool hard) {
             base_dirty = TRUE;
             overlay_dirty = TRUE;
         }
+
+        // PLAYER_CONTROL_PREVIOUS_WEAPON, PLAYER_CONTROL_NEXT_WEAPON and
+        // PLAYER_CONTROL_TOGGLE_AUTOMAP are intentionally reserved until the
+        // corresponding weapon and automap systems are implemented.
 
         if ((control & PLAYER_CONTROL_CHANGED) != 0) {
             base_dirty = TRUE;

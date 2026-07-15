@@ -21,6 +21,11 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
+& python (Join-Path $PSScriptRoot "test-billboard-raster.py")
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
 & python (Join-Path $PSScriptRoot "test-billboard-population.py")
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
@@ -37,6 +42,16 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 & python (Join-Path $PSScriptRoot "test-sector-map.py")
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
+& python (Join-Path $PSScriptRoot "test-door-animation.py")
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
+& python (Join-Path $PSScriptRoot "test-controller-mode1.py")
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }

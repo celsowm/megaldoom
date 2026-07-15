@@ -16,6 +16,11 @@
 #define PLAYER_CONTROL_CHANGED 0x0001
 #define PLAYER_CONTROL_USE 0x0002
 #define PLAYER_CONTROL_FIRE 0x0004
+// Reserved Mode 1 actions. They are emitted by the controller now so weapon
+// selection and the automap can attach later without another input remap.
+#define PLAYER_CONTROL_PREVIOUS_WEAPON 0x0008
+#define PLAYER_CONTROL_NEXT_WEAPON 0x0010
+#define PLAYER_CONTROL_TOGGLE_AUTOMAP 0x0020
 
 void player_controller_reset(void);
 u16 player_controller_update(PlayerState *player, u16 elapsed_frames);

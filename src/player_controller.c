@@ -25,8 +25,14 @@
 #define STRAFE_MAX 144
 #define MOVE_ACCEL 60 // per iteration, ramping up toward the target speed
 #define MOVE_DECEL 96 // per iteration, ramping down when released or reversing
+#define RUN_SPEED_NUMERATOR 3
+#define RUN_SPEED_DENOMINATOR 2
+#define RUN_SPEED(value) (((value) * RUN_SPEED_NUMERATOR) / RUN_SPEED_DENOMINATOR)
+
+#define THREE_BUTTON_AUTOMAP_CHORD (BUTTON_A | BUTTON_B | BUTTON_C)
 
 static u16 s_previous_joy = 0;
+static bool s_three_button_map_chord_active = FALSE;
 static s16 s_vel_forward = 0;
 static s16 s_vel_strafe = 0;
 static s16 s_turn_speed_fp = 0; // per-vsync fixed-point turn rate
@@ -59,6 +65,7 @@ static s16 approach_velocity(s16 vel, s16 target, s16 accel, s16 decel) {
 
 void player_controller_reset(void) {
     s_previous_joy = 0;
+    s_three_button_map_chord_active = FALSE;
     s_vel_forward = 0;
     s_vel_strafe = 0;
     s_turn_speed_fp = 0;
@@ -68,9 +75,19 @@ void player_controller_reset(void) {
 
 u16 player_controller_update(PlayerState *player, u16 elapsed_frames) {
     const u16 joy = JOY_readJoypad(JOY_1);
-    const bool turning_left = ((joy & BUTTON_LEFT) != 0);
-    const bool turning_right = ((joy & BUTTON_RIGHT) != 0);
+    const bool six_button_pad = (JOY_getJoypadType(JOY_1) == JOY_TYPE_PAD6);
+    const bool three_button_map_chord =
+        !six_button_pad && ((joy & THREE_BUTTON_AUTOMAP_CHORD) == THREE_BUTTON_AUTOMAP_CHORD);
+    const bool strafing = ((joy & BUTTON_C) != 0) &&
+                          ((joy & (BUTTON_LEFT | BUTTON_RIGHT)) != 0);
+    // C modifies lateral D-pad input into strafe, so it must suppress turn and
+    // use for the whole chord rather than leaking an action while strafing.
+    const bool turning_left = !strafing && ((joy & BUTTON_LEFT) != 0);
+    const bool turning_right = !strafing && ((joy & BUTTON_RIGHT) != 0);
+    const bool running = ((joy & BUTTON_A) != 0) && !three_button_map_chord;
     const s16 desired_turn = (turning_right && !turning_left) ? 1 : ((turning_left && !turning_right) ? -1 : 0);
+    const s16 move_max = running ? RUN_SPEED(MOVE_MAX) : MOVE_MAX;
+    const s16 strafe_max = running ? RUN_SPEED(STRAFE_MAX) : STRAFE_MAX;
     s16 target_forward = 0;
     s16 target_strafe = 0;
     u16 result = 0;
@@ -103,17 +120,19 @@ u16 player_controller_update(PlayerState *player, u16 elapsed_frames) {
     }
     s_turn_dir = desired_turn;
 
-    if ((joy & BUTTON_UP) != 0) {
-        target_forward += MOVE_MAX;
+    if (!three_button_map_chord && ((joy & BUTTON_UP) != 0)) {
+        target_forward += move_max;
     }
-    if ((joy & BUTTON_DOWN) != 0) {
-        target_forward -= MOVE_MAX;
+    if (!three_button_map_chord && ((joy & BUTTON_DOWN) != 0)) {
+        target_forward -= move_max;
     }
-    if ((joy & BUTTON_A) != 0) {
-        target_strafe -= STRAFE_MAX;
-    }
-    if ((joy & BUTTON_C) != 0) {
-        target_strafe += STRAFE_MAX;
+    if (!three_button_map_chord && strafing) {
+        if ((joy & BUTTON_LEFT) != 0) {
+            target_strafe -= strafe_max;
+        }
+        if ((joy & BUTTON_RIGHT) != 0) {
+            target_strafe += strafe_max;
+        }
     }
 
     s_vel_forward = approach_velocity(s_vel_forward, target_forward, MOVE_ACCEL, MOVE_DECEL);
@@ -125,12 +144,32 @@ u16 player_controller_update(PlayerState *player, u16 elapsed_frames) {
         result |= PLAYER_CONTROL_CHANGED;
     }
 
-    if (((joy & BUTTON_START) != 0) && ((s_previous_joy & BUTTON_START) == 0)) {
-        result |= PLAYER_CONTROL_USE;
+    if (three_button_map_chord) {
+        if (!s_three_button_map_chord_active) {
+            result |= PLAYER_CONTROL_TOGGLE_AUTOMAP;
+        }
+        s_three_button_map_chord_active = TRUE;
+    } else {
+        s_three_button_map_chord_active = FALSE;
+
+        if (((joy & BUTTON_C) != 0) && ((s_previous_joy & BUTTON_C) == 0) && !strafing) {
+            result |= PLAYER_CONTROL_USE;
+        }
+        if (((joy & BUTTON_B) != 0) && ((s_previous_joy & BUTTON_B) == 0)) {
+            result |= PLAYER_CONTROL_FIRE;
+        }
     }
 
-    if (((joy & BUTTON_B) != 0) && ((s_previous_joy & BUTTON_B) == 0)) {
-        result |= PLAYER_CONTROL_FIRE;
+    if (six_button_pad) {
+        if (((joy & BUTTON_X) != 0) && ((s_previous_joy & BUTTON_X) == 0)) {
+            result |= PLAYER_CONTROL_PREVIOUS_WEAPON;
+        }
+        if (((joy & BUTTON_Y) != 0) && ((s_previous_joy & BUTTON_Y) == 0)) {
+            result |= PLAYER_CONTROL_NEXT_WEAPON;
+        }
+        if (((joy & BUTTON_Z) != 0) && ((s_previous_joy & BUTTON_Z) == 0)) {
+            result |= PLAYER_CONTROL_TOGGLE_AUTOMAP;
+        }
     }
 
     s_previous_joy = joy;

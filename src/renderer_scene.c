@@ -268,38 +268,76 @@ typedef struct {
     const u8 *vertical_samples;
     u8 tex_x;
     u8 tex_y;
+    u8 flags;
 } WallColumnDescriptor;
 
-static WallColumnDescriptor describe_wall_column(const RayColumn *column) {
-    const u16 wall_h = column->height;
+static WallColumnDescriptor describe_textured_column(u16 wall_h,
+                                                     u16 depth,
+                                                     u8 texture_id,
+                                                     u8 tex_x_value,
+                                                     u8 tex_y_value,
+                                                     u8 side_shade,
+                                                     u8 flags) {
     const u16 top = (u16)((VIEW_PIXEL_H - wall_h) / 2);
     const u16 bottom = (u16)(top + wall_h);
-    const u8 tid = (u8)((column->texture_id < FREEDOOM_WALL_TEXTURE_COUNT) ?
-                            column->texture_id : MEGALDOOM_TEX_FALLBACK);
+    const u8 tid = (u8)((texture_id < FREEDOOM_WALL_TEXTURE_COUNT) ?
+                            texture_id : MEGALDOOM_TEX_FALLBACK);
     const u8 (*tex)[WALL_TEX_DIM] = FREEDOOM_WALL_TEXTURES[tid];
     // Distance fog + side shading fold into one LUT selection per column: the fog
     // level grows with depth, and N/S ("shade") walls add one extra darkening step.
     // g_shade_luts[0] is the identity, so near front walls are unshaded; every level
     // maps 0 -> 0, preserving transparency, and the inner loop stays branch-free.
-    u16 fog_level = (u16)(column->depth >> FOG_SHIFT) + (column->shade ? 1u : 0u);
+    u16 fog_level = (u16)(depth >> FOG_SHIFT) + (side_shade ? 1u : 0u);
     if (fog_level > (SHADE_LEVELS - 1)) {
         fog_level = SHADE_LEVELS - 1;
     }
     const u8 *shade_map = g_shade_luts[fog_level];
     const u8 *ty_table = MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[wall_h];
-    const u8 tex_x = (u8)(column->tex_x & WALL_TEX_DIM_MASK);
+    const u8 tex_x = (u8)(tex_x_value & WALL_TEX_DIM_MASK);
 
 #if RAY_COL_STRIDE == 4
     return (WallColumnDescriptor){top, bottom, (const u8 *)tex, shade_map,
                                   g_packed_shade_luts[fog_level], ty_table,
-                                  tex_x, column->tex_y};
+                                  tex_x, tex_y_value, flags};
 #else
     return (WallColumnDescriptor){top, bottom, (const u8 *)tex, shade_map, ty_table,
-                                  tex_x, column->tex_y};
+                                  tex_x, tex_y_value, flags};
 #endif
 }
 
+static WallColumnDescriptor describe_wall_column(const RayColumn *column) {
+    return describe_textured_column(column->height, column->depth,
+                                    column->texture_id, column->tex_x,
+                                    column->tex_y, column->shade, column->flags);
+}
+
+static WallColumnDescriptor describe_door_overlay(const RayDoorOverlay *door) {
+    return describe_textured_column(door->height, door->depth,
+                                    door->texture_id, door->tex_x,
+                                    door->tex_y, door->shade,
+                                    RAY_COLUMN_FLAG_DOOR);
+}
+
 #if RAY_COL_STRIDE == 2
+static u8 style_wall_texel(const WallColumnDescriptor *descriptor,
+                           u8 tex_y,
+                           u8 texel) {
+    if ((descriptor->flags & RAY_COLUMN_FLAG_DOOR) == 0) return texel;
+
+    // At 40 sampled wall columns, the original 128px BIGDOOR art collapses
+    // into gray noise. Give every interactive slab a stable low-resolution
+    // silhouette: a dark metal frame plus a yellow/black moving safety edge.
+    // The centre remains the real WAD texture.
+    if (descriptor->tex_x < 2 || descriptor->tex_x >= (WALL_TEX_DIM - 2) ||
+        tex_y < 2) {
+        return 0;
+    }
+    if (tex_y >= (WALL_TEX_DIM - 4)) {
+        return (descriptor->tex_x & 4) ? MEGALDOOM_WORLD_COLOR_WARNING : 0;
+    }
+    return texel;
+}
+
 static u8 sample_wall_descriptor(const WallColumnDescriptor *descriptor,
                                  const RaySceneColors *scene_colors,
                                  u16 y) {
@@ -310,10 +348,25 @@ static u8 sample_wall_descriptor(const WallColumnDescriptor *descriptor,
         return scene_colors->floor_color;
     }
 
-    return descriptor->shade_map[
-        (descriptor->texture[((descriptor->vertical_samples[y - descriptor->top] +
-                              descriptor->tex_y) & WALL_TEX_DIM_MASK) * WALL_TEX_DIM +
-                               descriptor->tex_x]) & 0x0F];
+    const u8 tex_y = (u8)((descriptor->vertical_samples[y - descriptor->top] +
+                           descriptor->tex_y) & WALL_TEX_DIM_MASK);
+    const u8 texel = descriptor->texture[(tex_y * WALL_TEX_DIM) +
+                                          descriptor->tex_x] & 0x0F;
+    return descriptor->shade_map[style_wall_texel(descriptor, tex_y, texel)];
+}
+#else
+static u8 style_wall_texel(const WallColumnDescriptor *descriptor,
+                           u8 tex_y,
+                           u8 texel) {
+    if ((descriptor->flags & RAY_COLUMN_FLAG_DOOR) == 0) return texel;
+    if (descriptor->tex_x < 2 || descriptor->tex_x >= (WALL_TEX_DIM - 2) ||
+        tex_y < 2) {
+        return 0;
+    }
+    if (tex_y >= (WALL_TEX_DIM - 4)) {
+        return (descriptor->tex_x & 4) ? MEGALDOOM_WORLD_COLOR_WARNING : 0;
+    }
+    return texel;
 }
 #endif
 #if (RAY_COL_STRIDE != 4) && (RAY_COL_STRIDE != 2)
@@ -329,8 +382,9 @@ static u8 sample_wall_descriptor(const WallColumnDescriptor *descriptor,
 static void build_packed_wall_column(const WallColumnDescriptor *descriptor,
                                      u16 packed_texels[WALL_TEX_DIM]) {
     for (u16 tex_y = 0; tex_y < WALL_TEX_DIM; tex_y++) {
-        const u8 texel = descriptor->texture[
+        u8 texel = descriptor->texture[
             (tex_y * WALL_TEX_DIM) + descriptor->tex_x] & 0x0F;
+        texel = style_wall_texel(descriptor, (u8)tex_y, texel);
         packed_texels[tex_y] = descriptor->packed_shade_map[texel];
     }
 }
@@ -454,6 +508,67 @@ static void build_bsp_tilemap(const RayColumn *columns,
 }
 #endif
 
+static u8 sample_door_overlay(const WallColumnDescriptor *descriptor,
+                              u16 y,
+                              u16 lift_pixels) {
+    u16 source_y = (u16)(y - descriptor->top + lift_pixels);
+    const u16 full_height = (u16)(descriptor->bottom - descriptor->top);
+    if (source_y >= full_height) source_y = (u16)(full_height - 1);
+    const u8 tex_y = (u8)((descriptor->vertical_samples[source_y] +
+                           descriptor->tex_y) & WALL_TEX_DIM_MASK);
+    const u8 texel = descriptor->texture[(tex_y * WALL_TEX_DIM) +
+                                          descriptor->tex_x] & 0x0F;
+    return descriptor->shade_map[style_wall_texel(descriptor, tex_y, texel)];
+}
+
+// Moving doors are translucent only in the geometric sense: their raised
+// lower gap reveals the fully rendered BSP scene behind, while the remaining
+// slab is composited at its own depth without rescaling its texture.
+static void draw_door_overlays(const RayColumn *columns, u32 target[][8]) {
+    for (u16 x = 0; x < RAY_VIEW_COLS; x += RAY_COL_STRIDE) {
+        const RayColumn *column = &columns[x];
+        const RayDoorOverlay *door = &column->door;
+        if (door->height == 0 || door->depth >= column->depth) continue;
+
+        const WallColumnDescriptor descriptor = describe_door_overlay(door);
+        const u16 lift_pixels = (u16)(((u32)door->height * door->lift) >> 8);
+        const u16 visible_bottom = (u16)(descriptor.bottom - lift_pixels);
+        if (visible_bottom <= descriptor.top) continue;
+
+        const u16 tile_x = (u16)(x >> 3);
+#if RAY_COL_STRIDE == 4
+        const u16 shift = (u16)((x & 4) ? 0 : 16);
+        const u32 keep_mask = ~((u32)0xFFFFu << shift);
+#else
+        const u16 shift = (u16)((6 - (x & 7)) * 4);
+        const u32 keep_mask = ~((u32)0xFFu << shift);
+#endif
+        for (u16 y = descriptor.top; y < visible_bottom; y++) {
+            const u8 color = sample_door_overlay(&descriptor, y, lift_pixels);
+#if RAY_COL_STRIDE == 4
+            const u32 value = (u32)REP4[color] << shift;
+#else
+            const u32 value = (u32)REP2[color] << shift;
+#endif
+            u32 *row = &target[((y >> 3) * VIEW_TILE_W) + tile_x][y & 7];
+            *row = (*row & keep_mask) | value;
+        }
+    }
+}
+
+static bool door_overlay_blocks_pixel(const RayColumn *column,
+                                      u16 object_depth,
+                                      u16 y) {
+    const RayDoorOverlay *door = &column->door;
+    if (door->height == 0 || door->depth >= column->depth ||
+        object_depth < door->depth) {
+        return FALSE;
+    }
+    const u16 top = (u16)((VIEW_PIXEL_H - door->height) / 2);
+    const u16 lift_pixels = (u16)(((u32)door->height * door->lift) >> 8);
+    return (bool)(y >= top && y < (u16)(top + door->height - lift_pixels));
+}
+
 
 // Exact 32/16=32 unsigned division using two DIVU.W steps (base-65536 long
 // division). Produces the same integer quotient as the '/' operator, so it can
@@ -478,9 +593,10 @@ static u32 divu32_16_exact(u32 numerator, u16 denominator) {
     return ((u32)quotient_high << 16) | quotient_low;
 }
 
-// Draw projected billboards object-by-object. Projection, texture selection,
-// colour remapping and the vertical DDA are all shared by the object's columns;
-// the per-column loop only resolves horizontal texture position and writes pixels.
+// Draw projected billboards object-by-object in painter order. Texture and depth
+// decisions remain pixel-exact, but pixels sharing one 8-pixel tile row are
+// accumulated into a mask/value pair and committed with one RAM RMW. The old
+// column-first path rewrote the same packed u32 once for every opaque pixel.
 static void draw_projected_billboards(const RayColumn *columns,
                                       const ProjectedBillboard *objects,
                                       u16 object_count) {
@@ -491,14 +607,15 @@ static void draw_projected_billboards(const RayColumn *columns,
         const BillboardTex tex = get_billboard_texture(object->visual_id, object->frame);
         const u8 *lut = MEGALDOOM_BILLBOARD_REMAP[
             (object->visual_id < 6) ? object->visual_id : BILLBOARD_VISUAL_BONUS];
-        u8 tex_y_by_screen_row[VIEW_PIXEL_H];
+        // 0xFF marks a clipped/wall-hidden screen column. Generated atlas X
+        // coordinates are far below 255, so the sentinel cannot alias a texel.
+        u8 tex_x_by_screen_col[RAY_VIEW_COLS];
+        s16 x0 = object->left;
+        s16 x1 = object->right;
         s16 y0 = object->top;
         s16 y1 = object->bottom;
-        u32 tex_x_acc = (u32)object->atlas_x << 8;
         u32 tex_x_step;
         const u8 atlas_x_last = (u8)(object->atlas_x + object->atlas_w - 1);
-        s16 last_marked_tile_x = -1;
-        u16 opaque_tile_rows = 0;
 
         if ((height <= 0) || (width <= 0)) {
             continue;
@@ -507,14 +624,39 @@ static void draw_projected_billboards(const RayColumn *columns,
         // must not alter the WAD patch's projected size or origin.
         tex_x_step = divu((u32)object->atlas_w << 8, (u16)width);
 
+        if (x0 < 0) {
+            x0 = 0;
+        }
+        if (x1 >= RAY_VIEW_COLS) {
+            x1 = RAY_VIEW_COLS - 1;
+        }
         if (y0 < 0) {
             y0 = 0;
         }
         if (y1 >= VIEW_PIXEL_H) {
             y1 = VIEW_PIXEL_H - 1;
         }
-        if (y0 > y1) {
+        if ((x0 > x1) || (y0 > y1)) {
             continue;
+        }
+
+        // Resolve horizontal texture coordinates and whole-column wall depth
+        // once. Door slabs remain a per-pixel vertical test below.
+        {
+            u32 tex_x_acc = ((u32)object->atlas_x << 8) +
+                ((u32)(x0 - object->left) * tex_x_step);
+            for (s16 col = x0; col <= x1; col++) {
+                u8 tex_x = (u8)(tex_x_acc >> 8);
+                const u16 wall_col = (u16)(col & ~(RAY_COL_STRIDE - 1));
+                tex_x_acc += tex_x_step;
+
+                if (!billboard_depth_visible(object, columns[wall_col].depth)) {
+                    tex_x_by_screen_col[col] = 0xFF;
+                    continue;
+                }
+                if (tex_x > atlas_x_last) tex_x = atlas_x_last;
+                tex_x_by_screen_col[col] = tex_x;
+            }
         }
 
         // Approximate floor(rel_y * tex.h / height) with one setup divide and a
@@ -530,59 +672,42 @@ static void draw_projected_billboards(const RayColumn *columns,
         const u8 atlas_y_last = (u8)(object->atlas_y + object->atlas_h - 1);
         for (s16 y = y0; y <= y1; y++) {
             u8 tex_y = (u8)(tex_y_acc >> 16);
-            if (tex_y > atlas_y_last) {
-                tex_y = atlas_y_last;
-            }
-            tex_y_by_screen_row[y] = tex_y;
+            const u16 tile_y = (u16)(y >> 3);
+            const u16 row_y = (u16)(y & 7);
+            const u16 first_tile_x = (u16)(x0 >> 3);
+            const u16 last_tile_x = (u16)(x1 >> 3);
+            if (tex_y > atlas_y_last) tex_y = atlas_y_last;
             tex_y_acc += tex_y_step;
-        }
 
-        for (s16 col = object->left; col <= object->right; col++) {
-            u8 tex_x = (u8)(tex_x_acc >> 8);
-            tex_x_acc += tex_x_step;
+            for (u16 tile_x = first_tile_x; tile_x <= last_tile_x; tile_x++) {
+                const s16 tile_left = (s16)(tile_x * 8);
+                const s16 tile_right = (s16)(tile_left + 7);
+                const s16 col_begin = (x0 > tile_left) ? x0 : tile_left;
+                const s16 col_end = (x1 < tile_right) ? x1 : tile_right;
+                u32 clear_mask = 0;
+                u32 value = 0;
 
-            if ((col < 0) || (col >= RAY_VIEW_COLS)) {
-                continue;
-            }
-            const u16 wall_col = (u16)(col & ~(RAY_COL_STRIDE - 1));
-            // The base image repeats the sampled wall column across this exact
-            // block, so billboard depth must use that same sample.
-            const u16 wall_depth = columns[wall_col].depth;
-            if (!billboard_depth_visible(object, wall_depth)) continue;
+                for (s16 col = col_begin; col <= col_end; col++) {
+                    const u8 tex_x = tex_x_by_screen_col[col];
+                    if (tex_x == 0xFF) continue;
 
-            if (tex_x > atlas_x_last) {
-                tex_x = atlas_x_last;
-            }
-            const u16 tile_x = (u16)(col >> 3);
-            const u16 shift = (u16)((7 - (col & 7)) * 4);
-            const u32 keep_mask = ~((u32)0x0F << shift);
-
-            if ((s16)tile_x != last_marked_tile_x) {
-                last_marked_tile_x = (s16)tile_x;
-                opaque_tile_rows = 0;
-            }
-
-            u16 y = (u16)y0;
-            const u16 y_end = (u16)(y1 + 1);
-            while (y < y_end) {
-                const u16 tile_y = (u16)(y >> 3);
-                u32 *tile = g_view_tiles[(tile_y * VIEW_TILE_W) + tile_x];
-                const u16 next_tile_y = (u16)((tile_y + 1) * 8);
-                const u16 stop = (next_tile_y < y_end) ? next_tile_y : y_end;
-
-                for (; y < stop; y++) {
-                    const u8 texel = lut[tex.pixels[(tex_y_by_screen_row[y] * tex.w) + tex_x] & 0x0F];
-                    const bool depth_visible = TRUE;
-                    if (texel != 0 && depth_visible) {
-                        const u16 row_y = (u16)(y & 7);
-                        const u16 tile_bit = (u16)1u << tile_y;
-                        if ((opaque_tile_rows & tile_bit) == 0) {
-                            renderer_mark_overlay_tile(
-                                (u16)(tile_y * VIEW_TILE_W + tile_x));
-                            opaque_tile_rows |= tile_bit;
-                        }
-                        tile[row_y] = (tile[row_y] & keep_mask) | ((u32)texel << shift);
+                    const u16 wall_col = (u16)(col & ~(RAY_COL_STRIDE - 1));
+                    const u8 texel = lut[
+                        tex.pixels[(tex_y * tex.w) + tex_x] & 0x0F];
+                    if (texel != 0 && !door_overlay_blocks_pixel(
+                            &columns[wall_col], object->depth, (u16)y)) {
+                        const u16 shift = (u16)((7 - (col & 7)) * 4);
+                        clear_mask |= (u32)0x0F << shift;
+                        value |= (u32)texel << shift;
                     }
+                }
+
+                if (clear_mask != 0) {
+                    const u16 tile_index = (u16)(tile_y * VIEW_TILE_W + tile_x);
+                    u32 *dst;
+                    renderer_mark_overlay_tile(tile_index);
+                    dst = &g_view_tiles[tile_index][row_y];
+                    *dst = (*dst & ~clear_mask) | value;
                 }
             }
         }
@@ -884,6 +1009,7 @@ void renderer_render_scene(const RayColumn *columns,
         stage_start = getSubTick();
 #endif
         build_bsp_tilemap(columns, scene_colors, g_view_tiles);
+        draw_door_overlays(columns, g_view_tiles);
         for (u16 i = 0; i < VIEW_DIRTY_WORD_COUNT; i++) {
             g_overlay_previous_bits[i] = 0;
         }

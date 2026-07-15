@@ -124,6 +124,17 @@ static s32 billboard_muls_word(s16 left, s16 right) {
     return result;
 }
 
+// E1M1 vertices and THING coordinates fit signed words, but runtime positions
+// stay s32 so future maps and out-of-bounds debug cameras remain correct. Keep
+// the exact wide fallback while letting the normal path compile to one native
+// 68000 MULS.W instead of libgcc's 32-bit multiplication helper.
+static s32 billboard_mul_basis_delta(s16 basis, s32 delta) {
+    if ((delta >= -32768) && (delta <= 32767)) {
+        return billboard_muls_word(basis, (s16)delta);
+    }
+    return (s32)basis * delta;
+}
+
 static s16 billboard_project_q12(s16 value, u16 scale_q12) {
     s32 product = billboard_muls_word(value, (s16)scale_q12);
     if (product < 0) return (s16)-((-product) >> BILLBOARD_SCALE_SHIFT);
@@ -188,11 +199,34 @@ bool billboard_measure_object(const PlayerState *player, s16 cos_a, s16 sin_a,
     const BillboardType *type = billboard_get_type(object->type_id);
     const s32 dx = object->x - player->x;
     const s32 dy = object->y - player->y;
-    const s32 forward = (((s32)cos_a * dx) + ((s32)sin_a * dy)) >> FX_SHIFT;
-    const s32 side = (((s32)cos_a * dy) - ((s32)sin_a * dx)) >> FX_SHIFT;
+    const s32 forward = (billboard_mul_basis_delta(cos_a, dx) +
+                         billboard_mul_basis_delta(sin_a, dy)) >> FX_SHIFT;
+    const s32 side = (billboard_mul_basis_delta(cos_a, dy) -
+                      billboard_mul_basis_delta(sin_a, dx)) >> FX_SHIFT;
     if ((forward <= BILLBOARD_MIN_DEPTH) || (forward >= type->max_depth)) return FALSE;
     BillboardGeometry geometry;
     billboard_get_geometry(object, type, &geometry);
+
+    // Reject a sprite whose complete authored horizontal span is safely beyond
+    // the viewport before paying for centre/scale divisions. The two-pixel
+    // expansion covers the separate truncation of centre and edge extents in
+    // the exact projector below, so an edge-touching sprite is never lost.
+    {
+        const s32 geometry_scale = geometry.uses_wad_origin ?
+            BILLBOARD_WORLD_GEOMETRY_SCALE : 1;
+        const s32 left_extent = (s32)geometry.left_offset * geometry_scale;
+        const s32 right_extent =
+            ((s32)geometry.source_w - geometry.left_offset) * geometry_scale;
+        const s32 left_numerator = (side - left_extent) * RAY_PROJ_X;
+        const s32 right_numerator = (side + right_extent) * RAY_PROJ_X;
+        const s32 left_clip = -((s32)(RAY_VIEW_CENTER_X + 2) * forward);
+        const s32 right_clip =
+            (s32)(RAY_VIEW_COLS - RAY_VIEW_CENTER_X + 2) * forward;
+        if ((right_numerator < left_clip) || (left_numerator >= right_clip)) {
+            return FALSE;
+        }
+    }
+
     measure->type = type;
     measure->forward = forward;
     measure->side = side;

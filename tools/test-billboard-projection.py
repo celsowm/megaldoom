@@ -58,6 +58,35 @@ def project_patch(forward: int, center: int, width: int, height: int,
     return left, max(left, right), top, max(top, bottom), origin_y
 
 
+def transform_component(basis: int, delta: int) -> tuple[int, str]:
+    """Model the guarded native-word path and its exact wide fallback."""
+    path = "word" if -32768 <= delta <= 32767 else "wide"
+    return basis * delta, path
+
+
+def early_culled(side: int, forward: int, width: int,
+                 left_offset: int, scale: int) -> bool:
+    left_extent = left_offset * scale
+    right_extent = (width - left_offset) * scale
+    left_numerator = (side - left_extent) * PROJ_X
+    right_numerator = (side + right_extent) * PROJ_X
+    left_clip = -(CENTER_X + 2) * forward
+    right_clip = (VIEW_W - CENTER_X + 2) * forward
+    return right_numerator < left_clip or left_numerator >= right_clip
+
+
+def geometry_key(type_id: int, visual: int, frame: int) -> int:
+    geometry_frame = frame if visual == 19 else 0
+    return ((type_id & 0x1F) | ((visual & 0x1F) << 5) |
+            ((geometry_frame & 0x0F) << 10))
+
+
+def cache_hit(cached: tuple[int, int, int, int],
+              current: tuple[int, int, int, int]) -> bool:
+    """Camera generation, object X/Y, and geometry key must all match."""
+    return cached == current
+
+
 def main() -> int:
     raycast = RAYCAST.read_text(encoding="utf-8")
     billboard = BILLBOARD.read_text(encoding="utf-8")
@@ -78,9 +107,9 @@ def main() -> int:
         raise ValueError("billboard span occlusion guard is missing")
     if "billboard_has_line_of_sight(i, player)" in projector:
         raise ValueError("render projection must not cull billboards by LOS")
-    if "const u16 wall_depth = columns[wall_col].depth;" not in scene:
+    if "columns[wall_col].depth" not in scene:
         raise ValueError("billboard rasterizer must use the rendered wall block depth")
-    if "billboard_depth_visible(object, wall_depth)" not in scene:
+    if "billboard_depth_visible(object, columns[wall_col].depth)" not in scene:
         raise ValueError("billboard rasterizer no longer applies typed wall-depth visibility")
     if "next_wall_col" in scene:
         raise ValueError("billboard rasterizer still samples the next wall block")
@@ -96,6 +125,22 @@ def main() -> int:
         raise ValueError("billboard rasterizer is not sampling the generated atlas crop")
     if "BILLBOARD_ENEMY_WORLD_WIDTH" not in billboard or "uses_wad_origin = FALSE" not in billboard:
         raise ValueError("enemy legacy geometry is no longer isolated")
+    if ("billboard_mul_basis_delta" not in billboard or
+            "muls.w %1,%0" not in billboard or
+            "return (s32)basis * delta;" not in billboard):
+        raise ValueError("guarded native MULS.W transform or exact fallback is missing")
+    if ("left_numerator" not in billboard or "right_numerator" not in billboard or
+            "RAY_VIEW_CENTER_X + 2" not in billboard):
+        raise ValueError("conservative pre-division frustum rejection is missing")
+    cache_tokens = [
+        "billboard_projection_cache_begin", "s_cache_player_x == player->x",
+        "s_cache_player_y == player->y", "s_cache_player_angle == player->angle",
+        "cache->object_x == object->x", "cache->object_y == object->y",
+        "cache->geometry_key == geometry_key",
+        "visual == BILLBOARD_VISUAL_BARREL_EXPLODING",
+    ]
+    if any(token not in projector for token in cache_tokens):
+        raise ValueError("billboard measurement cache invalidation contract changed")
 
     # Three successive turns preserve the exact wall/billboard horizontal law.
     # The changing side coordinate models a fixed prop as the camera rotates.
@@ -104,6 +149,49 @@ def main() -> int:
         wall_x = CENTER_X + int(side * PROJ_X / 192)
         if billboard_x != wall_x:
             raise ValueError("billboard and wall disagree during turn sequence")
+
+    # Signed-word boundaries use native MULS.W; only genuinely wide deltas take
+    # the exact 32-bit fallback. Both paths produce the same mathematical value.
+    for delta, expected_path in (
+            (-32769, "wide"), (-32768, "word"), (-1, "word"),
+            (0, "word"), (32767, "word"), (32768, "wide")):
+        product, path = transform_component(-1536, delta)
+        if product != -1536 * delta or path != expected_path:
+            raise ValueError("native/fallback camera transform boundary diverged")
+
+    # Differentially compare the cheap reject with the exact projected span.
+    # Any authored sprite that reaches the viewport must survive the early test.
+    geometries = ((23, 10, WORLD_GEOMETRY_SCALE),
+                  (28, 13, WORLD_GEOMETRY_SCALE),
+                  (32, 16, 1), (48, 24, 1))
+    for forward in (33, 48, 64, 96, 128, 192, 384, 768, 1535):
+        sx = (PROJ_X << SCALE_SHIFT) // forward
+        for width, left_offset, scale in geometries:
+            for side in range(-1024, 1025, 7):
+                center = project_x(side, forward)
+                left = center - projected_q12(left_offset * scale, sx)
+                right = center + projected_q12(
+                    (width - left_offset) * scale, sx) - 1
+                touches = max(left, right) >= 0 and left < VIEW_W
+                if touches and early_culled(side, forward, width, left_offset, scale):
+                    raise ValueError("early frustum rejection lost an edge sprite")
+
+    # Camera changes invalidate every measurement. Object movement and geometry
+    # changes invalidate only that object's entry; enemy animation reuses fixed
+    # geometry while each barrel-explosion shape gets a distinct key.
+    enemy_key_0 = geometry_key(5, 2, 0)
+    enemy_key_3 = geometry_key(5, 2, 3)
+    barrel_key_0 = geometry_key(7, 19, 0)
+    barrel_key_3 = geometry_key(7, 19, 3)
+    if enemy_key_0 != enemy_key_3 or barrel_key_0 == barrel_key_3:
+        raise ValueError("animation geometry cache key is over/under-invalidating")
+    base = (4, 100, 200, enemy_key_0)
+    if not cache_hit(base, base):
+        raise ValueError("unchanged projection did not reuse its measurement")
+    if (cache_hit(base, (5, 100, 200, enemy_key_0)) or
+            cache_hit(base, (4, 101, 200, enemy_key_0)) or
+            cache_hit(base, (4, 100, 200, geometry_key(5, 3, 0)))):
+        raise ValueError("camera, movement, or geometry change reused stale projection")
 
     depths = [0x7FFF] * VIEW_W
     depths[80] = 96
@@ -148,7 +236,7 @@ def main() -> int:
     if edge_clip[1] < 0 or not span_visible(128, edge_clip[0], edge_clip[1], edge_depths):
         raise ValueError("partially on-screen item was incorrectly clipped")
 
-    print("ok    native billboard geometry, crop sampling, span z-test, and WAD anchoring")
+    print("ok    native/fallback projection, conservative cull, cache invalidation, and span z-test")
     return 0
 
 

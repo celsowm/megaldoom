@@ -56,12 +56,26 @@ typedef struct {
 } RaySceneColors;
 
 typedef struct {
+    u16 height;   // full projected slab height
+    u16 depth;
+    u16 lift;     // Q8, 1..255 while the overlay is active
+    u8 tex_x;
+    u8 tex_y;
+    u8 texture_id;
+    u8 shade;
+} RayDoorOverlay;
+
+#define RAY_COLUMN_FLAG_DOOR 0x01u
+
+typedef struct {
     u16 height;
     u16 depth;
     u8 tex_x;
     u8 tex_y;
     u8 texture_id;
     u8 shade;
+    u8 flags;
+    RayDoorOverlay door;
 } RayColumn;
 
 void player_init(PlayerState *player, u16 phase_index);

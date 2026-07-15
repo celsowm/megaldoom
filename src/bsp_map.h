@@ -167,6 +167,15 @@ void bsp_map_reset(u16 phase_index);
 // Runtime door state. Non-door segs are never "open".
 bool bsp_seg_is_open(u16 seg_index);
 
+// Door lift in Q8 units: 0 is fully closed and 256 is fully raised. Non-door
+// segs return 0. All faces in one physical door group share the same value.
+u16 bsp_seg_door_lift(u16 seg_index);
+
+// Advance every moving door by elapsed_vblanks. A complete trip takes 32
+// vblanks. Returns TRUE while any lift changed so the caller can rebuild the
+// world view even when the player is stationary.
+bool bsp_update_doors(u16 elapsed_vblanks);
+
 // Monotonic revision for cached visibility. Changes whenever door state or the
 // active map resets, so billboard LOS results never survive world-geometry changes.
 u16 bsp_get_visibility_revision(void);

@@ -12,7 +12,12 @@
 
 // Runtime state is stored once per physical door. Every BSP face generated for
 // that door points at the same group, so collision/rendering can never disagree.
-static bool g_door_open[BSP_MAX_DOORS];
+// Lift is Q8: 0 is closed, 256 is fully raised. Eight units per vblank makes a
+// full trip take 32 vblanks (~0.53 s on NTSC hardware).
+#define BSP_DOOR_LIFT_MAX 256u
+#define BSP_DOOR_LIFT_PER_VBLANK 8u
+static u16 g_door_lift[BSP_MAX_DOORS];
+static bool g_door_target_open[BSP_MAX_DOORS];
 static u16 g_query_seen_generation[BSP_MAX_SEGS];
 static u16 g_query_generation = 1;
 static u16 g_visibility_revision = 1;
@@ -36,7 +41,8 @@ static u16 g_los_candidates;
 void bsp_map_reset(u16 phase_index) {
     (void)phase_index;
     for (u16 i = 0; i < bsp_door_count && i < BSP_MAX_DOORS; i++) {
-        g_door_open[i] = FALSE;
+        g_door_lift[i] = 0;
+        g_door_target_open[i] = FALSE;
     }
     g_visibility_revision++;
     if (g_visibility_revision == 0) g_visibility_revision = 1;
@@ -49,7 +55,46 @@ bool bsp_seg_is_open(u16 seg_index) {
     return (bool)(seg->type == BSP_SEG_DOOR &&
                   seg->door_group < bsp_door_count &&
                   seg->door_group < BSP_MAX_DOORS &&
-                  g_door_open[seg->door_group]);
+                  g_door_lift[seg->door_group] == BSP_DOOR_LIFT_MAX);
+}
+
+u16 bsp_seg_door_lift(u16 seg_index) {
+    if (seg_index >= bsp_seg_count) return 0;
+    const BspSeg *seg = &bsp_segs[seg_index];
+    if (seg->type != BSP_SEG_DOOR ||
+        seg->door_group >= bsp_door_count ||
+        seg->door_group >= BSP_MAX_DOORS) {
+        return 0;
+    }
+    return g_door_lift[seg->door_group];
+}
+
+bool bsp_update_doors(u16 elapsed_vblanks) {
+    const u16 delta = (elapsed_vblanks > (BSP_DOOR_LIFT_MAX / BSP_DOOR_LIFT_PER_VBLANK))
+        ? BSP_DOOR_LIFT_MAX
+        : (u16)(elapsed_vblanks * BSP_DOOR_LIFT_PER_VBLANK);
+    bool changed = FALSE;
+
+    for (u16 i = 0; i < bsp_door_count && i < BSP_MAX_DOORS; i++) {
+        const bool was_open = (bool)(g_door_lift[i] == BSP_DOOR_LIFT_MAX);
+        const u16 old_lift = g_door_lift[i];
+
+        if (g_door_target_open[i]) {
+            const u16 remaining = (u16)(BSP_DOOR_LIFT_MAX - g_door_lift[i]);
+            g_door_lift[i] = (delta >= remaining)
+                ? BSP_DOOR_LIFT_MAX : (u16)(g_door_lift[i] + delta);
+        } else {
+            g_door_lift[i] = (delta >= g_door_lift[i])
+                ? 0 : (u16)(g_door_lift[i] - delta);
+        }
+
+        if (g_door_lift[i] != old_lift) changed = TRUE;
+        if (was_open != (g_door_lift[i] == BSP_DOOR_LIFT_MAX)) {
+            g_visibility_revision++;
+            if (g_visibility_revision == 0) g_visibility_revision = 1;
+        }
+    }
+    return changed;
 }
 
 u16 bsp_get_visibility_revision(void) { return g_visibility_revision; }
@@ -305,9 +350,7 @@ u16 bsp_get_debug_los_candidates(void) { return g_los_candidates; }
 
 static void toggle_door(u8 door_group) {
     if (door_group >= bsp_door_count || door_group >= BSP_MAX_DOORS) return;
-    g_door_open[door_group] = !g_door_open[door_group];
-    g_visibility_revision++;
-    if (g_visibility_revision == 0) g_visibility_revision = 1;
+    g_door_target_open[door_group] = !g_door_target_open[door_group];
 }
 
 BspUseResult bsp_use_in_front(s32 x, s32 y, u16 angle, u8 owned_keys) {

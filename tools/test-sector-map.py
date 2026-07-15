@@ -105,8 +105,8 @@ def main():
     for name, value in (("BSP_KEY_BLUE", 1), ("BSP_KEY_YELLOW", 2),
                         ("BSP_KEY_RED", 4)):
         assert re.search(rf"#define {name} 0x0{value}u", header)
-    assert "g_door_open[BSP_MAX_DOORS]" in runtime
-    assert "g_door_open[seg->door_group]" in runtime
+    assert "g_door_lift[BSP_MAX_DOORS]" in runtime
+    assert "g_door_lift[seg->door_group]" in runtime
     assert "owned_keys & s->required_key" in runtime
     assert all("billboard_consume_key" not in path.read_text()
                for path in (ROOT / "src").glob("*.[ch]"))

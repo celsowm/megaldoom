@@ -11,6 +11,34 @@ typedef struct {
 // Only the nearest drawable objects are retained, so dense rooms never pay for
 // sorting every active map thing.
 static BillboardProjectionOrder s_order[BILLBOARD_MAX_PROJECTED_OBJECTS];
+
+typedef struct {
+    s32 object_x;
+    s32 object_y;
+    s32 forward;
+    u16 camera_generation;
+    u16 geometry_key;
+    s16 left;
+    s16 right;
+    s16 top;
+    s16 bottom;
+    u8 atlas_x;
+    u8 atlas_y;
+    u8 atlas_w;
+    u8 atlas_h;
+    bool measured;
+} BillboardMeasureCache;
+
+// Overlay-only enemy animation used to reproject every active map object even
+// while the camera and almost every object were unchanged. Cache both accepted
+// and rejected measurements. Wall-span occlusion and nearest-object selection
+// still run every redraw against the current column buffer.
+static BillboardMeasureCache s_measure_cache[BILLBOARD_OBJECT_COUNT];
+static s32 s_cache_player_x;
+static s32 s_cache_player_y;
+static u16 s_cache_player_angle;
+static u16 s_cache_generation = 1;
+static bool s_cache_context_valid;
 #if DEBUG_PERF
 static u16 s_debug_culled;
 static u16 s_debug_candidates;
@@ -33,6 +61,93 @@ static u16 billboard_project_one(const BillboardObject *object,
     projected->atlas_w = measure->atlas_w;
     projected->atlas_h = measure->atlas_h;
     return 1;
+}
+
+static u16 billboard_geometry_key(const BillboardObject *object) {
+    const BillboardType *type = billboard_get_type(object->type_id);
+    const u8 visual = billboard_get_object_visual_id(object, type);
+    const u8 geometry_frame = (visual == BILLBOARD_VISUAL_BARREL_EXPLODING) ?
+        billboard_get_object_frame(object) : 0;
+
+    return (u16)((object->type_id & 0x1Fu) |
+                 ((u16)(visual & 0x1Fu) << 5) |
+                 ((u16)(geometry_frame & 0x0Fu) << 10));
+}
+
+static void billboard_projection_cache_begin(const PlayerState *player) {
+    if (s_cache_context_valid &&
+        s_cache_player_x == player->x &&
+        s_cache_player_y == player->y &&
+        s_cache_player_angle == player->angle) {
+        return;
+    }
+
+    s_cache_player_x = player->x;
+    s_cache_player_y = player->y;
+    s_cache_player_angle = player->angle;
+    s_cache_context_valid = TRUE;
+    s_cache_generation++;
+    if (s_cache_generation == 0) {
+        for (u16 i = 0; i < BILLBOARD_OBJECT_COUNT; i++) {
+            s_measure_cache[i].camera_generation = 0;
+        }
+        s_cache_generation = 1;
+    }
+}
+
+static bool billboard_measure_cached(u16 index,
+                                     const PlayerState *player,
+                                     s16 cos_a,
+                                     s16 sin_a,
+                                     BillboardMeasure *measure) {
+    const BillboardObject *object = &g_billboards[index];
+    BillboardMeasureCache *cache = &s_measure_cache[index];
+    const u16 geometry_key = billboard_geometry_key(object);
+
+    if (cache->camera_generation == s_cache_generation &&
+        cache->object_x == object->x &&
+        cache->object_y == object->y &&
+        cache->geometry_key == geometry_key) {
+        if (cache->measured) {
+            measure->type = billboard_get_type(object->type_id);
+            measure->forward = cache->forward;
+            // These intermediate projection values are not consumed after a
+            // cache hit, but initialize the complete public-internal record so
+            // copying it into the nearest-object order never carries stale data.
+            measure->side = 0;
+            measure->center_col = 0;
+            measure->half_w = 0;
+            measure->projected_height = 0;
+            measure->left = cache->left;
+            measure->right = cache->right;
+            measure->top = cache->top;
+            measure->bottom = cache->bottom;
+            measure->atlas_x = cache->atlas_x;
+            measure->atlas_y = cache->atlas_y;
+            measure->atlas_w = cache->atlas_w;
+            measure->atlas_h = cache->atlas_h;
+        }
+        return cache->measured;
+    }
+
+    cache->object_x = object->x;
+    cache->object_y = object->y;
+    cache->geometry_key = geometry_key;
+    cache->measured = billboard_measure_object(
+        player, cos_a, sin_a, object, measure);
+    cache->camera_generation = s_cache_generation;
+    if (cache->measured) {
+        cache->forward = measure->forward;
+        cache->left = measure->left;
+        cache->right = measure->right;
+        cache->top = measure->top;
+        cache->bottom = measure->bottom;
+        cache->atlas_x = measure->atlas_x;
+        cache->atlas_y = measure->atlas_y;
+        cache->atlas_w = measure->atlas_w;
+        cache->atlas_h = measure->atlas_h;
+    }
+    return cache->measured;
 }
 
 // The wall buffer is sampled once per RAY_COL_STRIDE pixels. A billboard is
@@ -83,6 +198,8 @@ u16 billboard_project_scene(const PlayerState *player,
     const s16 cos_a = fx_cos(player->angle);
     const s16 sin_a = fx_sin(player->angle);
 
+    billboard_projection_cache_begin(player);
+
     if (budget == 0) {
         return 0;
     }
@@ -93,7 +210,7 @@ u16 billboard_project_scene(const PlayerState *player,
         const u16 i = active_indices[slot];
         BillboardMeasure measure;
 
-        if (!billboard_measure_object(player, cos_a, sin_a, &g_billboards[i], &measure)) {
+        if (!billboard_measure_cached(i, player, cos_a, sin_a, &measure)) {
             continue;
         }
         if ((measure.right < 0) || (measure.left >= RAY_VIEW_COLS)) {

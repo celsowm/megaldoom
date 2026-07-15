@@ -207,6 +207,8 @@ static void draw_seg(u16 seg_index) {
     BSP_DBG_INC(segments_tested);
 
     const BspSeg *seg = &bsp_segs[seg_index];
+    const u16 door_lift = bsp_seg_door_lift(seg_index);
+    const bool moving_door = (bool)(seg->type == BSP_SEG_DOOR && door_lift > 0);
     const BspVertex *a = &bsp_vertices[seg->v1];
     const BspVertex *b = &bsp_vertices[seg->v2];
 
@@ -335,15 +337,29 @@ static void draw_seg(u16 seg_index) {
             height = RAY_VIEW_ROWS;
         }
 
-        col->height = (u16)height;
-        col->depth = (u16)depth_col;
         const s32 scaled_u = (u_col * (s32)u_scale_q12) >> 12;
-        col->tex_x = (u8)(scaled_u & WALL_TEX_DIM_MASK);
-        col->tex_y = seg->tex_v_offset;
-        col->texture_id = tid;
-        col->shade = shade;
-
-        mark_sample_solid(sample);
+        if (moving_door) {
+            RayDoorOverlay *door = &col->door;
+            if (door->height != 0 && depth_col >= door->depth) {
+                continue;
+            }
+            door->height = (u16)height;
+            door->depth = (u16)depth_col;
+            door->lift = door_lift;
+            door->tex_x = (u8)(scaled_u & WALL_TEX_DIM_MASK);
+            door->tex_y = seg->tex_v_offset;
+            door->texture_id = tid;
+            door->shade = shade;
+        } else {
+            col->height = (u16)height;
+            col->depth = (u16)depth_col;
+            col->tex_x = (u8)(scaled_u & WALL_TEX_DIM_MASK);
+            col->tex_y = seg->tex_v_offset;
+            col->texture_id = tid;
+            col->shade = shade;
+            col->flags = (seg->type == BSP_SEG_DOOR) ? RAY_COLUMN_FLAG_DOOR : 0;
+            mark_sample_solid(sample);
+        }
         drew_any = TRUE;
     }
     if (drew_any) {
@@ -660,6 +676,14 @@ void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColor
         columns[c].tex_y = 0;
         columns[c].texture_id = MEGALDOOM_TEX_FALLBACK;
         columns[c].shade = 0;
+        columns[c].flags = 0;
+        columns[c].door.height = 0;
+        columns[c].door.depth = 0x7FFF;
+        columns[c].door.lift = 0;
+        columns[c].door.tex_x = 0;
+        columns[c].door.tex_y = 0;
+        columns[c].door.texture_id = MEGALDOOM_TEX_FALLBACK;
+        columns[c].door.shade = 0;
     }
 
     bsp_traverse_front_to_back(player, bsp_visit_leaf, bsp_range_closed,

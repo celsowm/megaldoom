@@ -43,16 +43,10 @@ static bool try_move_dummy(u16 index, BillboardObject *object, s16 step_x, s16 s
     return moved;
 }
 
-static bool separate_dummies(u16 left_index, BillboardObject *left,
-                             u16 right_index, BillboardObject *right) {
-    const s32 dx = right->x - left->x;
-    const s32 dy = right->y - left->y;
-    const s32 dist_sq = (dx * dx) + (dy * dy);
-    bool moved = FALSE;
-    s16 left_step_x = 0;
-    s16 left_step_y = 0;
-    s16 right_step_x = 0;
-    s16 right_step_y = 0;
+static bool dummies_need_separation(const BillboardObject *left,
+                                    const BillboardObject *right) {
+    s32 dx;
+    s32 dy;
 
     if (!left->active || !right->active) {
         return FALSE;
@@ -63,7 +57,31 @@ static bool separate_dummies(u16 left_index, BillboardObject *left,
     if ((left->life_state != ENEMY_ALIVE) || (right->life_state != ENEMY_ALIVE)) {
         return FALSE;
     }
-    if ((dist_sq == 0) || (dist_sq > DUMMY_SEPARATION_RANGE_SQ)) {
+
+    dx = right->x - left->x;
+    dy = right->y - left->y;
+    if ((dx < -DUMMY_SEPARATION_RANGE) || (dx > DUMMY_SEPARATION_RANGE) ||
+        (dy < -DUMMY_SEPARATION_RANGE) || (dy > DUMMY_SEPARATION_RANGE)) {
+        return FALSE;
+    }
+    if ((dx == 0) && (dy == 0)) {
+        return FALSE;
+    }
+
+    return (bool)(((dx * dx) + (dy * dy)) <= DUMMY_SEPARATION_RANGE_SQ);
+}
+
+static bool separate_dummies(u16 left_index, BillboardObject *left,
+                             u16 right_index, BillboardObject *right) {
+    const s32 dx = right->x - left->x;
+    const s32 dy = right->y - left->y;
+    bool moved = FALSE;
+    s16 left_step_x = 0;
+    s16 left_step_y = 0;
+    s16 right_step_x = 0;
+    s16 right_step_y = 0;
+
+    if (!dummies_need_separation(left, right)) {
         return FALSE;
     }
 
@@ -365,11 +383,20 @@ BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player) {
         const u16 i = s_simulated_enemy_indices[a];
         for (u16 b = (u16)(a + 1); b < s_simulated_enemy_count; b++) {
             const u16 j = s_simulated_enemy_indices[b];
-            const bool left_was_visible = enemy_affects_view(i, &g_billboards[i], player, cos_a, sin_a);
-            const bool right_was_visible = enemy_affects_view(j, &g_billboards[j], player, cos_a, sin_a);
-            if (separate_dummies(i, &g_billboards[i], j, &g_billboards[j])) {
-                const bool left_now_visible = enemy_affects_view(i, &g_billboards[i], player, cos_a, sin_a);
-                const bool right_now_visible = enemy_affects_view(j, &g_billboards[j], player, cos_a, sin_a);
+            BillboardObject *left = &g_billboards[i];
+            BillboardObject *right = &g_billboards[j];
+
+            // Most engaged enemies are nowhere near each other. Reject those
+            // pairs before paying for two sprite projections and visibility checks.
+            if (!dummies_need_separation(left, right)) {
+                continue;
+            }
+
+            const bool left_was_visible = enemy_affects_view(i, left, player, cos_a, sin_a);
+            const bool right_was_visible = enemy_affects_view(j, right, player, cos_a, sin_a);
+            if (separate_dummies(i, left, j, right)) {
+                const bool left_now_visible = enemy_affects_view(i, left, player, cos_a, sin_a);
+                const bool right_now_visible = enemy_affects_view(j, right, player, cos_a, sin_a);
                 if (left_was_visible || right_was_visible || left_now_visible || right_now_visible) {
                     update.moved = TRUE;
                 }

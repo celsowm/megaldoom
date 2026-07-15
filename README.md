@@ -16,8 +16,8 @@ reference-renderer fallback in the product.
 - Player movement, strafing and wall collision.
 - One textured flat-BSP cast per frame, packed directly into VDP tiles.
 - Real Doom wall, door and switch textures extracted from the WAD.
-- Grouped doors with persistent blue, yellow and red key bits.
-- Action button opens/closes a complete Doom door group.
+- Grouped vertical-lift doors with persistent blue, yellow and red key bits.
+- Action button smoothly opens/closes a complete Doom door group in 32 vblanks.
 - Flat conversion opens former height-only transitions while keeping structural walls.
 - Converter certification rejects maps without a proven start-to-key-to-exit route.
 - Generated E1M1 pickups, enemies and blocking decorative billboards (candles,
@@ -50,9 +50,14 @@ reference-renderer fallback in the product.
 - D-Pad Up: move forward
 - D-Pad Down: move backward
 - D-Pad Left/Right: rotate
-- A: strafe left
-- C: strafe right
-- B: action/fire; opens or closes a door if one is in front of the player
+- A (hold): run at 1.5x movement speed
+- B: fire
+- C: open doors / activate switches
+- C + D-Pad Left/Right: strafe left/right
+- 3-button pad, A + B + C: automap toggle (reserved until the automap exists)
+- 6-button pad, X/Y: previous/next weapon (reserved until weapon selection exists)
+- 6-button pad, Z: automap toggle (reserved until the automap exists)
+- 6-button pad, Mode: unused
 
 ## Fast path: Windows PowerShell
 
@@ -198,7 +203,6 @@ Suggested next milestones:
 
 1. Replace per-pixel `BMP_setPixelFast` drawing with tile slice bands.
 2. Add precomputed wall-height / texture-step tables.
-3. Add animated doors.
-4. Add multiple actors with visibility list and depth sort.
-5. Move weapon and enemies to sprites or tile assets.
-6. Add offline asset converter for maps/textures.
+3. Add multiple actors with visibility list and depth sort.
+4. Move weapon and enemies to sprites or tile assets.
+5. Add offline asset converter for maps/textures.
