@@ -9,26 +9,29 @@
 // as a sibling struct to BillboardEnemyUpdate so the two systems stay disjoint
 // (explosions are not enemy AI and vice versa).
 typedef struct {
-    u8 player_hits;
+    u16 player_damage;
     s16 push_x;
     s16 push_y;
+    u8 explosion_count;
 } BarrelExplosionResult;
 
 // Detonate a barrel at (origin_x, origin_y) and apply AoE:
 //   - other BARREL with life_state == ENEMY_ALIVE in radius -> chain detonate;
-//   - DUMMY with life_state == ENEMY_ALIVE in radius -> splash-damage, killing
-//     via the existing death path if hp drops to 0;
+//   - DUMMY/BARREL with life_state == ENEMY_ALIVE -> Doom-style 128-distance
+//     splash damage after subtracting the target collision radius;
 //   - player in radius AND with line-of-sight to the blast origin (raycast
 //     occlusion test, mirroring billboard_fire_center's wall-depth check) ->
-//     accumulate player_hits with a normalized knockback direction.
+//     accumulate damage and retain the strongest knockback direction.
 //
 // Pickups and decor are not damaged. Chain reactions are bounded by
 // BARREL_EXPLOSION_MAX_CHAIN to prevent unbounded worklist growth.
 BarrelExplosionResult billboard_apply_explosion(const PlayerState *player,
                                                 s32 origin_x, s32 origin_y);
 
-// Returns the result of the most-recent billboard_apply_explosion call. main.c
-// consults this only when billboard_fire_center() returned BILLBOARD_SHOT_EXPLOSION.
-BarrelExplosionResult billboard_get_last_explosion_result(void);
+// Doom-style Chebyshev distance minus the target radius, with 128 maximum
+// damage falling linearly to zero at the tuned 192-unit gameplay radius.
+u16 billboard_explosion_damage(s32 blast_x, s32 blast_y,
+                               s32 target_x, s32 target_y,
+                               u16 target_radius);
 
 #endif

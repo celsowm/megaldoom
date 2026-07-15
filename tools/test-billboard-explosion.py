@@ -1,143 +1,116 @@
 #!/usr/bin/env python3
-"""Source contracts for the explosive-barrel feature.
+"""Source and generated-asset contracts for explosions and pistol impacts."""
 
-These contracts are intentionally implementer-agnostic: they assert that the
-plumbing exists in the right files at the right level, not that any specific
-runtime behavior occurs (the runtime is exercised by the ROM build + check-rom
-guardrails). Mirrors tools/test-billboard-registry.py in style.
-"""
 from pathlib import Path
 import re
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def doom_radius_damage(dx: int, dy: int, target_radius: int) -> int:
+    distance = max(abs(dx), abs(dy)) - target_radius
+    distance = max(distance, 0)
+    return 0 if distance >= 192 else 128 - (distance * 2) // 3
+
+
 def main():
     billboard_h = (ROOT / "src/billboard.h").read_text()
-    billboard_internal_h = (ROOT / "src/billboard_internal.h").read_text()
+    internal_h = (ROOT / "src/billboard_internal.h").read_text()
     billboard_c = (ROOT / "src/billboard.c").read_text()
-    billboard_combat_c = (ROOT / "src/billboard_combat.c").read_text()
-    billboard_enemy_c = (ROOT / "src/billboard_enemy.c").read_text()
-    billboard_registry_c = (ROOT / "src/billboard_registry.c").read_text()
-    billboard_explosion_c = (ROOT / "src/billboard_explosion.c").read_text()
-    billboard_explosion_h = (ROOT / "src/billboard_explosion.h").read_text()
+    combat_c = (ROOT / "src/billboard_combat.c").read_text()
+    effects_c = (ROOT / "src/billboard_effects.c").read_text()
+    enemy_c = (ROOT / "src/billboard_enemy.c").read_text()
+    explosion_c = (ROOT / "src/billboard_explosion.c").read_text()
+    explosion_h = (ROOT / "src/billboard_explosion.h").read_text()
+    projection_c = (ROOT / "src/billboard_projection.c").read_text()
+    renderer_c = (ROOT / "src/renderer_scene.c").read_text()
     main_c = (ROOT / "src/main.c").read_text()
-    generated_assets_h = (ROOT / "src/generated_billboard_assets.h").read_text()
-    generated_geometry_h = (ROOT / "src/generated_billboard_geometry.h").read_text()
-    generated_e1m1_map_c = (ROOT / "src/generated_e1m1_map.c").read_text()
+    assets = (ROOT / "src/generated_billboard_assets.h").read_text()
+    resources = (ROOT / "res/resources.res").read_text()
+    generated_map = (ROOT / "src/generated_e1m1_map.c").read_text()
 
-    # 1. BARREL type is targetable. The BILLBOARD_TYPES[BILLBOARD_TYPE_BARREL]
-    #    row's flag column (collectible, targetable, blocking) was flipped so
-    #    the pistol hit-scan can acquire a barrel.
-    barrel_row = re.search(
-        r"\{BILLBOARD_VISUAL_BARREL,.*?BILLBOARD_MAX_DEPTH, FALSE, TRUE,  TRUE\}",
-        billboard_c)
-    assert barrel_row is not None, (
-        "BARREL row must have targetable=TRUE (FALSE, TRUE, TRUE)."
+    # Barrel targeting and direct fire-result handoff.
+    assert re.search(
+        r"\{BILLBOARD_VISUAL_BARREL,.*?BILLBOARD_MAX_DEPTH, FALSE, TRUE,\s+TRUE\}",
+        billboard_c,
     )
+    assert "typedef struct {\n    BillboardShotResult status;" in billboard_h
+    assert "BillboardFireResult billboard_fire_center" in billboard_h
+    assert "billboard_get_last_explosion_result" not in explosion_h
+    assert "fire_result = billboard_fire_center(" in main_c
+    assert "fire_result.player_damage" in main_c
+    assert "fire_result.status == BILLBOARD_SHOT_EXPLOSION" in main_c
 
-    # 2. BillboardShotResult gains an EXPLOSION variant.
-    assert "BILLBOARD_SHOT_EXPLOSION = 3" in billboard_h, (
-        "BillboardShotResult must include BILLBOARD_SHOT_EXPLOSION = 3."
-    )
+    # Doom radius formula: Chebyshev distance, target-radius allowance, falloff.
+    assert "u16 billboard_explosion_damage(" in explosion_h
+    assert "((dx > dy) ? dx : dy) - target_radius" in explosion_c
+    assert "((u32)distance * 2u) / 3u" in explosion_c
+    assert "#define BARREL_EXPLOSION_RADIUS 192" in internal_h
+    assert doom_radius_damage(0, 0, 16) == 128
+    assert doom_radius_damage(36, 0, 16) == 115
+    assert doom_radius_damage(64, 0, 16) == 96
+    assert doom_radius_damage(64, 64, 16) == 96
+    assert doom_radius_damage(207, 0, 16) == 1
+    assert doom_radius_damage(208, 0, 16) == 0
+    assert "result.player_damage + player_damage" in explosion_c
+    assert explosion_c.count("bsp_segment_crosses_wall(") >= 2
+    assert "player_damage > strongest_damage" in explosion_c
 
-    # 3. fire_center must walk the union target list (DUMMY + BARREL), not the
-    #    AI-only enemy list. The literal accessor call is the contract.
-    assert "billboard_registry_target_indices()" in billboard_combat_c, (
-        "billboard_fire_center must iterate billboard_registry_target_indices()."
-    )
+    # Chain reactions retain live-state guards and the source barrel population.
+    assert "object->life_state != ENEMY_ALIVE" in explosion_c
+    assert "BARREL_EXPLOSION_MAX_CHAIN" in explosion_c
+    assert len(re.findall(r"\b2035u\b", generated_map)) >= 6
 
-    # 4. The new visual ID lives in the enum AND in both generated headers.
-    assert "BILLBOARD_VISUAL_BARREL_EXPLODING = 19" in billboard_h, (
-        "billboard.h must declare BILLBOARD_VISUAL_BARREL_EXPLODING = 19."
-    )
-    assert "FREEDOOM_BILLBOARD_BARREL_EXPLOSION_FRAMES" in generated_assets_h, (
-        "generated_billboard_assets.h must bake the BEXP frame array."
-    )
-    assert "FREEDOOM_BILLBOARD_BARREL_EXPLOSION_FRAME_COUNT 5" in generated_assets_h, (
-        "generated_billboard_assets.h must expose the 5-frame count."
-    )
-    # The static world-texture count stays at 17 (items/props only). The BEXP
-    # frames live in a separate dedicated array, not the world-texture array.
-    assert "FREEDOOM_BILLBOARD_WORLD_TEXTURE_COUNT 17" in generated_assets_h, (
-        "World-texture count must stay at 17 (BARREL_EXPLODING uses a sibling array)."
-    )
-    assert "FREEDOOM_BILLBOARD_WORLD_GEOMETRY_COUNT 17" in generated_geometry_h, (
-        "World-geometry count must stay at 17."
-    )
+    # Exact fastest BEXP cadence: every pose advances on the next update.
+    assert "BARREL_DEATH_FRAME_HOLDS[BARREL_DEATH_FRAME_COUNT] = {1, 1, 1, 1, 1}" in internal_h
+    assert "object->death_timer > 1" in enemy_c
+    assert "BARREL_DEATH_FRAME_HOLDS[object->death_index]" in enemy_c
 
-    # 5. The explosion routine is defined in its own translation unit and wired
-    #    in from the hit-scan kill branch.
-    assert "BarrelExplosionResult billboard_apply_explosion(" in billboard_explosion_h, (
-        "billboard_explosion.h must declare billboard_apply_explosion."
-    )
-    assert "billboard_apply_explosion(player, best_object->x, best_object->y);" in billboard_combat_c, (
-        "billboard_combat.c must call billboard_apply_explosion on a barrel kill."
-    )
+    # Native explosion geometry grows rather than being clipped to 24x48.
+    assert "FREEDOOM_BILLBOARD_BARREL_EXPLOSION_W 60" in assets
+    assert "FREEDOOM_BILLBOARD_BARREL_EXPLOSION_H 53" in assets
+    geometry = re.search(
+        r"FREEDOOM_BILLBOARD_BARREL_EXPLOSION_GEOMETRY.*?= \{(.*?)\n\};",
+        assets,
+        re.S,
+    ).group(1)
+    for row in ("{23, 32, 10, 28}", "{60, 53, 29, 49}"):
+        assert row in geometry
+    assert "FREEDOOM_BILLBOARD_BARREL_EXPLOSION_GEOMETRY[frame]" in billboard_c
 
-    # 6. The per-frame death clock is defined and called from main.c.
-    assert "BillboardEnemyUpdate billboard_update_barrels(const PlayerState *player);" in billboard_h, (
-        "billboard.h must declare billboard_update_barrels."
-    )
-    assert "advance_barrel_death" in billboard_enemy_c, (
-        "billboard_enemy.c must implement advance_barrel_death."
-    )
-    assert "billboard_update_barrels(&g_player)" in main_c, (
-        "main.c must call billboard_update_barrels each frame."
-    )
+    # Four-slot transient effects, native frame sets, shared painter order.
+    assert "BILLBOARD_MAX_PROJECTED_EFFECTS 4" in billboard_h
+    assert "IMPACT_POOL_COUNT BILLBOARD_MAX_PROJECTED_EFFECTS" in effects_c
+    assert "IMPACT_FRAME_HOLD 2" in effects_c
+    assert "IMPACT_WORLD_SCALE BILLBOARD_WORLD_GEOMETRY_SCALE" in effects_c
+    assert "IMPACT_MIN_SCREEN_RADIUS 2" in effects_c
+    assert "PUFF_WALL_DEPTH_TOLERANCE 64" in renderer_c
+    assert "billboard_depth_visible(object, wall_depth)" in renderer_c
+    assert "#define WALL_PUFF_DEPTH_BIAS 24" in combat_c
+    assert "wall_depth - WALL_PUFF_DEPTH_BIAS" in combat_c
+    assert "changed = TRUE;" in effects_c
+    assert "FREEDOOM_BILLBOARD_PUFF_FRAME_COUNT 4" in assets
+    assert "FREEDOOM_BILLBOARD_PUFF_W 15" in assets
+    assert "FREEDOOM_BILLBOARD_PUFF_H 15" in assets
+    assert "FREEDOOM_BILLBOARD_BLOOD_FRAME_COUNT 3" in assets
+    assert "FREEDOOM_BILLBOARD_BLOOD_W 12" in assets
+    assert "FREEDOOM_BILLBOARD_BLOOD_H 11" in assets
+    assert "billboard_effects_spawn_blood(best_object->x, best_object->y)" in combat_c
+    assert "spawn_wall_puff(player, wall_depth)" in combat_c
+    assert "billboard_effects_spawn_puff(best_object->x, best_object->y)" in combat_c
+    assert "billboard_project_effects(" in projection_c
+    assert "BILLBOARD_MAX_PROJECTED_TOTAL" in renderer_c
+    assert "BILLBOARD_VISUAL_PUFF" in renderer_c
+    assert "BILLBOARD_VISUAL_BLOOD" in renderer_c
+    assert "billboard_update_effects()" in main_c
+    assert "#define SHOT_COOLDOWN_FRAMES 6" in main_c
 
-    # 7. AoE radius is the literal 128 Doom map units.
-    assert "#define BARREL_EXPLOSION_RADIUS 128" in billboard_internal_h, (
-        "BARREL_EXPLOSION_RADIUS must be 128 (literal Doom units)."
-    )
-    assert "#define BARREL_EXPLOSION_RADIUS_SQ (BARREL_EXPLOSION_RADIUS * BARREL_EXPLOSION_RADIUS)" in billboard_internal_h, (
-        "BARREL_EXPLOSION_RADIUS_SQ must be the squared radius."
-    )
+    # Explosion PCM is built into ROM and triggered once per returned event.
+    assert 'WAV sfx_barexp       "sound/dsbarexp.wav"  XGM2' in resources
+    assert "fire_result.explosion_count > 0" in main_c
+    assert "XGM2_playPCM(sfx_barexp" in main_c
 
-    # 8. The original Doom barrel THING type (2035) is still mapped. The full
-    #    population test (test-billboard-population.py) covers count; here we
-    #    just verify the case still exists.
-    assert "case 2035:" in billboard_c, (
-        "map_thing_type must still route case 2035 to BARREL."
-    )
-
-    # 9. Chain-reaction guard: a barrel already flagged ENEMY_DYING must be
-    #    short-circuited so each barrel explodes exactly once.
-    assert "life_state != ENEMY_ALIVE" in billboard_explosion_c, (
-        "billboard_explosion.c must short-circuit when life_state != ENEMY_ALIVE."
-    )
-
-    # 10. Render pipeline: the per-object visual override flips dying barrels
-    #     to BARREL_EXPLODING so the renderer pulls pixels from the BEXP array.
-    assert "BILLBOARD_VISUAL_BARREL_EXPLODING" in billboard_c, (
-        "billboard_get_object_visual_id must reference BILLBOARD_VISUAL_BARREL_EXPLODING."
-    )
-
-    # 11. The six E1M1 barrels still appear in the generated map (the population
-    #     test asserts a count of 6 barrels separately; this is the literal
-    #     waveform check that the THING generation did not regress to a different
-    #     type id).
-    barrel_count = len(re.findall(r"\b2035u\b", generated_e1m1_map_c))
-    assert barrel_count >= 6, f"E1M1 must still place >=6 barrels (2035u); found {barrel_count}."
-
-    # Damage field of barrel_explosion.c must apply AoE to the player using the
-    # wall occlusion check matching pistol LoS parity.
-    assert "bsp_segment_hits_wall(bx, by, player->x, player->y)" in billboard_explosion_c, (
-        "Player AoE must apply wall-occlusion via bsp_segment_hits_wall."
-    )
-
-    # The registry must publish the target list (DUMMY + BARREL union) and prune
-    # it on deactivate so dying barrels exit both the active AND target arrays.
-    assert "s_target_indices[BILLBOARD_OBJECT_COUNT]" in billboard_registry_c, (
-        "billboard_registry.c must hold a target_indices array."
-    )
-    assert "s_target_count--" in billboard_registry_c, (
-        "billboard_registry_deactivate must prune s_target_indices."
-    )
-    assert "billboard_registry_target_indices(void)" in billboard_registry_c
-    assert "billboard_registry_target_count(void)" in billboard_registry_c
-
-    print("ok    billboard explosion: target registry, hit-scan, AoE chains, BEXP death clock")
+    print("ok    Doom blast falloff, direct damage handoff, fast BEXP, PUFF/BLUD impacts")
 
 
 if __name__ == "__main__":

@@ -256,20 +256,20 @@ static bool update_dummy(u16 index, BillboardObject *object, const PlayerState *
 }
 
 // Step the barrel explosion animation one frame. Mirrors advance_death(): a
-// barrel stays in each BEXP pose for BARREL_DEATH_HOLD frames, advances to the
-// next, and on the final frame is dropped from the registry (stopping rendering
-// and releasing collision). Called from main.c via billboard_update_barrels().
+// barrel uses the exact per-pose BARREL_DEATH_FRAME_HOLDS cadence and is dropped
+// from the registry after the final frame (stopping rendering and releasing
+// collision). Called from main.c via billboard_update_barrels().
 static void advance_barrel_death(u16 index, BillboardObject *object) {
     if (object->life_state != ENEMY_DYING) {
         return;
     }
-    if (object->death_timer > 0) {
+    if (object->death_timer > 1) {
         object->death_timer--;
         return;
     }
     if ((object->death_index + 1) < BARREL_DEATH_FRAME_COUNT) {
         object->death_index++;
-        object->death_timer = BARREL_DEATH_HOLD;
+        object->death_timer = BARREL_DEATH_FRAME_HOLDS[object->death_index];
     } else {
         billboard_registry_deactivate(index);
     }

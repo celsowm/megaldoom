@@ -5,6 +5,9 @@
 #include "raycast.h"
 
 #define BILLBOARD_MAX_PROJECTED_OBJECTS 12
+#define BILLBOARD_MAX_PROJECTED_EFFECTS 4
+#define BILLBOARD_MAX_PROJECTED_TOTAL \
+    (BILLBOARD_MAX_PROJECTED_OBJECTS + BILLBOARD_MAX_PROJECTED_EFFECTS)
 
 typedef enum {
     BILLBOARD_VISUAL_BONUS = 0,
@@ -26,7 +29,9 @@ typedef enum {
     BILLBOARD_VISUAL_TREE = 16,
     BILLBOARD_VISUAL_DUMMY = 17,
     BILLBOARD_VISUAL_DUMMY_DAMAGED = 18,
-    BILLBOARD_VISUAL_BARREL_EXPLODING = 19
+    BILLBOARD_VISUAL_BARREL_EXPLODING = 19,
+    BILLBOARD_VISUAL_PUFF = 20,
+    BILLBOARD_VISUAL_BLOOD = 21
 } BillboardVisualId;
 
 typedef struct {
@@ -83,6 +88,14 @@ typedef enum {
 } BillboardShotResult;
 
 typedef struct {
+    BillboardShotResult status;
+    u16 player_damage;
+    s16 push_x;
+    s16 push_y;
+    u8 explosion_count;
+} BillboardFireResult;
+
+typedef struct {
     bool moved;
     u16 hits;
     s16 push_x;
@@ -98,9 +111,10 @@ u16 billboard_get_enemy_count(void);
 u16 billboard_get_active_count(void);
 u16 billboard_get_target_count(void);
 u16 billboard_get_target_health(void);
-BillboardShotResult billboard_fire_center(const PlayerState *player, u16 wall_depth);
+BillboardFireResult billboard_fire_center(const PlayerState *player, u16 wall_depth);
 BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player);
 BillboardEnemyUpdate billboard_update_barrels(const PlayerState *player);
+bool billboard_update_effects(void);
 bool billboard_position_blocked(s32 x, s32 y, s32 radius);
 #if DEBUG_PERF
 u16 billboard_get_debug_culled_count(void);

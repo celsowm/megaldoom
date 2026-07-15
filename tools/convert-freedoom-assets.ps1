@@ -270,7 +270,8 @@ function Get-PreservedAspectPlacement([int]$SourceWidth, [int]$SourceHeight,
 }
 
 function Convert-Image([string]$Path, [int]$Width, [int]$Height, [bool]$UseAlphaTransparency,
-                       [bool]$PreserveAspect = $false, [bool]$BottomAlign = $false) {
+                       [bool]$PreserveAspect = $false, [bool]$BottomAlign = $false,
+                       [bool]$NativeSize = $false) {
     # Area/box downscale: each output texel is the AVERAGE of the full source
     # rectangle it covers, then quantized to the palette. Point sampling (grabbing
     # a single source pixel) aliased high-frequency Doom textures into random-looking
@@ -283,7 +284,13 @@ function Convert-Image([string]$Path, [int]$Width, [int]$Height, [bool]$UseAlpha
     $drawX = 0
     $drawY = 0
 
-    if ($PreserveAspect) {
+    if ($NativeSize) {
+        if ($image.Width -gt $Width -or $image.Height -gt $Height) {
+            throw "Native sprite $Path ($($image.Width)x$($image.Height)) exceeds ${Width}x${Height} canvas"
+        }
+        $drawWidth = $image.Width
+        $drawHeight = $image.Height
+    } elseif ($PreserveAspect) {
         $placement = Get-PreservedAspectPlacement $image.Width $image.Height $Width $Height $BottomAlign
         $drawWidth = $placement.Width
         $drawHeight = $placement.Height
@@ -752,20 +759,51 @@ foreach ($name in $EnemyFrameNames) {
     $enemyFrameRows = Convert-Image $enemyFramePath $BillboardEnemyW $BillboardEnemyH $true
     $enemyFrameBlocks.Add("    {" + "`r`n" + ($enemyFrameRows -join ",`r`n") + "`r`n    }")
 }
-# Barrel explosion (BEXPA0..E0): 5 frames at the same 24x48 box as the enemy
-# atlas. Mirrors FREEDOOM_BILLBOARD_ENEMY_FRAMES so the renderer can index them
-# via renderer_scene.c::get_billboard_texture() using a dedicated visual_id.
+# Native Doom impact/explosion frames live in fixed transparent canvases while
+# retaining their individual picture-header geometry. This keeps later BEXP
+# frames large instead of squeezing every pose into the enemy atlas.
 $BarrelExplosionFrameNames = @("BEXPA0", "BEXPB0", "BEXPC0", "BEXPD0", "BEXPE0")
+$barrelExplosionW = 60
+$barrelExplosionH = 53
 $barrelExplosionFrameBlocks = New-Object System.Collections.Generic.List[string]
+$barrelExplosionGeometryBlocks = New-Object System.Collections.Generic.List[string]
 foreach ($name in $BarrelExplosionFrameNames) {
     $barrelExplosionFramePath = Join-Path $Root (Join-Path $EnemySpritesDir "$name.png")
     if (-not (Test-Path $barrelExplosionFramePath)) {
         throw "Barrel explosion frame source not found: $barrelExplosionFramePath"
     }
-    $barrelExplosionFrameRows = Convert-Image $barrelExplosionFramePath $BillboardEnemyW $BillboardEnemyH $true
+    $offset = Get-SpriteOffset $name
+    $barrelExplosionFrameRows = Convert-Image $barrelExplosionFramePath $barrelExplosionW $barrelExplosionH $true $false $false $true
     $barrelExplosionFrameBlocks.Add("    {" + "`r`n" + ($barrelExplosionFrameRows -join ",`r`n") + "`r`n    }")
+    $barrelExplosionGeometryBlocks.Add("    {$($offset.width), $($offset.height), $($offset.leftOffset), $($offset.topOffset)}")
 }
 $barrelExplosionFrameCount = $BarrelExplosionFrameNames.Count
+
+$PuffFrameNames = @("PUFFA0", "PUFFB0", "PUFFC0", "PUFFD0")
+$puffW = 15
+$puffH = 15
+$puffFrameBlocks = New-Object System.Collections.Generic.List[string]
+$puffGeometryBlocks = New-Object System.Collections.Generic.List[string]
+foreach ($name in $PuffFrameNames) {
+    $path = Join-Path $Root (Join-Path $EnemySpritesDir "$name.png")
+    $offset = Get-SpriteOffset $name
+    $rows = Convert-Image $path $puffW $puffH $true $false $false $true
+    $puffFrameBlocks.Add("    {" + "`r`n" + ($rows -join ",`r`n") + "`r`n    }")
+    $puffGeometryBlocks.Add("    {$($offset.width), $($offset.height), $($offset.leftOffset), $($offset.topOffset)}")
+}
+
+$BloodFrameNames = @("BLUDA0", "BLUDB0", "BLUDC0")
+$bloodW = 12
+$bloodH = 11
+$bloodFrameBlocks = New-Object System.Collections.Generic.List[string]
+$bloodGeometryBlocks = New-Object System.Collections.Generic.List[string]
+foreach ($name in $BloodFrameNames) {
+    $path = Join-Path $Root (Join-Path $EnemySpritesDir "$name.png")
+    $offset = Get-SpriteOffset $name
+    $rows = Convert-Image $path $bloodW $bloodH $true $false $false $true
+    $bloodFrameBlocks.Add("    {" + "`r`n" + ($rows -join ",`r`n") + "`r`n    }")
+    $bloodGeometryBlocks.Add("    {$($offset.width), $($offset.height), $($offset.leftOffset), $($offset.topOffset)}")
+}
 
 $enemyFrameCount = $EnemyFrameNames.Count
 $relativeSource = $TexturePath.Replace("\", "/")
@@ -837,8 +875,33 @@ $($enemyFrameBlocks -join ",`r`n")
 // BILLBOARD_VISUAL_BARREL_EXPLODING visual. Rendered via the same frame-index
 // path as the enemy frames in renderer_scene.c::get_billboard_texture().
 #define FREEDOOM_BILLBOARD_BARREL_EXPLOSION_FRAME_COUNT $barrelExplosionFrameCount
-static const u8 FREEDOOM_BILLBOARD_BARREL_EXPLOSION_FRAMES[FREEDOOM_BILLBOARD_BARREL_EXPLOSION_FRAME_COUNT][$BillboardEnemyH][$BillboardEnemyW] = {
+#define FREEDOOM_BILLBOARD_BARREL_EXPLOSION_W $barrelExplosionW
+#define FREEDOOM_BILLBOARD_BARREL_EXPLOSION_H $barrelExplosionH
+static const u8 FREEDOOM_BILLBOARD_BARREL_EXPLOSION_FRAMES[FREEDOOM_BILLBOARD_BARREL_EXPLOSION_FRAME_COUNT][$barrelExplosionH][$barrelExplosionW] = {
 $($barrelExplosionFrameBlocks -join ",`r`n")
+};
+static const s16 FREEDOOM_BILLBOARD_BARREL_EXPLOSION_GEOMETRY[FREEDOOM_BILLBOARD_BARREL_EXPLOSION_FRAME_COUNT][4] = {
+$($barrelExplosionGeometryBlocks -join ",`r`n")
+};
+
+#define FREEDOOM_BILLBOARD_PUFF_FRAME_COUNT $($PuffFrameNames.Count)
+#define FREEDOOM_BILLBOARD_PUFF_W $puffW
+#define FREEDOOM_BILLBOARD_PUFF_H $puffH
+static const u8 FREEDOOM_BILLBOARD_PUFF_FRAMES[FREEDOOM_BILLBOARD_PUFF_FRAME_COUNT][$puffH][$puffW] = {
+$($puffFrameBlocks -join ",`r`n")
+};
+static const s16 FREEDOOM_BILLBOARD_PUFF_GEOMETRY[FREEDOOM_BILLBOARD_PUFF_FRAME_COUNT][4] = {
+$($puffGeometryBlocks -join ",`r`n")
+};
+
+#define FREEDOOM_BILLBOARD_BLOOD_FRAME_COUNT $($BloodFrameNames.Count)
+#define FREEDOOM_BILLBOARD_BLOOD_W $bloodW
+#define FREEDOOM_BILLBOARD_BLOOD_H $bloodH
+static const u8 FREEDOOM_BILLBOARD_BLOOD_FRAMES[FREEDOOM_BILLBOARD_BLOOD_FRAME_COUNT][$bloodH][$bloodW] = {
+$($bloodFrameBlocks -join ",`r`n")
+};
+static const s16 FREEDOOM_BILLBOARD_BLOOD_GEOMETRY[FREEDOOM_BILLBOARD_BLOOD_FRAME_COUNT][4] = {
+$($bloodGeometryBlocks -join ",`r`n")
 };
 
 #endif

@@ -178,6 +178,10 @@ bool bsp_circle_blocked(s32 x, s32 y, s32 radius);
 // Line-of-sight: does the segment (x0,y0)-(x1,y1) cross any solid wall?
 bool bsp_segment_hits_wall(s32 x0, s32 y0, s32 x1, s32 y1);
 
+// Explosion sight: only a proper wall crossing blocks the blast. Endpoint-only
+// contact is ignored so a barrel placed against a wall cannot occlude itself.
+bool bsp_segment_crosses_wall(s32 x0, s32 y0, s32 x1, s32 y1);
+
 #if DEBUG_PERF
 typedef enum {
     BSP_QUERY_PLAYER = 0,

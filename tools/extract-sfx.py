@@ -63,6 +63,7 @@ DEFAULT_SFX = (
     "DSPLDETH",   # player death
     "DSSTNMOV",   # door / platform move
     "DSITEMUP",   # item pickup
+    "DSBAREXP",   # exploding barrel
 )
 
 

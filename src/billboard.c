@@ -1,4 +1,6 @@
 #include "billboard_internal.h"
+#include "billboard_effects.h"
+#include "generated_billboard_assets.h"
 #include "generated_billboard_geometry.h"
 
 // type: visual, effect, HP, radius, max depth, collectible, targetable, blocking.
@@ -70,11 +72,6 @@ const BillboardType *billboard_get_type(u8 type_id) {
 u8 billboard_get_object_visual_id(const BillboardObject *object, const BillboardType *type) {
     (void)type;
     if (object->type_id == BILLBOARD_TYPE_KEY) return object->hp;
-    // A detonating barrel swaps to the BEXP animation frames. Geometry lookup
-    // below still falls back to the static BAR1 slot's world footprint (all 5
-    // BEXP frames share BAR1's 23x32 source canvas dimensions; the slight
-    // growth of later BEXP frames is clipped into that silhouette by the
-    // atlas baker -- faithful enough for a single-use chain explosion).
     if ((object->type_id == BILLBOARD_TYPE_BARREL) && (object->life_state != ENEMY_ALIVE)) {
         return BILLBOARD_VISUAL_BARREL_EXPLODING;
     }
@@ -117,8 +114,6 @@ static s32 bb_divs(s32 numerator, s32 denominator) {
 // baseline is 128 units, so patch geometry is first doubled (native 2x match).
 // A further 1.5x growth makes barrels and pickups read larger on screen
 // without touching enemies or walls. Effective scale is 2 * 1.5 = 3.
-#define BILLBOARD_WORLD_GEOMETRY_SCALE 3
-
 static s32 billboard_muls_word(s16 left, s16 right) {
     s32 result = left;
     __asm__ volatile (
@@ -143,10 +138,20 @@ static void billboard_get_geometry(const BillboardObject *object,
                                    const BillboardType *type,
                                    BillboardGeometry *geometry) {
     u8 visual_id = billboard_get_object_visual_id(object, type);
-    // Per-object visual overrides (BARREL_EXPLODING frames) are pixel-source
-    // swaps only -- their world footprint still uses the static prop slot's
-    // geometry so a detonating barrel keeps BAR1's 23x32 silhouette and the
-    // renderer never falls through to the generic enemy 34x102 fallback.
+    if (visual_id == BILLBOARD_VISUAL_BARREL_EXPLODING) {
+        const u8 frame = billboard_get_object_frame(object);
+        const s16 *source = FREEDOOM_BILLBOARD_BARREL_EXPLOSION_GEOMETRY[frame];
+        geometry->source_w = source[0];
+        geometry->source_h = source[1];
+        geometry->left_offset = source[2];
+        geometry->top_offset = source[3];
+        geometry->atlas_x = 0;
+        geometry->atlas_y = 0;
+        geometry->atlas_w = (u8)source[0];
+        geometry->atlas_h = (u8)source[1];
+        geometry->uses_wad_origin = TRUE;
+        return;
+    }
     if (visual_id >= FREEDOOM_BILLBOARD_WORLD_GEOMETRY_COUNT) {
         visual_id = type->visual_id;
     }
@@ -247,6 +252,7 @@ void billboard_init(u16 phase_index) {
     u16 count = 0;
     (void)phase_index;
     billboard_registry_reset();
+    billboard_effects_reset();
     for (u16 i = 0; i < BILLBOARD_OBJECT_COUNT; i++) g_billboards[i].active = FALSE;
     for (u16 i = 0; i < bsp_thing_count && count < BILLBOARD_OBJECT_COUNT; i++) {
         const u16 flags = bsp_things[i].flags;

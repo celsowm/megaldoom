@@ -15,6 +15,18 @@ typedef struct {
     u8 h;
 } BillboardTex;
 
+#define PUFF_WALL_DEPTH_TOLERANCE 64
+
+static bool billboard_depth_visible(const ProjectedBillboard *object,
+                                    u16 wall_depth) {
+    if (object->depth < wall_depth) return TRUE;
+    // PUFF represents a hit on this wall plane. Ray depths vary across the
+    // four-pixel rendered block, so allow only this transient a small tolerance
+    // around the plane instead of letting the block hide its own impact.
+    return (bool)((object->visual_id == BILLBOARD_VISUAL_PUFF) &&
+                  ((u16)(object->depth - wall_depth) <= PUFF_WALL_DEPTH_TOLERANCE));
+}
+
 static BillboardTex get_billboard_texture(u8 visual_id, u8 frame) {
     switch (visual_id) {
         case BILLBOARD_VISUAL_DUMMY_DAMAGED:
@@ -26,7 +38,18 @@ static BillboardTex get_billboard_texture(u8 visual_id, u8 frame) {
         case BILLBOARD_VISUAL_BARREL_EXPLODING: {
             const u8 f = (frame < FREEDOOM_BILLBOARD_BARREL_EXPLOSION_FRAME_COUNT) ? frame : 0;
             return (BillboardTex){(const u8 *)FREEDOOM_BILLBOARD_BARREL_EXPLOSION_FRAMES[f],
-                                  FREEDOOM_BILLBOARD_ENEMY_W, FREEDOOM_BILLBOARD_ENEMY_H};
+                                  FREEDOOM_BILLBOARD_BARREL_EXPLOSION_W,
+                                  FREEDOOM_BILLBOARD_BARREL_EXPLOSION_H};
+        }
+        case BILLBOARD_VISUAL_PUFF: {
+            const u8 f = (frame < FREEDOOM_BILLBOARD_PUFF_FRAME_COUNT) ? frame : 0;
+            return (BillboardTex){(const u8 *)FREEDOOM_BILLBOARD_PUFF_FRAMES[f],
+                                  FREEDOOM_BILLBOARD_PUFF_W, FREEDOOM_BILLBOARD_PUFF_H};
+        }
+        case BILLBOARD_VISUAL_BLOOD: {
+            const u8 f = (frame < FREEDOOM_BILLBOARD_BLOOD_FRAME_COUNT) ? frame : 0;
+            return (BillboardTex){(const u8 *)FREEDOOM_BILLBOARD_BLOOD_FRAMES[f],
+                                  FREEDOOM_BILLBOARD_BLOOD_W, FREEDOOM_BILLBOARD_BLOOD_H};
         }
         default:
             if (visual_id < FREEDOOM_BILLBOARD_WORLD_TEXTURE_COUNT) {
@@ -525,7 +548,7 @@ static void draw_projected_billboards(const RayColumn *columns,
             // The base image repeats the sampled wall column across this exact
             // block, so billboard depth must use that same sample.
             const u16 wall_depth = columns[wall_col].depth;
-            if (object->depth >= wall_depth) continue;
+            if (!billboard_depth_visible(object, wall_depth)) continue;
 
             if (tex_x > atlas_x_last) {
                 tex_x = atlas_x_last;
@@ -843,9 +866,9 @@ void renderer_render_scene(const RayColumn *columns,
     u32 stage_start = getSubTick();
     renderer_reset_frame_modified();
 #endif
-    ProjectedBillboard objects[BILLBOARD_MAX_PROJECTED_OBJECTS];
+    ProjectedBillboard objects[BILLBOARD_MAX_PROJECTED_TOTAL];
     const u16 object_count = billboard_project_scene(
-        player, columns, objects, BILLBOARD_MAX_PROJECTED_OBJECTS);
+        player, columns, objects, BILLBOARD_MAX_PROJECTED_TOTAL);
 #if DEBUG_PERF
     s_debug_projection_subticks = getSubTick() - stage_start;
 #endif

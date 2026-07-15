@@ -1,8 +1,10 @@
 #include "billboard_internal.h"
+#include "billboard_effects.h"
 #include "billboard_explosion.h"
 #include "bsp_map.h"
 
 #define ENEMY_RADIUS 24
+#define WALL_PUFF_DEPTH_BIAS 24
 
 static bool is_position_blocked(s32 x, s32 y) {
 #if DEBUG_PERF
@@ -64,7 +66,32 @@ u16 billboard_get_target_health(void) {
     return 0;
 }
 
-BillboardShotResult billboard_fire_center(const PlayerState *player, u16 wall_depth) {
+static BillboardFireResult explosion_fire_result(BarrelExplosionResult explosion) {
+    BillboardFireResult result;
+    result.status = BILLBOARD_SHOT_EXPLOSION;
+    result.player_damage = explosion.player_damage;
+    result.push_x = explosion.push_x;
+    result.push_y = explosion.push_y;
+    result.explosion_count = explosion.explosion_count;
+    return result;
+}
+
+static void spawn_wall_puff(const PlayerState *player, u16 wall_depth) {
+    // Pull the impact far enough in front of the hit plane to survive the
+    // renderer's 4-column wall-depth blocks. A four-unit bias could round back
+    // onto/behind the wall and make PUFF disappear completely.
+    if (wall_depth <= 2 || wall_depth >= 0xFF00u) return;
+    const s32 distance = (wall_depth > WALL_PUFF_DEPTH_BIAS) ?
+        (wall_depth - WALL_PUFF_DEPTH_BIAS) : (wall_depth / 2);
+    const s16 cos_a = fx_cos(player->angle);
+    const s16 sin_a = fx_sin(player->angle);
+    billboard_effects_spawn_puff(
+        player->x + (((s32)cos_a * distance) >> FX_SHIFT),
+        player->y + (((s32)sin_a * distance) >> FX_SHIFT));
+}
+
+BillboardFireResult billboard_fire_center(const PlayerState *player, u16 wall_depth) {
+    BillboardFireResult result = {BILLBOARD_SHOT_NONE, 0, 0, 0, 0};
     BillboardObject *best_object = NULL;
     u16 best_index = 0;
     s32 best_depth = 0x7FFFFFFF;
@@ -122,7 +149,6 @@ BillboardShotResult billboard_fire_center(const PlayerState *player, u16 wall_de
     if (best_object == NULL) {
         s32 closest_dist_sq = BILLBOARD_POINT_BLANK_RADIUS_SQ;
         BillboardObject *closest_barrel = NULL;
-        u16 closest_index = 0;
         for (u16 slot = 0; slot < target_count; slot++) {
             const u16 i = indices[slot];
             BillboardObject *object = &g_billboards[i];
@@ -138,25 +164,32 @@ BillboardShotResult billboard_fire_center(const PlayerState *player, u16 wall_de
             if (dist_sq < closest_dist_sq) {
                 closest_dist_sq = dist_sq;
                 closest_barrel = object;
-                closest_index = i;
             }
         }
         if (closest_barrel != NULL) {
             closest_barrel->life_state = ENEMY_DYING;
             closest_barrel->hp = 0;
             closest_barrel->death_index = 0;
-            closest_barrel->death_timer = BARREL_DEATH_HOLD;
-            billboard_apply_explosion(player, closest_barrel->x, closest_barrel->y);
-            return BILLBOARD_SHOT_EXPLOSION;
+            closest_barrel->death_timer = (u8)(BARREL_DEATH_FRAME_HOLDS[0] + 1);
+            billboard_effects_spawn_puff(closest_barrel->x, closest_barrel->y);
+            return explosion_fire_result(billboard_apply_explosion(
+                player, closest_barrel->x, closest_barrel->y));
         }
-        return BILLBOARD_SHOT_NONE;
+        spawn_wall_puff(player, wall_depth);
+        return result;
     }
 
+    if (best_object->type_id == BILLBOARD_TYPE_DUMMY) {
+        billboard_effects_spawn_blood(best_object->x, best_object->y);
+    } else {
+        billboard_effects_spawn_puff(best_object->x, best_object->y);
+    }
     push_dummy_on_hit(best_index, best_object, player);
 
     if (best_object->hp > 1) {
         best_object->hp--;
-        return BILLBOARD_SHOT_DAMAGE;
+        result.status = BILLBOARD_SHOT_DAMAGE;
+        return result;
     }
 
     // Enemies play a death animation and leave a corpse instead of vanishing;
@@ -166,7 +199,8 @@ BillboardShotResult billboard_fire_center(const PlayerState *player, u16 wall_de
         billboard_registry_enemy_died(best_index);
         best_object->death_index = 0;
         best_object->death_timer = ENEMY_DEATH_HOLD;
-        return BILLBOARD_SHOT_KILL;
+        result.status = BILLBOARD_SHOT_KILL;
+        return result;
     }
 
     if (best_object->type_id == BILLBOARD_TYPE_BARREL) {
@@ -177,12 +211,13 @@ BillboardShotResult billboard_fire_center(const PlayerState *player, u16 wall_de
         best_object->life_state = ENEMY_DYING;
         best_object->hp = 0;
         best_object->death_index = 0;
-        best_object->death_timer = BARREL_DEATH_HOLD;
-        billboard_apply_explosion(player, best_object->x, best_object->y);
-        return BILLBOARD_SHOT_EXPLOSION;
+        best_object->death_timer = (u8)(BARREL_DEATH_FRAME_HOLDS[0] + 1);
+        return explosion_fire_result(billboard_apply_explosion(
+            player, best_object->x, best_object->y));
     }
 
     billboard_registry_deactivate(best_index);
     best_object->hp = 0;
-    return BILLBOARD_SHOT_KILL;
+    result.status = BILLBOARD_SHOT_KILL;
+    return result;
 }

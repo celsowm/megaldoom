@@ -14,3 +14,4 @@ WAV sfx_player_pain  "sound/dsplpain.wav"  XGM2
 WAV sfx_player_death "sound/dspldeth.wav"  XGM2
 WAV sfx_door         "sound/dsstnmov.wav"  XGM2
 WAV sfx_pickup       "sound/dsitemup.wav"  XGM2
+WAV sfx_barexp       "sound/dsbarexp.wav"  XGM2

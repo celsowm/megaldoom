@@ -44,6 +44,10 @@
 #define BILLBOARD_ENEMY_WORLD_HEIGHT 102
 #define BILLBOARD_ENEMY_ATLAS_WIDTH 24
 #define BILLBOARD_ENEMY_ATLAS_HEIGHT 48
+// Doom patch/world geometry is enlarged threefold against the 256-unit walls.
+// Gameplay effects whose authored reach is tied to their sprite must use the
+// same scale or a visually close explosion has a much smaller invisible radius.
+#define BILLBOARD_WORLD_GEOMETRY_SCALE 3
 
 #define DUMMY_MOVE_STEP (FX_ONE / 8)
 #define DUMMY_MOVE_INTERVAL 5
@@ -74,19 +78,15 @@
 // barrels and billboard_get_object_visual_id flips to
 // BILLBOARD_VISUAL_BARREL_EXPLODING so renderer_scene.c draws from
 // FREEDOOM_BILLBOARD_BARREL_EXPLOSION_FRAMES instead of the static BAR1 slot.
-// Hold is 2 frames per pose at the locked 30fps cadence -> 5 * 2 * 2 = 20 vblanks
-// = ~0.33s end-to-end, matching Doom's 3-tic BEXP burst rather than the slow
-// 5-frame corpse hold used by the enemy death animation.
 #define BARREL_DEATH_FRAME_COUNT 5
-#define BARREL_DEATH_HOLD 2
+static const u8 BARREL_DEATH_FRAME_HOLDS[BARREL_DEATH_FRAME_COUNT] = {1, 1, 1, 1, 1};
 
-// Barrel explosion AoE. Doom barrels detonate on death at 128 map units;
-// the squared form mirrors billboard_position_blocked's convention so the
-// inner loop uses one MULU.W per pair instead of a sqrt. Map and runtime
-// coordinates share FX_ONE==256 scaling (bsp_map.h:16), so 128 is literal.
-#define BARREL_EXPLOSION_RADIUS 128
-#define BARREL_EXPLOSION_RADIUS_SQ (BARREL_EXPLOSION_RADIUS * BARREL_EXPLOSION_RADIUS)
-#define BARREL_EXPLOSION_DAMAGE 20
+// Barrel explosion AoE. World sprites are visually enlarged, but using their
+// full 3x scale here made barrels kill the player from across a room. A 192-unit
+// reach keeps point-blank splash reliable without the excessive 384-unit range.
+#define BARREL_EXPLOSION_BASE_RADIUS 128
+#define BARREL_EXPLOSION_RADIUS 192
+#define BARREL_EXPLOSION_DAMAGE 128
 // Per-explosion worklist cap. E1M1's largest barrel cluster is 3; this still
 // bounds worst-case chains without unbounded recursion.
 #define BARREL_EXPLOSION_MAX_CHAIN 8

@@ -8,6 +8,7 @@ import sys
 ROOT = Path(__file__).resolve().parent.parent
 RAYCAST = ROOT / "src" / "raycast.h"
 BILLBOARD = ROOT / "src" / "billboard.c"
+BILLBOARD_INTERNAL = ROOT / "src" / "billboard_internal.h"
 PROJECTOR = ROOT / "src" / "billboard_projection.c"
 SCENE = ROOT / "src" / "renderer_scene.c"
 
@@ -60,6 +61,7 @@ def project_patch(forward: int, center: int, width: int, height: int,
 def main() -> int:
     raycast = RAYCAST.read_text(encoding="utf-8")
     billboard = BILLBOARD.read_text(encoding="utf-8")
+    billboard_internal = BILLBOARD_INTERNAL.read_text(encoding="utf-8")
     projector = PROJECTOR.read_text(encoding="utf-8")
     scene = SCENE.read_text(encoding="utf-8")
 
@@ -78,11 +80,13 @@ def main() -> int:
         raise ValueError("render projection must not cull billboards by LOS")
     if "const u16 wall_depth = columns[wall_col].depth;" not in scene:
         raise ValueError("billboard rasterizer must use the rendered wall block depth")
+    if "billboard_depth_visible(object, wall_depth)" not in scene:
+        raise ValueError("billboard rasterizer no longer applies typed wall-depth visibility")
     if "next_wall_col" in scene:
         raise ValueError("billboard rasterizer still samples the next wall block")
     if "RAY_CAMERA_HEIGHT" not in billboard or "BILLBOARD_SCALE_SHIFT 12" not in billboard:
         raise ValueError("world billboards are not using the shared Q12 render camera")
-    if "#define BILLBOARD_WORLD_GEOMETRY_SCALE 3" not in billboard:
+    if "#define BILLBOARD_WORLD_GEOMETRY_SCALE 3" not in billboard_internal:
         raise ValueError("world billboard scale no longer matches 256-unit BSP walls")
     if "geometry.top_offset, scale_x_q12" not in billboard:
         raise ValueError("sprite height is no longer using the width focal scale")

@@ -1,4 +1,5 @@
 #include "billboard_internal.h"
+#include "billboard_effects.h"
 
 typedef struct {
     u8 index;
@@ -159,6 +160,20 @@ u16 billboard_project_scene(const PlayerState *player,
                                                     &g_billboards[s_order[k].index],
                                                     &s_order[k].measure,
                                                     &objects[count]));
+    }
+    count = (u16)(count + billboard_project_effects(
+        player, &objects[count], (u16)(max_objects - count)));
+
+    // Effects and world objects share painter order so blood remains on its
+    // target while nearer sprites can still occlude it.
+    for (u16 a = 1; a < count; a++) {
+        const ProjectedBillboard item = objects[a];
+        s16 b = (s16)(a - 1);
+        while (b >= 0 && objects[b].depth < item.depth) {
+            objects[b + 1] = objects[b];
+            b--;
+        }
+        objects[b + 1] = item;
     }
 #if DEBUG_PERF
     s_debug_projected = count;

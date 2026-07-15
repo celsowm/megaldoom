@@ -1,6 +1,5 @@
 #include <genesis.h>
 #include "billboard.h"
-#include "billboard_explosion.h"
 #include "bsp_map.h"
 #include "bsp_render.h"
 #include "fixed_math.h"
@@ -9,7 +8,7 @@
 #include "renderer.h"
 #include "resources.h"
 
-#define SHOT_COOLDOWN_FRAMES 12
+#define SHOT_COOLDOWN_FRAMES 6
 #define WEAPON_FLASH_FRAMES 2
 #define PLAYER_DAMAGE_FLASH_FRAMES 6
 #define PLAYER_INVULN_FRAMES 24
@@ -164,6 +163,7 @@ int main(bool hard) {
         u16 control = 0;
         DoorActionResult action_status = g_hud.action_status;
         BillboardShotResult shot_status = g_hud.shot_status;
+        BillboardFireResult fire_result = {BILLBOARD_SHOT_NONE, 0, 0, 0, 0};
         // Real vblanks elapsed since last iteration. Keep it clamped for future diagnostics,
         // but now it IS fed to the turn controller so rotation stays time-correct.
         const u32 cur_vtimer = vtimer;
@@ -198,6 +198,9 @@ int main(bool hard) {
         }
         if (g_player_invuln > 0) {
             g_player_invuln--;
+        }
+        if (billboard_update_effects()) {
+            overlay_dirty = TRUE;
         }
 
         JOY_update();
@@ -260,7 +263,9 @@ int main(bool hard) {
             BillboardShotResult shot = BILLBOARD_SHOT_NONE;
 
             if ((shot_cooldown == 0) && (player_ammo > 0)) {
-                shot = billboard_fire_center(&g_player, g_ray_columns[RAY_VIEW_COLS / 2].depth);
+                fire_result = billboard_fire_center(
+                    &g_player, g_ray_columns[RAY_VIEW_COLS / 2].depth);
+                shot = fire_result.status;
                 shot_cooldown = SHOT_COOLDOWN_FRAMES;
                 player_ammo--;
                 g_weapon_flash = WEAPON_FLASH_FRAMES;
@@ -274,11 +279,9 @@ int main(bool hard) {
                     XGM2_playPCM(sfx_enemy_pain, sizeof(sfx_enemy_pain), SOUND_PCM_CH3);
                 } else if (shot == BILLBOARD_SHOT_KILL) {
                     XGM2_playPCM(sfx_enemy_death, sizeof(sfx_enemy_death), SOUND_PCM_CH3);
+                } else if (fire_result.explosion_count > 0) {
+                    XGM2_playPCM(sfx_barexp, sizeof(sfx_barexp), SOUND_PCM_CH3);
                 }
-                // BILLBOARD_SHOT_EXPLOSION: SFX bake (Doom BAREXP PCM) is a
-                // deferred sub-step; the chain AoE + player damage hook
-                // beneath this block are wired so the gameplay effect ships
-                // immediately, the literal explosion sound follows.
 
                 if ((shot == BILLBOARD_SHOT_DAMAGE) || (shot == BILLBOARD_SHOT_KILL) ||
                     (shot == BILLBOARD_SHOT_EXPLOSION)) {
@@ -290,18 +293,12 @@ int main(bool hard) {
         }
 
         if (!level_cleared) {
-            // Barrel explosion player splash damage. Symmetric to enemy_update
-            // below but reads the cached BarrelExplosionResult from the most
-            // recent fire-center that returned BILLBOARD_SHOT_EXPLOSION. Hits
-            // arriving during g_player_invuln are absorbed (no damage), matching
-            // the i-frames the enemy path just set; this means explosions and
-            // drill attacks on the same frame share one invuln window, which is
-            // faithful to Doom and avoids a frame-1 40-HP combined hit.
-            if ((shot_status == BILLBOARD_SHOT_EXPLOSION) && (g_player_invuln == 0)) {
-                const BarrelExplosionResult explosion = billboard_get_last_explosion_result();
-                if (explosion.player_hits > 0) {
-                    const u16 damage_per_hit = PLAYER_HIT_DAMAGE;
-                    const u16 total_damage = (u16)(damage_per_hit * explosion.player_hits);
+            // Consume the result returned by this exact trigger pull. Keeping
+            // damage on the fire result prevents stale HUD shot state or a later
+            // explosion from overwriting the player-facing blast outcome.
+            if ((fire_result.status == BILLBOARD_SHOT_EXPLOSION) &&
+                (fire_result.player_damage > 0) && (g_player_invuln == 0)) {
+                    const u16 total_damage = fire_result.player_damage;
                     const u16 armor_absorb = (u16)(((total_damage / 3) < player_armor) ? (total_damage / 3) : player_armor);
                     const u16 damage = (u16)(total_damage - armor_absorb);
                     player_armor = (u16)(player_armor - armor_absorb);
@@ -314,15 +311,14 @@ int main(bool hard) {
                         overlay_dirty = TRUE;
                     } else {
                         player_apply_world_push(&g_player,
-                                                (s32)explosion.push_x * PLAYER_HIT_PUSH_STEP,
-                                                (s32)explosion.push_y * PLAYER_HIT_PUSH_STEP);
+                                                (s32)fire_result.push_x * PLAYER_HIT_PUSH_STEP,
+                                                (s32)fire_result.push_y * PLAYER_HIT_PUSH_STEP);
                         player_health = (u16)(player_health - damage);
                         g_player_damage_flash = PLAYER_DAMAGE_FLASH_FRAMES;
                         g_player_invuln = PLAYER_INVULN_FRAMES;
                         overlay_dirty = TRUE;
                         XGM2_playPCM(sfx_player_pain, sizeof(sfx_player_pain), SOUND_PCM_CH2);
                     }
-                }
             }
         }
 

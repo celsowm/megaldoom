@@ -185,7 +185,8 @@ static bool point_on_segment(s32 ax, s32 ay, s32 bx, s32 by, s32 px, s32 py) {
                   (py >= min_y) && (py <= max_y));
 }
 
-bool bsp_segment_hits_wall(s32 x0, s32 y0, s32 x1, s32 y1) {
+static bool segment_hits_wall(s32 x0, s32 y0, s32 x1, s32 y1,
+                              bool count_endpoint_touch) {
     // Ray AABB, used to reject non-overlapping segs before the 4 cross3 multiplies.
     const s32 ray_minx = (x0 < x1) ? x0 : x1;
     const s32 ray_maxx = (x0 > x1) ? x0 : x1;
@@ -245,7 +246,7 @@ bool bsp_segment_hits_wall(s32 x0, s32 y0, s32 x1, s32 y1) {
                     (d3 == 0 && point_on_segment(a->x, a->y, b->x, b->y, x0, y0)) ||
                     (d4 == 0 && point_on_segment(a->x, a->y, b->x, b->y, x1, y1));
 
-                if (proper_cross || endpoint_touch) {
+                if (proper_cross || (count_endpoint_touch && endpoint_touch)) {
                     hit = TRUE;
                     break;
                 }
@@ -276,6 +277,14 @@ bool bsp_segment_hits_wall(s32 x0, s32 y0, s32 x1, s32 y1) {
     g_los_subticks += getSubTick() - query_start;
 #endif
     return hit;
+}
+
+bool bsp_segment_hits_wall(s32 x0, s32 y0, s32 x1, s32 y1) {
+    return segment_hits_wall(x0, y0, x1, y1, TRUE);
+}
+
+bool bsp_segment_crosses_wall(s32 x0, s32 y0, s32 x1, s32 y1) {
+    return segment_hits_wall(x0, y0, x1, y1, FALSE);
 }
 
 #if DEBUG_PERF
