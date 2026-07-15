@@ -45,8 +45,11 @@ static void init_video(void) {
     PAL_setColor(14, RGB24_TO_VDPCOLOR(0x484038));
     PAL_setColor(15, RGB24_TO_VDPCOLOR(0x4C6028));
 
-    // Palette line 1, foreground slot (index 15): Doom-red status-bar numerals.
-    PAL_setColor(31, RGB24_TO_VDPCOLOR(0xF04028));
+    // Palette line 1: native Doom STTNUM/STTPRCNT shading for the transparent
+    // BG_A status-number compositor.
+    for (u16 i = 0; i < 16; i++) {
+        PAL_setColor((u16)(16 + i), RGB24_TO_VDPCOLOR(FREEDOOM_HUD_DIGIT_PALETTE[i]));
+    }
 
     // Palette line 2: dedicated skin/brown/red ramp for the Doom-guy portrait so
     // the face keeps proper flesh tones instead of going gold under PAL0.

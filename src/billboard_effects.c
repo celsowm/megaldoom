@@ -69,9 +69,10 @@ bool billboard_update_effects(void) {
             FREEDOOM_BILLBOARD_BLOOD_FRAME_COUNT;
 
         if (!impact->active) continue;
-        // Keep the overlay redraw alive for the whole transient. This also
-        // guarantees a newly spawned pose reaches both alternating VRAM banks.
-        changed = TRUE;
+        // Hold frames leave the displayed pixels unchanged. Overlay-only work
+        // targets the displayed VRAM bank, while a later base redraw completely
+        // rebuilds the inactive bank, so only pose transitions and final clear
+        // need another render/upload.
         if (impact->timer > 1) {
             impact->timer--;
             continue;
@@ -82,6 +83,7 @@ bool billboard_update_effects(void) {
         } else {
             impact->active = FALSE;
         }
+        changed = TRUE;
     }
 
     return changed;

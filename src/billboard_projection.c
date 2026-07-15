@@ -44,6 +44,8 @@ static u16 s_debug_culled;
 static u16 s_debug_candidates;
 static u16 s_debug_occluded;
 static u16 s_debug_projected;
+static u16 s_debug_cache_hits;
+static u16 s_debug_cache_misses;
 #endif
 
 static u16 billboard_project_one(const BillboardObject *object,
@@ -108,6 +110,9 @@ static bool billboard_measure_cached(u16 index,
         cache->object_x == object->x &&
         cache->object_y == object->y &&
         cache->geometry_key == geometry_key) {
+#if DEBUG_PERF
+        s_debug_cache_hits++;
+#endif
         if (cache->measured) {
             measure->type = billboard_get_type(object->type_id);
             measure->forward = cache->forward;
@@ -129,6 +134,10 @@ static bool billboard_measure_cached(u16 index,
         }
         return cache->measured;
     }
+
+#if DEBUG_PERF
+    s_debug_cache_misses++;
+#endif
 
     cache->object_x = object->x;
     cache->object_y = object->y;
@@ -191,6 +200,8 @@ u16 billboard_project_scene(const PlayerState *player,
     s_debug_candidates = 0;
     s_debug_occluded = 0;
     s_debug_projected = 0;
+    s_debug_cache_hits = 0;
+    s_debug_cache_misses = 0;
 #endif
 
     // Compute the view basis once and share it across every object instead of
@@ -304,4 +315,6 @@ u16 billboard_get_debug_culled_count(void) { return s_debug_culled; }
 u16 billboard_get_debug_candidate_count(void) { return s_debug_candidates; }
 u16 billboard_get_debug_occluded_count(void) { return s_debug_occluded; }
 u16 billboard_get_debug_projected_count(void) { return s_debug_projected; }
+u16 billboard_get_debug_projection_cache_hits(void) { return s_debug_cache_hits; }
+u16 billboard_get_debug_projection_cache_misses(void) { return s_debug_cache_misses; }
 #endif

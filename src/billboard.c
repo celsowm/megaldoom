@@ -37,6 +37,8 @@ static u16 g_visibility_bsp_revision;
 static bool g_visibility_context_valid;
 #if DEBUG_PERF
 static u16 g_debug_prop_collision_candidates;
+static u16 g_debug_prop_collision_calls;
+static u16 g_debug_prop_collision_scanned;
 static u16 g_debug_visibility_cache_hits;
 static u16 g_debug_visibility_cache_misses;
 #endif
@@ -275,8 +277,11 @@ bool billboard_measure_object(const PlayerState *player, s16 cos_a, s16 sin_a,
         if (measure->projected_height < 1) measure->projected_height = 1;
         measure->left = (s16)(measure->center_col - measure->half_w);
         measure->right = (s16)(measure->center_col + measure->half_w);
-        measure->bottom = (s16)(RAY_VIEW_CENTER_Y -
-            (((s32)-PLAYER_EYE_HEIGHT * RAY_PROJ_Y) / forward));
+        // Enemies share the BSP render camera with walls and WAD-origin
+        // billboards. PLAYER_EYE_HEIGHT is gameplay geometry; using it here
+        // placed the enemy baseline above the rendered floor plane.
+        measure->bottom = (s16)(RAY_VIEW_CENTER_Y +
+            (((s32)RAY_CAMERA_HEIGHT * RAY_PROJ_Y) / forward));
         measure->top = (s16)(measure->bottom - measure->projected_height);
     }
     return TRUE;
@@ -412,7 +417,13 @@ BillboardPickupResult billboard_collect_near(s32 x, s32 y) {
 bool billboard_position_blocked(s32 x, s32 y, s32 radius) {
     const u8 *indices = billboard_registry_active_indices();
     const u16 active_count = billboard_registry_active_count();
+#if DEBUG_PERF
+    g_debug_prop_collision_calls++;
+#endif
     for (u16 slot = 0; slot < active_count; slot++) {
+#if DEBUG_PERF
+        g_debug_prop_collision_scanned++;
+#endif
         const u16 i = indices[slot];
         const BillboardObject *object = &g_billboards[i];
         const BillboardType *type = billboard_get_type(object->type_id);
@@ -435,10 +446,14 @@ u16 billboard_get_enemy_count(void) { return billboard_registry_living_enemy_cou
 u16 billboard_get_active_count(void) { return billboard_registry_active_count(); }
 #if DEBUG_PERF
 u16 billboard_get_debug_prop_collision_candidates(void) { return g_debug_prop_collision_candidates; }
+u16 billboard_get_debug_prop_collision_calls(void) { return g_debug_prop_collision_calls; }
+u16 billboard_get_debug_prop_collision_scanned(void) { return g_debug_prop_collision_scanned; }
 u16 billboard_get_debug_visibility_cache_hits(void) { return g_debug_visibility_cache_hits; }
 u16 billboard_get_debug_visibility_cache_misses(void) { return g_debug_visibility_cache_misses; }
 void billboard_debug_reset_stats(void) {
     g_debug_prop_collision_candidates = 0;
+    g_debug_prop_collision_calls = 0;
+    g_debug_prop_collision_scanned = 0;
     g_debug_visibility_cache_hits = 0;
     g_debug_visibility_cache_misses = 0;
 }

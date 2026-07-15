@@ -41,12 +41,4 @@ void renderer_queue_scene_upload(void);
 void renderer_upload_scene_step(void);
 bool renderer_scene_upload_pending(void);
 
-#if DEBUG_PERF
-void renderer_debug_set_cast_subticks(u32 subticks);
-void renderer_debug_set_gameplay_subticks(u32 subticks);
-// Total VBlanks consumed by the whole main-loop iteration (captured at the end
-// of the iteration in main.c; displayed one frame late by the perf overlay).
-void renderer_debug_set_total_vblanks(u16 vblanks);
-#endif
-
 #endif

@@ -6,6 +6,8 @@
 #include "player_controller.h"
 #include "raycast.h"
 #include "renderer.h"
+#include "renderer_perf.h"
+#include "renderer_redraw.h"
 #include "resources.h"
 
 #define SHOT_COOLDOWN_FRAMES 6
@@ -122,8 +124,7 @@ static void reset_level(u16 phase_index, bool *level_cleared, u16 *shot_cooldown
 
 int main(bool hard) {
     u32 frame = 0;
-    bool base_dirty = TRUE;
-    bool overlay_dirty = TRUE;
+    RendererRedrawState redraw;
     bool level_cleared = FALSE;
     u16 phase_index = 0;
     u16 player_health = PLAYER_MAX_HEALTH;
@@ -139,6 +140,7 @@ int main(bool hard) {
     fx_init_tables();
     bsp_init();
     renderer_init();
+    renderer_redraw_init(&redraw);
 
     // Sound: load the XGM2 Z80 driver and start background music (the E1M1
     // theme, converted from Doom's MUS by tools/midi2vgm). XGM2 has reinforced
@@ -186,8 +188,7 @@ int main(bool hard) {
         // elapsed_frames is fed to player_controller_update below so turning is time-correct.
 
         if (bsp_update_doors(elapsed_frames)) {
-            base_dirty = TRUE;
-            overlay_dirty = TRUE;
+            renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE);
         }
 
         if (shot_cooldown > 0) {
@@ -195,17 +196,21 @@ int main(bool hard) {
         }
         if (g_weapon_flash > 0) {
             g_weapon_flash--;
-            overlay_dirty = TRUE;
+            if (g_weapon_flash == 0) {
+                renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_WEAPON);
+            }
         }
         if (g_player_damage_flash > 0) {
             g_player_damage_flash--;
-            overlay_dirty = TRUE;
+            if (g_player_damage_flash == 0) {
+                renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_DAMAGE);
+            }
         }
         if (g_player_invuln > 0) {
             g_player_invuln--;
         }
         if (billboard_update_effects()) {
-            overlay_dirty = TRUE;
+            renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_EFFECT);
         }
 
         JOY_update();
@@ -215,8 +220,7 @@ int main(bool hard) {
             phase_index = (u16)((phase_index + 1) & 1);
             reset_level(phase_index, &level_cleared, &shot_cooldown, &player_health,
                         &player_armor, &player_ammo, &player_keys, &frame);
-            base_dirty = TRUE;
-            overlay_dirty = TRUE;
+            renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE);
         }
 
         // PLAYER_CONTROL_PREVIOUS_WEAPON, PLAYER_CONTROL_NEXT_WEAPON and
@@ -224,8 +228,7 @@ int main(bool hard) {
         // corresponding weapon and automap systems are implemented.
 
         if ((control & PLAYER_CONTROL_CHANGED) != 0) {
-            base_dirty = TRUE;
-            overlay_dirty = TRUE;
+            renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE);
             const BillboardPickupResult pickup = billboard_collect_near(g_player.x, g_player.y);
             if (pickup.collected) {
                 if (pickup.effect == BILLBOARD_EFFECT_HEALTH) {
@@ -242,7 +245,7 @@ int main(bool hard) {
                 } else if (pickup.effect == BILLBOARD_EFFECT_KEY) {
                     player_keys = (u8)(player_keys | pickup.key_mask);
                 }
-                overlay_dirty = TRUE;
+                renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_OTHER);
                 XGM2_playPCM(sfx_pickup, sizeof(sfx_pickup), SOUND_PCM_CH2);
             }
         }
@@ -258,8 +261,7 @@ int main(bool hard) {
                 if (action == DOOR_ACTION_EXIT) {
                     level_cleared = TRUE;
                 }
-                base_dirty = TRUE;
-                overlay_dirty = TRUE;
+                renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE);
                 // Door / platform move sound on PCM channel 3. A toggle or a
                 // key-unlock moves the door; a locked bump stays silent.
                 if ((action == DOOR_ACTION_TOGGLED) || (action == DOOR_ACTION_UNLOCKED)) {
@@ -278,7 +280,7 @@ int main(bool hard) {
                 shot_cooldown = SHOT_COOLDOWN_FRAMES;
                 player_ammo--;
                 g_weapon_flash = WEAPON_FLASH_FRAMES;
-                overlay_dirty = TRUE;
+                renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_WEAPON);
 
                 // Pistol gunshot on PCM channel 2 (channel 1 is reserved for
                 // music PCM). Connected-hit SFX go on channel 3 so the gunshot
@@ -294,7 +296,9 @@ int main(bool hard) {
 
                 if ((shot == BILLBOARD_SHOT_DAMAGE) || (shot == BILLBOARD_SHOT_KILL) ||
                     (shot == BILLBOARD_SHOT_EXPLOSION)) {
-                    overlay_dirty = TRUE;
+                    renderer_redraw_request_overlay(
+                        &redraw, (shot == BILLBOARD_SHOT_EXPLOSION) ?
+                            RENDERER_REDRAW_BARREL : RENDERER_REDRAW_ENEMY_POSE);
                 }
             }
 
@@ -316,8 +320,7 @@ int main(bool hard) {
                         reset_level(phase_index, &level_cleared, &shot_cooldown,
                                     &player_health, &player_armor, &player_ammo,
                                     &player_keys, &frame);
-                        base_dirty = TRUE;
-                        overlay_dirty = TRUE;
+                        renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE);
                     } else {
                         player_apply_world_push(&g_player,
                                                 (s32)fire_result.push_x * PLAYER_HIT_PUSH_STEP,
@@ -325,17 +328,23 @@ int main(bool hard) {
                         player_health = (u16)(player_health - damage);
                         g_player_damage_flash = PLAYER_DAMAGE_FLASH_FRAMES;
                         g_player_invuln = PLAYER_INVULN_FRAMES;
-                        overlay_dirty = TRUE;
+                        renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_DAMAGE);
                         XGM2_playPCM(sfx_player_pain, sizeof(sfx_player_pain), SOUND_PCM_CH2);
                     }
             }
         }
 
         if (!level_cleared) {
-            const BillboardEnemyUpdate enemy_update = billboard_update_enemies(&g_player);
+            const BillboardEnemyUpdate enemy_update = billboard_update_enemies(
+                &g_player, renderer_redraw_is_pending(&redraw));
 
             if (enemy_update.moved) {
-                overlay_dirty = TRUE;
+                if (enemy_update.position_changed) {
+                    renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_ENEMY_MOVE);
+                }
+                if (enemy_update.pose_changed) {
+                    renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_ENEMY_POSE);
+                }
             }
 
             if ((enemy_update.hits > 0) && (g_player_invuln == 0)) {
@@ -347,8 +356,7 @@ int main(bool hard) {
                     reset_level(phase_index, &level_cleared, &shot_cooldown,
                                 &player_health, &player_armor, &player_ammo,
                                 &player_keys, &frame);
-                    base_dirty = TRUE;
-                    overlay_dirty = TRUE;
+                    renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE);
                 } else {
                     player_apply_world_push(&g_player,
                                             (s32)enemy_update.push_x * PLAYER_HIT_PUSH_STEP,
@@ -356,21 +364,19 @@ int main(bool hard) {
                     player_health = (u16)(player_health - damage);
                     g_player_damage_flash = PLAYER_DAMAGE_FLASH_FRAMES;
                     g_player_invuln = PLAYER_INVULN_FRAMES;
-                    overlay_dirty = TRUE;
+                    renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_DAMAGE);
                     XGM2_playPCM(sfx_player_pain, sizeof(sfx_player_pain), SOUND_PCM_CH2);
                 }
             }
         }
 
         if (!level_cleared) {
-            // Drive the BEXP animation cycle for any detonating barrels and drop
-            // them from the registry when the last frame finishes. .moved reuses
-            // the same overlay_dirty path so the engine redraws while a barrel
-            // is mid-explosion without forcing a full base rebuild.
+            // Drive the BEXP animation cycle and request an overlay redraw only
+            // when its dedicated animator reports a visual transition.
             const BillboardEnemyUpdate barrel_update = billboard_update_barrels(&g_player);
 
             if (barrel_update.moved) {
-                overlay_dirty = TRUE;
+                renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_BARREL);
             }
         }
 
@@ -392,10 +398,12 @@ int main(bool hard) {
         }
 #endif
 
-        if (base_dirty || overlay_dirty) {
-            render_current_view(player_health, base_dirty);
-            base_dirty = FALSE;
-            overlay_dirty = FALSE;
+        if (renderer_redraw_is_pending(&redraw)) {
+#if DEBUG_PERF
+            renderer_debug_set_redraw_reasons(renderer_redraw_reasons(&redraw));
+#endif
+            render_current_view(player_health, renderer_redraw_base_is_dirty(&redraw));
+            renderer_redraw_consume(&redraw);
             renderer_queue_scene_upload();
         }
 

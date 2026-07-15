@@ -40,8 +40,11 @@
 #define BILLBOARD_TYPE_DUMMY 15
 #define BILLBOARD_TYPE_COUNT 16
 #define BILLBOARD_PROP_RADIUS 16
-#define BILLBOARD_ENEMY_WORLD_WIDTH 34
-#define BILLBOARD_ENEMY_WORLD_HEIGHT 102
+// Preserve the actor's former on-screen head line after moving its baseline
+// from gameplay eye height to the actual render-camera floor plane. The width
+// keeps the 24:48 atlas aspect under the asymmetric X/Y focal lengths.
+#define BILLBOARD_ENEMY_WORLD_WIDTH 63
+#define BILLBOARD_ENEMY_WORLD_HEIGHT 189
 #define BILLBOARD_ENEMY_ATLAS_WIDTH 24
 #define BILLBOARD_ENEMY_ATLAS_HEIGHT 48
 // Doom patch/world geometry is enlarged threefold against the 256-unit walls.

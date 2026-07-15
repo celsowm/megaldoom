@@ -97,6 +97,8 @@ typedef struct {
 
 typedef struct {
     bool moved;
+    bool position_changed;
+    bool pose_changed;
     u16 hits;
     s16 push_x;
     s16 push_y;
@@ -112,7 +114,8 @@ u16 billboard_get_active_count(void);
 u16 billboard_get_target_count(void);
 u16 billboard_get_target_health(void);
 BillboardFireResult billboard_fire_center(const PlayerState *player, u16 wall_depth);
-BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player);
+BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player,
+                                               bool redraw_pending);
 BillboardEnemyUpdate billboard_update_barrels(const PlayerState *player);
 bool billboard_update_effects(void);
 bool billboard_position_blocked(s32 x, s32 y, s32 radius);
@@ -121,10 +124,19 @@ u16 billboard_get_debug_culled_count(void);
 u16 billboard_get_debug_candidate_count(void);
 u16 billboard_get_debug_occluded_count(void);
 u16 billboard_get_debug_projected_count(void);
+u16 billboard_get_debug_projection_cache_hits(void);
+u16 billboard_get_debug_projection_cache_misses(void);
 u16 billboard_get_debug_prop_collision_candidates(void);
+u16 billboard_get_debug_prop_collision_calls(void);
+u16 billboard_get_debug_prop_collision_scanned(void);
 u16 billboard_get_debug_visibility_cache_hits(void);
 u16 billboard_get_debug_visibility_cache_misses(void);
 u16 billboard_get_debug_simulated_enemy_count(void);
+u16 billboard_get_debug_enemy_pair_tests(void);
+u16 billboard_get_debug_enemy_close_pairs(void);
+u16 billboard_get_debug_enemy_separation_attempts(void);
+u16 billboard_get_debug_enemy_separation_moves(void);
+u32 billboard_get_debug_enemy_separation_subticks(void);
 void billboard_debug_reset_stats(void);
 #endif
 u16 billboard_project_scene(const PlayerState *player,

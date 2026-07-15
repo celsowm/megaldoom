@@ -19,7 +19,7 @@ def main():
     billboard_c = (ROOT / "src/billboard.c").read_text()
     combat_c = (ROOT / "src/billboard_combat.c").read_text()
     effects_c = (ROOT / "src/billboard_effects.c").read_text()
-    enemy_c = (ROOT / "src/billboard_enemy.c").read_text()
+    barrel_c = (ROOT / "src/billboard_barrel.c").read_text()
     explosion_c = (ROOT / "src/billboard_explosion.c").read_text()
     explosion_h = (ROOT / "src/billboard_explosion.h").read_text()
     projection_c = (ROOT / "src/billboard_projection.c").read_text()
@@ -63,8 +63,8 @@ def main():
 
     # Exact fastest BEXP cadence: every pose advances on the next update.
     assert "BARREL_DEATH_FRAME_HOLDS[BARREL_DEATH_FRAME_COUNT] = {1, 1, 1, 1, 1}" in internal_h
-    assert "object->death_timer > 1" in enemy_c
-    assert "BARREL_DEATH_FRAME_HOLDS[object->death_index]" in enemy_c
+    assert "object->death_timer > 1" in barrel_c
+    assert "BARREL_DEATH_FRAME_HOLDS[object->death_index]" in barrel_c
 
     # Native explosion geometry grows rather than being clipped to 24x48.
     assert "FREEDOOM_BILLBOARD_BARREL_EXPLOSION_W 60" in assets
@@ -88,7 +88,12 @@ def main():
     assert "billboard_depth_visible(object, columns[wall_col].depth)" in renderer_c
     assert "#define WALL_PUFF_DEPTH_BIAS 24" in combat_c
     assert "wall_depth - WALL_PUFF_DEPTH_BIAS" in combat_c
-    assert "changed = TRUE;" in effects_c
+    # Hold frames do not redraw; frame transitions and final removal do.
+    hold_branch = re.search(
+        r"if \(impact->timer > 1\) \{(.*?)continue;\s*\}", effects_c, re.S
+    ).group(1)
+    assert "changed = TRUE" not in hold_branch
+    assert effects_c.index("changed = TRUE;") > effects_c.index("impact->active = FALSE;")
     assert "FREEDOOM_BILLBOARD_PUFF_FRAME_COUNT 4" in assets
     assert "FREEDOOM_BILLBOARD_PUFF_W 15" in assets
     assert "FREEDOOM_BILLBOARD_PUFF_H 15" in assets

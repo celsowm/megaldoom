@@ -3,6 +3,7 @@
 
 #include "renderer.h"
 #include "fixed_math.h"
+#include "generated_hud_assets.h"
 
 #define RENDERER_VERSION_TEXT "MEGALDOOM REWRITE GATE 73"
 // Tile-grid dimensions alias the BSP view geometry (single source of
@@ -23,21 +24,57 @@
 #define PAIR_TILE_COUNT 256
 #define HUD_TILE_BASE (PAIR_TILE_BASE + PAIR_TILE_COUNT)
 #define FACE_TILE_BASE (HUD_TILE_BASE + FREEDOOM_HUD_TILE_COUNT)
+#define HUD_NUMBER_TILE_BASE (FACE_TILE_BASE + FREEDOOM_FACE_TILE_COUNT)
+#define HUD_NUMBER_AMMO_TILE_W 6
+#define HUD_NUMBER_HEALTH_TILE_W 7
+#define HUD_NUMBER_FRAGS_TILE_W 5
+#define HUD_NUMBER_ARMOR_TILE_W 8
+#define HUD_NUMBER_TILE_H 3
+#define HUD_NUMBER_AMMO_TILE_COUNT (HUD_NUMBER_AMMO_TILE_W * HUD_NUMBER_TILE_H)
+#define HUD_NUMBER_HEALTH_TILE_COUNT (HUD_NUMBER_HEALTH_TILE_W * HUD_NUMBER_TILE_H)
+#define HUD_NUMBER_FRAGS_TILE_COUNT (HUD_NUMBER_FRAGS_TILE_W * HUD_NUMBER_TILE_H)
+#define HUD_NUMBER_ARMOR_TILE_COUNT (HUD_NUMBER_ARMOR_TILE_W * HUD_NUMBER_TILE_H)
+#define HUD_NUMBER_TILE_COUNT (HUD_NUMBER_AMMO_TILE_COUNT + HUD_NUMBER_HEALTH_TILE_COUNT + HUD_NUMBER_FRAGS_TILE_COUNT + HUD_NUMBER_ARMOR_TILE_COUNT)
+#define HUD_NUMBER_MAX_FIELD_TILES HUD_NUMBER_ARMOR_TILE_COUNT
+#define HUD_VRAM_SAFE_TILE_LIMIT 1440
 #define VIEW_TILEMAP_X 10
 #define VIEW_TILEMAP_Y 5
 #define COMPASS_X 3
 #define COMPASS_Y 10
 #define COMPASS_W 5
 #define COMPASS_H 5
-#define HUD_PANEL_X 4
-#define HUD_PANEL_Y 21
-#define HUD_PANEL_W 32
-#define HUD_PANEL_H 7
+#define SCREEN_TILE_W 40
+#define SCREEN_TILE_H 28
+#define HUD_PANEL_X 0
+#define HUD_PANEL_W SCREEN_TILE_W
+#define HUD_PANEL_H FREEDOOM_HUD_TILE_H
+#define HUD_PANEL_Y (SCREEN_TILE_H - HUD_PANEL_H)
 
 // Doom-guy portrait sits in the recessed face slot at the centre of the status
-// bar (panel tile columns ~14-17). 3x4 tiles, top of the recessed interior.
-#define HUD_FACE_TILE_X (HUD_PANEL_X + 15)
-#define HUD_FACE_TILE_Y (HUD_PANEL_Y + 1)
+// bar. The generated 4-tile block matches the 32px recess and centres the
+// original 24px portrait with four transparent/background pixels per side.
+#define HUD_FACE_TILE_X ((SCREEN_TILE_W - FREEDOOM_FACE_TILE_W) / 2)
+#define HUD_FACE_TILE_Y HUD_PANEL_Y
+#define HUD_FACE_CONTENT_PIXEL_X ((HUD_FACE_TILE_X * 8) + FREEDOOM_FACE_CONTENT_PAD_X)
+
+#if FREEDOOM_HUD_PIXEL_W != (SCREEN_TILE_W * 8)
+#error "HUD backdrop must fill the 320px screen width"
+#endif
+#if FREEDOOM_HUD_PIXEL_H != (HUD_PANEL_H * 8)
+#error "HUD pixel and tile heights disagree"
+#endif
+#if HUD_PANEL_X != 0 || (HUD_PANEL_X + HUD_PANEL_W) != SCREEN_TILE_W
+#error "HUD must touch both horizontal screen edges"
+#endif
+#if (HUD_PANEL_Y + HUD_PANEL_H) != SCREEN_TILE_H
+#error "HUD must be flush with the bottom screen edge"
+#endif
+#if ((2 * HUD_FACE_CONTENT_PIXEL_X) + FREEDOOM_FACE_SOURCE_W) != (SCREEN_TILE_W * 8)
+#error "Visible Doom face content must be exactly screen-centred"
+#endif
+#if (HUD_NUMBER_TILE_BASE + HUD_NUMBER_TILE_COUNT) > HUD_VRAM_SAFE_TILE_LIMIT
+#error "HUD number tiles overlap the SGDK font VRAM region"
+#endif
 
 extern u32 g_view_tiles[VIEW_TILE_COUNT][8];
 extern u32 g_base_view_tiles[VIEW_TILE_COUNT][8];
@@ -48,26 +85,6 @@ extern u16 g_view_dirty_bank_mask;
 extern u16 g_compass_tilemap[COMPASS_W * COMPASS_H];
 
 #if DEBUG_PERF
-typedef struct {
-    u16 upload_dirty_tiles;
-    u16 upload_tiles;
-    u16 upload_runs;
-    bool upload_full;
-    bool upload_swap;
-    u32 gameplay_subticks;
-    u32 cast_subticks;
-    u32 pack_subticks;
-    u32 projection_subticks;
-    u32 billboard_subticks;
-    u32 weapon_subticks;
-    u32 upload_prepare_subticks;
-    u32 dma_wait_subticks;
-    u16 total_vblanks;
-    u16 max_vblanks;
-    u16 missed_deadlines;
-} RendererPerfSnapshot;
-
-RendererPerfSnapshot renderer_get_perf_snapshot(void);
 void renderer_draw_perf_overlay(bool frame_complete);
 #endif
 
@@ -75,6 +92,11 @@ void set_view_pair_tile(u16 x, u16 y, u8 left_color, u8 right_color);
 void set_view_column_color(u16 column, u16 y, u8 color);
 void renderer_mark_tile_dirty(u16 tile_index);
 void renderer_mark_overlay_tile(u16 tile_index);
+void renderer_overlay_reset(void);
+void renderer_overlay_base_rebuilt(void);
+void renderer_overlay_restore_previous(void);
+void renderer_overlay_begin(void);
+void renderer_overlay_finish(void);
 void renderer_set_bg_pair_tile(u16 x, u16 y, u8 left_color, u8 right_color);
 void renderer_set_view_vram_bank(u16 bank);
 void renderer_prepare_full_base_upload(void);

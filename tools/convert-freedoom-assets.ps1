@@ -216,6 +216,27 @@ $facePalette = @(
 )
 $FacePaletteFillIndex = 1
 
+# Native STTNUM/STTPRCNT red ramp for the transparent BG_A number overlay.
+# Index 0 stays transparent; opaque source pixels are quantized to 1..15.
+$hudDigitPalette = @(
+    @(0x00, 0x00, 0x00),
+    @(0x2F, 0x2F, 0x2F),
+    @(0x43, 0x00, 0x00),
+    @(0x53, 0x07, 0x07),
+    @(0x5B, 0x00, 0x00),
+    @(0x67, 0x00, 0x00),
+    @(0x73, 0x00, 0x00),
+    @(0x7F, 0x00, 0x00),
+    @(0x8B, 0x00, 0x00),
+    @(0x9B, 0x00, 0x00),
+    @(0xA7, 0x00, 0x00),
+    @(0xB3, 0x00, 0x00),
+    @(0xBF, 0x00, 0x00),
+    @(0xCB, 0x00, 0x00),
+    @(0xD7, 0x00, 0x00),
+    @(0xEF, 0x00, 0x00)
+)
+
 function Get-NearestIndexInPalette([System.Drawing.Color]$Color, $Palette) {
     $bestIndex = 0
     $bestDistance = [int]::MaxValue
@@ -237,6 +258,22 @@ function Get-NearestIndexInPalette([System.Drawing.Color]$Color, $Palette) {
 
 function Get-NearestPaletteIndex([System.Drawing.Color]$Color) {
     return Get-NearestIndexInPalette $Color $palette
+}
+
+function Get-NearestOpaqueIndexInPalette([System.Drawing.Color]$Color, $Palette) {
+    $bestIndex = 1
+    $bestDistance = [int]::MaxValue
+    for ($i = 1; $i -lt $Palette.Count; $i++) {
+        $dr = [int]$Color.R - $Palette[$i][0]
+        $dg = [int]$Color.G - $Palette[$i][1]
+        $db = [int]$Color.B - $Palette[$i][2]
+        $distance = ($dr * $dr) + ($dg * $dg) + ($db * $db)
+        if ($distance -lt $bestDistance) {
+            $bestDistance = $distance
+            $bestIndex = $i
+        }
+    }
+    return $bestIndex
 }
 
 function Get-NearestWorldPaletteIndex([System.Drawing.Color]$Color, [bool]$AllowTransparent = $true) {
@@ -584,10 +621,13 @@ function Get-HudPaletteIndex([System.Drawing.Color]$Color) {
 function Convert-HudTiles([string]$Path) {
     $image = [System.Drawing.Bitmap]::new($Path)
     $tiles = New-Object System.Collections.Generic.List[string]
-    $Width = 256
-    $Height = 56
+    $Width = 320
+    $Height = 32
 
     try {
+        if (($image.Width -ne $Width) -or ($image.Height -ne $Height)) {
+            throw "Native HUD source must be exactly ${Width}x${Height}: $Path is $($image.Width)x$($image.Height)"
+        }
         for ($tileY = 0; $tileY -lt ($Height / 8); $tileY++) {
             for ($tileX = 0; $tileX -lt ($Width / 8); $tileX++) {
                 $rows = New-Object System.Collections.Generic.List[string]
@@ -598,17 +638,7 @@ function Convert-HudTiles([string]$Path) {
                     for ($col = 0; $col -lt 8; $col++) {
                         $x = ($tileX * 8) + $col
                         $y = ($tileY * 8) + $row
-                        $index = 3
-
-                        if (($y -ge 12) -and ($y -lt 44)) {
-                            $srcX = [Math]::Min($image.Width - 1, [int](($x * $image.Width) / $Width))
-                            $srcY = [Math]::Min($image.Height - 1, [int](($y - 12) * $image.Height / 32))
-                            $index = Get-HudPaletteIndex $image.GetPixel($srcX, $srcY)
-                        } elseif (($y -eq 10) -or ($y -eq 45)) {
-                            $index = 5
-                        } elseif (($y -gt 10) -and ($y -lt 45)) {
-                            $index = 2
-                        }
+                        $index = Get-HudPaletteIndex $image.GetPixel($x, $y)
 
                         $packed = ($packed -shl 4) -bor ($index -band 0x0F)
                     }
@@ -626,14 +656,13 @@ function Convert-HudTiles([string]$Path) {
     return $tiles
 }
 
-# Doom-guy face (STF*). Packs each sprite into a 24x32 (3x4 tile) block so it
-# drops straight into the recessed face slot of the status bar. The sprite is
-# CENTERED in the block; surrounding pixels are filled with the slot's recessed
-# panel colour (palette index 3). Unlike Convert-HudTiles this keeps
-# skin/red/brown indices (no luminance desaturation) so the portrait stays
-# coloured. Convert-FaceFrame bakes one sprite -> 12 tile strings.
-$FaceTileW = 3
+# Doom-guy face (STF*). Every 24px portrait is centred in the native 32px-wide
+# status-bar recess. The four pixels on each side are baked into the frame, so
+# runtime placement is tile-aligned while visible content is pixel-centred.
+$FaceTileW = 4
 $FaceTileH = 4
+$FaceSourceW = 24
+$FaceContentPadX = 4
 $FaceBgIndex = $FacePaletteFillIndex
 
 # Animated portrait frames. Order MUST match the index #defines emitted below and
@@ -654,11 +683,19 @@ function Convert-FaceFrame([string]$Path) {
     $tiles = New-Object System.Collections.Generic.List[string]
     $blockW = $FaceTileW * 8
     $blockH = $FaceTileH * 8
-    # Centre the sprite inside the 24x32 block (clamped so it never starts < 0).
+    # Centre the 24px Doom portrait inside the 32x32 HUD recess. A 3-tile
+    # block can only sit four pixels to either side of the recess centre.
     $offsetX = [Math]::Max(0, [int](($blockW - $image.Width) / 2))
     $offsetY = [Math]::Max(0, [int](($blockH - $image.Height) / 2))
 
     try {
+        if ($image.Width -ne $FaceSourceW) {
+            throw "Face frame must be exactly $FaceSourceW pixels wide: $Path is $($image.Width)"
+        }
+        if ($offsetX -ne $FaceContentPadX -or
+            ((2 * $offsetX) + $image.Width) -ne $blockW) {
+            throw "Face frame is not pixel-centred in its $blockW-pixel cell: $Path"
+        }
         for ($tileY = 0; $tileY -lt $FaceTileH; $tileY++) {
             for ($tileX = 0; $tileX -lt $FaceTileW; $tileX++) {
                 $rows = New-Object System.Collections.Generic.List[string]
@@ -698,25 +735,80 @@ function Convert-FaceFrame([string]$Path) {
 }
 
 function Convert-FaceFrames() {
-    $allTiles = New-Object System.Collections.Generic.List[string]
+    $uniqueTiles = New-Object System.Collections.Generic.List[string]
+    $frameMaps = New-Object System.Collections.Generic.List[string]
+    $tileLookup = @{}
     foreach ($name in $FaceFrameNames) {
         $framePath = Join-Path $Root (Join-Path $FaceGraphicsDir "$name.png")
         if (-not (Test-Path $framePath)) {
             throw "Face frame source not found: $framePath"
         }
+        $indices = New-Object System.Collections.Generic.List[string]
         foreach ($tile in (Convert-FaceFrame $framePath)) {
-            $allTiles.Add($tile)
+            if (-not $tileLookup.ContainsKey($tile)) {
+                $tileLookup[$tile] = $uniqueTiles.Count
+                $uniqueTiles.Add($tile)
+            }
+            $indices.Add($tileLookup[$tile].ToString())
         }
+        $frameMaps.Add("    {" + ($indices -join ", ") + "}")
     }
-    return $allTiles
+    return [pscustomobject]@{ Tiles = $uniqueTiles; FrameMaps = $frameMaps }
+}
+
+# Native Doom status-bar numbers. Runtime composition uses a transparent 16x16
+# canvas per glyph so variable source widths remain available for right-aligned
+# placement while all sampling stays within fixed array bounds.
+$HudDigitNames = @("STTNUM0", "STTNUM1", "STTNUM2", "STTNUM3", "STTNUM4",
+                   "STTNUM5", "STTNUM6", "STTNUM7", "STTNUM8", "STTNUM9",
+                   "STTPRCNT")
+$HudDigitCanvasW = 16
+$HudDigitCanvasH = 16
+$hudDigitBlocks = New-Object System.Collections.Generic.List[string]
+$hudDigitWidths = New-Object System.Collections.Generic.List[string]
+foreach ($name in $HudDigitNames) {
+    $path = Join-Path $Root (Join-Path $FaceGraphicsDir "$name.png")
+    if (-not (Test-Path $path)) {
+        throw "HUD digit source not found: $path"
+    }
+    $image = [System.Drawing.Bitmap]::new($path)
+    try {
+        if ($image.Width -gt $HudDigitCanvasW -or $image.Height -gt $HudDigitCanvasH) {
+            throw "HUD digit $name exceeds ${HudDigitCanvasW}x${HudDigitCanvasH}"
+        }
+        $rows = New-Object System.Collections.Generic.List[string]
+        for ($y = 0; $y -lt $HudDigitCanvasH; $y++) {
+            $values = New-Object System.Collections.Generic.List[string]
+            for ($x = 0; $x -lt $HudDigitCanvasW; $x++) {
+                $index = 0
+                if ($x -lt $image.Width -and $y -lt $image.Height) {
+                    $pixel = $image.GetPixel($x, $y)
+                    if ($pixel.A -ge 128) {
+                        $index = Get-NearestOpaqueIndexInPalette $pixel $hudDigitPalette
+                    }
+                }
+                $values.Add($index.ToString())
+            }
+            $rows.Add("        {" + ($values -join ", ") + "}")
+        }
+        $hudDigitBlocks.Add("    {`r`n" + ($rows -join ",`r`n") + "`r`n    }")
+        $hudDigitWidths.Add($image.Width.ToString())
+    } finally {
+        $image.Dispose()
+    }
 }
 
 $weaponIdleRows = Convert-WeaponOverlay $WeaponIdleSourcePath $false
 $weaponFireRows = Convert-WeaponOverlayFire $WeaponFireSourcePath $WeaponFlashSourcePath
 $hudTiles = Convert-HudTiles $HudSourcePath
-$faceTiles = Convert-FaceFrames
+$faceFrames = Convert-FaceFrames
+$faceTiles = $faceFrames.Tiles
+$faceFrameMaps = $faceFrames.FrameMaps
 $faceFrameCount = $FaceFrameNames.Count
 $facePaletteRgb = ($facePalette | ForEach-Object {
+    "0x{0:X2}{1:X2}{2:X2}" -f $_[0], $_[1], $_[2]
+}) -join ", "
+$hudDigitPaletteRgb = ($hudDigitPalette | ForEach-Object {
     "0x{0:X2}{1:X2}{2:X2}" -f $_[0], $_[1], $_[2]
 }) -join ", "
 $billboardRows = Convert-Image $BillboardSourcePath 16 16 $true
@@ -777,6 +869,7 @@ foreach ($name in $BarrelExplosionFrameNames) {
     $barrelExplosionFrameBlocks.Add("    {" + "`r`n" + ($barrelExplosionFrameRows -join ",`r`n") + "`r`n    }")
     $barrelExplosionGeometryBlocks.Add("    {$($offset.width), $($offset.height), $($offset.leftOffset), $($offset.topOffset)}")
 }
+
 $barrelExplosionFrameCount = $BarrelExplosionFrameNames.Count
 
 $PuffFrameNames = @("PUFFA0", "PUFFB0", "PUFFC0", "PUFFD0")
@@ -946,9 +1039,11 @@ $hudContent = @"
 
 #include <genesis.h>
 
-#define FREEDOOM_HUD_TILE_W 32
-#define FREEDOOM_HUD_TILE_H 7
-#define FREEDOOM_HUD_TILE_COUNT 224
+#define FREEDOOM_HUD_PIXEL_W 320
+#define FREEDOOM_HUD_PIXEL_H 32
+#define FREEDOOM_HUD_TILE_W 40
+#define FREEDOOM_HUD_TILE_H 4
+#define FREEDOOM_HUD_TILE_COUNT 160
 #define FREEDOOM_WEAPON_W $WeaponOverlayW
 #define FREEDOOM_WEAPON_H $WeaponOverlayH
 #define FREEDOOM_WEAPON_DRAW_X $WeaponDrawX
@@ -959,7 +1054,13 @@ $hudContent = @"
 #define FREEDOOM_FACE_TILE_H $FaceTileH
 #define FREEDOOM_FACE_FRAME_TILES $($FaceTileW * $FaceTileH)
 #define FREEDOOM_FACE_FRAME_COUNT $faceFrameCount
-#define FREEDOOM_FACE_TILE_COUNT $($FaceTileW * $FaceTileH * $faceFrameCount)
+#define FREEDOOM_FACE_TILE_COUNT $($faceTiles.Count)
+#define FREEDOOM_FACE_SOURCE_W $FaceSourceW
+#define FREEDOOM_FACE_CONTENT_PAD_X $FaceContentPadX
+#define FREEDOOM_HUD_DIGIT_COUNT $($HudDigitNames.Count)
+#define FREEDOOM_HUD_DIGIT_PERCENT 10
+#define FREEDOOM_HUD_DIGIT_CANVAS_W $HudDigitCanvasW
+#define FREEDOOM_HUD_DIGIT_CANVAS_H $HudDigitCanvasH
 
 // Portrait frame indices (order matches the baker's frame list and
 // compute_face_frame() in renderer_hud.c). Bracket 0 = high HP, 4 = low HP.
@@ -983,11 +1084,28 @@ $($hudTiles -join ",`r`n")
 // the recessed-slot fill. Values are 0xRRGGBB; pass through RGB24_TO_VDPCOLOR.
 static const u32 FREEDOOM_FACE_PALETTE[16] = { $facePaletteRgb };
 
-// Doom-guy animated portrait: $faceFrameCount frames x $($FaceTileW * $FaceTileH) tiles, laid out
-// consecutively. Frame f occupies tiles [f*12 .. f*12+11]; centred in a 3x4 block.
-// Rendered with PAL2 (FREEDOOM_FACE_PALETTE).
+// Native STTNUM/STTPRCNT palette and transparent pixel canvases for the BG_A
+// number compositor. Widths preserve Doom's variable-width right alignment.
+static const u32 FREEDOOM_HUD_DIGIT_PALETTE[16] = { $hudDigitPaletteRgb };
+static const u8 FREEDOOM_HUD_DIGIT_WIDTHS[FREEDOOM_HUD_DIGIT_COUNT] = {
+    $($hudDigitWidths -join ", ")
+};
+static const u8 FREEDOOM_HUD_DIGITS
+    [FREEDOOM_HUD_DIGIT_COUNT]
+    [FREEDOOM_HUD_DIGIT_CANVAS_H]
+    [FREEDOOM_HUD_DIGIT_CANVAS_W] = {
+$($hudDigitBlocks -join ",`r`n")
+};
+
+// Deduplicated Doom-guy portrait tiles. The frame map preserves each 4x4 cell
+// while identical background/art tiles share one VRAM slot across expressions.
 static const u32 FREEDOOM_FACE_TILES[FREEDOOM_FACE_TILE_COUNT][8] = {
 $($faceTiles -join ",`r`n")
+};
+static const u16 FREEDOOM_FACE_FRAME_TILE_IDS
+    [FREEDOOM_FACE_FRAME_COUNT]
+    [FREEDOOM_FACE_FRAME_TILES] = {
+$($faceFrameMaps -join ",`r`n")
 };
 
 static const u8 FREEDOOM_WEAPON_IDLE[FREEDOOM_WEAPON_H][FREEDOOM_WEAPON_W] = {

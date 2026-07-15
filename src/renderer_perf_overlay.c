@@ -1,4 +1,5 @@
 #include "renderer_internal.h"
+#include "renderer_perf.h"
 #include "bsp_render.h"
 
 #if DEBUG_PERF
@@ -80,6 +81,29 @@ void renderer_draw_perf_overlay(bool frame_complete) {
             (unsigned long)bsp_get_debug_segment_raster_subticks(),
             (unsigned long)bsp_get_debug_side_cache_subticks());
     VDP_drawTextFill(text, 0, 8, 40);
+
+    sprintf(text, "RR=%02X Ov=%03u/%03u/%03u",
+            (unsigned int)perf.redraw_reasons,
+            (unsigned int)perf.overlay_restored_tiles,
+            (unsigned int)perf.overlay_touched_tiles,
+            (unsigned int)perf.overlay_overlap_tiles);
+    VDP_drawTextFill(text, 0, 9, 40);
+
+    sprintf(text, "Qc=%03u/%03u Ep=%03u/%03u/%03u/%03u",
+            (unsigned int)billboard_get_debug_projection_cache_hits(),
+            (unsigned int)billboard_get_debug_projection_cache_misses(),
+            (unsigned int)billboard_get_debug_enemy_pair_tests(),
+            (unsigned int)billboard_get_debug_enemy_close_pairs(),
+            (unsigned int)billboard_get_debug_enemy_separation_attempts(),
+            (unsigned int)billboard_get_debug_enemy_separation_moves());
+    VDP_drawTextFill(text, 0, 10, 40);
+
+    sprintf(text, "Es=%04lu Bc=%03u/%03u/%03u",
+            (unsigned long)billboard_get_debug_enemy_separation_subticks(),
+            (unsigned int)billboard_get_debug_prop_collision_calls(),
+            (unsigned int)billboard_get_debug_prop_collision_scanned(),
+            (unsigned int)billboard_get_debug_prop_collision_candidates());
+    VDP_drawTextFill(text, 0, 11, 40);
 }
 
 #endif

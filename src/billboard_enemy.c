@@ -5,6 +5,18 @@
 
 static u8 s_simulated_enemy_indices[BILLBOARD_OBJECT_COUNT];
 static u16 s_simulated_enemy_count;
+#if DEBUG_PERF
+static u16 s_debug_pair_tests;
+static u16 s_debug_close_pairs;
+static u16 s_debug_separation_attempts;
+static u16 s_debug_separation_moves;
+static u32 s_debug_separation_subticks;
+#endif
+
+typedef struct {
+    bool position_changed;
+    bool pose_changed;
+} EnemyVisualChange;
 
 static s16 get_step_toward(s32 delta) {
     if (delta > 0) {
@@ -103,12 +115,6 @@ static bool update_dummy_alive(u16 index, BillboardObject *object, const PlayerS
     const s32 player_dx = player->x - object->x;
     const s32 player_dy = player->y - object->y;
     const s32 player_dist_sq = (player_dx * player_dx) + (player_dy * player_dy);
-    const s32 home_dx = object->home_x - object->x;
-    const s32 home_dy = object->home_y - object->y;
-    const s32 home_dist_sq = (home_dx * home_dx) + (home_dy * home_dy);
-    const s32 seen_dx = object->last_seen_x - object->x;
-    const s32 seen_dy = object->last_seen_y - object->y;
-    const s32 seen_dist_sq = (seen_dx * seen_dx) + (seen_dy * seen_dy);
     const bool perception_candidate =
         (player_dist_sq <= DUMMY_WAKE_RANGE_SQ) || object->has_last_seen;
     const bool visible = perception_candidate && billboard_has_line_of_sight(index, player);
@@ -179,6 +185,12 @@ static bool update_dummy_alive(u16 index, BillboardObject *object, const PlayerS
     }
 
     {
+        const s32 home_dx = object->home_x - object->x;
+        const s32 home_dy = object->home_y - object->y;
+        const s32 home_dist_sq = (home_dx * home_dx) + (home_dy * home_dy);
+        const s32 seen_dx = object->last_seen_x - object->x;
+        const s32 seen_dy = object->last_seen_y - object->y;
+        const s32 seen_dist_sq = (seen_dx * seen_dx) + (seen_dy * seen_dy);
         s16 step_x;
         s16 step_y;
 
@@ -253,96 +265,47 @@ static void advance_death(BillboardObject *object) {
     }
 }
 
-// Wrapper over the live AI / death animation. Returns TRUE when the enemy moved
-// OR its visible pose changed, so main.c redraws (reuses the .moved -> redraw path).
-static bool update_dummy(u16 index, BillboardObject *object, const PlayerState *player, u16 *hits) {
+// Wrapper over the live AI / death animation. Keep position and pose changes
+// distinct so the caller can attribute redraws without re-running simulation.
+static EnemyVisualChange update_dummy(u16 index, BillboardObject *object,
+                                      const PlayerState *player, u16 *hits) {
     const u8 prev_frame = billboard_get_object_frame(object);
-    bool moved;
+    EnemyVisualChange change = {FALSE, FALSE};
 
     if (object->life_state != ENEMY_ALIVE) {
         advance_death(object);
-        moved = FALSE;
     } else {
-        moved = update_dummy_alive(index, object, player, hits);
+        change.position_changed = update_dummy_alive(index, object, player, hits);
     }
 
     if (billboard_get_object_frame(object) != prev_frame) {
-        return TRUE;
+        change.pose_changed = TRUE;
     }
 
-    return moved;
+    return change;
 }
 
-// Step the barrel explosion animation one frame. Mirrors advance_death(): a
-// barrel uses the exact per-pose BARREL_DEATH_FRAME_HOLDS cadence and is dropped
-// from the registry after the final frame (stopping rendering and releasing
-// collision). Called from main.c via billboard_update_barrels().
-static void advance_barrel_death(u16 index, BillboardObject *object) {
-    if (object->life_state != ENEMY_DYING) {
-        return;
-    }
-    if (object->death_timer > 1) {
-        object->death_timer--;
-        return;
-    }
-    if ((object->death_index + 1) < BARREL_DEATH_FRAME_COUNT) {
-        object->death_index++;
-        object->death_timer = BARREL_DEATH_FRAME_HOLDS[object->death_index];
-    } else {
-        billboard_registry_deactivate(index);
-    }
-}
-
-BillboardEnemyUpdate billboard_update_barrels(const PlayerState *player) {
-    BillboardEnemyUpdate update = {FALSE, 0, 0, 0};
-    (void)player;
-
-    // Snapshot the target list first: advance_barrel_death can call
-    // billboard_registry_deactivate at the end of an animation, which mutates
-    // s_target_indices[] in place (shifts entries left, decrements the count).
-    // Iterating the live array would then skip a barrel or read past the end.
-    u8 snapshot[BILLBOARD_OBJECT_COUNT];
-    const u8 *target_indices = billboard_registry_target_indices();
-    const u16 target_count = billboard_registry_target_count();
-    for (u16 i = 0; i < target_count; i++) snapshot[i] = target_indices[i];
-
-    for (u16 slot = 0; slot < target_count; slot++) {
-        const u16 i = snapshot[slot];
-        BillboardObject *object = &g_billboards[i];
-
-        if (!object->active || (object->type_id != BILLBOARD_TYPE_BARREL)) {
-            continue;
-        }
-        if (object->life_state != ENEMY_DYING) {
-            continue;
-        }
-
-        const u8 prev_frame = billboard_get_object_frame(object);
-        const bool was_active = object->active;
-        advance_barrel_death(i, object);
-        // The deactivate on the last BEXP frame does not change death_index, so
-        // the frame-comparison below would miss the off-screen transition. The
-        // active->inactive flip is itself the signal that the renderer must
-        // redraw so the final BEXP pose is cleared instead of left frozen.
-        if (!object->active && was_active) {
-            update.moved = TRUE;
-        }
-        if (billboard_get_object_frame(object) != prev_frame) {
-            update.moved = TRUE;
-        }
-    }
-
-    return update;
-}
-
-BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player) {
-    BillboardEnemyUpdate update = {FALSE, 0, 0, 0};
+BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player,
+                                              bool redraw_pending) {
+    BillboardEnemyUpdate update = {FALSE, FALSE, FALSE, 0, 0, 0};
     s32 best_hit_dist = 0x7FFFFFFF;
-    const s16 cos_a = fx_cos(player->angle);
-    const s16 sin_a = fx_sin(player->angle);
+    s16 cos_a = 0;
+    s16 sin_a = 0;
+
+    if (!redraw_pending) {
+        cos_a = fx_cos(player->angle);
+        sin_a = fx_sin(player->angle);
+    }
 
     billboard_visibility_begin(player);
     s_simulated_enemy_count = 0;
+#if DEBUG_PERF
+    s_debug_pair_tests = 0;
+    s_debug_close_pairs = 0;
+    s_debug_separation_attempts = 0;
+    s_debug_separation_moves = 0;
+    s_debug_separation_subticks = 0;
+#endif
 
     const u8 *enemy_indices = billboard_registry_enemy_indices();
     const u16 enemy_count = billboard_registry_enemy_count();
@@ -353,25 +316,36 @@ BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player) {
         if (!object->active || (object->type_id != BILLBOARD_TYPE_DUMMY)) {
             continue;
         }
+        // Persistent corpses remain active for rendering, but no longer pay
+        // simulation, projection-for-redraw, LOS or attacker-distance work.
+        if (object->life_state == ENEMY_DEAD) {
+            continue;
+        }
 
-        const s32 dx = player->x - object->x;
-        const s32 dy = player->y - object->y;
-        const s32 dist_sq = (dx * dx) + (dy * dy);
         const u16 hits_before = update.hits;
-
-        const bool was_visible = enemy_affects_view(i, object, player, cos_a, sin_a);
-        const bool changed = update_dummy(i, object, player, &update.hits);
-        const bool now_visible = changed ?
+        const bool was_visible = redraw_pending ? FALSE :
+            enemy_affects_view(i, object, player, cos_a, sin_a);
+        const EnemyVisualChange change = update_dummy(i, object, player, &update.hits);
+        const bool changed = change.position_changed || change.pose_changed;
+        const bool now_visible = (!redraw_pending && changed) ?
             enemy_affects_view(i, object, player, cos_a, sin_a) : was_visible;
 
-        if (changed && (was_visible || now_visible)) {
+        if (!redraw_pending && changed && (was_visible || now_visible)) {
             update.moved = TRUE;
+            update.position_changed = update.position_changed || change.position_changed;
+            update.pose_changed = update.pose_changed || change.pose_changed;
         }
         if ((object->life_state == ENEMY_ALIVE) && object->has_last_seen) {
             s_simulated_enemy_indices[s_simulated_enemy_count++] = (u8)i;
         }
 
-        if ((update.hits > hits_before) && (dist_sq < best_hit_dist)) {
+        if (update.hits > hits_before) {
+            const s32 dx = player->x - object->x;
+            const s32 dy = player->y - object->y;
+            const s32 dist_sq = (dx * dx) + (dy * dy);
+            if (dist_sq >= best_hit_dist) {
+                continue;
+            }
             best_hit_dist = dist_sq;
             update.push_x = (dx > 0) ? 1 : ((dx < 0) ? -1 : 0);
             update.push_y = (dy > 0) ? 1 : ((dy < 0) ? -1 : 0);
@@ -379,34 +353,61 @@ BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player) {
     }
 
     // Pair separation is local to the simulation working set, never all map enemies.
+#if DEBUG_PERF
+    const u32 separation_start = getSubTick();
+#endif
     for (u16 a = 0; a < s_simulated_enemy_count; a++) {
         const u16 i = s_simulated_enemy_indices[a];
         for (u16 b = (u16)(a + 1); b < s_simulated_enemy_count; b++) {
             const u16 j = s_simulated_enemy_indices[b];
             BillboardObject *left = &g_billboards[i];
             BillboardObject *right = &g_billboards[j];
+#if DEBUG_PERF
+            s_debug_pair_tests++;
+#endif
 
             // Most engaged enemies are nowhere near each other. Reject those
             // pairs before paying for two sprite projections and visibility checks.
             if (!dummies_need_separation(left, right)) {
                 continue;
             }
+#if DEBUG_PERF
+            s_debug_close_pairs++;
+            s_debug_separation_attempts++;
+#endif
 
-            const bool left_was_visible = enemy_affects_view(i, left, player, cos_a, sin_a);
-            const bool right_was_visible = enemy_affects_view(j, right, player, cos_a, sin_a);
+            const bool left_was_visible = redraw_pending ? FALSE :
+                enemy_affects_view(i, left, player, cos_a, sin_a);
+            const bool right_was_visible = redraw_pending ? FALSE :
+                enemy_affects_view(j, right, player, cos_a, sin_a);
             if (separate_dummies(i, left, j, right)) {
-                const bool left_now_visible = enemy_affects_view(i, left, player, cos_a, sin_a);
-                const bool right_now_visible = enemy_affects_view(j, right, player, cos_a, sin_a);
-                if (left_was_visible || right_was_visible || left_now_visible || right_now_visible) {
+#if DEBUG_PERF
+                s_debug_separation_moves++;
+#endif
+                const bool left_now_visible = redraw_pending ? FALSE :
+                    enemy_affects_view(i, left, player, cos_a, sin_a);
+                const bool right_now_visible = redraw_pending ? FALSE :
+                    enemy_affects_view(j, right, player, cos_a, sin_a);
+                if (!redraw_pending && (left_was_visible || right_was_visible ||
+                                        left_now_visible || right_now_visible)) {
                     update.moved = TRUE;
+                    update.position_changed = TRUE;
                 }
             }
         }
     }
+#if DEBUG_PERF
+    s_debug_separation_subticks = getSubTick() - separation_start;
+#endif
 
     return update;
 }
 
 #if DEBUG_PERF
 u16 billboard_get_debug_simulated_enemy_count(void) { return s_simulated_enemy_count; }
+u16 billboard_get_debug_enemy_pair_tests(void) { return s_debug_pair_tests; }
+u16 billboard_get_debug_enemy_close_pairs(void) { return s_debug_close_pairs; }
+u16 billboard_get_debug_enemy_separation_attempts(void) { return s_debug_separation_attempts; }
+u16 billboard_get_debug_enemy_separation_moves(void) { return s_debug_separation_moves; }
+u32 billboard_get_debug_enemy_separation_subticks(void) { return s_debug_separation_subticks; }
 #endif

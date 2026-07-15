@@ -57,17 +57,30 @@ class UploadModel:
         return bank, uploaded
 
 
+def compose_overlay(previous, current):
+    """Model CPU tile writes after the redundant per-touch restore is removed."""
+    restored = set(previous)
+    touched = set(current)
+    overlap = restored & touched
+    return restored, touched, overlap
+
+
 def main():
     header = (ROOT / "src/renderer_internal.h").read_text()
+    hud_assets = (ROOT / "src/generated_hud_assets.h").read_text()
     raycast = (ROOT / "src/raycast.h").read_text()
     scene = (ROOT / "src/renderer_scene.c").read_text()
+    overlay = (ROOT / "src/renderer_overlay.c").read_text()
     renderer = (ROOT / "src/renderer.c").read_text()
+    perf = (ROOT / "src/renderer_perf.c").read_text()
     tile_w = define(raycast, "RAY_VIEW_TILE_W")
     tile_h = define(raycast, "RAY_VIEW_TILE_H")
     tile_count = tile_w * tile_h
     batch_limit = define(header, "VIEW_DMA_TILES_PER_VBLANK")
     full_threshold = define(header, "VIEW_DIRTY_FULL_THRESHOLD")
     max_runs = define(header, "VIEW_DIRTY_MAX_RUNS")
+    assert define(hud_assets, "FREEDOOM_FACE_TILE_W") == 4
+    assert "HUD_FACE_TILE_X ((SCREEN_TILE_W - FREEDOOM_FACE_TILE_W) / 2)" in header
 
     empty = set()
     contiguous_below = set(range(20, 100))
@@ -103,6 +116,17 @@ def main():
     assert bank == 1 and len(second_batch) == tile_count - batch_limit
     assert first_batch.isdisjoint(second_batch)
     assert model.active_bank == 1 and model.pending_bank is None
+
+    # The overlay-only render restores the complete previous footprint once.
+    # Current touches then draw on that clean buffer without a second base copy.
+    restored, touched, overlap = compose_overlay({7, 8, 41}, {8, 9})
+    assert restored == {7, 8, 41}
+    assert touched == {8, 9}
+    assert overlap == {8}
+    restored, touched, overlap = compose_overlay({7, 8}, set())
+    assert restored == {7, 8} and not touched and not overlap
+    restored, touched, overlap = compose_overlay(set(), {12, 13})
+    assert not restored and touched == {12, 13} and not overlap
 
     # Overlay-only work mutates only the displayed bank and never swaps it.
     overlay_tiles = {7, 8, 41}
@@ -141,9 +165,14 @@ def main():
     assert "if ((g_view_dirty_bank_mask & (1u << bank)) == 0) continue" in renderer
     assert "difference |= (base_rows[row] ^ row_data)" not in scene
     assert "store_base_tile" not in scene
-    assert "g_base_snapshot_valid_bits" in scene
-    assert "g_base_view_tiles[tile_index][row] = g_view_tiles[tile_index][row]" in scene
-    assert scene.index("g_base_snapshot_valid_bits[i] = 0") < scene.index(
+    assert "s_base_snapshot_valid_bits" in overlay
+    assert "g_base_view_tiles[tile_index][row] = g_view_tiles[tile_index][row]" in overlay
+    assert "g_base_built_this_frame" not in scene + overlay
+    mark_overlay = overlay[overlay.index("void renderer_mark_overlay_tile"):]
+    assert "g_view_tiles[tile_index][row] = g_base_view_tiles[tile_index][row]" not in mark_overlay
+    assert scene.index("renderer_overlay_restore_previous();") < scene.index(
+        "draw_projected_billboards(columns, objects, object_count);")
+    assert scene.index("renderer_overlay_base_rebuilt();") < scene.index(
         "build_bsp_tilemap(columns, scene_colors, g_view_tiles)")
     assert "void renderer_queue_scene_upload" in scene
     assert "void renderer_upload_scene_step" in scene
@@ -151,9 +180,10 @@ def main():
     assert "u16 budget = VIEW_DMA_TILES_PER_VBLANK" in scene
     assert not re.search(r"(?m)^\s*VDP_waitVSync\s*\(", scene)
     assert scene.index("finish_view_upload();") > scene.index("dbg_wait_dma();")
-    assert scene.count("static u16 s_debug_total_vblanks;") == 1
-    assert "static u16 s_debug_total_vblanks;" not in renderer
-    assert "void renderer_debug_set_total_vblanks" in scene
+    assert "RendererPerfSnapshot s_perf" in perf
+    assert "void renderer_debug_set_total_vblanks" in perf
+    assert "renderer_perf_begin_upload" in scene
+    assert "renderer_debug_set_total_vblanks" not in scene
     assert "void renderer_debug_set_total_vblanks" not in renderer
 
     print("ok    renderer upload policy: full base swap plus active-bank overlays")

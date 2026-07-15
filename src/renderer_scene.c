@@ -1,4 +1,5 @@
 #include "renderer_internal.h"
+#include "renderer_perf.h"
 #include "bsp_render.h"
 #include "generated_assets.h"
 #include "generated_billboard_assets.h"
@@ -70,13 +71,9 @@ static BillboardTex get_billboard_texture(u8 visual_id, u8 frame) {
 // walls sit around level 1-2 and distant walls saturate at the darkest level.
 #define FOG_SHIFT 9
 static u8 g_shade_luts[SHADE_LEVELS][16];
-static u32 g_overlay_previous_bits[VIEW_DIRTY_WORD_COUNT];
-static u32 g_overlay_current_bits[VIEW_DIRTY_WORD_COUNT];
-static u32 g_base_snapshot_valid_bits[VIEW_DIRTY_WORD_COUNT];
 static u16 g_last_compass_angle = 0xFFFF;
 static bool g_upload_requires_bank_swap = FALSE;
 static bool g_compass_dirty = TRUE;
-static bool g_base_built_this_frame = FALSE;
 
 typedef struct {
     bool pending;
@@ -87,78 +84,6 @@ typedef struct {
 } ViewUploadState;
 
 static ViewUploadState g_view_upload;
-
-#if DEBUG_PERF
-static u16 s_debug_upload_dirty_tiles;
-static u16 s_debug_upload_tiles;
-static u16 s_debug_upload_runs;
-static bool s_debug_upload_full;
-static bool s_debug_upload_swap;
-static u32 s_debug_cast_subticks;
-static u32 s_debug_gameplay_subticks;
-static u32 s_debug_pack_subticks;
-static u32 s_debug_projection_subticks;
-static u32 s_debug_billboard_subticks;
-static u32 s_debug_weapon_overlay_subticks;
-// Upload cost decomposition: CPU time issuing DMA versus time blocked in
-// VDP_waitDMACompletion(). VBlank waits belong exclusively to main.c.
-static u32 s_debug_upload_prepare_subticks;
-static u32 s_debug_dma_wait_subticks;
-static u16 s_debug_total_vblanks;
-static u16 s_debug_max_vblanks;
-static u16 s_debug_missed_deadlines;
-#endif
-
-#if DEBUG_PERF
-void renderer_debug_set_cast_subticks(u32 subticks) {
-    s_debug_cast_subticks = subticks;
-}
-
-void renderer_debug_set_gameplay_subticks(u32 subticks) {
-    s_debug_gameplay_subticks = subticks;
-}
-
-void renderer_debug_set_total_vblanks(u16 vblanks) {
-    s_debug_total_vblanks = vblanks;
-    if (vblanks > s_debug_max_vblanks) s_debug_max_vblanks = vblanks;
-    if (vblanks > TARGET_FRAME_VSYNCS) s_debug_missed_deadlines++;
-}
-
-RendererPerfSnapshot renderer_get_perf_snapshot(void) {
-    return (RendererPerfSnapshot){
-        s_debug_upload_dirty_tiles, s_debug_upload_tiles, s_debug_upload_runs,
-        s_debug_upload_full, s_debug_upload_swap,
-        s_debug_gameplay_subticks, s_debug_cast_subticks, s_debug_pack_subticks,
-        s_debug_projection_subticks, s_debug_billboard_subticks,
-        s_debug_weapon_overlay_subticks, s_debug_upload_prepare_subticks,
-        s_debug_dma_wait_subticks, s_debug_total_vblanks, s_debug_max_vblanks,
-        s_debug_missed_deadlines
-    };
-}
-#endif
-
-void renderer_mark_overlay_tile(u16 tile_index) {
-    const u16 word = (u16)(tile_index >> 5);
-    const u32 mask = (u32)1u << (tile_index & 31);
-
-    if ((g_overlay_current_bits[word] & mask) == 0) {
-        if ((g_base_snapshot_valid_bits[word] & mask) == 0) {
-            // Capture the pristine base lazily. A full base redraw invalidates
-            // every snapshot; only tiles actually touched by a billboard or
-            // weapon pay this 8-row copy instead of all 300 tiles every frame.
-            for (u16 row = 0; row < 8; row++) {
-                g_base_view_tiles[tile_index][row] = g_view_tiles[tile_index][row];
-            }
-            g_base_snapshot_valid_bits[word] |= mask;
-        } else if (!g_base_built_this_frame) {
-            for (u16 row = 0; row < 8; row++) {
-                g_view_tiles[tile_index][row] = g_base_view_tiles[tile_index][row];
-            }
-        }
-        g_overlay_current_bits[word] |= mask;
-        renderer_mark_tile_dirty(tile_index);
-    }
-}
 
 static void build_shade_luts(void) {
     for (u16 c = 0; c < 16; c++) {
@@ -233,13 +158,8 @@ void renderer_scene_init(void) {
     g_last_compass_angle = 0xFFFF;
     g_upload_requires_bank_swap = FALSE;
     g_compass_dirty = TRUE;
-    g_base_built_this_frame = FALSE;
     g_view_upload = (ViewUploadState){FALSE, FALSE, FALSE, 0, 0};
-    for (u16 i = 0; i < VIEW_DIRTY_WORD_COUNT; i++) {
-        g_overlay_previous_bits[i] = 0;
-        g_overlay_current_bits[i] = 0;
-        g_base_snapshot_valid_bits[i] = 0;
-    }
+    renderer_overlay_reset();
     clear_all_view_banks_dirty();
 }
 
@@ -247,12 +167,7 @@ void renderer_invalidate_scene(void) {
     g_last_compass_angle = 0xFFFF;
     g_upload_requires_bank_swap = FALSE;
     g_compass_dirty = TRUE;
-    g_base_built_this_frame = FALSE;
-    for (u16 i = 0; i < VIEW_DIRTY_WORD_COUNT; i++) {
-        g_overlay_previous_bits[i] = 0;
-        g_overlay_current_bits[i] = 0;
-        g_base_snapshot_valid_bits[i] = 0;
-    }
+    renderer_overlay_reset();
     clear_all_view_banks_dirty();
     g_view_dirty_bank_mask = 0;
 }
@@ -790,9 +705,7 @@ static void load_view_tile_run(u16 vram_base, u16 first, u16 count) {
                      count,
                      DMA);
 #if DEBUG_PERF
-    s_debug_upload_prepare_subticks += getSubTick() - issue_start;
-    s_debug_upload_tiles = (u16)(s_debug_upload_tiles + count);
-    s_debug_upload_runs++;
+    renderer_perf_record_upload_run(count, getSubTick() - issue_start);
 #endif
 }
 
@@ -800,7 +713,7 @@ static void load_view_tile_run(u16 vram_base, u16 first, u16 count) {
 static void dbg_wait_dma(void) {
     const u32 t = getSubTick();
     VDP_waitDMACompletion();
-    s_debug_dma_wait_subticks += getSubTick() - t;
+    renderer_perf_record_dma_wait(getSubTick() - t);
 }
 #else
 #define dbg_wait_dma() VDP_waitDMACompletion()
@@ -834,13 +747,8 @@ void renderer_queue_scene_upload(void) {
     g_view_upload.bank = bank;
     g_view_upload.cursor = 0;
 #if DEBUG_PERF
-    s_debug_upload_dirty_tiles = g_view_bank_dirty_count[bank];
-    s_debug_upload_tiles = 0;
-    s_debug_upload_runs = 0;
-    s_debug_upload_full = g_view_upload.full;
-    s_debug_upload_swap = swap;
-    s_debug_upload_prepare_subticks = 0;
-    s_debug_dma_wait_subticks = 0;
+    renderer_perf_begin_upload(g_view_bank_dirty_count[bank],
+                               g_view_upload.full, swap);
 #endif
 }
 
@@ -937,33 +845,6 @@ static void build_compass_tilemap(u16 angle) {
     g_compass_dirty = TRUE;
 }
 
-static void restore_previous_overlay_tiles(void) {
-    for (u16 tile = 0; tile < VIEW_TILE_COUNT; tile++) {
-        const u16 word = (u16)(tile >> 5);
-        const u32 mask = (u32)1u << (tile & 31);
-        if ((g_overlay_previous_bits[word] & mask) == 0) {
-            continue;
-        }
-
-        for (u16 row = 0; row < 8; row++) {
-            g_view_tiles[tile][row] = g_base_view_tiles[tile][row];
-        }
-        renderer_mark_tile_dirty(tile);
-    }
-}
-
-static void clear_overlay_bits(void) {
-    for (u16 i = 0; i < VIEW_DIRTY_WORD_COUNT; i++) {
-        g_overlay_current_bits[i] = 0;
-    }
-}
-
-static void finish_overlay_bits(void) {
-    for (u16 i = 0; i < VIEW_DIRTY_WORD_COUNT; i++) {
-        g_overlay_previous_bits[i] = g_overlay_current_bits[i];
-    }
-}
-
 static void upload_compass_tilemap(void) {
     if (!g_compass_dirty) {
         return;
@@ -990,49 +871,43 @@ void renderer_render_scene(const RayColumn *columns,
 #if DEBUG_PERF
     u32 stage_start = getSubTick();
     renderer_reset_frame_modified();
+    renderer_perf_reset_overlay_tiles();
 #endif
     ProjectedBillboard objects[BILLBOARD_MAX_PROJECTED_TOTAL];
     const u16 object_count = billboard_project_scene(
         player, columns, objects, BILLBOARD_MAX_PROJECTED_TOTAL);
 #if DEBUG_PERF
-    s_debug_projection_subticks = getSubTick() - stage_start;
+    renderer_perf_set_projection_subticks(getSubTick() - stage_start);
 #endif
 
     if (base_dirty) {
         g_upload_requires_bank_swap = TRUE;
-        g_base_built_this_frame = TRUE;
         renderer_prepare_full_base_upload();
-        for (u16 i = 0; i < VIEW_DIRTY_WORD_COUNT; i++) {
-            g_base_snapshot_valid_bits[i] = 0;
-        }
+        renderer_overlay_base_rebuilt();
 #if DEBUG_PERF
         stage_start = getSubTick();
 #endif
         build_bsp_tilemap(columns, scene_colors, g_view_tiles);
         draw_door_overlays(columns, g_view_tiles);
-        for (u16 i = 0; i < VIEW_DIRTY_WORD_COUNT; i++) {
-            g_overlay_previous_bits[i] = 0;
-        }
 #if DEBUG_PERF
-        s_debug_pack_subticks = getSubTick() - stage_start;
+        renderer_perf_set_pack_subticks(getSubTick() - stage_start);
         stage_start = getSubTick();
 #endif
     } else {
-        g_base_built_this_frame = FALSE;
         g_view_dirty_bank_mask = (u16)(1u << g_view_vram_bank);
-        restore_previous_overlay_tiles();
+        renderer_overlay_restore_previous();
 #if DEBUG_PERF
-        s_debug_pack_subticks = 0;
+        renderer_perf_set_pack_subticks(0);
 #endif
     }
 
-    clear_overlay_bits();
+    renderer_overlay_begin();
 #if DEBUG_PERF
     const u32 bb_start = getSubTick();
 #endif
     draw_projected_billboards(columns, objects, object_count);
 #if DEBUG_PERF
-    s_debug_billboard_subticks = getSubTick() - bb_start;
+    renderer_perf_set_billboard_subticks(getSubTick() - bb_start);
     const u32 wpn_start = getSubTick();
 #endif
     draw_weapon_overlay(weapon_flash);
@@ -1042,9 +917,9 @@ void renderer_render_scene(const RayColumn *columns,
         draw_overlay_ops(MEGALDOOM_LOW_HEALTH_OVERLAY_OPS, MEGALDOOM_OVERLAY_OP_COUNT[1]);
     }
     build_compass_tilemap(player->angle);
-    finish_overlay_bits();
+    renderer_overlay_finish();
 #if DEBUG_PERF
-    s_debug_weapon_overlay_subticks = getSubTick() - wpn_start;
+    renderer_perf_set_weapon_subticks(getSubTick() - wpn_start);
 #endif
 }
 

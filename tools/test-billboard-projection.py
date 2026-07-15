@@ -115,6 +115,10 @@ def main() -> int:
         raise ValueError("billboard rasterizer still samples the next wall block")
     if "RAY_CAMERA_HEIGHT" not in billboard or "BILLBOARD_SCALE_SHIFT 12" not in billboard:
         raise ValueError("world billboards are not using the shared Q12 render camera")
+    if "((s32)RAY_CAMERA_HEIGHT * RAY_PROJ_Y) / forward" not in billboard:
+        raise ValueError("enemy baseline is no longer anchored to the rendered floor plane")
+    if "PLAYER_EYE_HEIGHT * RAY_PROJ_Y" in billboard:
+        raise ValueError("enemy projection is using gameplay eye height instead of the render camera")
     if "#define BILLBOARD_WORLD_GEOMETRY_SCALE 3" not in billboard_internal:
         raise ValueError("world billboard scale no longer matches 256-unit BSP walls")
     if "geometry.top_offset, scale_x_q12" not in billboard:
@@ -125,6 +129,9 @@ def main() -> int:
         raise ValueError("billboard rasterizer is not sampling the generated atlas crop")
     if "BILLBOARD_ENEMY_WORLD_WIDTH" not in billboard or "uses_wad_origin = FALSE" not in billboard:
         raise ValueError("enemy legacy geometry is no longer isolated")
+    if "#define BILLBOARD_ENEMY_WORLD_WIDTH 63" not in billboard_internal or \
+            "#define BILLBOARD_ENEMY_WORLD_HEIGHT 189" not in billboard_internal:
+        raise ValueError("grounded enemy geometry no longer preserves its former head line and aspect")
     if ("billboard_mul_basis_delta" not in billboard or
             "muls.w %1,%0" not in billboard or
             "return (s32)basis * delta;" not in billboard):

@@ -41,7 +41,7 @@ def main():
     assert "g_door_target_open[door_group] = !g_door_target_open[door_group]" in MAP
     assert "g_door_lift[i] == BSP_DOOR_LIFT_MAX" in MAP
     assert "bsp_update_doors(elapsed_frames)" in MAIN
-    assert "base_dirty = TRUE" in MAIN
+    assert "renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE)" in MAIN
 
     # Exactly 32 vblanks, monotonic in both directions, and reversible without
     # snapping to an endpoint.
