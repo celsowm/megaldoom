@@ -112,6 +112,22 @@ def main():
     assert "BillboardEnemyUpdate billboard_update_barrels" in barrel_c
     assert "BillboardEnemyUpdate billboard_update_barrels" not in enemy_c
 
+    # Pair separation caches pre-pass visibility per simulated enemy and checks
+    # final visibility once per moved enemy, never once per close pair.
+    separation = loop[loop.index("// Pair separation"):loop.index("return update;")]
+    pair_loop = separation[:separation.index(
+        "// Separation can move one enemy through several close pairs."
+    )]
+    final_visibility = separation[separation.index(
+        "// Separation can move one enemy through several close pairs."
+    ):]
+    assert "s_simulated_enemy_visibility" in enemy_c
+    assert "SEPARATION_WAS_VISIBLE" in enemy_c
+    assert "SEPARATION_MOVED" in enemy_c
+    assert "enemy_affects_view" not in pair_loop
+    assert "if ((visibility & SEPARATION_MOVED) == 0) continue;" in final_visibility
+    assert final_visibility.count("enemy_affects_view") == 1
+
     print("ok    active-battle perf: stable semantics, transition redraws, debug evidence")
 
 

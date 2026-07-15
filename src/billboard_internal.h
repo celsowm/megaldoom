@@ -194,9 +194,11 @@ void billboard_registry_enemy_died(u16 index);
 const u8 *billboard_registry_active_indices(void);
 const u8 *billboard_registry_enemy_indices(void);
 const u8 *billboard_registry_target_indices(void);
+const u8 *billboard_registry_blocking_indices(void);
 u16 billboard_registry_active_count(void);
 u16 billboard_registry_enemy_count(void);
 u16 billboard_registry_target_count(void);
+u16 billboard_registry_blocking_count(void);
 u16 billboard_registry_living_enemy_count(void);
 
 #endif

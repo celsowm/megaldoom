@@ -60,6 +60,10 @@ def main():
     assert "object->life_state != ENEMY_ALIVE" in explosion_c
     assert "BARREL_EXPLOSION_MAX_CHAIN" in explosion_c
     assert len(re.findall(r"\b2035u\b", generated_map)) >= 6
+    process_blast = explosion_c[explosion_c.index("static void process_blast"):]
+    assert "billboard_registry_target_indices()" in process_blast
+    assert "billboard_registry_target_count()" in process_blast
+    assert "billboard_registry_active_indices()" not in process_blast
 
     # Exact fastest BEXP cadence: every pose advances on the next update.
     assert "BARREL_DEATH_FRAME_HOLDS[BARREL_DEATH_FRAME_COUNT] = {1, 1, 1, 1, 1}" in internal_h

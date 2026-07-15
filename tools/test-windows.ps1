@@ -61,6 +61,11 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
+& python (Join-Path $PSScriptRoot "test-bsp-successor.py")
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
 & python (Join-Path $PSScriptRoot "test-flat-progression.py")
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE

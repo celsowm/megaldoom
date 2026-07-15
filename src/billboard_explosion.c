@@ -33,12 +33,15 @@ u16 billboard_explosion_damage(s32 blast_x, s32 blast_y,
 
 static void process_blast(s32 bx, s32 by,
                           BlastSite *worklist, u16 *worklist_count) {
-    const u8 *indices = billboard_registry_active_indices();
-    const u16 active_count = billboard_registry_active_count();
+    // The target registry is exactly the union affected by blast damage:
+    // barrels plus enemies. Avoid walking pickups and decorative billboards;
+    // moving enemies remain present without requiring a static spatial grid.
+    const u8 *indices = billboard_registry_target_indices();
+    const u16 target_count = billboard_registry_target_count();
     PendingHit pending[BILLBOARD_OBJECT_COUNT];
     u16 pending_count = 0;
 
-    for (u16 slot = 0; slot < active_count; slot++) {
+    for (u16 slot = 0; slot < target_count; slot++) {
         const u16 i = indices[slot];
         BillboardObject *object = &g_billboards[i];
         const BillboardType *type;

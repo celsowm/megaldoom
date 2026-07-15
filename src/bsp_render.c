@@ -39,7 +39,11 @@ static s16 g_rx, g_ry;   // right axis, Q8
 static s32 g_px, g_py;   // camera position, world units
 static bool g_native_word_math;
 
-static bool g_sample_solid[BSP_SAMPLE_COLS];
+// Successor set for open samples. Once a solid wall claims a sample, its entry
+// points at the next still-open sample, so farther overlapping segments skip
+// closed runs instead of walking them column by column. The final entry is a
+// sentinel one past the view.
+static u8 g_next_open[BSP_SAMPLE_COLS + 1];
 static u32 g_solid_words[BSP_SOLID_WORD_COUNT];
 static u16 g_solid_count;
 static RayColumn *g_columns;
@@ -165,10 +169,24 @@ static s32 perspective_divide(s32 numerator, s32 denominator) {
     return numerator / denominator;
 }
 
+static u16 find_next_open(u16 sample) {
+    u16 root = sample;
+
+    while (g_next_open[root] != root) {
+        root = g_next_open[root];
+    }
+    while (sample != root) {
+        const u16 next = g_next_open[sample];
+        g_next_open[sample] = (u8)root;
+        sample = next;
+    }
+    return root;
+}
+
 static void mark_sample_solid(u16 sample) {
-    g_sample_solid[sample] = TRUE;
     g_solid_words[sample >> 5] |= (u32)1u << (sample & 31);
     g_solid_count++;
+    g_next_open[sample] = (u8)find_next_open((u16)(sample + 1));
 }
 
 static bool solid_sample_range_filled(u16 left_sample, u16 right_sample) {
@@ -306,17 +324,15 @@ static void draw_seg(u16 seg_index) {
     }
 
     bool drew_any = FALSE;
-    for (u16 sample = first_sample; sample <= last_sample; sample++) {
-        if (g_sample_solid[sample]) {
-            continue;
-        }
-
+    u16 sample = find_next_open(first_sample);
+    while (sample <= last_sample) {
         const s32 x = (s32)sample * RAY_COL_STRIDE;
         const s32 sfix = (((x - xL) * inv_span) >> FX_SHIFT); // 0..256 across span
         RayColumn *col = &g_columns[x];
 
         const s32 invz = invzL + (render_mul(invzR - invzL, sfix) >> FX_SHIFT);
         if (invz <= 0) {
+            sample = find_next_open((u16)(sample + 1));
             continue;
         }
 
@@ -341,6 +357,7 @@ static void draw_seg(u16 seg_index) {
         if (moving_door) {
             RayDoorOverlay *door = &col->door;
             if (door->height != 0 && depth_col >= door->depth) {
+                sample = find_next_open((u16)(sample + 1));
                 continue;
             }
             door->height = (u16)height;
@@ -361,6 +378,8 @@ static void draw_seg(u16 seg_index) {
             mark_sample_solid(sample);
         }
         drew_any = TRUE;
+        sample = moving_door ? find_next_open((u16)(sample + 1)) :
+                               find_next_open(sample);
     }
     if (drew_any) {
         BSP_DBG_INC(segments_drawn);
@@ -669,7 +688,7 @@ void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColor
     }
     for (u16 sample = 0; sample < BSP_SAMPLE_COLS; sample++) {
         const u16 c = (u16)(sample * RAY_COL_STRIDE);
-        g_sample_solid[sample] = FALSE;
+        g_next_open[sample] = (u8)sample;
         columns[c].height = 1;
         columns[c].depth = 0x7FFF;
         columns[c].tex_x = 0;
@@ -685,6 +704,7 @@ void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColor
         columns[c].door.texture_id = MEGALDOOM_TEX_FALLBACK;
         columns[c].door.shade = 0;
     }
+    g_next_open[BSP_SAMPLE_COLS] = BSP_SAMPLE_COLS;
 
     bsp_traverse_front_to_back(player, bsp_visit_leaf, bsp_range_closed,
                                bsp_all_closed, NULL);

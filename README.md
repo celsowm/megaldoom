@@ -183,12 +183,18 @@ These folders are ignored by git.
 
 ### Runtime complexity
 
-- BSP rendering is worst-case `O(nodes + segments + sampled columns)`, but normal
-  frames visit only view-relevant nodes and segments. Near/far node decisions are
-  computed lazily once per reached node at each player position and reused while
-  rotating in place.
-- Player/enemy circle collision uses the generated 256-unit blockmap and is
+- BSP rendering uses a successor set for solid sampled columns, so each ordinary
+  wall sample becomes closed once per frame and farther overlapping segments jump
+  over closed runs. Moving-door overlays deliberately revisit still-open samples.
+  Near/far node decisions are computed lazily once per reached node at each player
+  position and reused while rotating in place.
+- Player/enemy wall collision uses the generated 256-unit blockmap and is
   `O(k)` in local candidate segments instead of scanning every map segment.
+- Static billboard collision uses a compact blocker registry and is `O(B)` in
+  active blocking props instead of scanning all active billboards.
+- Stride-4 wall columns are shaded and packed offline into cartridge ROM for
+  both ordinary walls and styled doors; rotation no longer rebuilds 40x32
+  packed texels in work RAM on every base redraw.
 - Enemy line-of-sight walks crossed blockmap cells and is `O(c + k)` for crossed
   cells plus unique segment candidates.
 - Enemy separation remains `O(E^2)`; `E` is currently capped at seven objects.

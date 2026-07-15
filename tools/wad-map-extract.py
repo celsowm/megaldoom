@@ -426,6 +426,38 @@ def emit_world_assets(path, texture_usage, sectors):
         for row in rows:
             lines.append("        {" + ", ".join(str(value) for value in row) + "},")
         lines.append("    },")
+    lines.extend([
+        "};",
+        "",
+        "// ROM-resident, shade-ready columns for the stride-4 wall packer.",
+        "// Layout is [door_style][shade][texture][x][y]; each u16 repeats one 4bpp",
+        "// palette index across the four horizontal pixels of a sampled ray.",
+        "static const u16 FREEDOOM_WALL_PACKED_COLUMNS",
+        "    [2][FREEDOOM_WORLD_SHADE_LEVELS][FREEDOOM_WALL_TEXTURE_COUNT]",
+        "    [WALL_TEX_DIM][WALL_TEX_DIM] = {",
+    ])
+    for door_style in range(2):
+        lines.append("    { // door style %d" % door_style)
+        for level_index, level in enumerate(shade_lut):
+            lines.append("        { // shade %d" % level_index)
+            for texture_index, rows in enumerate(converted):
+                lines.append("            { // %d: %s" %
+                             (texture_index, texture_names[texture_index]))
+                for tex_x in range(WALL_TEX_DIM):
+                    colors = []
+                    for tex_y in range(WALL_TEX_DIM):
+                        texel = rows[tex_y][tex_x] & 0x0F
+                        if door_style:
+                            if tex_x < 2 or tex_x >= WALL_TEX_DIM - 2 or tex_y < 2:
+                                texel = 0
+                            elif tex_y >= WALL_TEX_DIM - 4:
+                                texel = WORLD_COLOR_WARNING if tex_x & 4 else 0
+                        colors.append(level[texel] * 0x1111)
+                    lines.append("                {" + ", ".join(
+                        "0x%04X" % value for value in colors) + "},")
+                lines.append("            },")
+            lines.append("        },")
+        lines.append("    },")
     lines.extend(["};", "", "#endif", ""])
     with open(path, "w", newline="\n") as fh:
         fh.write("\n".join(lines))

@@ -4,7 +4,12 @@
 #define ENEMY_RADIUS 24
 
 static u8 s_simulated_enemy_indices[BILLBOARD_OBJECT_COUNT];
+static u8 s_simulated_enemy_visibility[BILLBOARD_OBJECT_COUNT];
 static u16 s_simulated_enemy_count;
+#define SEPARATION_WAS_VISIBLE 0x01u
+#define SEPARATION_MOVED 0x02u
+#define SEPARATION_MOVED_LEFT 0x01u
+#define SEPARATION_MOVED_RIGHT 0x02u
 #if DEBUG_PERF
 static u16 s_debug_pair_tests;
 static u16 s_debug_close_pairs;
@@ -83,18 +88,18 @@ static bool dummies_need_separation(const BillboardObject *left,
     return (bool)(((dx * dx) + (dy * dy)) <= DUMMY_SEPARATION_RANGE_SQ);
 }
 
-static bool separate_dummies(u16 left_index, BillboardObject *left,
-                             u16 right_index, BillboardObject *right) {
+static u8 separate_dummies(u16 left_index, BillboardObject *left,
+                           u16 right_index, BillboardObject *right) {
     const s32 dx = right->x - left->x;
     const s32 dy = right->y - left->y;
-    bool moved = FALSE;
+    u8 moved = 0;
     s16 left_step_x = 0;
     s16 left_step_y = 0;
     s16 right_step_x = 0;
     s16 right_step_y = 0;
 
     if (!dummies_need_separation(left, right)) {
-        return FALSE;
+        return 0;
     }
 
     if ((dx < 0 ? -dx : dx) >= (dy < 0 ? -dy : dy)) {
@@ -105,8 +110,12 @@ static bool separate_dummies(u16 left_index, BillboardObject *left,
         right_step_y = (s16)-left_step_y;
     }
 
-    moved = try_move_dummy(left_index, left, left_step_x, left_step_y) || moved;
-    moved = try_move_dummy(right_index, right, right_step_x, right_step_y) || moved;
+    if (try_move_dummy(left_index, left, left_step_x, left_step_y)) {
+        moved |= SEPARATION_MOVED_LEFT;
+    }
+    if (try_move_dummy(right_index, right, right_step_x, right_step_y)) {
+        moved |= SEPARATION_MOVED_RIGHT;
+    }
 
     return moved;
 }
@@ -336,7 +345,11 @@ BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player,
             update.pose_changed = update.pose_changed || change.pose_changed;
         }
         if ((object->life_state == ENEMY_ALIVE) && object->has_last_seen) {
-            s_simulated_enemy_indices[s_simulated_enemy_count++] = (u8)i;
+            s_simulated_enemy_indices[s_simulated_enemy_count] = (u8)i;
+            s_simulated_enemy_visibility[s_simulated_enemy_count] =
+                (!redraw_pending && (changed ? now_visible : was_visible)) ?
+                    SEPARATION_WAS_VISIBLE : 0;
+            s_simulated_enemy_count++;
         }
 
         if (update.hits > hits_before) {
@@ -376,23 +389,34 @@ BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player,
             s_debug_separation_attempts++;
 #endif
 
-            const bool left_was_visible = redraw_pending ? FALSE :
-                enemy_affects_view(i, left, player, cos_a, sin_a);
-            const bool right_was_visible = redraw_pending ? FALSE :
-                enemy_affects_view(j, right, player, cos_a, sin_a);
-            if (separate_dummies(i, left, j, right)) {
+            const u8 moved = separate_dummies(i, left, j, right);
+            if (moved != 0) {
 #if DEBUG_PERF
                 s_debug_separation_moves++;
 #endif
-                const bool left_now_visible = redraw_pending ? FALSE :
-                    enemy_affects_view(i, left, player, cos_a, sin_a);
-                const bool right_now_visible = redraw_pending ? FALSE :
-                    enemy_affects_view(j, right, player, cos_a, sin_a);
-                if (!redraw_pending && (left_was_visible || right_was_visible ||
-                                        left_now_visible || right_now_visible)) {
-                    update.moved = TRUE;
-                    update.position_changed = TRUE;
+                if ((moved & SEPARATION_MOVED_LEFT) != 0) {
+                    s_simulated_enemy_visibility[a] |= SEPARATION_MOVED;
                 }
+                if ((moved & SEPARATION_MOVED_RIGHT) != 0) {
+                    s_simulated_enemy_visibility[b] |= SEPARATION_MOVED;
+                }
+            }
+        }
+    }
+    // Separation can move one enemy through several close pairs. Evaluate its
+    // final visibility only once, after all positions settle, and compare it
+    // with the visibility captured immediately before pair resolution.
+    if (!redraw_pending) {
+        for (u16 slot = 0; slot < s_simulated_enemy_count; slot++) {
+            const u8 visibility = s_simulated_enemy_visibility[slot];
+            if ((visibility & SEPARATION_MOVED) == 0) continue;
+
+            const u16 i = s_simulated_enemy_indices[slot];
+            const bool now_visible = enemy_affects_view(
+                i, &g_billboards[i], player, cos_a, sin_a);
+            if ((visibility & SEPARATION_WAS_VISIBLE) != 0 || now_visible) {
+                update.moved = TRUE;
+                update.position_changed = TRUE;
             }
         }
     }

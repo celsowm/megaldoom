@@ -114,16 +114,6 @@ static const u32 REP4[16] = {
     0x0000, 0x1111, 0x2222, 0x3333, 0x4444, 0x5555, 0x6666, 0x7777,
     0x8888, 0x9999, 0xAAAA, 0xBBBB, 0xCCCC, 0xDDDD, 0xEEEE, 0xFFFF,
 };
-static u16 g_packed_shade_luts[SHADE_LEVELS][16];
-
-static void build_packed_shade_luts(void) {
-    for (u16 level = 0; level < SHADE_LEVELS; level++) {
-        for (u16 color = 0; color < 16; color++) {
-            g_packed_shade_luts[level][color] =
-                (u16)REP4[g_shade_luts[level][color]];
-        }
-    }
-}
 #else /* RAY_COL_STRIDE == 2 */
 static const u32 REP2[16] = {
     0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
@@ -152,9 +142,6 @@ static u32 pack_flat_row(u8 color) {
 // use 331 (idle) / 277 (fire). The builder guards against overflow.
 void renderer_scene_init(void) {
     build_shade_luts();
-#if RAY_COL_STRIDE == 4
-    build_packed_shade_luts();
-#endif
     g_last_compass_angle = 0xFFFF;
     g_upload_requires_bank_swap = FALSE;
     g_compass_dirty = TRUE;
@@ -177,12 +164,11 @@ typedef struct {
     u16 bottom;
     const u8 *texture;
     const u8 *shade_map;
-#if RAY_COL_STRIDE == 4
-    const u16 *packed_shade_map;
-#endif
     const u8 *vertical_samples;
     u8 tex_x;
     u8 tex_y;
+    u8 texture_id;
+    u8 shade_level;
     u8 flags;
 } WallColumnDescriptor;
 
@@ -211,12 +197,11 @@ static WallColumnDescriptor describe_textured_column(u16 wall_h,
     const u8 tex_x = (u8)(tex_x_value & WALL_TEX_DIM_MASK);
 
 #if RAY_COL_STRIDE == 4
-    return (WallColumnDescriptor){top, bottom, (const u8 *)tex, shade_map,
-                                  g_packed_shade_luts[fog_level], ty_table,
-                                  tex_x, tex_y_value, flags};
+    return (WallColumnDescriptor){top, bottom, (const u8 *)tex, shade_map, ty_table,
+                                  tex_x, tex_y_value, tid, (u8)fog_level, flags};
 #else
     return (WallColumnDescriptor){top, bottom, (const u8 *)tex, shade_map, ty_table,
-                                  tex_x, tex_y_value, flags};
+                                  tex_x, tex_y_value, tid, (u8)fog_level, flags};
 #endif
 }
 
@@ -290,20 +275,6 @@ static u8 style_wall_texel(const WallColumnDescriptor *descriptor,
 
 
 #if RAY_COL_STRIDE == 4
-// Pre-shade the 32-texel source column once per sampled ray column. The hot
-// per-screen-pixel loop then performs only the vertical DDA lookup and one u16
-// load. The 64-byte temporaries stay inside the packer's frame, avoiding both a
-// large call-stack allocation and renderer-global cache state.
-static void build_packed_wall_column(const WallColumnDescriptor *descriptor,
-                                     u16 packed_texels[WALL_TEX_DIM]) {
-    for (u16 tex_y = 0; tex_y < WALL_TEX_DIM; tex_y++) {
-        u8 texel = descriptor->texture[
-            (tex_y * WALL_TEX_DIM) + descriptor->tex_x] & 0x0F;
-        texel = style_wall_texel(descriptor, (u8)tex_y, texel);
-        packed_texels[tex_y] = descriptor->packed_shade_map[texel];
-    }
-}
-
 static void build_bsp_tilemap(const RayColumn *columns,
                                    const RaySceneColors *scene_colors,
                                    u32 target[][8]) {
@@ -323,10 +294,12 @@ static void build_bsp_tilemap(const RayColumn *columns,
         const WallColumnDescriptor column_a = describe_wall_column(&columns[base_col]);
         const WallColumnDescriptor column_b = describe_wall_column(&columns[base_col + 4]);
 
-        u16 packed_texels_a[WALL_TEX_DIM];
-        u16 packed_texels_b[WALL_TEX_DIM];
-        build_packed_wall_column(&column_a, packed_texels_a);
-        build_packed_wall_column(&column_b, packed_texels_b);
+        const u16 *packed_column_a = FREEDOOM_WALL_PACKED_COLUMNS[
+            (column_a.flags & RAY_COLUMN_FLAG_DOOR) != 0]
+            [column_a.shade_level][column_a.texture_id][column_a.tex_x];
+        const u16 *packed_column_b = FREEDOOM_WALL_PACKED_COLUMNS[
+            (column_b.flags & RAY_COLUMN_FLAG_DOOR) != 0]
+            [column_b.shade_level][column_b.texture_id][column_b.tex_x];
 
         for (u16 tile_y = 0; tile_y < VIEW_TILE_H; tile_y++) {
             const u16 tile_index = (u16)((tile_y * VIEW_TILE_W) + tile_x);
@@ -355,7 +328,7 @@ static void build_bsp_tilemap(const RayColumn *columns,
                     } else if (py >= column_a.bottom) {
                         val_a = floor_packed;
                     } else {
-                        val_a = packed_texels_a[
+                        val_a = packed_column_a[
                             (column_a.vertical_samples[py - column_a.top] +
                              column_a.tex_y) & WALL_TEX_DIM_MASK];
                     }
@@ -365,7 +338,7 @@ static void build_bsp_tilemap(const RayColumn *columns,
                     } else if (py >= column_b.bottom) {
                         val_b = floor_packed;
                     } else {
-                        val_b = packed_texels_b[
+                        val_b = packed_column_b[
                             (column_b.vertical_samples[py - column_b.top] +
                              column_b.tex_y) & WALL_TEX_DIM_MASK];
                     }
@@ -531,6 +504,9 @@ static void draw_projected_billboards(const RayColumn *columns,
         s16 y1 = object->bottom;
         u32 tex_x_step;
         const u8 atlas_x_last = (u8)(object->atlas_x + object->atlas_w - 1);
+        u16 first_tile_x;
+        u16 last_tile_x;
+        bool has_door_overlay = FALSE;
 
         if ((height <= 0) || (width <= 0)) {
             continue;
@@ -554,6 +530,8 @@ static void draw_projected_billboards(const RayColumn *columns,
         if ((x0 > x1) || (y0 > y1)) {
             continue;
         }
+        first_tile_x = (u16)(x0 >> 3);
+        last_tile_x = (u16)(x1 >> 3);
 
         // Resolve horizontal texture coordinates and whole-column wall depth
         // once. Door slabs remain a per-pixel vertical test below.
@@ -574,6 +552,20 @@ static void draw_projected_billboards(const RayColumn *columns,
             }
         }
 
+        // Most views have no moving door slab across a sprite. Detect that once
+        // per object so the hot pixel loop can short-circuit the full vertical
+        // door/depth test instead of repeating it for every opaque texel.
+        for (u16 wall_col = (u16)(x0 & ~(RAY_COL_STRIDE - 1));
+             wall_col <= (u16)x1;
+             wall_col = (u16)(wall_col + RAY_COL_STRIDE)) {
+            const RayDoorOverlay *door = &columns[wall_col].door;
+            if (door->height != 0 && door->depth < columns[wall_col].depth &&
+                object->depth >= door->depth) {
+                has_door_overlay = TRUE;
+                break;
+            }
+        }
+
         // Approximate floor(rel_y * tex.h / height) with one setup divide and a
         // fixed-point DDA instead of a 68k divide for every visible sprite row.
         // tex_y_step = (crop.h<<16)/height is Q16; for a 48px enemy the numerator
@@ -589,10 +581,9 @@ static void draw_projected_billboards(const RayColumn *columns,
             u8 tex_y = (u8)(tex_y_acc >> 16);
             const u16 tile_y = (u16)(y >> 3);
             const u16 row_y = (u16)(y & 7);
-            const u16 first_tile_x = (u16)(x0 >> 3);
-            const u16 last_tile_x = (u16)(x1 >> 3);
             if (tex_y > atlas_y_last) tex_y = atlas_y_last;
             tex_y_acc += tex_y_step;
+            const u8 *tex_row = &tex.pixels[(u16)tex_y * tex.w];
 
             for (u16 tile_x = first_tile_x; tile_x <= last_tile_x; tile_x++) {
                 const s16 tile_left = (s16)(tile_x * 8);
@@ -607,10 +598,10 @@ static void draw_projected_billboards(const RayColumn *columns,
                     if (tex_x == 0xFF) continue;
 
                     const u16 wall_col = (u16)(col & ~(RAY_COL_STRIDE - 1));
-                    const u8 texel = lut[
-                        tex.pixels[(tex_y * tex.w) + tex_x] & 0x0F];
-                    if (texel != 0 && !door_overlay_blocks_pixel(
-                            &columns[wall_col], object->depth, (u16)y)) {
+                    const u8 texel = lut[tex_row[tex_x] & 0x0F];
+                    if (texel != 0 && (!has_door_overlay ||
+                            !door_overlay_blocks_pixel(&columns[wall_col],
+                                                       object->depth, (u16)y))) {
                         const u16 shift = (u16)((7 - (col & 7)) * 4);
                         clear_mask |= (u32)0x0F << shift;
                         value |= (u32)texel << shift;

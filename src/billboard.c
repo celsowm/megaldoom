@@ -415,12 +415,12 @@ BillboardPickupResult billboard_collect_near(s32 x, s32 y) {
 }
 
 bool billboard_position_blocked(s32 x, s32 y, s32 radius) {
-    const u8 *indices = billboard_registry_active_indices();
-    const u16 active_count = billboard_registry_active_count();
+    const u8 *indices = billboard_registry_blocking_indices();
+    const u16 blocking_count = billboard_registry_blocking_count();
 #if DEBUG_PERF
     g_debug_prop_collision_calls++;
 #endif
-    for (u16 slot = 0; slot < active_count; slot++) {
+    for (u16 slot = 0; slot < blocking_count; slot++) {
 #if DEBUG_PERF
         g_debug_prop_collision_scanned++;
 #endif
