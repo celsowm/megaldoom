@@ -1,6 +1,34 @@
 # XGM2 music: rescomp runs xgm2tool to convert the VGM into an XGM2 blob
 # embedded in the ROM. The generated resources.h exposes `extern const u8 test_music[]`.
-XGM2 test_music "music/d_e1m1.vgm"
+XGM2 test_music  "music/d_e1m1.vgm"
+XGM2 intro_music "music/d_intro.vgm"
+
+# Doom frontend. All images are generated from the extracted DOOM1.WAD patches
+# with one shared PAL0 palette; transparent overlays use palette index zero.
+# Keep the 32 KB title tileset unpacked in ROM: APLIB would require a temporary
+# buffer larger than the game's remaining SGDK heap before gameplay starts.
+IMAGE frontend_title          "frontend/title.png"     NONE ALL
+IMAGE frontend_prompt         "frontend/prompt.png"    NONE ALL
+IMAGE frontend_main_menu      "frontend/main_menu.png" NONE ALL
+IMAGE frontend_skull1         "frontend/skull1.png"    NONE ALL
+IMAGE frontend_skull2         "frontend/skull2.png"    NONE ALL
+IMAGE frontend_options_0_0_0  "frontend/options_0_0_0.png" NONE ALL
+IMAGE frontend_options_0_0_1  "frontend/options_0_0_1.png" NONE ALL
+IMAGE frontend_options_0_0_2  "frontend/options_0_0_2.png" NONE ALL
+IMAGE frontend_options_0_1_0  "frontend/options_0_1_0.png" NONE ALL
+IMAGE frontend_options_0_1_1  "frontend/options_0_1_1.png" NONE ALL
+IMAGE frontend_options_0_1_2  "frontend/options_0_1_2.png" NONE ALL
+IMAGE frontend_options_1_0_0  "frontend/options_1_0_0.png" NONE ALL
+IMAGE frontend_options_1_0_1  "frontend/options_1_0_1.png" NONE ALL
+IMAGE frontend_options_1_0_2  "frontend/options_1_0_2.png" NONE ALL
+IMAGE frontend_options_1_1_0  "frontend/options_1_1_0.png" NONE ALL
+IMAGE frontend_options_1_1_1  "frontend/options_1_1_1.png" NONE ALL
+IMAGE frontend_options_1_1_2  "frontend/options_1_1_2.png" NONE ALL
+IMAGE frontend_pause_0        "frontend/pause_0.png" NONE ALL
+IMAGE frontend_pause_1        "frontend/pause_1.png" NONE ALL
+IMAGE frontend_pause_2        "frontend/pause_2.png" NONE ALL
+IMAGE frontend_confirm_0      "frontend/confirm_0.png" NONE ALL
+IMAGE frontend_confirm_1      "frontend/confirm_1.png" NONE ALL
 
 # XGM2 PCM sound effects. Each WAV is converted at build time by rescomp into an
 # 8-bit signed sample resampled to the XGM2 fixed 13300 Hz rate, 256-byte aligned.

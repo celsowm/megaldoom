@@ -6,7 +6,9 @@ ROM_PATH="${ROM_PATH:-}"
 EMULATOR_PATH="${EMULATOR:-$ROOT/.tools/blastem/blastem}"
 NO_BUILD="${NO_BUILD:-0}"
 NO_CLEAN="${NO_CLEAN:-0}"
+CLEAN="${CLEAN:-0}"
 DEBUG_PERF="${DEBUG_PERF:-0}"
+FORCE_ASSETS="${FORCE_ASSETS:-0}"
 
 find_rom() {
   if [[ -f "$ROOT/out/rom.bin" ]]; then
@@ -24,7 +26,8 @@ find_rom() {
 }
 
 if [[ "$NO_BUILD" != "1" ]]; then
-  NO_CLEAN="$NO_CLEAN" DEBUG_PERF="$DEBUG_PERF" "$ROOT/tools/build-linux.sh"
+  NO_CLEAN="$NO_CLEAN" CLEAN="$CLEAN" DEBUG_PERF="$DEBUG_PERF" \
+    FORCE_ASSETS="$FORCE_ASSETS" "$ROOT/tools/build-linux.sh"
 fi
 
 if [[ -z "$ROM_PATH" ]]; then

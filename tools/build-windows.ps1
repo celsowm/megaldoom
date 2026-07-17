@@ -1,7 +1,9 @@
 param(
     [string]$GdkPath = $env:GDK,
     [switch]$NoClean,
-    [switch]$DebugPerf
+    [switch]$Clean,
+    [switch]$DebugPerf,
+    [switch]$ForceAssets
 )
 
 $ErrorActionPreference = "Stop"
@@ -35,35 +37,79 @@ $env:GDK = $GdkPath
 $Make = Join-Path $GdkPath "bin\make.exe"
 if (-not (Test-Path $Make)) { $Make = "make" }
 
+# Frontend PNGs stay out of git. The generator fingerprints its exact inputs and
+# returns without touching the files when its complete cache is current.
+$assetArgs = @((Join-Path $PSScriptRoot "generate-frontend-assets.py"))
+if ($ForceAssets) { $assetArgs += "--force" }
+& python @assetArgs
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Asset generation failed." -ForegroundColor Red
+    exit $LASTEXITCODE
+}
+
 # SGDK's makefile.gen folds $(EXTRA_FLAGS) into every compile's CFLAGS but never
-# assigns it itself, so it falls through to this environment variable. Object
-# files carry no record of which flags built them, so a define toggle must force
-# a full rebuild or stale .o files silently keep the old behavior.
-if ($DebugPerf) {
-    $flags = @()
-    if ($DebugPerf) { $flags += "-DDEBUG_PERF=1" }
-    $env:EXTRA_FLAGS = $flags -join " "
-    if ($NoClean) {
-        Write-Host "Build flags force a clean rebuild; ignoring -NoClean." -ForegroundColor Yellow
-        $NoClean = $false
-    }
-} elseif ($env:EXTRA_FLAGS -match "DEBUG_PERF") {
-    # Previous invocation in this shell left DEBUG_PERF on; drop it so a plain
-    # rebuild doesn't silently keep the perf overlay.
-    Remove-Item Env:\EXTRA_FLAGS
-    if ($NoClean) {
-        Write-Host "Clearing a stale DEBUG_PERF build forces a clean rebuild; ignoring -NoClean." -ForegroundColor Yellow
-        $NoClean = $false
-    }
+# assigns it itself. Preserve caller flags, but own the DEBUG_PERF define so a
+# previous invocation in the same shell cannot leak it into a release build.
+$flags = @()
+if (-not [string]::IsNullOrWhiteSpace($env:EXTRA_FLAGS)) {
+    $flags = @($env:EXTRA_FLAGS -split '\s+' | Where-Object {
+        $_ -and $_ -notmatch '^-DDEBUG_PERF(?:=.*)?$'
+    })
+}
+if ($DebugPerf) { $flags += "-DDEBUG_PERF=1" }
+$effectiveFlags = $flags -join " "
+if ($effectiveFlags) { $env:EXTRA_FLAGS = $effectiveFlags }
+else { Remove-Item Env:\EXTRA_FLAGS -ErrorAction SilentlyContinue }
+
+$statePath = Join-Path $Root "build\build-config.json"
+$romStatePath = Join-Path $Root "build\rom-bin.json"
+$romPath = Join-Path $Root "out\rom.bin"
+$stateTool = Join-Path $PSScriptRoot "build-state.py"
+$stateDecision = (& python $stateTool check --state $statePath --output (Join-Path $Root "out") "--flags=$effectiveFlags")
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Could not inspect the incremental build state." -ForegroundColor Red
+    exit $LASTEXITCODE
+}
+$mustClean = $Clean -or ($stateDecision -eq "clean")
+if ($stateDecision -eq "clean" -and -not $Clean) {
+    Write-Host "Compiler flags changed; cleaning stale objects." -ForegroundColor Yellow
+}
+if ($NoClean) {
+    Write-Host "-NoClean is retained for compatibility; builds are incremental by default." -ForegroundColor DarkGray
 }
 
 Push-Location $Root
 try {
-    if (-not $NoClean) {
+    if ($mustClean) {
         & $Make -f Makefile clean
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Clean failed (make exit code $LASTEXITCODE)." -ForegroundColor Red
+            exit $LASTEXITCODE
+        }
     }
-    & $Make -f Makefile
+    # Keep SGDK's target-specific release CFLAGS/AFLAGS, but defer its phony
+    # Java padding recipe until the ROM content actually changed.
+    & $Make -f Makefile release "SIZEBND=echo"
     $buildExit = $LASTEXITCODE
+    if ($buildExit -eq 0) {
+        & python $stateTool seal-link --output (Join-Path $Root "out") --root $Root
+        $buildExit = $LASTEXITCODE
+    }
+    if ($buildExit -eq 0) {
+        $romDecision = (& python $stateTool check-rom --state $romStatePath --rom $romPath)
+        if ($LASTEXITCODE -ne 0) {
+            $buildExit = $LASTEXITCODE
+        } elseif ($romDecision -eq "pad") {
+            # Use release again so LIBMD and all target-specific SGDK variables
+            # remain defined. seal-link makes every prerequisite up to date.
+            & $Make -f Makefile release
+            $buildExit = $LASTEXITCODE
+            if ($buildExit -eq 0) {
+                & python $stateTool record-rom --state $romStatePath --rom $romPath
+                $buildExit = $LASTEXITCODE
+            }
+        }
+    }
 } finally {
     Pop-Location
 }
@@ -74,4 +120,16 @@ try {
 if ($buildExit -ne 0) {
     Write-Host "Build failed (make exit code $buildExit)." -ForegroundColor Red
     exit $buildExit
+}
+
+& python $stateTool seal-link --output (Join-Path $Root "out") --root $Root
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Build succeeded, but the incremental link state could not be prepared." -ForegroundColor Red
+    exit $LASTEXITCODE
+}
+
+& python $stateTool record --state $statePath "--flags=$effectiveFlags"
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Build succeeded, but its incremental state could not be recorded." -ForegroundColor Red
+    exit $LASTEXITCODE
 }

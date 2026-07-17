@@ -1130,6 +1130,10 @@ if ($BillboardOnly) {
     Write-Host "Generated $BillboardOutPath and $BillboardGeometryOutPath" -ForegroundColor Green
     return
 }
+& python (Join-Path $PSScriptRoot "generate-frontend-assets.py") --force
+if ($LASTEXITCODE -ne 0) {
+    throw "Frontend asset generation failed."
+}
 Write-Host "Generated $OutPath and $MapOutPath from DOOM1.WAD" -ForegroundColor Green
 Write-Host "Generated $BillboardOutPath from $BillboardPath, $BillboardKeyPath and $BillboardDecorPath" -ForegroundColor Green
 Write-Host "Generated $BillboardGeometryOutPath from Doom sprite offsets" -ForegroundColor Green

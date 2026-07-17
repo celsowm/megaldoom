@@ -26,6 +26,7 @@ reference-renderer fallback in the product.
 - Placeholder pistol with recoil.
 - HUD and minimap.
 - XGM2 background music (E1M1) and Doom PCM sound effects: pistol gunshot, enemy pain/death, player pain/death, door move and item pickup.
+- Doom `TITLEPIC` boot screen with intro music, animated-skull main menu, audio options and an in-game pause menu.
 
 ## New in 0.0.4
 
@@ -46,6 +47,20 @@ reference-renderer fallback in the product.
 - Hardware sprite weapon/enemies.
 
 ## Controls
+
+### Menus
+
+- Start on the title screen: open the main menu
+- D-Pad Up/Down: move the animated skull cursor
+- Start, A or C: confirm
+- B: back
+- Start during gameplay: pause / resume through the pause menu
+- Options: toggle music and sound effects for the current boot session
+
+`NEW GAME` starts E1M1 directly with the existing medium-skill population. Save/load,
+episode selection and alternate difficulty rules are intentionally not exposed yet.
+
+### Gameplay
 
 - D-Pad Up: move forward
 - D-Pad Down: move backward
@@ -69,6 +84,17 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\tools\download-emulator-windows.ps1
 .\tools\run-windows.ps1
 ```
+
+For the usual edit/build/debug loop, one command rebuilds with the performance
+overlay, closes the previous BlastEm instance and starts the new ROM without
+occupying the terminal:
+
+```powershell
+npm run debug
+```
+
+The native sector renderer is the only renderer and needs no `-SectorRenderer`
+switch.
 
 To test in the alternate emulator:
 
@@ -130,16 +156,23 @@ export EMULATOR=/opt/blastem/blastem
 ```powershell
 .\tools\setup-sgdk-windows.ps1 [-BuildLibrary] [-Force]
 .\tools\download-emulator-windows.ps1 [-Emulator All|BlastEm|ares] [-Stable] [-Force]
-.\tools\build-windows.ps1 [-NoClean]
-.\tools\test-windows.ps1 [-NoBuild] [-NoClean]
+.\tools\build-windows.ps1 [-Clean] [-DebugPerf] [-ForceAssets]
+.\tools\test-windows.ps1 [-NoBuild] [-Clean] [-ForceAssets]
 .\tools\check-rom.ps1
-.\tools\run-windows.ps1 [-Emulator Auto|BlastEm|ares] [-NoBuild] [-NoClean] [-RomPath out\rom.bin]
+.\tools\run-windows.ps1 [-Emulator Auto|BlastEm|ares] [-NoBuild] [-Clean] [-DebugPerf] [-ForceAssets] [-Restart] [-Detach] [-RomPath out\rom.bin]
 .\tools\clean-windows.ps1
 ```
 
 If you have Node installed, `package.json` wraps the common ones so they feel like
 any Node project: `npm run build`, `npm run test`, `npm run check`, `npm run play`,
-`npm run assets`.
+`npm run debug`, `npm run assets`.
+
+Builds are incremental by default. The frontend generator fingerprints the exact
+copyrighted source PNGs it uses and leaves `res/frontend/` untouched on a cache
+hit, allowing SGDK and `rescomp` to reuse their existing outputs. Use `-Clean`
+to force a full compile, `-ForceAssets` to force only the frontend regeneration,
+or `npm run assets` to rebuild every generated map/graphics header. The legacy
+`-NoClean` switch and Linux `NO_CLEAN=1` remain accepted but are no longer necessary.
 
 ### Guardrails (`npm run test` / `tools\test-windows.ps1`)
 
@@ -162,7 +195,9 @@ FORCE=1 ./tools/setup-sgdk-linux.sh
 STABLE=1 ./tools/download-emulator-linux.sh
 FORCE=1 ./tools/download-emulator-linux.sh
 ./tools/build-linux.sh
-NO_CLEAN=1 ./tools/build-linux.sh
+CLEAN=1 ./tools/build-linux.sh
+DEBUG_PERF=1 ./tools/build-linux.sh
+FORCE_ASSETS=1 ./tools/build-linux.sh
 ./tools/run-linux.sh
 NO_BUILD=1 ./tools/run-linux.sh
 ./tools/clean-linux.sh
@@ -175,6 +210,8 @@ NO_BUILD=1 ./tools/run-linux.sh
 .tools/blastem        downloaded BlastEm
 .tools/ares           downloaded ares
 out/                  SGDK build output
+build/                incremental compiler-flag state
+res/frontend/         generated Doom frontend PNG cache
 ```
 
 These folders are ignored by git.

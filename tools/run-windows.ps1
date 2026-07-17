@@ -5,7 +5,11 @@ param(
     [string]$Emulator = "Auto",
     [switch]$NoBuild,
     [switch]$NoClean,
-    [switch]$DebugPerf
+    [switch]$Clean,
+    [switch]$DebugPerf,
+    [switch]$ForceAssets,
+    [switch]$Restart,
+    [switch]$Detach
 )
 
 $ErrorActionPreference = "Stop"
@@ -72,20 +76,6 @@ function Find-LocalEmulator([string]$Name) {
     return $null
 }
 
-if (-not $NoBuild) {
-    $buildArgs = @()
-    if ($NoClean) { $buildArgs += "-NoClean" }
-    if ($DebugPerf) { $buildArgs += "-DebugPerf" }
-    & (Join-Path $PSScriptRoot "build-windows.ps1") @buildArgs
-}
-
-$RomPath = Resolve-LocalPath $RomPath
-if (-not $RomPath) { $RomPath = Find-Rom }
-if (-not $RomPath -or -not (Test-Path $RomPath)) {
-    Write-Host "ROM was not found. Build first with .\tools\build-windows.ps1" -ForegroundColor Red
-    exit 1
-}
-
 if (-not $EmulatorPath) {
     $EmulatorPath = Find-LocalEmulator $Emulator
 }
@@ -98,6 +88,37 @@ if (-not $EmulatorPath -or -not (Test-Path $EmulatorPath)) {
     exit 1
 }
 
+if ($Restart) {
+    $processName = [IO.Path]::GetFileNameWithoutExtension($EmulatorPath)
+    $running = @(Get-Process -Name $processName -ErrorAction SilentlyContinue)
+    if ($running.Count -gt 0) {
+        Write-Host "Stopping $($running.Count) running $processName instance(s)..." -ForegroundColor DarkGray
+        $running | Stop-Process -Force
+        $running | Wait-Process -ErrorAction SilentlyContinue
+    }
+}
+
+if (-not $NoBuild) {
+    $buildArgs = @()
+    if ($NoClean) { $buildArgs += "-NoClean" }
+    if ($Clean) { $buildArgs += "-Clean" }
+    if ($DebugPerf) { $buildArgs += "-DebugPerf" }
+    if ($ForceAssets) { $buildArgs += "-ForceAssets" }
+    & (Join-Path $PSScriptRoot "build-windows.ps1") @buildArgs
+}
+
+$RomPath = Resolve-LocalPath $RomPath
+if (-not $RomPath) { $RomPath = Find-Rom }
+if (-not $RomPath -or -not (Test-Path $RomPath)) {
+    Write-Host "ROM was not found. Build first with .\tools\build-windows.ps1" -ForegroundColor Red
+    exit 1
+}
+
 Write-Host "Running: $RomPath" -ForegroundColor Green
 Set-MegalDoomBlastEmBindings $EmulatorPath
-& $EmulatorPath $RomPath
+if ($Detach) {
+    Start-Process -FilePath $EmulatorPath -ArgumentList @($RomPath)
+    Write-Host "Emulator started in the background." -ForegroundColor Green
+} else {
+    & $EmulatorPath $RomPath
+}

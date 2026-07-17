@@ -117,7 +117,7 @@ def main():
     # Explosion PCM is built into ROM and triggered once per returned event.
     assert 'WAV sfx_barexp       "sound/dsbarexp.wav"  XGM2' in resources
     assert "fire_result.explosion_count > 0" in main_c
-    assert "XGM2_playPCM(sfx_barexp" in main_c
+    assert "game_audio_play_sfx(sfx_barexp" in main_c
 
     print("ok    Doom blast falloff, direct damage handoff, fast BEXP, PUFF/BLUD impacts")
 

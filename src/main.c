@@ -3,6 +3,8 @@
 #include "bsp_map.h"
 #include "bsp_render.h"
 #include "fixed_math.h"
+#include "frontend.h"
+#include "game_audio.h"
 #include "player_controller.h"
 #include "raycast.h"
 #include "renderer.h"
@@ -123,53 +125,54 @@ static void reset_level(u16 phase_index, bool *level_cleared, u16 *shot_cooldown
 }
 
 int main(bool hard) {
-    u32 frame = 0;
-    RendererRedrawState redraw;
-    bool level_cleared = FALSE;
-    u16 phase_index = 0;
-    u16 player_health = PLAYER_MAX_HEALTH;
-    u16 player_armor = 0;
-    u16 player_ammo = PLAYER_START_AMMO;
-    u8 player_keys = BSP_KEY_NONE;
-    u16 shot_cooldown = 0;
-    u32 prev_vtimer = vtimer;
-
     (void)hard;
 
     JOY_init();
     fx_init_tables();
     bsp_init();
-    renderer_init();
-    renderer_redraw_init(&redraw);
+    game_audio_init();
 
-    // Sound: load the XGM2 Z80 driver and start background music (the E1M1
-    // theme, converted from Doom's MUS by tools/midi2vgm). XGM2 has reinforced
-    // DMA contention protection, important given MegalDoom's heavy vblank
-    // tile-upload DMA. The VGM is converted to XGM2 by rescomp at build time
-    // (see res/resources.res). Sound effects (gunshots, pain, doors, pickups)
-    // are Doom DS* lumps extracted by tools/extract-sfx.py into res/sound/*.wav
-    // and converted by rescomp to XGM2 PCM samples, triggered below with
-    // XGM2_playPCM(..) on PCM channels 2/3 (channel 1 stays free for music).
-    Z80_loadDriver(Z80_DRIVER_XGM2, TRUE);
-    XGM2_play(test_music);
+    while (TRUE) {
+        u32 frame = 0;
+        RendererRedrawState redraw;
+        bool level_cleared = FALSE;
+        u16 phase_index = 0;
+        u16 player_health = PLAYER_MAX_HEALTH;
+        u16 player_armor = 0;
+        u16 player_ammo = PLAYER_START_AMMO;
+        u8 player_keys = BSP_KEY_NONE;
+        u16 shot_cooldown = 0;
+        u16 previous_system_joy;
+        u32 prev_vtimer;
 
-    reset_level(phase_index, &level_cleared, &shot_cooldown, &player_health,
-                &player_armor, &player_ammo, &player_keys, &frame);
+        frontend_run();
+        game_audio_stop_music();
+        renderer_init();
+        renderer_redraw_init(&redraw);
+        game_audio_play_music(test_music);
+
+        reset_level(phase_index, &level_cleared, &shot_cooldown, &player_health,
+                    &player_armor, &player_ammo, &player_keys, &frame);
+        JOY_update();
+        previous_system_joy = JOY_readJoypad(JOY_1);
+        prev_vtimer = vtimer;
 
 #if DEBUG_PERF
     // Scanline cursor (sprite 0): top = 0% load, bottom = 100% load, averaged.
     SYS_showFrameLoad(TRUE);
 #endif
 
-    while (TRUE) {
+        while (TRUE) {
         u16 control = 0;
+        u16 system_joy;
+        u16 system_pressed;
         DoorActionResult action_status = g_hud.action_status;
         BillboardShotResult shot_status = g_hud.shot_status;
         BillboardFireResult fire_result = {BILLBOARD_SHOT_NONE, 0, 0, 0, 0};
         // Real vblanks elapsed since last iteration. Keep it clamped for future diagnostics,
         // but now it IS fed to the turn controller so rotation stays time-correct.
-        const u32 cur_vtimer = vtimer;
-        u16 elapsed_frames = (u16)(cur_vtimer - prev_vtimer);
+        u32 cur_vtimer;
+        u16 elapsed_frames;
 #if DEBUG_PERF
         const u32 gameplay_start = getSubTick();
 #endif
@@ -179,6 +182,34 @@ int main(bool hard) {
         billboard_debug_reset_stats();
 #endif
 
+        JOY_update();
+        system_joy = JOY_readJoypad(JOY_1);
+        system_pressed = (u16)(system_joy & ~previous_system_joy);
+        previous_system_joy = system_joy;
+
+        if ((system_pressed & BUTTON_START) != 0) {
+            const FrontendPauseAction pause_action =
+                frontend_run_pause(renderer_get_menu_tile_base());
+            if (pause_action == FRONTEND_PAUSE_QUIT_TO_TITLE) {
+#if DEBUG_PERF
+                SYS_showFrameLoad(FALSE);
+#endif
+                break;
+            }
+
+            renderer_restore_after_menu();
+            sync_hud(frame, phase_index, player_health, player_armor, player_ammo,
+                     player_keys, shot_cooldown, action_status, shot_status, level_cleared);
+            renderer_draw_hud(&g_hud);
+            renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE);
+            JOY_update();
+            previous_system_joy = JOY_readJoypad(JOY_1);
+            prev_vtimer = vtimer;
+            continue;
+        }
+
+        cur_vtimer = vtimer;
+        elapsed_frames = (u16)(cur_vtimer - prev_vtimer);
         prev_vtimer = cur_vtimer;
         if (elapsed_frames < 1) {
             elapsed_frames = 1;
@@ -213,10 +244,9 @@ int main(bool hard) {
             renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_EFFECT);
         }
 
-        JOY_update();
         if (!level_cleared) {
             control = player_controller_update(&g_player, elapsed_frames);
-        } else if ((JOY_readJoypad(JOY_1) & BUTTON_START) != 0) {
+        } else if ((system_pressed & BUTTON_A) != 0) {
             phase_index = (u16)((phase_index + 1) & 1);
             reset_level(phase_index, &level_cleared, &shot_cooldown, &player_health,
                         &player_armor, &player_ammo, &player_keys, &frame);
@@ -246,7 +276,7 @@ int main(bool hard) {
                     player_keys = (u8)(player_keys | pickup.key_mask);
                 }
                 renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_OTHER);
-                XGM2_playPCM(sfx_pickup, sizeof(sfx_pickup), SOUND_PCM_CH2);
+                game_audio_play_sfx(sfx_pickup, sizeof(sfx_pickup), SOUND_PCM_CH2);
             }
         }
 
@@ -265,7 +295,7 @@ int main(bool hard) {
                 // Door / platform move sound on PCM channel 3. A toggle or a
                 // key-unlock moves the door; a locked bump stays silent.
                 if ((action == DOOR_ACTION_TOGGLED) || (action == DOOR_ACTION_UNLOCKED)) {
-                    XGM2_playPCM(sfx_door, sizeof(sfx_door), SOUND_PCM_CH3);
+                    game_audio_play_sfx(sfx_door, sizeof(sfx_door), SOUND_PCM_CH3);
                 }
             }
         }
@@ -285,13 +315,13 @@ int main(bool hard) {
                 // Pistol gunshot on PCM channel 2 (channel 1 is reserved for
                 // music PCM). Connected-hit SFX go on channel 3 so the gunshot
                 // and the enemy reaction never cancel each other out.
-                XGM2_playPCM(sfx_pistol, sizeof(sfx_pistol), SOUND_PCM_CH2);
+                game_audio_play_sfx(sfx_pistol, sizeof(sfx_pistol), SOUND_PCM_CH2);
                 if (shot == BILLBOARD_SHOT_DAMAGE) {
-                    XGM2_playPCM(sfx_enemy_pain, sizeof(sfx_enemy_pain), SOUND_PCM_CH3);
+                    game_audio_play_sfx(sfx_enemy_pain, sizeof(sfx_enemy_pain), SOUND_PCM_CH3);
                 } else if (shot == BILLBOARD_SHOT_KILL) {
-                    XGM2_playPCM(sfx_enemy_death, sizeof(sfx_enemy_death), SOUND_PCM_CH3);
+                    game_audio_play_sfx(sfx_enemy_death, sizeof(sfx_enemy_death), SOUND_PCM_CH3);
                 } else if (fire_result.explosion_count > 0) {
-                    XGM2_playPCM(sfx_barexp, sizeof(sfx_barexp), SOUND_PCM_CH3);
+                    game_audio_play_sfx(sfx_barexp, sizeof(sfx_barexp), SOUND_PCM_CH3);
                 }
 
                 if ((shot == BILLBOARD_SHOT_DAMAGE) || (shot == BILLBOARD_SHOT_KILL) ||
@@ -316,7 +346,7 @@ int main(bool hard) {
                     const u16 damage = (u16)(total_damage - armor_absorb);
                     player_armor = (u16)(player_armor - armor_absorb);
                     if (player_health <= damage) {
-                        XGM2_playPCM(sfx_player_death, sizeof(sfx_player_death), SOUND_PCM_CH2);
+                        game_audio_play_sfx(sfx_player_death, sizeof(sfx_player_death), SOUND_PCM_CH2);
                         reset_level(phase_index, &level_cleared, &shot_cooldown,
                                     &player_health, &player_armor, &player_ammo,
                                     &player_keys, &frame);
@@ -329,7 +359,7 @@ int main(bool hard) {
                         g_player_damage_flash = PLAYER_DAMAGE_FLASH_FRAMES;
                         g_player_invuln = PLAYER_INVULN_FRAMES;
                         renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_DAMAGE);
-                        XGM2_playPCM(sfx_player_pain, sizeof(sfx_player_pain), SOUND_PCM_CH2);
+                        game_audio_play_sfx(sfx_player_pain, sizeof(sfx_player_pain), SOUND_PCM_CH2);
                     }
             }
         }
@@ -352,7 +382,7 @@ int main(bool hard) {
                 const u16 damage = (u16)(PLAYER_HIT_DAMAGE - armor_absorb);
                 player_armor = (u16)(player_armor - armor_absorb);
                 if (player_health <= damage) {
-                    XGM2_playPCM(sfx_player_death, sizeof(sfx_player_death), SOUND_PCM_CH2);
+                    game_audio_play_sfx(sfx_player_death, sizeof(sfx_player_death), SOUND_PCM_CH2);
                     reset_level(phase_index, &level_cleared, &shot_cooldown,
                                 &player_health, &player_armor, &player_ammo,
                                 &player_keys, &frame);
@@ -365,7 +395,7 @@ int main(bool hard) {
                     g_player_damage_flash = PLAYER_DAMAGE_FLASH_FRAMES;
                     g_player_invuln = PLAYER_INVULN_FRAMES;
                     renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_DAMAGE);
-                    XGM2_playPCM(sfx_player_pain, sizeof(sfx_player_pain), SOUND_PCM_CH2);
+                    game_audio_play_sfx(sfx_player_pain, sizeof(sfx_player_pain), SOUND_PCM_CH2);
                 }
             }
         }
@@ -426,6 +456,7 @@ int main(bool hard) {
         renderer_debug_set_total_vblanks((u16)(vtimer - cur_vtimer));
 #endif
         frame++;
+        }
     }
 
     return 0;

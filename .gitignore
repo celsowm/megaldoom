@@ -20,6 +20,8 @@ res/*.h
 
 # WAD-extracted original Doom PNGs (copyrighted source material, not for commit)
 res/originaldoom/
+# Doom frontend PNGs generated from copyrighted WAD art and regenerated on demand.
+res/frontend/
 # MUS lumps extracted from WAD and intermediate MIDI conversions (regenerable
 # via tools/extract-mus.py + tools/midi2vgm/mus2midi.py; derived from WAD)
 res/music/mus/

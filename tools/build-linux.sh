@@ -4,7 +4,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GDK_PATH="${GDK:-$ROOT/.toolchain/sgdk}"
 NO_CLEAN="${NO_CLEAN:-0}"
+CLEAN="${CLEAN:-0}"
 DEBUG_PERF="${DEBUG_PERF:-0}"
+FORCE_ASSETS="${FORCE_ASSETS:-0}"
 
 if [[ ! -f "$GDK_PATH/makefile.gen" ]]; then
   echo "SGDK was not found."
@@ -15,26 +17,61 @@ fi
 
 export GDK="$GDK_PATH"
 
-# SGDK's makefile.gen folds $EXTRA_FLAGS into every compile's CFLAGS but never
-# assigns it itself, so it falls through to this environment variable. Object
-# files carry no record of which flags built them, so a define toggle must force
-# a full rebuild or stale .o files silently keep the old behavior.
+ASSET_ARGS=("$ROOT/tools/generate-frontend-assets.py")
+if [[ "$FORCE_ASSETS" == "1" ]]; then
+  ASSET_ARGS+=(--force)
+fi
+python3 "${ASSET_ARGS[@]}"
+
+# Preserve caller flags, but own DEBUG_PERF so it cannot leak from a previous
+# invocation. SGDK dependencies do not record flags, so build-state.py requests
+# a clean only when the effective configuration changed.
+read -r -a INHERITED_FLAGS <<< "${EXTRA_FLAGS:-}"
+EFFECTIVE_FLAG_PARTS=()
+for flag in "${INHERITED_FLAGS[@]}"; do
+  if [[ "$flag" != "-DDEBUG_PERF" && "$flag" != -DDEBUG_PERF=* ]]; then
+    EFFECTIVE_FLAG_PARTS+=("$flag")
+  fi
+done
 if [[ "$DEBUG_PERF" == "1" ]]; then
-  export EXTRA_FLAGS="-DDEBUG_PERF=1"
-  if [[ "$NO_CLEAN" == "1" ]]; then
-    echo "DEBUG_PERF=1 forces a clean rebuild (object files don't track compiler flags); ignoring NO_CLEAN."
-    NO_CLEAN=0
-  fi
-elif [[ "${EXTRA_FLAGS:-}" == "-DDEBUG_PERF=1" ]]; then
+  EFFECTIVE_FLAG_PARTS+=("-DDEBUG_PERF=1")
+fi
+EFFECTIVE_FLAGS="${EFFECTIVE_FLAG_PARTS[*]}"
+if [[ -n "$EFFECTIVE_FLAGS" ]]; then
+  export EXTRA_FLAGS="$EFFECTIVE_FLAGS"
+else
   unset EXTRA_FLAGS
-  if [[ "$NO_CLEAN" == "1" ]]; then
-    echo "Clearing a stale DEBUG_PERF build forces a clean rebuild; ignoring NO_CLEAN."
-    NO_CLEAN=0
+fi
+
+STATE_PATH="$ROOT/build/build-config.json"
+ROM_STATE_PATH="$ROOT/build/rom-bin.json"
+STATE_DECISION="$(python3 "$ROOT/tools/build-state.py" check \
+  --state "$STATE_PATH" --output "$ROOT/out" "--flags=$EFFECTIVE_FLAGS")"
+MUST_CLEAN="$CLEAN"
+if [[ "$STATE_DECISION" == "clean" ]]; then
+  MUST_CLEAN=1
+  if [[ "$CLEAN" != "1" ]]; then
+    echo "Compiler flags changed; cleaning stale objects."
   fi
+fi
+if [[ "$NO_CLEAN" == "1" ]]; then
+  echo "NO_CLEAN is retained for compatibility; builds are incremental by default."
 fi
 
 cd "$ROOT"
-if [[ "$NO_CLEAN" != "1" ]]; then
+if [[ "$MUST_CLEAN" == "1" ]]; then
   make -f Makefile clean
 fi
-make -f Makefile
+# Keep SGDK's target-specific release flags while replacing only its phony
+# Java padding recipe. The real padding runs below when the ROM hash changed.
+make -f Makefile release SIZEBND=echo
+python3 "$ROOT/tools/build-state.py" seal-link --output "$ROOT/out" --root "$ROOT"
+ROM_DECISION="$(python3 "$ROOT/tools/build-state.py" check-rom \
+  --state "$ROM_STATE_PATH" --rom "$ROOT/out/rom.bin")"
+if [[ "$ROM_DECISION" == "pad" ]]; then
+  make -f Makefile release
+  python3 "$ROOT/tools/build-state.py" record-rom \
+    --state "$ROM_STATE_PATH" --rom "$ROOT/out/rom.bin"
+fi
+python3 "$ROOT/tools/build-state.py" seal-link --output "$ROOT/out" --root "$ROOT"
+python3 "$ROOT/tools/build-state.py" record --state "$STATE_PATH" "--flags=$EFFECTIVE_FLAGS"

@@ -30,6 +30,8 @@ void renderer_init(void);
 void renderer_invalidate_scene(void);
 void renderer_draw_static_screen(void);
 void renderer_draw_hud(const RendererHudState *state);
+u16 renderer_get_menu_tile_base(void);
+void renderer_restore_after_menu(void);
 void renderer_render_scene(const RayColumn *columns,
                            const PlayerState *player,
                            const RaySceneColors *scene_colors,

@@ -21,13 +21,7 @@ static u16 g_frame_modified_count;
 
 static u16 s_view_bank_tilemaps[VIEW_BANK_COUNT][VIEW_TILE_COUNT];
 
-static void init_video(void) {
-    VDP_setScreenWidth320();
-    VDP_setScreenHeight224();
-    VDP_setHInterrupt(FALSE);
-    VDP_setHilightShadow(FALSE);
-    VDP_setTextPlane(BG_A);
-
+static void load_game_palettes(void) {
     PAL_setColor(0, RGB24_TO_VDPCOLOR(0x000000));
     PAL_setColor(1, RGB24_TO_VDPCOLOR(0xD8D8D8));
     PAL_setColor(2, RGB24_TO_VDPCOLOR(0x181410));
@@ -62,6 +56,16 @@ static void init_video(void) {
     for (u16 i = 0; i < 16; i++) {
         PAL_setColor((u16)(48 + i), RGB24_TO_VDPCOLOR(FREEDOOM_WORLD_PALETTE[i]));
     }
+}
+
+static void init_video(void) {
+    VDP_setScreenWidth320();
+    VDP_setScreenHeight224();
+    VDP_setHInterrupt(FALSE);
+    VDP_setHilightShadow(FALSE);
+    VDP_setTextPlane(BG_A);
+
+    load_game_palettes();
 
     VDP_clearPlane(BG_A, TRUE);
     VDP_clearPlane(BG_B, TRUE);
@@ -213,6 +217,23 @@ void renderer_init(void) {
     init_view_tilemap();
     g_view_dirty_bank_mask = 0;
     renderer_scene_init();
+}
+
+u16 renderer_get_menu_tile_base(void) {
+    return PAIR_TILE_BASE;
+}
+
+void renderer_restore_after_menu(void) {
+    // The pause frontend deliberately borrows the reloadable pair/HUD region
+    // while leaving both dynamic view banks untouched. Restore everything it
+    // can have overwritten, then rebuild BG_A and force a fresh scene cast.
+    VDP_waitVSync();
+    load_game_palettes();
+    init_pair_tiles();
+    init_hud_tiles();
+    VDP_clearPlane(BG_A, TRUE);
+    renderer_invalidate_scene();
+    renderer_draw_static_screen();
 }
 
 #if DEBUG_PERF

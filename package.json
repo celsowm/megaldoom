@@ -8,6 +8,7 @@
     "test": "pwsh -NoProfile -File tools/test-windows.ps1",
     "check": "pwsh -NoProfile -File tools/check-rom.ps1",
     "assets": "pwsh -NoProfile -File tools/convert-freedoom-assets.ps1",
-    "play": "pwsh -NoProfile -File tools/run-windows.ps1"
+    "play": "pwsh -NoProfile -File tools/run-windows.ps1",
+    "debug": "pwsh -NoProfile -File tools/run-windows.ps1 -DebugPerf -Restart -Detach"
   }
 }
