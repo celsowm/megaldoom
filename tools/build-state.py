@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 
 
@@ -26,7 +27,38 @@ def has_objects(output: Path) -> bool:
     return output.is_dir() and next(output.rglob("*.o"), None) is not None
 
 
+def dependency_prerequisites(depfile: Path, root: Path) -> list[Path]:
+    try:
+        rule = depfile.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return []
+    rule = re.sub(r"\\\r?\n", " ", rule)
+    if ":" not in rule:
+        return []
+    _, prerequisites = rule.split(":", 1)
+    result = []
+    for token in prerequisites.split():
+        if token.endswith(":"):
+            continue
+        path = Path(token)
+        result.append(path if path.is_absolute() else root / path)
+    return result
+
+
+def has_stale_dependencies(output: Path, root: Path | None = None) -> bool:
+    if not output.is_dir():
+        return False
+    root = root or output.parent
+    for depfile in output.rglob("*.d"):
+        for prerequisite in dependency_prerequisites(depfile, root):
+            if not prerequisite.exists():
+                return True
+    return False
+
+
 def needs_clean(state: Path, output: Path, flags: str) -> bool:
+    if has_stale_dependencies(output):
+        return True
     return has_objects(output) and read_flags(state) != flags
 
 

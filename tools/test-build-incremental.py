@@ -136,6 +136,19 @@ with tempfile.TemporaryDirectory(prefix="megaldoom-build-test-") as folder:
     assert not build_state.rom_is_recorded(rom_state, rom)
     build_state.record(state, "")
     assert not build_state.needs_clean(state, objects, "")
+    stale_dep = objects / "src" / "frontend.d"
+    stale_dep.write_text(
+        "out/src/frontend.o: src/frontend.c res/frontend/frontend_layout.h\n",
+        encoding="utf-8",
+    )
+    assert build_state.needs_clean(state, objects, "")
+    cli_stale = subprocess.run(
+        [sys.executable, str(STATE_TOOL), "check", "--state", str(state),
+         "--output", str(objects), "--flags="],
+        text=True, capture_output=True, check=False,
+    )
+    assert cli_stale.returncode == 0 and cli_stale.stdout.strip() == "clean"
+    stale_dep.unlink()
     assert build_state.needs_clean(state, objects, "-DDEBUG_PERF=1")
     cli_check = subprocess.run(
         [sys.executable, str(STATE_TOOL), "check", "--state", str(state),
