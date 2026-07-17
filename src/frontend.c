@@ -8,7 +8,9 @@
 #define PANEL_X 8
 #define PANEL_Y 7
 #define MAIN_CURSOR_X 9
-#define MAIN_CURSOR_Y 11
+/* The skull art is 24px tall; anchor it one tile above the menu label so its
+ * visible head lines up with the selected entry instead of the gap below it. */
+#define MAIN_CURSOR_Y 10
 #define MAIN_CURSOR_STEP 4
 
 static void clear_plane_cpu(VDPPlane plane) {
@@ -40,6 +42,10 @@ static void wait_for_release(u16 mask) {
 }
 
 static u16 read_pressed(u16 *previous) {
+    /* SGDK only refreshes the controller state when JOY_update runs. Without
+     * this, the title screen keeps reading the state captured before its loop
+     * and Start (BlastEm Enter) is never observed as a new press. */
+    JOY_update();
     const u16 current = JOY_readJoypad(JOY_1);
     const u16 pressed = (u16)(current & ~(*previous));
     *previous = current;
