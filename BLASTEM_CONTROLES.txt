@@ -1,0 +1,22 @@
+BlastEm - controles padrão
+
+Genesis / Mega Drive:
+- Direções: setas
+- A: tecla A
+- B: tecla S
+- C: tecla D
+- X: tecla Q
+- Y: tecla W
+- Z: tecla E
+- Screenshot: P
+- Reset: Tab
+- Start: Enter
+
+Master System / Game Gear:
+- Direções: setas
+- A: tecla S
+- B: tecla D
+- Pause/Select: Z
+- Screenshot: P
+- Reset: Tab
+- Start: tecla S
