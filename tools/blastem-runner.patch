@@ -1,0 +1,88 @@
+diff --git a/Makefile b/Makefile
+--- a/Makefile
++++ b/Makefile
+@@
+-COREOBJS:=system.o genesis.o vdp.o io.o romdb.o hash.o xband.o realtec.o i2c.o nor.o $(M68KOBJS) \
++COREOBJS:=system.o genesis.o vdp.o io.o romdb.o hash.o xband.o realtec.o i2c.o nor.o megaldoom_runner.o $(M68KOBJS) \
+diff --git a/megaldoom_runner.h b/megaldoom_runner.h
+new file mode 100644
+--- /dev/null
++++ b/megaldoom_runner.h
+@@
++#ifndef MEGALDOOM_RUNNER_H_
++#define MEGALDOOM_RUNNER_H_
++#include <stdint.h>
++#include "system.h"
++void megaldoom_route_load(const char *path);
++void megaldoom_runner_set_report(const char *path);
++void megaldoom_runner_set_mailbox(uint32_t address, uint32_t bytes);
++void megaldoom_runner_set_capture(const char *directory, uint32_t every);
++void megaldoom_runner_set_capture_every(uint32_t every);
++void megaldoom_runner_on_frame(system_header *system, uint32_t frame, uint32_t cycles);
++void megaldoom_runner_finish(void);
++#endif
+diff --git a/megaldoom_runner.c b/megaldoom_runner.c
+new file mode 100644
+--- /dev/null
++++ b/megaldoom_runner.c
+@@
++#include "megaldoom_runner.h"
++#include "genesis.h"
++#include "io.h"
++#include "render.h"
++#include "util.h"
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++typedef struct { uint32_t *masks, count, active, first, last, pc[64], mailbox, bytes; char *report, *capture, hex[1025]; uint32_t every; } state_t;
++static state_t s;
++static char *dup(const char *v) { size_t n=strlen(v)+1; char *r=malloc(n); if(r) memcpy(r,v,n); return r; }
++void megaldoom_route_load(const char *p) { FILE *f=fopen(p,"r"); uint32_t n,m,cap=0; if(!f) fatal_error("Could not open route %s\n",p); while(fscanf(f,"%u %x",&n,&m)==2) { if(n>=cap) { uint32_t x=cap?cap:256; while(n>=x)x*=2; s.masks=realloc(s.masks,x*4); memset(s.masks+cap,0,(x-cap)*4); cap=x; } s.masks[n]=m; s.count=n+1; } fclose(f); }
++void megaldoom_runner_set_report(const char *p) { s.report=dup(p); }
++void megaldoom_runner_set_mailbox(uint32_t a,uint32_t b) { s.mailbox=a;s.bytes=b>512?512:b; }
++void megaldoom_runner_set_capture(const char *p,uint32_t e) { s.capture=dup(p);s.every=e; }
++void megaldoom_runner_set_capture_every(uint32_t e) { s.every=e; }
++void megaldoom_runner_on_frame(system_header *h,uint32_t f,uint32_t c) { static uint32_t old; static const uint8_t b[]={DPAD_UP,DPAD_DOWN,DPAD_LEFT,DPAD_RIGHT,BUTTON_A,BUTTON_B,BUTTON_C,BUTTON_START,BUTTON_X,BUTTON_Y,BUTTON_Z,BUTTON_MODE}; uint32_t m=f<s.count?s.masks[f]:0; for(uint8_t i=0;i<12;i++)if((m&(1u<<i))!=(old&(1u<<i)) { if(m&(1u<<i))h->gamepad_down(h,1,b[i]);else h->gamepad_up(h,1,b[i]); } old=m; if(!s.active++)s.first=c;s.last=c; if(h->type==SYSTEM_GENESIS){genesis_context*g=(genesis_context*)h;s.pc[(g->m68k->last_prefetch_address>>1)&63]++; if(s.mailbox>=0xFF0000&&s.bytes){uint32_t o=s.mailbox-0xFF0000; static const char x[]="0123456789abcdef";for(uint32_t i=0;i<s.bytes&&o+i<RAM_WORDS*2;i++){uint8_t v=((uint8_t*)g->work_ram)[(o+i)^1];s.hex[2*i]=x[v>>4];s.hex[2*i+1]=x[v&15];}}} if(s.capture&&s.every&&!(f%s.every)){char p[1024];snprintf(p,sizeof(p),"%s/frame-%06u.ppm",s.capture,f);render_save_screenshot(p);} }
++void megaldoom_runner_finish(void) { if(!s.report)return;FILE*f=fopen(s.report,"w");if(!f)return;fprintf(f,"{\"frames\":%u,\"cycles\":%u,\"pcHistogram\":[",s.active,s.last-s.first);for(uint32_t i=0;i<64;i++)fprintf(f,"%s%u",i?",":"",s.pc[i]);fprintf(f,"],\"mailbox\":\"%s\"}\n",s.hex);fclose(f); }
+diff --git a/genesis.c b/genesis.c
+--- a/genesis.c
++++ b/genesis.c
+@@
+ #include "event_log.h"
++#include "megaldoom_runner.h"
+@@
+ 		gen->last_frame = v_context->frame;
++		megaldoom_runner_on_frame(&gen->header, gen->last_frame, mclks);
+@@
+ 		gen->last_frame = v_context->frame;
++		megaldoom_runner_on_frame(&gen->header, gen->last_frame, mclks);
+@@
+-				exit(0);
++				megaldoom_runner_finish();
++				exit(0);
+@@
+-				exit(0);
++				megaldoom_runner_finish();
++				exit(0);
+diff --git a/blastem.c b/blastem.c
+--- a/blastem.c
++++ b/blastem.c
+@@
+ #include "event_log.h"
++#include "megaldoom_runner.h"
+@@
+ 	for (int i = 1; i < argc; i++) {
++		if (!strcmp(argv[i], "--md-route") || !strcmp(argv[i], "--md-report") || !strcmp(argv[i], "--md-capture-dir")) {
++			if (++i >= argc) fatal_error("%s needs a value\n", argv[i-1]);
++			if (!strcmp(argv[i-1], "--md-route")) megaldoom_route_load(argv[i]);
++			else if (!strcmp(argv[i-1], "--md-report")) megaldoom_runner_set_report(argv[i]);
++			else megaldoom_runner_set_capture(argv[i], 1);
++			continue;
++		}
++		if (!strcmp(argv[i], "--md-capture-every")) { if (++i >= argc) fatal_error("--md-capture-every needs a value\n"); megaldoom_runner_set_capture_every(atoi(argv[i])); continue; }
++		if (!strcmp(argv[i], "--md-mailbox")) { uint32_t address, bytes = 128; if (++i >= argc || sscanf(argv[i], "%x:%u", &address, &bytes) < 1) fatal_error("--md-mailbox needs ADDRESS[:BYTES]\n"); megaldoom_runner_set_mailbox(address, bytes); continue; }
+@@
+-	return 0;
++	megaldoom_runner_finish();
++	return 0;
+ }

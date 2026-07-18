@@ -107,6 +107,29 @@ filesystem for speed, and copies the verified result to
 `.tools/blastem` remains the normal interactive fallback until the custom
 Windows frontend/toolchain is enabled.
 
+To build that custom, isolated Windows frontend, run:
+
+```powershell
+npm run blastem:windows
+```
+
+It downloads a pinned LLVM MinGW-w64 toolchain plus SDL2 and GLEW to the
+ignored `.externals/toolchain` directory and produces
+`.externals/blastem/build/windows/blastem.exe`. It never changes a global
+compiler installation.
+
+The custom emulator accepts a deterministic route (`frame hexadecimalMask` per
+line). For example, `0 0008` holds Right on emulated frame zero. Run a fixed,
+headless route and write its cycle/PC report with:
+
+```powershell
+npm run blastem:route -- -Route tools\routes\second-room.txt -Frames 600
+```
+
+Use `-Mailbox FF0000:128` to include a DebugPerf RAM range in the JSON report;
+`-CaptureDir out\route-frames -CaptureEvery 60` additionally writes periodic
+PPM frames. This path uses no desktop focus or `SendKeys`.
+
 The native sector renderer is the only renderer and needs no `-SectorRenderer`
 switch.
 

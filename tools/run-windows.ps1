@@ -57,6 +57,8 @@ function Find-Rom {
 function Find-LocalEmulator([string]$Name) {
     switch ($Name) {
         "BlastEm" {
+            $custom = Join-Path $Root ".externals\blastem\build\windows\blastem.exe"
+            if (Test-Path $custom) { return $custom }
             $path = Join-Path $Root ".tools\blastem\blastem.exe"
             if (Test-Path $path) { return $path }
         }

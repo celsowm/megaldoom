@@ -10,6 +10,9 @@
     "assets": "pwsh -NoProfile -File tools/convert-freedoom-assets.ps1",
     "play": "pwsh -NoProfile -File tools/run-windows.ps1",
     "debug": "pwsh -NoProfile -File tools/run-windows.ps1 -DebugPerf -Restart -Detach",
-    "blastem:core": "pwsh -NoProfile -File tools/build-blastem-dev.ps1"
+    "blastem:core": "pwsh -NoProfile -File tools/build-blastem-dev.ps1",
+    "blastem:toolchain": "pwsh -NoProfile -File tools/setup-blastem-toolchain.ps1",
+    "blastem:windows": "pwsh -NoProfile -File tools/build-blastem-windows.ps1 -Setup",
+    "blastem:route": "pwsh -NoProfile -File tools/run-blastem-route.ps1"
   }
 }
