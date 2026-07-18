@@ -141,6 +141,63 @@ function New-WeaponOps([int[]]$Pixels) {
     }
 }
 
+function New-WeaponTileSet([int[]]$IdlePixels, [int[]]$FirePixels) {
+    $drawX = Get-DefineValue $hudText "FREEDOOM_WEAPON_DRAW_X"
+    $drawY = Get-DefineValue $hudText "FREEDOOM_WEAPON_DRAW_Y"
+    $drawW = Get-DefineValue $hudText "FREEDOOM_WEAPON_DRAW_W"
+    $drawH = Get-DefineValue $hudText "FREEDOOM_WEAPON_DRAW_H"
+    $tileX = $drawX -shr 3
+    $tileY = $drawY -shr 3
+    $tileW = (($drawX + $drawW - 1) -shr 3) - $tileX + 1
+    $tileH = (($drawY + $drawH - 1) -shr 3) - $tileY + 1
+    $unique = New-Object System.Collections.Generic.List[object]
+    $indexByRows = @{}
+    $maps = @()
+
+    foreach ($pixels in @($IdlePixels, $FirePixels)) {
+        $map = New-Object System.Collections.Generic.List[int]
+        for ($localY = 0; $localY -lt $tileH; $localY++) {
+            for ($localX = 0; $localX -lt $tileW; $localX++) {
+                [uint32[]]$rows = @(0, 0, 0, 0, 0, 0, 0, 0)
+                for ($row = 0; $row -lt 8; $row++) {
+                    [uint32]$packed = 0
+                    $py = (($tileY + $localY) * 8) + $row
+                    for ($col = 0; $col -lt 8; $col++) {
+                        $px = (($tileX + $localX) * 8) + $col
+                        $texel = 0
+                        if ($px -ge 0 -and $px -lt $viewPxW -and
+                            $py -ge 0 -and $py -lt $viewPxH) {
+                            $texel = $pixels[($py * $viewPxW) + $px] -band 0x0F
+                        }
+                        $packed = [uint32](($packed -shl 4) -bor $texel)
+                    }
+                    $rows[$row] = $packed
+                }
+                $key = ($rows | ForEach-Object { $_.ToString("X8") }) -join ""
+                if ($key -eq ("00000000" * 8)) {
+                    [void]$map.Add(0xFFFF)
+                } else {
+                    if (-not $indexByRows.ContainsKey($key)) {
+                        $indexByRows[$key] = $unique.Count
+                        [void]$unique.Add($rows)
+                    }
+                    [void]$map.Add([int]$indexByRows[$key])
+                }
+            }
+        }
+        $maps += ,$map.ToArray()
+    }
+
+    return [pscustomobject]@{
+        TileX = $tileX
+        TileY = $tileY
+        TileW = $tileW
+        TileH = $tileH
+        Tiles = $unique.ToArray()
+        Maps = $maps
+    }
+}
+
 function New-OverlayOps([string]$Kind, [int]$Color) {
     $masks = @{}
     $values = @{}
@@ -226,8 +283,7 @@ $damageColor = Get-DefineValue $worldText "MEGALDOOM_WORLD_COLOR_DAMAGE"
 $warningColor = Get-DefineValue $worldText "MEGALDOOM_WORLD_COLOR_WARNING"
 $idlePixels = Get-ArrayValues $hudText "FREEDOOM_WEAPON_IDLE"
 $firePixels = Get-ArrayValues $hudText "FREEDOOM_WEAPON_FIRE"
-$idleOps = New-WeaponOps $idlePixels
-$fireOps = New-WeaponOps $firePixels
+$weaponTiles = New-WeaponTileSet $idlePixels $firePixels
 $damageOps = New-OverlayOps "damage" $damageColor
 $lowHealthOps = New-OverlayOps "low_health" $warningColor
 
@@ -257,28 +313,20 @@ foreach ($line in (New-PairTileRows)) { [void]$lines.Add($line) }
 foreach ($line in (New-WallSamplingRows)) { [void]$lines.Add($line) }
 [void]$lines.Add("};")
 [void]$lines.Add("")
-[void]$lines.Add("static const u16 MEGALDOOM_WEAPON_DST_IDLE[$($idleOps.Count)] = {")
-[void]$lines.Add(((Format-FlatU16 $idleOps.Dst) + ","))
+[void]$lines.Add("#define MEGALDOOM_WEAPON_TILE_X $($weaponTiles.TileX)")
+[void]$lines.Add("#define MEGALDOOM_WEAPON_TILE_Y $($weaponTiles.TileY)")
+[void]$lines.Add("#define MEGALDOOM_WEAPON_TILE_W $($weaponTiles.TileW)")
+[void]$lines.Add("#define MEGALDOOM_WEAPON_TILE_H $($weaponTiles.TileH)")
+[void]$lines.Add("#define MEGALDOOM_WEAPON_TILE_COUNT $($weaponTiles.Tiles.Count)")
+[void]$lines.Add("static const u32 MEGALDOOM_WEAPON_TILES[MEGALDOOM_WEAPON_TILE_COUNT][8] = {")
+foreach ($tile in $weaponTiles.Tiles) {
+    [void]$lines.Add(((Format-U32Row $tile) + ","))
+}
 [void]$lines.Add("};")
-[void]$lines.Add("static const u16 MEGALDOOM_WEAPON_DST_FIRE[$($fireOps.Count)] = {")
-[void]$lines.Add(((Format-FlatU16 $fireOps.Dst) + ","))
+[void]$lines.Add("static const u16 MEGALDOOM_WEAPON_TILEMAP[2][MEGALDOOM_WEAPON_TILE_W * MEGALDOOM_WEAPON_TILE_H] = {")
+[void]$lines.Add(("    {" + (($weaponTiles.Maps[0] | ForEach-Object { $_.ToString() }) -join ", ") + "},"))
+[void]$lines.Add(("    {" + (($weaponTiles.Maps[1] | ForEach-Object { $_.ToString() }) -join ", ") + "},"))
 [void]$lines.Add("};")
-[void]$lines.Add("")
-[void]$lines.Add("static const u32 MEGALDOOM_WEAPON_VALUE_IDLE[$($idleOps.Count)] = {")
-[void]$lines.Add(((Format-FlatU32 $idleOps.Value) + ","))
-[void]$lines.Add("};")
-[void]$lines.Add("static const u32 MEGALDOOM_WEAPON_VALUE_FIRE[$($fireOps.Count)] = {")
-[void]$lines.Add(((Format-FlatU32 $fireOps.Value) + ","))
-[void]$lines.Add("};")
-[void]$lines.Add("")
-[void]$lines.Add("static const u32 MEGALDOOM_WEAPON_CLEAR_IDLE[$($idleOps.Count)] = {")
-[void]$lines.Add(((Format-FlatU32 $idleOps.Mask) + ","))
-[void]$lines.Add("};")
-[void]$lines.Add("static const u32 MEGALDOOM_WEAPON_CLEAR_FIRE[$($fireOps.Count)] = {")
-[void]$lines.Add(((Format-FlatU32 $fireOps.Mask) + ","))
-[void]$lines.Add("};")
-[void]$lines.Add("")
-[void]$lines.Add("static const u16 MEGALDOOM_WEAPON_OP_COUNT[2] = {$($idleOps.Count), $($fireOps.Count)};")
 [void]$lines.Add("")
 [void]$lines.Add("typedef struct {")
 [void]$lines.Add("    u16 dst;")

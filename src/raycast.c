@@ -82,11 +82,14 @@ void player_apply_world_push(PlayerState *player, s32 dx, s32 dy) {
     const s32 next_x = player->x + dx;
     const s32 next_y = player->y + dy;
 
-    if (!is_blocked_at(next_x, player->y)) {
+    // The common free-space case needs one BSP/prop query. Preserve Doom-like
+    // wall sliding with the old per-axis retries only after a combined move is
+    // actually blocked.
+    if (!is_blocked_at(next_x, next_y)) {
         player->x = next_x;
-    }
-
-    if (!is_blocked_at(player->x, next_y)) {
         player->y = next_y;
+        return;
     }
+    if (!is_blocked_at(next_x, player->y)) player->x = next_x;
+    if (!is_blocked_at(player->x, next_y)) player->y = next_y;
 }

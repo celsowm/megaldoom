@@ -16,16 +16,18 @@ def main():
     assert "PLAYER_CONTROL_TOGGLE_AUTOMAP 0x0020" in HEADER
     assert "JOY_getJoypadType(JOY_1) == JOY_TYPE_PAD6" in SOURCE
 
-    # A is a held 3/2 run modifier, not the old strafe-left binding. C only
-    # strafes while paired with a lateral direction and that chord blocks turn.
-    assert "#define RUN_SPEED_NUMERATOR 3" in SOURCE
-    assert "#define RUN_SPEED_DENOMINATOR 2" in SOURCE
+    # A selects Doom's 50-unit run command (2x walk), not the old strafe-left
+    # binding. C only strafes with a lateral direction and blocks turning.
+    assert "#define DOOM_FORWARD_WALK 25" in SOURCE
+    assert "#define DOOM_FORWARD_RUN 50" in SOURCE
+    assert "#define DOOM_STRAFE_WALK 24" in SOURCE
+    assert "#define DOOM_STRAFE_RUN 40" in SOURCE
     assert "const bool running = ((joy & BUTTON_A) != 0) && !three_button_map_chord;" in SOURCE
     assert "const bool strafing = ((joy & BUTTON_C) != 0)" in SOURCE
     assert "const bool turning_left = !strafing" in SOURCE
     assert "const bool turning_right = !strafing" in SOURCE
-    assert "target_strafe -= strafe_max;" in SOURCE
-    assert "target_strafe += strafe_max;" in SOURCE
+    assert "target_strafe -= strafe_command;" in SOURCE
+    assert "target_strafe += strafe_command;" in SOURCE
     assert "((joy & BUTTON_C) != 0) && ((s_previous_joy & BUTTON_C) == 0) && !strafing" in SOURCE
 
     # The 3-button A+B+C chord is edge-latched and suppresses its ordinary

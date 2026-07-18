@@ -12,6 +12,45 @@ typedef struct {
 // sorting every active map thing.
 static BillboardProjectionOrder s_order[BILLBOARD_MAX_PROJECTED_OBJECTS];
 
+// Max-depth segment tree for the 80 sampled wall columns. A billboard span is
+// visible iff its depth is smaller than the maximum wall depth in that span.
+// This replaces as many as 80 dependent RAM reads per active THING with an
+// exact O(log 128) query.
+#define BILLBOARD_DEPTH_TREE_LEAVES 128
+static u16 s_wall_depth_max[BILLBOARD_DEPTH_TREE_LEAVES * 2];
+
+static void billboard_build_depth_tree(const RayColumn *columns) {
+    for (u16 i = 0; i < BILLBOARD_DEPTH_TREE_LEAVES; i++) {
+        s_wall_depth_max[BILLBOARD_DEPTH_TREE_LEAVES + i] =
+            (i < (RAY_VIEW_COLS / RAY_COL_STRIDE)) ?
+                columns[i * RAY_COL_STRIDE].depth : 0;
+    }
+    for (u16 i = BILLBOARD_DEPTH_TREE_LEAVES - 1; i > 0; i--) {
+        const u16 left = s_wall_depth_max[i << 1];
+        const u16 right = s_wall_depth_max[(i << 1) + 1];
+        s_wall_depth_max[i] = (left > right) ? left : right;
+    }
+}
+
+static u16 billboard_depth_range_max(u16 left, u16 right) {
+    u16 maximum = 0;
+    left = (u16)(left + BILLBOARD_DEPTH_TREE_LEAVES);
+    right = (u16)(right + BILLBOARD_DEPTH_TREE_LEAVES);
+    while (left <= right) {
+        if (left & 1) {
+            if (s_wall_depth_max[left] > maximum) maximum = s_wall_depth_max[left];
+            left++;
+        }
+        if ((right & 1) == 0) {
+            if (s_wall_depth_max[right] > maximum) maximum = s_wall_depth_max[right];
+            right--;
+        }
+        left >>= 1;
+        right >>= 1;
+    }
+    return maximum;
+}
+
 typedef struct {
     s32 object_x;
     s32 object_y;
@@ -174,14 +213,10 @@ static bool billboard_span_has_visible_block(const BillboardMeasure *measure,
     if (left < 0) left = 0;
     if (right >= RAY_VIEW_COLS) right = RAY_VIEW_COLS - 1;
 
-    const u16 first = (u16)(left & ~(RAY_COL_STRIDE - 1));
-    const u16 last = (u16)(right & ~(RAY_COL_STRIDE - 1));
-    for (u16 col = first; col <= last; col += RAY_COL_STRIDE) {
-        if (measure->forward < columns[col].depth) {
-            return TRUE;
-        }
-    }
-    return FALSE;
+    const u16 first = (u16)left / RAY_COL_STRIDE;
+    const u16 last = (u16)right / RAY_COL_STRIDE;
+    (void)columns;
+    return (bool)(measure->forward < billboard_depth_range_max(first, last));
 }
 
 u16 billboard_project_scene(const PlayerState *player,
@@ -210,6 +245,7 @@ u16 billboard_project_scene(const PlayerState *player,
     const s16 sin_a = fx_sin(player->angle);
 
     billboard_projection_cache_begin(player);
+    billboard_build_depth_tree(columns);
 
     if (budget == 0) {
         return 0;

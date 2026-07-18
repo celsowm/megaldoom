@@ -92,9 +92,11 @@ def main():
         "g_debug_prop_collision_scanned",
     ):
         assert symbol in projection_c + enemy_c + (ROOT / "src/billboard.c").read_text()
-    assert '"RR=%02X Ov=%03u/%03u/%03u"' in perf_c
-    assert '"Qc=%03u/%03u Ep=%03u/%03u/%03u/%03u"' in perf_c
-    assert '"Es=%04lu Bc=%03u/%03u/%03u"' in perf_c
+    assert "sprintf" not in perf_c
+    assert "PERF_OVERLAY_REFRESH_FRAMES 30" in perf_c
+    assert "VDP_setTileMapDataRect" in perf_c
+    for label in ('TXT("RR=")', 'TXT("Qc=")', 'TXT("Es=")', 'TXT(" P95=")'):
+        assert label in perf_c
 
     # SRP boundaries: main requests redraws through one policy owner, renderer
     # scene records metrics without owning aggregation, and barrels animate in

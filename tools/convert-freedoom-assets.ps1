@@ -172,6 +172,17 @@ $worldPalette = @([regex]::Matches($worldPaletteMatch.Groups["body"].Value, '0x[
 if ($worldPalette.Count -ne 16) {
     throw "Expected 16 PAL3 colors, found $($worldPalette.Count)."
 }
+$worldPaletteHex = ($worldPalette | ForEach-Object {
+    "{0:X2}{1:X2}{2:X2}" -f $_[0], $_[1], $_[2]
+}) -join ","
+$worldMixLut = (& python (Join-Path $PSScriptRoot "world-palette-lut.py") `
+    --palette $worldPaletteHex) | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or $worldMixLut.first.Count -ne 32768) {
+    throw "Could not build perceptual PAL3 lookup."
+}
+$worldBayer = @(
+    @(0, 8, 2, 10), @(12, 4, 14, 6), @(3, 11, 1, 9), @(15, 7, 13, 5)
+)
 
 $palette = @(
     @(0x00, 0x00, 0x00),
@@ -276,21 +287,25 @@ function Get-NearestOpaqueIndexInPalette([System.Drawing.Color]$Color, $Palette)
     return $bestIndex
 }
 
-function Get-NearestWorldPaletteIndex([System.Drawing.Color]$Color, [bool]$AllowTransparent = $true) {
-    $start = if ($AllowTransparent) { 0 } else { 1 }
-    $bestIndex = $start
-    $bestDistance = [int]::MaxValue
-    for ($i = $start; $i -lt $worldPalette.Count; $i++) {
-        $dr = [int]$Color.R - $worldPalette[$i][0]
-        $dg = [int]$Color.G - $worldPalette[$i][1]
-        $db = [int]$Color.B - $worldPalette[$i][2]
-        $distance = ($dr * $dr) + ($dg * $dg) + ($db * $db)
-        if ($distance -lt $bestDistance) {
-            $bestDistance = $distance
-            $bestIndex = $i
-        }
+function Get-NearestWorldPaletteIndex([System.Drawing.Color]$Color,
+                                      [bool]$AllowTransparent = $true,
+                                      [int]$X = -1, [int]$Y = -1) {
+    if ($AllowTransparent -and $Color.A -lt 128) { return 0 }
+    $r5 = [int][Math]::Floor(([int]$Color.R * 31) / 255)
+    $g5 = [int][Math]::Floor(([int]$Color.G * 31) / 255)
+    $b5 = [int][Math]::Floor(([int]$Color.B * 31) / 255)
+    $key = ($r5 * 1024) + ($g5 * 32) + $b5
+    $first = [int]$worldMixLut.first[$key]
+    $second = [int]$worldMixLut.second[$key]
+    $coverage = [int]$worldMixLut.coverage[$key]
+    if (($X -ge 0) -and ($Y -ge 0)) {
+        return $(if ($worldBayer[$Y -band 3][$X -band 3] -lt $coverage) {
+            $second
+        } else {
+            $first
+        })
     }
-    return $bestIndex
+    return $(if ($coverage -ge 8) { $second } else { $first })
 }
 
 function Get-PreservedAspectPlacement([int]$SourceWidth, [int]$SourceHeight,
@@ -384,7 +399,7 @@ function Convert-Image([string]$Path, [int]$Width, [int]$Height, [bool]$UseAlpha
                 if (-not $UseAlphaTransparency) {
                     $avg = [System.Drawing.Color]::FromArgb(
                         [int]($sumR / $count), [int]($sumG / $count), [int]($sumB / $count))
-                    $index = Get-NearestWorldPaletteIndex $avg $true
+                    $index = Get-NearestWorldPaletteIndex $avg $true $x $y
                 } else {
                     # Sprites: a texel is transparent only when the covered area is
                     # mostly transparent. Otherwise average the OPAQUE pixels so edge
@@ -398,7 +413,7 @@ function Convert-Image([string]$Path, [int]$Width, [int]$Height, [bool]$UseAlpha
                             $avg = [System.Drawing.Color]::FromArgb(
                                 [int]($sumR / $count), [int]($sumG / $count), [int]($sumB / $count))
                         }
-                        $index = Get-NearestWorldPaletteIndex $avg $false
+                        $index = Get-NearestWorldPaletteIndex $avg $false $x $y
                     }
                 }
 
@@ -471,27 +486,18 @@ function Get-SpriteOffset([string]$Name) {
     }
 }
 
-function Get-WeaponPaletteIndex([System.Drawing.Color]$Color, [bool]$FireFrame) {
+function Get-WeaponPaletteIndex([System.Drawing.Color]$Color, [bool]$FireFrame,
+                                [int]$X = -1, [int]$Y = -1) {
     # Transparency is decided ONLY by alpha. Dark opaque pixels (the pistol's
     # metal/shadow) must stay solid, otherwise the gun renders see-through.
     if ($Color.A -lt 128) {
         return 0
     }
 
-    if ($FireFrame) {
-        # Muzzle-flash warm ramp, mapped onto PAL3 (FREEDOOM_WORLD_PALETTE). This
-        # branch only ever sees flash pixels: the gun body is coloured by
-        # Get-NearestWorldPaletteIndex directly in Convert-WeaponOverlayFire.
-        #   13 = light gray (white-hot core), 15 = gold (yellow),
-        #   14 = bright red, 8 = red, 2 = dark red.
-        $r = [int]$Color.R; $g = [int]$Color.G; $b = [int]$Color.B
-        if (($r -gt 225) -and ($g -gt 210) -and ($b -gt 160)) { return 13 }
-        if (($r -gt 190) -and ($g -gt 125)) { return 15 }
-        if (($r -gt 150) -and ($g -lt 100)) { return 14 }
-        if (($r -gt 100) -and ($g -lt 60))  { return 8 }
-        if (($r -gt 70)  -and ($g -lt 40))  { return 2 }
-    }
-    return Get-NearestWorldPaletteIndex $Color $false
+    # Fire and weapon pixels use the same generated perceptual palette. Damage
+    # red and warning amber remain available as reserved warm endpoints.
+    $null = $FireFrame
+    return Get-NearestWorldPaletteIndex $Color $false $X $Y
 }
 
 function Convert-WeaponOverlay([string]$Path, [bool]$FireFrame) {
@@ -515,7 +521,7 @@ function Convert-WeaponOverlay([string]$Path, [bool]$FireFrame) {
                     $localY = $y - $offsetY
                     $srcX = [Math]::Min($image.Width - 1, [int](($localX * $image.Width) / $drawWidth))
                     $srcY = [Math]::Min($image.Height - 1, [int](($localY * $image.Height) / $drawHeight))
-                    $index = Get-WeaponPaletteIndex $image.GetPixel($srcX, $srcY) $FireFrame
+                    $index = Get-WeaponPaletteIndex $image.GetPixel($srcX, $srcY) $FireFrame $x $y
                 }
 
                 $values.Add($index.ToString())
@@ -578,7 +584,7 @@ function Convert-WeaponOverlayFire([string]$GunPath, [string]$FlashPath) {
                     if (($gx -ge 0) -and ($gx -lt $gunW) -and ($gy -ge 0) -and ($gy -lt $gunH)) {
                         $gp = $gunImage.GetPixel($gx, $gy)
                         if ($gp.A -ge 128) {
-                            $index = Get-NearestWorldPaletteIndex $gp $false
+                            $index = Get-NearestWorldPaletteIndex $gp $false $x $y
                         }
                     }
 
@@ -588,7 +594,7 @@ function Convert-WeaponOverlayFire([string]$GunPath, [string]$FlashPath) {
                     if (($fx -ge 0) -and ($fx -lt $flW) -and ($fy -ge 0) -and ($fy -lt $flH)) {
                         $fp = $flashImage.GetPixel($fx, $fy)
                         if ($fp.A -ge 128) {
-                            $index = Get-WeaponPaletteIndex $fp $true
+                            $index = Get-WeaponPaletteIndex $fp $true $x $y
                         }
                     }
                 }
@@ -816,8 +822,13 @@ $billboardKeyRows = Convert-Image $BillboardKeySourcePath 16 16 $true
 $billboardDecorRows = Convert-Image $BillboardDecorSourcePath 16 16 $true
 $billboardWorldW = 24
 $billboardWorldH = 48
+$billboardPickupCount = 11
 $billboardWorldBlocks = New-Object System.Collections.Generic.List[string]
 $billboardGeometryBlocks = New-Object System.Collections.Generic.List[string]
+$billboardPickupPostOffsetBlocks = New-Object System.Collections.Generic.List[string]
+$billboardPickupPosts = New-Object System.Collections.Generic.List[string]
+$billboardPickupUsePosts = New-Object System.Collections.Generic.List[string]
+$billboardWorldIndex = 0
 foreach ($spec in $BillboardWorldSpecs) {
     # Keep the preserved-aspect patch bottom-aligned inside the compact atlas.
     # Runtime placement uses the separate WAD origin metadata below, so this
@@ -835,6 +846,33 @@ foreach ($spec in $BillboardWorldSpecs) {
         "    {$($offset.width), $($offset.height), $($offset.leftOffset), $($offset.topOffset), " +
         "$($placement.X), $($placement.Y), $($placement.Width), $($placement.Height)}"
     )
+    if ($billboardWorldIndex -lt $billboardPickupCount) {
+        $matrix = @()
+        foreach ($row in $rows) {
+            $matrix += ,@([regex]::Matches($row, '\d+') | ForEach-Object { [int]$_.Value })
+        }
+        $offsets = New-Object System.Collections.Generic.List[string]
+        $opaqueCount = 0
+        for ($x = 0; $x -lt $billboardWorldW; $x++) {
+            $offsets.Add($billboardPickupPosts.Count.ToString())
+            $y = 0
+            while ($y -lt $billboardWorldH) {
+                while (($y -lt $billboardWorldH) -and ($matrix[$y][$x] -eq 0)) { $y++ }
+                if ($y -ge $billboardWorldH) { break }
+                $top = $y
+                while (($y -lt $billboardWorldH) -and ($matrix[$y][$x] -ne 0)) {
+                    $opaqueCount++
+                    $y++
+                }
+                $billboardPickupPosts.Add("    {$top, $($y - $top)}")
+            }
+        }
+        $offsets.Add($billboardPickupPosts.Count.ToString())
+        $billboardPickupPostOffsetBlocks.Add("    {" + ($offsets -join ", ") + "}")
+        $cropArea = [Math]::Max(1, $placement.Width * $placement.Height)
+        $billboardPickupUsePosts.Add($(if (($opaqueCount * 100) -lt ($cropArea * 80)) { "1" } else { "0" }))
+    }
+    $billboardWorldIndex++
 }
 # Enemy (zombieman) animation frames, all scaled into the same 24x48 box.
 # Order MUST match the pose indices in src/billboard_internal.h:
@@ -950,6 +988,24 @@ $($billboardDecorRows -join ",`r`n")
 // $((($BillboardWorldSpecs | ForEach-Object { $_.Name }) -join ", "))
 static const u8 FREEDOOM_BILLBOARD_WORLD_TEXTURES[FREEDOOM_BILLBOARD_WORLD_TEXTURE_COUNT][FREEDOOM_BILLBOARD_WORLD_H][FREEDOOM_BILLBOARD_WORLD_W] = {
 $($billboardWorldBlocks -join ",`r`n")
+};
+
+// Doom-style opaque column posts for the 11 collectible world textures.
+// Offsets address FREEDOOM_BILLBOARD_PICKUP_POSTS; each post is {top, length}.
+#define FREEDOOM_BILLBOARD_PICKUP_TEXTURE_COUNT $billboardPickupCount
+#define FREEDOOM_BILLBOARD_PICKUP_POST_COUNT $($billboardPickupPosts.Count)
+static const u16 FREEDOOM_BILLBOARD_PICKUP_POST_OFFSETS
+    [FREEDOOM_BILLBOARD_PICKUP_TEXTURE_COUNT][FREEDOOM_BILLBOARD_WORLD_W + 1] = {
+$($billboardPickupPostOffsetBlocks -join ",`r`n")
+};
+static const u8 FREEDOOM_BILLBOARD_PICKUP_POSTS
+    [FREEDOOM_BILLBOARD_PICKUP_POST_COUNT][2] = {
+$($billboardPickupPosts -join ",`r`n")
+};
+// Dense sprites stay on the row/tile packer; sparse sprites use column posts.
+static const u8 FREEDOOM_BILLBOARD_PICKUP_USE_POSTS
+    [FREEDOOM_BILLBOARD_PICKUP_TEXTURE_COUNT] = {
+    $($billboardPickupUsePosts -join ", ")
 };
 
 #define FREEDOOM_BILLBOARD_ENEMY_W $BillboardEnemyW

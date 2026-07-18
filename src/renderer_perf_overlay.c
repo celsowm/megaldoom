@@ -4,106 +4,143 @@
 
 #if DEBUG_PERF
 
-#define PERF_OVERLAY_REFRESH_FRAMES 4
+#define PERF_OVERLAY_W 40
+#define PERF_OVERLAY_H 11
+#define PERF_OVERLAY_REFRESH_FRAMES 30
+
+static u16 s_perf_tilemap[PERF_OVERLAY_W * PERF_OVERLAY_H];
+static char s_line[PERF_OVERLAY_W];
+static u16 s_cursor;
+
+static void line_begin(void) {
+    for (u16 i = 0; i < PERF_OVERLAY_W; i++) s_line[i] = ' ';
+    s_cursor = 0;
+}
+
+static void put_char(char value) {
+    if (s_cursor < PERF_OVERLAY_W) s_line[s_cursor++] = value;
+}
+
+static void put_text(const char *value) {
+    while (*value != 0 && s_cursor < PERF_OVERLAY_W) put_char(*value++);
+}
+
+static void put_dec(u32 value, u16 width) {
+    static const u16 powers[5] = {10000, 1000, 100, 10, 1};
+    const u16 start = (width >= 5) ? 0 : (u16)(5 - width);
+    // divu traps when the quotient does not fit in 16 bits. Stage counters are
+    // displayed as saturated 16-bit values, which is also enough to expose a
+    // missed frame without making the diagnostics path unsafe.
+    if (value > 65535u) value = 65535u;
+    for (u16 i = start; i < 5; i++) {
+        const u16 digit = divu(value, powers[i]);
+        put_char((char)('0' + digit));
+        value -= (u32)digit * powers[i];
+    }
+}
+
+static void put_hex(u16 value, u16 width) {
+    static const char digits[] = "0123456789ABCDEF";
+    while (width > 0) {
+        width--;
+        put_char(digits[(value >> (width * 4)) & 0x0F]);
+    }
+}
+
+static void line_commit(u16 row) {
+    u16 *target = &s_perf_tilemap[row * PERF_OVERLAY_W];
+    for (u16 i = 0; i < PERF_OVERLAY_W; i++) {
+        target[i] = TILE_ATTR_FULL(PAL0, FALSE, FALSE, FALSE,
+            TILE_FONT_INDEX + ((u8)s_line[i] - 32));
+    }
+}
+
+#define TXT(v) put_text(v)
+#define DEC(v,w) put_dec((u32)(v), (w))
 
 void renderer_draw_perf_overlay(bool frame_complete) {
+    static const char *const deep_labels[RENDERER_PERF_DEEP_COUNT] = {
+        "BS", "BX", "BR", "PM", "PF", "BP"
+    };
     static u16 refresh_counter;
-    char text[44];
     RendererPerfSnapshot perf;
+    u32 diagnostics_start;
+    char size_c;
+    char bank_c;
+    u16 displayed_deep_phase;
 
     if (!frame_complete) return;
     refresh_counter++;
-    if ((refresh_counter != 1) &&
-        ((refresh_counter & (PERF_OVERLAY_REFRESH_FRAMES - 1)) != 0)) return;
-
+    if ((refresh_counter != 1) && (refresh_counter < PERF_OVERLAY_REFRESH_FRAMES)) return;
+    refresh_counter = 0;
+    diagnostics_start = getSubTick();
     perf = renderer_get_perf_snapshot();
-    const char size_c = (perf.upload_dirty_tiles == 0) ? 'N'
-                        : (perf.upload_full ? 'F' : 'P');
-    const char bank_c = perf.upload_swap ? 'I' : 'A';
+    size_c = (perf.upload_dirty_tiles == 0) ? 'N' : (perf.upload_full ? 'F' : 'P');
+    bank_c = perf.upload_swap ? 'I' : 'A';
+    displayed_deep_phase = (perf.deep_phase == 0) ?
+        (RENDERER_PERF_DEEP_COUNT - 1) : (u16)(perf.deep_phase - 1);
 
-    sprintf(text, "V=%u Vm=%u X=%u Vup=0 %c-%c",
-            (unsigned int)perf.total_vblanks,
-            (unsigned int)perf.max_vblanks,
-            (unsigned int)perf.missed_deadlines,
-            size_c, bank_c);
-    VDP_drawTextFill(text, 0, 1, 32);
+    line_begin(); TXT("V="); DEC(perf.total_vblanks,2); TXT(" Av=");
+    DEC(perf.average_vblanks_x10 / 10,2); put_char('.'); DEC(perf.average_vblanks_x10 % 10,1);
+    TXT(" P95="); DEC(perf.p95_vblanks,2); TXT(" Vm="); DEC(perf.max_vblanks,2);
+    TXT(" X="); DEC(perf.missed_deadlines,4); line_commit(0);
 
-    sprintf(text, "G=%04lu C=%04lu P=%04lu",
-            (unsigned long)perf.gameplay_subticks,
-            (unsigned long)perf.cast_subticks,
-            (unsigned long)perf.pack_subticks);
-    VDP_drawTextFill(text, 0, 2, 32);
+    line_begin(); TXT("G="); DEC(perf.gameplay_subticks,5); TXT(" C=");
+    DEC(perf.cast_subticks,5); TXT(" P="); DEC(perf.pack_subticks,5); line_commit(1);
 
-    sprintf(text, "Pr=%04lu B=%04lu W=%04lu",
-            (unsigned long)perf.projection_subticks,
-            (unsigned long)perf.billboard_subticks,
-            (unsigned long)perf.weapon_subticks);
-    VDP_drawTextFill(text, 0, 3, 32);
+    line_begin(); TXT("Pr="); DEC(perf.projection_subticks,5); TXT(" B=");
+    DEC(perf.billboard_subticks,5); TXT(" W="); DEC(perf.weapon_subticks,5); line_commit(2);
 
-    sprintf(text, "D=%03u U=%03u R=%02u M=%03u Up=%04lu Ud=%04lu",
-            (unsigned int)perf.upload_dirty_tiles,
-            (unsigned int)perf.upload_tiles,
-            (unsigned int)perf.upload_runs,
-            (unsigned int)renderer_get_frame_modified_count(),
-            (unsigned long)perf.upload_prepare_subticks,
-            (unsigned long)perf.dma_wait_subticks);
-    VDP_drawTextFill(text, 0, 4, 40);
+    line_begin(); TXT("D="); DEC(perf.upload_dirty_tiles,3); TXT(" U=");
+    DEC(perf.upload_tiles,3); TXT(" R="); DEC(perf.upload_runs,2); TXT(" M=");
+    DEC(renderer_get_frame_modified_count(),3); put_char(' '); put_char(size_c); put_char('-'); put_char(bank_c);
+    line_commit(3);
 
-    sprintf(text, "N=%03u R=%03u P=%03u F=%03u S=%03u/%03u",
-            (unsigned int)bsp_get_debug_nodes_visited(),
-            (unsigned int)bsp_get_debug_boxes_rejected_cheap(),
-            (unsigned int)bsp_get_debug_boxes_projected(),
-            (unsigned int)bsp_get_debug_near_fallbacks(),
-            (unsigned int)bsp_get_debug_segments_tested(),
-            (unsigned int)bsp_get_debug_segments_drawn());
-    VDP_drawTextFill(text, 0, 5, 40);
+    line_begin(); TXT("N="); DEC(bsp_get_debug_nodes_visited(),3); TXT(" R=");
+    DEC(bsp_get_debug_boxes_rejected_cheap(),3); TXT(" P=");
+    DEC(bsp_get_debug_boxes_projected(),3); TXT(" F="); DEC(bsp_get_debug_near_fallbacks(),3);
+    TXT(" S="); DEC(bsp_get_debug_segments_tested(),3); put_char('/');
+    DEC(bsp_get_debug_segments_drawn(),3); line_commit(4);
 
-    sprintf(text, "PC=%03lu EC=%03lu L=%03lu K=%03u LK=%03u",
-            (unsigned long)bsp_get_debug_player_collision_subticks(),
-            (unsigned long)bsp_get_debug_enemy_collision_subticks(),
-            (unsigned long)bsp_get_debug_los_subticks(),
-            (unsigned int)bsp_get_debug_collision_candidates(),
-            (unsigned int)bsp_get_debug_los_candidates());
-    VDP_drawTextFill(text, 0, 6, 40);
+    line_begin(); TXT("PC="); DEC(bsp_get_debug_player_collision_subticks(),4);
+    TXT(" EC="); DEC(bsp_get_debug_enemy_collision_subticks(),4); TXT(" L=");
+    DEC(bsp_get_debug_los_subticks(),4); TXT(" K="); DEC(bsp_get_debug_collision_candidates(),3);
+    put_char('/'); DEC(bsp_get_debug_los_candidates(),3); line_commit(5);
 
-    sprintf(text, "O%02u C%02u W%02u D%02u A%02u H%02u M%02u",
-            (unsigned int)billboard_get_active_count(),
-            (unsigned int)billboard_get_debug_candidate_count(),
-            (unsigned int)billboard_get_debug_occluded_count(),
-            (unsigned int)billboard_get_debug_projected_count(),
-            (unsigned int)billboard_get_debug_simulated_enemy_count(),
-            (unsigned int)billboard_get_debug_visibility_cache_hits(),
-            (unsigned int)billboard_get_debug_visibility_cache_misses());
-    VDP_drawTextFill(text, 0, 7, 40);
+    line_begin(); TXT("O"); DEC(billboard_get_active_count(),2); TXT(" C");
+    DEC(billboard_get_debug_candidate_count(),2); TXT(" W"); DEC(billboard_get_debug_occluded_count(),2);
+    TXT(" D"); DEC(billboard_get_debug_projected_count(),2); TXT(" A");
+    DEC(billboard_get_debug_simulated_enemy_count(),2); TXT(" H");
+    DEC(billboard_get_debug_visibility_cache_hits(),2); TXT(" M");
+    DEC(billboard_get_debug_visibility_cache_misses(),2); line_commit(6);
 
-    sprintf(text, "Bx=%04lu Sr=%04lu Sc=%04lu",
-            (unsigned long)bsp_get_debug_box_projection_subticks(),
-            (unsigned long)bsp_get_debug_segment_raster_subticks(),
-            (unsigned long)bsp_get_debug_side_cache_subticks());
-    VDP_drawTextFill(text, 0, 8, 40);
+    line_begin(); TXT("Dp="); TXT(deep_labels[displayed_deep_phase]); TXT(" T=");
+    DEC(perf.deep_subticks[displayed_deep_phase],5); TXT(" N=");
+    DEC(perf.deep_units[displayed_deep_phase],3); TXT(" As=");
+    DEC(perf.asm_compare_tile,3); put_char(' '); DEC(perf.asm_checked_tiles,4);
+    put_char('/'); DEC(perf.asm_mismatches,2); put_char('/');
+    DEC(perf.asm_canary_failures,2); line_commit(7);
 
-    sprintf(text, "RR=%02X Ov=%03u/%03u/%03u",
-            (unsigned int)perf.redraw_reasons,
-            (unsigned int)perf.overlay_restored_tiles,
-            (unsigned int)perf.overlay_touched_tiles,
-            (unsigned int)perf.overlay_overlap_tiles);
-    VDP_drawTextFill(text, 0, 9, 40);
+    line_begin(); TXT("RR="); put_hex(perf.redraw_reasons,2); TXT(" Ov=");
+    DEC(perf.overlay_restored_tiles,3); put_char('/'); DEC(perf.overlay_touched_tiles,3);
+    put_char('/'); DEC(perf.overlay_overlap_tiles,3); TXT(" Db=");
+    DEC(perf.diagnostics_subticks,4); line_commit(8);
 
-    sprintf(text, "Qc=%03u/%03u Ep=%03u/%03u/%03u/%03u",
-            (unsigned int)billboard_get_debug_projection_cache_hits(),
-            (unsigned int)billboard_get_debug_projection_cache_misses(),
-            (unsigned int)billboard_get_debug_enemy_pair_tests(),
-            (unsigned int)billboard_get_debug_enemy_close_pairs(),
-            (unsigned int)billboard_get_debug_enemy_separation_attempts(),
-            (unsigned int)billboard_get_debug_enemy_separation_moves());
-    VDP_drawTextFill(text, 0, 10, 40);
+    line_begin(); TXT("Qc="); DEC(billboard_get_debug_projection_cache_hits(),3);
+    put_char('/'); DEC(billboard_get_debug_projection_cache_misses(),3); TXT(" Ep=");
+    DEC(billboard_get_debug_enemy_pair_tests(),3); put_char('/');
+    DEC(billboard_get_debug_enemy_close_pairs(),3); put_char('/');
+    DEC(billboard_get_debug_enemy_separation_attempts(),3); put_char('/');
+    DEC(billboard_get_debug_enemy_separation_moves(),3); line_commit(9);
 
-    sprintf(text, "Es=%04lu Bc=%03u/%03u/%03u",
-            (unsigned long)billboard_get_debug_enemy_separation_subticks(),
-            (unsigned int)billboard_get_debug_prop_collision_calls(),
-            (unsigned int)billboard_get_debug_prop_collision_scanned(),
-            (unsigned int)billboard_get_debug_prop_collision_candidates());
-    VDP_drawTextFill(text, 0, 11, 40);
+    line_begin(); TXT("Es="); DEC(billboard_get_debug_enemy_separation_subticks(),5);
+    TXT(" Bc="); DEC(billboard_get_debug_prop_collision_calls(),3); put_char('/');
+    DEC(billboard_get_debug_prop_collision_scanned(),3); put_char('/');
+    DEC(billboard_get_debug_prop_collision_candidates(),3); line_commit(10);
+
+    VDP_setTileMapDataRect(BG_A, s_perf_tilemap, 0, 1,
+                           PERF_OVERLAY_W, PERF_OVERLAY_H, PERF_OVERLAY_W, CPU);
+    renderer_perf_record_diagnostics(getSubTick() - diagnostics_start);
 }
 
 #endif

@@ -137,6 +137,8 @@ with tempfile.TemporaryDirectory(prefix="megaldoom-build-test-") as folder:
     build_state.record(state, "")
     assert not build_state.needs_clean(state, objects, "")
     stale_dep = objects / "src" / "frontend.d"
+    (temp / "src" / "frontend.c").write_text("void frontend(void);", encoding="utf-8")
+    stale_dep.with_suffix(".o").write_bytes(b"frontend-object")
     stale_dep.write_text(
         "out/src/frontend.o: src/frontend.c res/frontend/frontend_layout.h\n",
         encoding="utf-8",
@@ -149,6 +151,11 @@ with tempfile.TemporaryDirectory(prefix="megaldoom-build-test-") as folder:
     )
     assert cli_stale.returncode == 0 and cli_stale.stdout.strip() == "clean"
     stale_dep.unlink()
+    stale_dep.with_suffix(".o").unlink()
+    orphan_dep = objects / "src" / "removed.d"
+    orphan_dep.write_text("out/src/removed.o: src/removed.c\n", encoding="utf-8")
+    assert not build_state.needs_clean(state, objects, "")
+    orphan_dep.unlink()
     assert build_state.needs_clean(state, objects, "-DDEBUG_PERF=1")
     cli_check = subprocess.run(
         [sys.executable, str(STATE_TOOL), "check", "--state", str(state),
@@ -169,6 +176,9 @@ for token in ("[switch]$Clean", "[switch]$ForceAssets", "build-state.py", "gener
 for token in ('CLEAN="${CLEAN:-0}"', 'FORCE_ASSETS="${FORCE_ASSETS:-0}"', "build-state.py", "generate-frontend-assets.py"):
     assert token in linux
 for token in ("[switch]$Restart", "[switch]$Detach", "Stop-Process -Force", "Start-Process"):
+    assert token in runner
+for token in ("$buildArgs = @{", "DebugPerf = [bool]$DebugPerf",
+              '& (Join-Path $PSScriptRoot "build-windows.ps1") @buildArgs'):
     assert token in runner
 assert '"debug": "pwsh -NoProfile -File tools/run-windows.ps1 -DebugPerf -Restart -Detach"' in package
 

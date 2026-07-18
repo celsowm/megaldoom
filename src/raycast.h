@@ -15,9 +15,9 @@
 #define RAY_VIEW_CENTER_Y (RAY_VIEW_ROWS / 2)
 // Shared camera geometry. Wall and billboard projection must use these exact
 // values or world objects drift against the BSP as the player turns.
-#define RAY_PROJ_X 180
-#define RAY_PROJ_Y RAY_VIEW_ROWS
-#define RAY_WORLD_WALL_HEIGHT 256
+#define RAY_PROJ_X RAY_VIEW_CENTER_X
+#define RAY_PROJ_Y RAY_VIEW_CENTER_X
+#define RAY_WORLD_WALL_HEIGHT 128
 #define RAY_CAMERA_HEIGHT (RAY_WORLD_WALL_HEIGHT / 2)
 // Doom's player is 32 map units wide. Using that value as a radius makes real
 // Doom doorways (notably E1M2) geometrically impossible, so runtime and offline
@@ -25,8 +25,9 @@
 #define PLAYER_COLLISION_RADIUS 16
 // Horizontal render granularity: cast/sample one wall column every N pixels and
 // duplicate across the gap. 1 = full 1px detail (heaviest), 2 = 2px (~80 cols),
-// 4 = 4px (~40 cols, original cost). Must divide 8. Lower = sharper but slower.
-#define RAY_COL_STRIDE 4
+// 4 = 4px (~40 cols, original cost). Must divide 8. The shipped quality profile
+// uses stride 2: 80 sampled wall columns across the 160px viewport.
+#define RAY_COL_STRIDE 2
 #define RAY_SAMPLE_COLS (RAY_VIEW_COLS / RAY_COL_STRIDE)
 #define PLAYER_HEIGHT 56
 #define PLAYER_EYE_HEIGHT 41
@@ -41,7 +42,7 @@
 //   - renderer.c builds the x-WALL_TEX_DIM vertical sampling table from it,
 //   - the generated arrays are declared [WALL_TEX_DIM][WALL_TEX_DIM].
 // Exact texture IDs and source dimensions are generated from the active WAD map.
-#define WALL_TEX_DIM 32
+#define WALL_TEX_DIM 64
 #define WALL_TEX_DIM_MASK (WALL_TEX_DIM - 1)
 
 typedef struct {
@@ -51,8 +52,14 @@ typedef struct {
 } PlayerState;
 
 typedef struct {
-    u8 ceiling_color;
-    u8 floor_color;
+    u8 primary;
+    u8 secondary;
+    u8 secondary_coverage; // 0..16 Bayer cells
+} RayFlatColor;
+
+typedef struct {
+    RayFlatColor ceiling;
+    RayFlatColor floor;
 } RaySceneColors;
 
 typedef struct {

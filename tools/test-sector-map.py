@@ -92,13 +92,13 @@ def main():
     # Textured rendering remains the only path, including arbitrary Doom widths.
     assert "FREEDOOM_WALL_TEXTURES" in assets
     assert "FREEDOOM_WALL_TEXTURE_USCALE_Q12" in assets
-    assert "FREEDOOM_WALL_PACKED_COLUMNS" in assets
+    assert "FREEDOOM_WALL_PACKED_PAIRS" in assets
     assert "[2][FREEDOOM_WORLD_SHADE_LEVELS][FREEDOOM_WALL_TEXTURE_COUNT]" in assets
-    assert "FREEDOOM_WALL_PACKED_COLUMNS[" in renderer_scene
+    assert "FREEDOOM_WALL_PACKED_PAIRS[" in renderer_scene
     assert "column_a.flags & RAY_COLUMN_FLAG_DOOR" in renderer_scene
     extractor_source = Path(extractor.__file__).read_text()
     assert "for door_style in range(2)" in extractor_source
-    assert "level[texel] * 0x1111" in extractor_source
+    assert "level[texel] * 0x11" in extractor_source
     assert extractor.texture_u_scale_q12(24) > 0
     assert "FREEDOOM_WALL_TEXTURE_USCALE_Q12[tid]" in (
         ROOT / "src/bsp_render.c").read_text()

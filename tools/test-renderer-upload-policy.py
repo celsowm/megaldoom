@@ -165,11 +165,12 @@ def main():
     assert "if ((g_view_dirty_bank_mask & (1u << bank)) == 0) continue" in renderer
     assert "difference |= (base_rows[row] ^ row_data)" not in scene
     assert "store_base_tile" not in scene
-    assert "s_base_snapshot_valid_bits" in overlay
-    assert "g_base_view_tiles[tile_index][row] = g_view_tiles[tile_index][row]" in overlay
+    assert "OVERLAY_SNAPSHOT_TILE_LIMIT 128" in overlay
+    assert "s_snapshot_rows[slot][row] = g_view_tiles[tile_index][row]" in overlay
+    assert "renderer_overlay_requires_base_rebuild" in scene + overlay
     assert "g_base_built_this_frame" not in scene + overlay
     mark_overlay = overlay[overlay.index("void renderer_mark_overlay_tile"):]
-    assert "g_view_tiles[tile_index][row] = g_base_view_tiles[tile_index][row]" not in mark_overlay
+    assert "g_view_tiles[tile_index][row] = s_snapshot_rows" not in mark_overlay
     assert scene.index("renderer_overlay_restore_previous();") < scene.index(
         "draw_projected_billboards(columns, objects, object_count);")
     assert scene.index("renderer_overlay_base_rebuilt();") < scene.index(

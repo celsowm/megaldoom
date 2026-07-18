@@ -93,6 +93,20 @@ occupying the terminal:
 npm run debug
 ```
 
+The project also keeps an ignored BlastEm development checkout in
+`.externals/blastem`. Its pinned Libretro core can be rebuilt after emulator
+changes with:
+
+```powershell
+npm run blastem:core
+```
+
+This build uses WSL `gcc`, `g++` and `make`, writes intermediates to the Linux
+filesystem for speed, and copies the verified result to
+`.externals/blastem/build/libblastem.so`. The downloaded Windows emulator in
+`.tools/blastem` remains the normal interactive fallback until the custom
+Windows frontend/toolchain is enabled.
+
 The native sector renderer is the only renderer and needs no `-SectorRenderer`
 switch.
 
@@ -229,9 +243,10 @@ These folders are ignored by git.
   `O(k)` in local candidate segments instead of scanning every map segment.
 - Static billboard collision uses a compact blocker registry and is `O(B)` in
   active blocking props instead of scanning all active billboards.
-- Stride-4 wall columns are shaded and packed offline into cartridge ROM for
-  both ordinary walls and styled doors; rotation no longer rebuilds 40x32
-  packed texels in work RAM on every base redraw.
+- The shipped wall profile samples 80 stride-2 columns and uses 64x64 WAD
+  textures. Shade-ready pixel pairs for ordinary walls and styled doors are
+  packed offline into cartridge ROM, so the higher detail does not add runtime
+  palette quantization or per-texel shading.
 - Enemy line-of-sight walks crossed blockmap cells and is `O(c + k)` for crossed
   cells plus unique segment candidates.
 - Enemy separation remains `O(E^2)`; `E` is currently capped at seven objects.

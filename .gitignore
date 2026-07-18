@@ -35,7 +35,7 @@ __pycache__/
 # Local toolchains and emulators downloaded by scripts
 .toolchain/
 .tools/
-.extenals/
+.externals/
 
 # Local environment overrides
 .env

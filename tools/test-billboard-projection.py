@@ -15,12 +15,12 @@ SCENE = ROOT / "src" / "renderer_scene.c"
 VIEW_W = 160
 CENTER_X = 80
 CENTER_Y = 60
-PROJ_X = 180
-PROJ_Y = 120
-CAMERA_HEIGHT = 128
+PROJ_X = 80
+PROJ_Y = 80
+CAMERA_HEIGHT = 64
 SCALE_SHIFT = 12
-WORLD_GEOMETRY_SCALE = 3
-STRIDE = 4
+WORLD_GEOMETRY_SCALE = 1
+STRIDE = 2
 
 
 def project_x(side: int, forward: int) -> int:
@@ -43,18 +43,20 @@ def projected_q12(value: int, scale: int) -> int:
 
 
 def project_patch(forward: int, center: int, width: int, height: int,
-                  left_offset: int, top_offset: int) -> tuple[int, int, int, int, int]:
+                  left_offset: int, top_offset: int,
+                  visual_scale: int = 1) -> tuple[int, int, int, int, int]:
     sx = (PROJ_X << SCALE_SHIFT) // forward
     sy = (PROJ_Y << SCALE_SHIFT) // forward
     origin_y = CENTER_Y + projected_q12(CAMERA_HEIGHT, sy)
-    left = center - projected_q12(left_offset * WORLD_GEOMETRY_SCALE, sx)
+    geometry_scale = WORLD_GEOMETRY_SCALE * visual_scale
+    left = center - projected_q12(left_offset * geometry_scale, sx)
     right = center + projected_q12(
-        (width - left_offset) * WORLD_GEOMETRY_SCALE, sx) - 1
+        (width - left_offset) * geometry_scale, sx) - 1
     # Sprite width and height share one focal scale. Only its world-floor origin
     # uses the wall camera's vertical projection.
-    top = origin_y - projected_q12(top_offset * WORLD_GEOMETRY_SCALE, sx)
+    top = origin_y - projected_q12(top_offset * geometry_scale, sx)
     bottom = origin_y + projected_q12(
-        (height - top_offset) * WORLD_GEOMETRY_SCALE, sx) - 1
+        (height - top_offset) * geometry_scale, sx) - 1
     return left, max(left, right), top, max(top, bottom), origin_y
 
 
@@ -96,11 +98,13 @@ def main() -> int:
 
     required = [
         "#define RAY_VIEW_CENTER_X", "#define RAY_VIEW_CENTER_Y",
-        "#define RAY_PROJ_X 180", "#define RAY_PROJ_Y RAY_VIEW_ROWS",
-        "#define RAY_CAMERA_HEIGHT",
+        "#define RAY_PROJ_X RAY_VIEW_CENTER_X", "#define RAY_PROJ_Y RAY_VIEW_CENTER_X",
+        "#define RAY_WORLD_WALL_HEIGHT 128", "#define RAY_CAMERA_HEIGHT",
     ]
     if any(token not in raycast for token in required):
         raise ValueError("raycast camera geometry is no longer shared")
+    if project_x(-100, 100) != 0 or project_x(100, 100) != VIEW_W:
+        raise ValueError("horizontal projection is not an exact 90-degree FOV")
     if "side * RAY_PROJ_X" not in billboard or "side * 80" in billboard:
         raise ValueError("billboard horizontal projection diverged from walls")
     if "billboard_span_has_visible_block" not in projector:
@@ -115,12 +119,17 @@ def main() -> int:
         raise ValueError("billboard rasterizer still samples the next wall block")
     if "RAY_CAMERA_HEIGHT" not in billboard or "BILLBOARD_SCALE_SHIFT 12" not in billboard:
         raise ValueError("world billboards are not using the shared Q12 render camera")
-    if "((s32)RAY_CAMERA_HEIGHT * RAY_PROJ_Y) / forward" not in billboard:
+    if "divu((u32)RAY_CAMERA_HEIGHT * RAY_PROJ_Y, (u16)forward)" not in billboard:
         raise ValueError("enemy baseline is no longer anchored to the rendered floor plane")
     if "PLAYER_EYE_HEIGHT * RAY_PROJ_Y" in billboard:
         raise ValueError("enemy projection is using gameplay eye height instead of the render camera")
-    if "#define BILLBOARD_WORLD_GEOMETRY_SCALE 3" not in billboard_internal:
-        raise ValueError("world billboard scale no longer matches 256-unit BSP walls")
+    if "#define BILLBOARD_WORLD_GEOMETRY_SCALE 1" not in billboard_internal:
+        raise ValueError("world billboard geometry no longer uses native Doom units")
+    if "#define BILLBOARD_PICKUP_VISUAL_SCALE 3" not in billboard_internal:
+        raise ValueError("pickups are not rendered at the required 3x scale")
+    if "u8 visual_scale;" not in billboard_internal or \
+            "type->visual_scale" not in billboard:
+        raise ValueError("billboard projection is not using per-type visual scale")
     if "geometry.top_offset, scale_x_q12" not in billboard:
         raise ValueError("sprite height is no longer using the width focal scale")
     if "FREEDOOM_BILLBOARD_WORLD_GEOMETRY" not in billboard:
@@ -129,13 +138,13 @@ def main() -> int:
         raise ValueError("billboard rasterizer is not sampling the generated atlas crop")
     if "BILLBOARD_ENEMY_WORLD_WIDTH" not in billboard or "uses_wad_origin = FALSE" not in billboard:
         raise ValueError("enemy legacy geometry is no longer isolated")
-    if "#define BILLBOARD_ENEMY_WORLD_WIDTH 63" not in billboard_internal or \
-            "#define BILLBOARD_ENEMY_WORLD_HEIGHT 189" not in billboard_internal:
-        raise ValueError("grounded enemy geometry no longer preserves its former head line and aspect")
+    if "#define BILLBOARD_ENEMY_WORLD_WIDTH 24" not in billboard_internal or \
+            "#define BILLBOARD_ENEMY_WORLD_HEIGHT 48" not in billboard_internal:
+        raise ValueError("enemy geometry no longer uses its native atlas/world aspect")
     if ("billboard_mul_basis_delta" not in billboard or
             "muls.w %1,%0" not in billboard or
-            "return (s32)basis * delta;" not in billboard):
-        raise ValueError("guarded native MULS.W transform or exact fallback is missing")
+            "return billboard_muls_word(basis, (s16)delta);" not in billboard):
+        raise ValueError("E1M1 native MULS.W transform is missing")
     if ("left_numerator" not in billboard or "right_numerator" not in billboard or
             "RAY_VIEW_CENTER_X + 2" not in billboard):
         raise ValueError("conservative pre-division frustum rejection is missing")
@@ -157,11 +166,10 @@ def main() -> int:
         if billboard_x != wall_x:
             raise ValueError("billboard and wall disagree during turn sequence")
 
-    # Signed-word boundaries use native MULS.W; only genuinely wide deltas take
-    # the exact 32-bit fallback. Both paths produce the same mathematical value.
+    # Every possible E1M1 camera-to-THING delta stays in the native word domain.
     for delta, expected_path in (
-            (-32769, "wide"), (-32768, "word"), (-1, "word"),
-            (0, "word"), (32767, "word"), (32768, "wide")):
+            (-4576, "word"), (-1, "word"), (0, "word"),
+            (1, "word"), (4576, "word")):
         product, path = transform_component(-1536, delta)
         if product != -1536 * delta or path != expected_path:
             raise ValueError("native/fallback camera transform boundary diverged")
@@ -210,14 +218,14 @@ def main() -> int:
     if span_visible(128, 72, 88, depths):
         raise ValueError("fully hidden billboard was not culled")
 
-    # A depth discontinuity only affects its own rendered 4px block.
+    # A depth discontinuity only affects its own rendered 2px block.
     depths = [0x7FFF] * VIEW_W
     depths[84] = 96
     if not span_visible(128, 80, 83, depths):
         raise ValueError("neighbouring wall block leaked into current sprite block")
 
-    near_barrel = project_patch(192, CENTER_X, 23, 32, 10, 28)
-    far_barrel = project_patch(384, CENTER_X, 23, 32, 10, 28)
+    near_barrel = project_patch(96, CENTER_X, 23, 32, 10, 28)
+    far_barrel = project_patch(192, CENTER_X, 23, 32, 10, 28)
     if not ((near_barrel[1] - near_barrel[0]) > (far_barrel[1] - far_barrel[0]) and
             (near_barrel[3] - near_barrel[2]) > (far_barrel[3] - far_barrel[2])):
         raise ValueError("native barrel size does not shrink with depth")
@@ -225,20 +233,24 @@ def main() -> int:
         raise ValueError("asymmetric Doom left offset was lost")
     if near_barrel[3] < near_barrel[4]:
         raise ValueError("barrel no longer extends below its Doom origin")
-    if (near_barrel[1] - near_barrel[0] + 1) < 40:
-        raise ValueError("barrel regressed to tiny 1:1 WAD geometry")
+    if (near_barrel[1] - near_barrel[0] + 1) < 8:
+        raise ValueError("native barrel became unreadably small")
     barrel_w = near_barrel[1] - near_barrel[0] + 1
     barrel_h = near_barrel[3] - near_barrel[2] + 1
     if abs((barrel_h * 23) - (barrel_w * 32)) > 32:
         raise ValueError("barrel source aspect was crushed into a bucket")
 
-    blue_key = project_patch(192, CENTER_X, 14, 16, 7, 19)
+    native_key = project_patch(192, CENTER_X, 14, 16, 7, 19)
+    blue_key = project_patch(192, CENTER_X, 14, 16, 7, 19, 3)
     if blue_key[3] >= blue_key[4]:
         raise ValueError("blue key top offset no longer lifts it above the floor origin")
+    if not ((blue_key[1] - blue_key[0]) >= 3 * (native_key[1] - native_key[0]) - 2 and
+            (blue_key[3] - blue_key[2]) >= 3 * (native_key[3] - native_key[2]) - 2):
+        raise ValueError("pickup projected extent is not 3x native geometry")
 
     # Precise projected bounds, rather than a symmetric half-width, drive edge
     # clipping and span occlusion.
-    edge_clip = project_patch(128, -4, 28, 19, 13, 19)
+    edge_clip = project_patch(128, -4, 28, 19, 13, 19, 3)
     edge_depths = [0x7FFF] * VIEW_W
     if edge_clip[1] < 0 or not span_visible(128, edge_clip[0], edge_clip[1], edge_depths):
         raise ValueError("partially on-screen item was incorrectly clipped")

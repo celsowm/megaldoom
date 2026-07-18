@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
-$ExternalsRoot = Join-Path $Root ".extenals"
+$ExternalsRoot = Join-Path $Root ".externals"
 $FreedoomDir = Join-Path $ExternalsRoot "freedoom"
 $FreedoomUrl = "https://github.com/freedoom/freedoom.git"
 $DocsDir = Join-Path $Root "docs"
@@ -45,7 +45,7 @@ if ((Test-Path $FreedoomDir) -and $Force) {
 }
 
 if (-not (Test-Path $FreedoomDir)) {
-    Write-Step "Cloning Freedoom into .extenals/freedoom"
+    Write-Step "Cloning Freedoom into .externals/freedoom"
     git clone --depth 1 $FreedoomUrl $FreedoomDir
 } else {
     Write-Step "Updating existing Freedoom checkout"
@@ -67,17 +67,17 @@ This file records local, non-versioned external sources used by MegalDoom asset 
 ## Freedoom
 
 - Repository: $origin
-- Local path: .extenals/freedoom
+- Local path: .externals/freedoom
 - Checked commit: $commit
 - Short commit: $shortCommit
 - Commit date: $commitDate
 - Synced at: $syncDate
-- License source: .extenals/freedoom/COPYING.adoc
+- License source: .externals/freedoom/COPYING.adoc
 
 Usage policy:
 
 - Freedoom is used as a free asset/reference source, not as an engine base.
-- The .extenals/ checkout is not versioned.
+- The .externals/ checkout is not versioned.
 - Converted Mega Drive-ready assets generated into res/ may be versioned later with their origin documented here.
 - Do not rely on a floating branch without updating this file with the exact commit.
 "@

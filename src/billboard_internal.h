@@ -40,17 +40,17 @@
 #define BILLBOARD_TYPE_DUMMY 15
 #define BILLBOARD_TYPE_COUNT 16
 #define BILLBOARD_PROP_RADIUS 16
-// Preserve the actor's former on-screen head line after moving its baseline
-// from gameplay eye height to the actual render-camera floor plane. The width
-// keeps the 24:48 atlas aspect under the asymmetric X/Y focal lengths.
-#define BILLBOARD_ENEMY_WORLD_WIDTH 63
-#define BILLBOARD_ENEMY_WORLD_HEIGHT 189
+// Enemy atlas pixels use native Doom world units. With the shared 80px focal
+// length a 24x48 actor keeps its authored proportion against a 128-unit wall.
+#define BILLBOARD_ENEMY_WORLD_WIDTH 24
+#define BILLBOARD_ENEMY_WORLD_HEIGHT 48
 #define BILLBOARD_ENEMY_ATLAS_WIDTH 24
 #define BILLBOARD_ENEMY_ATLAS_HEIGHT 48
-// Doom patch/world geometry is enlarged threefold against the 256-unit walls.
-// Gameplay effects whose authored reach is tied to their sprite must use the
-// same scale or a visually close explosion has a much smaller invisible radius.
-#define BILLBOARD_WORLD_GEOMETRY_SCALE 3
+// WAD patch geometry and BSP vertices share native Doom map units. Individual
+// types may enlarge only their rendered patch through BillboardType.visual_scale;
+// collision, collection radii and world coordinates remain native.
+#define BILLBOARD_WORLD_GEOMETRY_SCALE 1
+#define BILLBOARD_PICKUP_VISUAL_SCALE 3
 
 #define DUMMY_MOVE_STEP (FX_ONE / 8)
 #define DUMMY_MOVE_INTERVAL 5
@@ -116,6 +116,7 @@ typedef struct {
     u8 effect;
     u8 hit_points;
     u8 radius;
+    u8 visual_scale;
     s32 max_depth;
     bool collectible;
     bool targetable;

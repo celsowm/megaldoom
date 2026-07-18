@@ -33,6 +33,11 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
+& python (Join-Path $PSScriptRoot "test-billboard-posts.py")
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
 & python (Join-Path $PSScriptRoot "test-billboard-raster.py")
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
@@ -54,6 +59,16 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 & python (Join-Path $PSScriptRoot "test-sector-map.py")
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
+& python (Join-Path $PSScriptRoot "test-wall-quality.py")
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
+& python (Join-Path $PSScriptRoot "test-world-scale.py")
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }

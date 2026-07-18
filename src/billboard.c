@@ -3,25 +3,26 @@
 #include "generated_billboard_assets.h"
 #include "generated_billboard_geometry.h"
 
-// type: visual, effect, HP, radius, max depth, collectible, targetable, blocking.
+// type: visual, effect, HP, radius, visual scale, max depth,
+// collectible, targetable, blocking.
 // Item/prop render geometry comes from the Doom patch metadata, not this table.
 static const BillboardType BILLBOARD_TYPES[BILLBOARD_TYPE_COUNT] = {
-    {BILLBOARD_VISUAL_BONUS,       BILLBOARD_EFFECT_HEALTH, 1, 20, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
-    {BILLBOARD_VISUAL_BLUE_KEY,    BILLBOARD_EFFECT_KEY,    1, 20, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
-    {BILLBOARD_VISUAL_STIMPACK,    BILLBOARD_EFFECT_HEALTH, 1, 20, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
-    {BILLBOARD_VISUAL_MEDIKIT,     BILLBOARD_EFFECT_HEALTH, 1, 24, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
-    {BILLBOARD_VISUAL_ARMOR_BONUS, BILLBOARD_EFFECT_ARMOR,  1, 16, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
-    {BILLBOARD_VISUAL_GREEN_ARMOR, BILLBOARD_EFFECT_ARMOR,  1, 28, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
-    {BILLBOARD_VISUAL_BLUE_ARMOR,  BILLBOARD_EFFECT_ARMOR,  1, 28, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
-    {BILLBOARD_VISUAL_CLIP,        BILLBOARD_EFFECT_AMMO,   1, 18, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
-    {BILLBOARD_VISUAL_AMMO_BOX,    BILLBOARD_EFFECT_AMMO,   1, 24, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
-    {BILLBOARD_VISUAL_CANDLE,      BILLBOARD_EFFECT_NONE,   1, BILLBOARD_PROP_RADIUS, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
-    {BILLBOARD_VISUAL_CANDELABRA,  BILLBOARD_EFFECT_NONE,   1, BILLBOARD_PROP_RADIUS, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
-    {BILLBOARD_VISUAL_COLUMN,      BILLBOARD_EFFECT_NONE,   1, 16, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
-    {BILLBOARD_VISUAL_ELEC,        BILLBOARD_EFFECT_NONE,   1, 16, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
-    {BILLBOARD_VISUAL_BARREL,      BILLBOARD_EFFECT_NONE,   1, 20, BILLBOARD_MAX_DEPTH, FALSE, TRUE,  TRUE},
-    {BILLBOARD_VISUAL_TREE,        BILLBOARD_EFFECT_NONE,   1, 48, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
-    {BILLBOARD_VISUAL_DUMMY,       BILLBOARD_EFFECT_NONE,   3, 24, BILLBOARD_MAX_DEPTH, FALSE, TRUE,  FALSE},
+    {BILLBOARD_VISUAL_BONUS,       BILLBOARD_EFFECT_HEALTH, 1, 20, BILLBOARD_PICKUP_VISUAL_SCALE, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
+    {BILLBOARD_VISUAL_BLUE_KEY,    BILLBOARD_EFFECT_KEY,    1, 20, BILLBOARD_PICKUP_VISUAL_SCALE, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
+    {BILLBOARD_VISUAL_STIMPACK,    BILLBOARD_EFFECT_HEALTH, 1, 20, BILLBOARD_PICKUP_VISUAL_SCALE, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
+    {BILLBOARD_VISUAL_MEDIKIT,     BILLBOARD_EFFECT_HEALTH, 1, 24, BILLBOARD_PICKUP_VISUAL_SCALE, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
+    {BILLBOARD_VISUAL_ARMOR_BONUS, BILLBOARD_EFFECT_ARMOR,  1, 16, BILLBOARD_PICKUP_VISUAL_SCALE, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
+    {BILLBOARD_VISUAL_GREEN_ARMOR, BILLBOARD_EFFECT_ARMOR,  1, 28, BILLBOARD_PICKUP_VISUAL_SCALE, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
+    {BILLBOARD_VISUAL_BLUE_ARMOR,  BILLBOARD_EFFECT_ARMOR,  1, 28, BILLBOARD_PICKUP_VISUAL_SCALE, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
+    {BILLBOARD_VISUAL_CLIP,        BILLBOARD_EFFECT_AMMO,   1, 18, BILLBOARD_PICKUP_VISUAL_SCALE, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
+    {BILLBOARD_VISUAL_AMMO_BOX,    BILLBOARD_EFFECT_AMMO,   1, 24, BILLBOARD_PICKUP_VISUAL_SCALE, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
+    {BILLBOARD_VISUAL_CANDLE,      BILLBOARD_EFFECT_NONE,   1, BILLBOARD_PROP_RADIUS, 1, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
+    {BILLBOARD_VISUAL_CANDELABRA,  BILLBOARD_EFFECT_NONE,   1, BILLBOARD_PROP_RADIUS, 1, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
+    {BILLBOARD_VISUAL_COLUMN,      BILLBOARD_EFFECT_NONE,   1, 16, 1, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
+    {BILLBOARD_VISUAL_ELEC,        BILLBOARD_EFFECT_NONE,   1, 16, 1, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
+    {BILLBOARD_VISUAL_BARREL,      BILLBOARD_EFFECT_NONE,   1, 20, 1, BILLBOARD_MAX_DEPTH, FALSE, TRUE,  TRUE},
+    {BILLBOARD_VISUAL_TREE,        BILLBOARD_EFFECT_NONE,   1, 48, 1, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
+    {BILLBOARD_VISUAL_DUMMY,       BILLBOARD_EFFECT_NONE,   3, 24, 1, BILLBOARD_MAX_DEPTH, FALSE, TRUE,  FALSE},
 };
 
 BillboardObject g_billboards[BILLBOARD_OBJECT_COUNT];
@@ -100,12 +101,9 @@ u8 billboard_get_object_frame(const BillboardObject *object) {
 }
 
 static s32 bb_divs(s32 numerator, s32 denominator) {
-    if ((denominator > 0) && (denominator <= 0x7FFF)) {
-        const s32 min = -((s32)denominator << 15);
-        const s32 max = ((s32)denominator << 15) - denominator;
-        if ((numerator >= min) && (numerator <= max)) return (s32)divs(numerator, (s16)denominator);
-    }
-    return numerator / denominator;
+    // Active E1M1 THINGs and the collision-constrained player keep this
+    // projection inside the signed-word quotient domain.
+    return (s32)divs(numerator, (s16)denominator);
 }
 
 #define BILLBOARD_SCALE_SHIFT 12
@@ -126,15 +124,8 @@ static s32 billboard_muls_word(s16 left, s16 right) {
     return result;
 }
 
-// E1M1 vertices and THING coordinates fit signed words, but runtime positions
-// stay s32 so future maps and out-of-bounds debug cameras remain correct. Keep
-// the exact wide fallback while letting the normal path compile to one native
-// 68000 MULS.W instead of libgcc's 32-bit multiplication helper.
 static s32 billboard_mul_basis_delta(s16 basis, s32 delta) {
-    if ((delta >= -32768) && (delta <= 32767)) {
-        return billboard_muls_word(basis, (s16)delta);
-    }
-    return (s32)basis * delta;
+    return billboard_muls_word(basis, (s16)delta);
 }
 
 static s16 billboard_project_q12(s16 value, u16 scale_q12) {
@@ -143,8 +134,10 @@ static s16 billboard_project_q12(s16 value, u16 scale_q12) {
     return (s16)(product >> BILLBOARD_SCALE_SHIFT);
 }
 
-static s16 billboard_project_world_q12(s16 value, u16 scale_q12) {
-    return billboard_project_q12((s16)(value * BILLBOARD_WORLD_GEOMETRY_SCALE), scale_q12);
+static s16 billboard_project_world_q12(s16 value, u16 scale_q12,
+                                       u8 visual_scale) {
+    const s16 scaled = (s16)(value * BILLBOARD_WORLD_GEOMETRY_SCALE * visual_scale);
+    return billboard_project_q12(scaled, scale_q12);
 }
 
 static void billboard_get_geometry(const BillboardObject *object,
@@ -182,8 +175,8 @@ static void billboard_get_geometry(const BillboardObject *object,
         return;
     }
 
-    // Preserve the established enemy size and bottom-centred anchor. This pass
-    // intentionally changes only static world items and props.
+    // Enemy frames use the native 24x48 atlas/world proportion and a
+    // bottom-centred anchor, matching the WAD-origin billboard path.
     geometry->source_w = BILLBOARD_ENEMY_WORLD_WIDTH;
     geometry->source_h = BILLBOARD_ENEMY_WORLD_HEIGHT;
     geometry->left_offset = BILLBOARD_ENEMY_WORLD_WIDTH / 2;
@@ -215,7 +208,7 @@ bool billboard_measure_object(const PlayerState *player, s16 cos_a, s16 sin_a,
     // the exact projector below, so an edge-touching sprite is never lost.
     {
         const s32 geometry_scale = geometry.uses_wad_origin ?
-            BILLBOARD_WORLD_GEOMETRY_SCALE : 1;
+            BILLBOARD_WORLD_GEOMETRY_SCALE * type->visual_scale : 1;
         const s32 left_extent = (s32)geometry.left_offset * geometry_scale;
         const s32 right_extent =
             ((s32)geometry.source_w - geometry.left_offset) * geometry_scale;
@@ -248,18 +241,20 @@ bool billboard_measure_object(const PlayerState *player, s16 cos_a, s16 sin_a,
         const s16 origin_y = (s16)(RAY_VIEW_CENTER_Y +
             billboard_project_q12(RAY_CAMERA_HEIGHT, scale_y_q12));
         const s16 right_extent = billboard_project_world_q12(
-            (s16)(geometry.source_w - geometry.left_offset), scale_x_q12);
-        // Sprite pixels must use one focal scale on both axes or the 23x32 Doom
-        // barrel is crushed into a bucket by RAY_PROJ_Y/RAY_PROJ_X (120/180).
-        // The wall-camera scale remains correct only for locating the floor origin.
+            (s16)(geometry.source_w - geometry.left_offset), scale_x_q12,
+            type->visual_scale);
+        // Sprite pixels and walls share one focal scale on both axes.
         const s16 bottom_extent = billboard_project_world_q12(
-            (s16)(geometry.source_h - geometry.top_offset), scale_x_q12);
+            (s16)(geometry.source_h - geometry.top_offset), scale_x_q12,
+            type->visual_scale);
 
         measure->left = (s16)(measure->center_col -
-            billboard_project_world_q12(geometry.left_offset, scale_x_q12));
+            billboard_project_world_q12(geometry.left_offset, scale_x_q12,
+                                        type->visual_scale));
         measure->right = (s16)(measure->center_col + right_extent - 1);
         measure->top = (s16)(origin_y -
-            billboard_project_world_q12(geometry.top_offset, scale_x_q12));
+            billboard_project_world_q12(geometry.top_offset, scale_x_q12,
+                                        type->visual_scale));
         measure->bottom = (s16)(origin_y + bottom_extent - 1);
         if (measure->right < measure->left) measure->right = measure->left;
         if (measure->bottom < measure->top) measure->bottom = measure->top;
@@ -281,7 +276,7 @@ bool billboard_measure_object(const PlayerState *player, s16 cos_a, s16 sin_a,
         // billboards. PLAYER_EYE_HEIGHT is gameplay geometry; using it here
         // placed the enemy baseline above the rendered floor plane.
         measure->bottom = (s16)(RAY_VIEW_CENTER_Y +
-            (((s32)RAY_CAMERA_HEIGHT * RAY_PROJ_Y) / forward));
+            divu((u32)RAY_CAMERA_HEIGHT * RAY_PROJ_Y, (u16)forward));
         measure->top = (s16)(measure->bottom - measure->projected_height);
     }
     return TRUE;

@@ -3,8 +3,11 @@
 #include "generated_hud_assets.h"
 #include "generated_renderer_assets.h"
 
+#if (WEAPON_TILE_BASE + MEGALDOOM_WEAPON_TILE_COUNT) > HUD_VRAM_SAFE_TILE_LIMIT
+#error "Weapon tiles overlap the SGDK font VRAM region"
+#endif
+
 u32 g_view_tiles[VIEW_TILE_COUNT][8];
-u32 g_base_view_tiles[VIEW_TILE_COUNT][8];
 u16 g_compass_tilemap[COMPASS_W * COMPASS_H];
 u32 g_view_bank_dirty_bits[VIEW_BANK_COUNT][VIEW_DIRTY_WORD_COUNT];
 u16 g_view_bank_dirty_count[VIEW_BANK_COUNT];
@@ -95,6 +98,8 @@ static void init_pair_tiles(void) {
 static void init_hud_tiles(void) {
     VDP_loadTileData((const u32 *)FREEDOOM_HUD_TILES, HUD_TILE_BASE, FREEDOOM_HUD_TILE_COUNT, DMA);
     VDP_loadTileData((const u32 *)FREEDOOM_FACE_TILES, FACE_TILE_BASE, FREEDOOM_FACE_TILE_COUNT, DMA);
+    VDP_loadTileData((const u32 *)MEGALDOOM_WEAPON_TILES, WEAPON_TILE_BASE,
+                     MEGALDOOM_WEAPON_TILE_COUNT, DMA);
 }
 
 static void build_view_bank_tilemaps(void) {

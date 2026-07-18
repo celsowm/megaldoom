@@ -24,6 +24,7 @@ $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 # MD main RAM: 0xFF0000-0xFFFFFF. Holds .data + .bss + stack + SGDK heap. text
 # (.text/.rodata) lives in the cartridge ROM, not here, so it does NOT count.
 $RamTotal = 65536
+$RomMaxBytes = 4 * 1024 * 1024
 
 $RomOutPath = Join-Path $Root $RomOut
 $RomBinPath = Join-Path $Root $RomBin
@@ -82,6 +83,9 @@ else {
 $romLen = (Get-Item $RomBinPath).Length
 if ($romLen -le 0) {
     Fail "$RomBin is empty."
+}
+elseif ($romLen -gt $RomMaxBytes) {
+    Fail ("$RomBin is $romLen bytes, above the mapper-free 4 MB cartridge limit.")
 }
 elseif ($romLen % 131072 -ne 0) {
     Note "$RomBin is $romLen bytes, not 128 KB-aligned (sizebnd normally pads this)."

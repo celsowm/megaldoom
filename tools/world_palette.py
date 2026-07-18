@@ -1,0 +1,220 @@
+#!/usr/bin/env python3
+"""Deterministic Mega Drive PAL3 quantization in perceptual colour space."""
+
+from functools import lru_cache
+import math
+
+
+BAYER_4X4 = (
+    (0, 8, 2, 10),
+    (12, 4, 14, 6),
+    (3, 11, 1, 9),
+    (15, 7, 13, 5),
+)
+
+
+def md_color(rgb):
+    return tuple(int(round(channel * 7 / 255)) * 255 // 7 for channel in rgb)
+
+
+VDP_COLORS = tuple(
+    (r * 255 // 7, g * 255 // 7, b * 255 // 7)
+    for r in range(8) for g in range(8) for b in range(8)
+)
+
+
+@lru_cache(maxsize=None)
+def oklab(rgb):
+    linear = []
+    for channel in rgb:
+        value = channel / 255.0
+        linear.append(value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4)
+    r, g, b = linear
+    l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b
+    m = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b
+    s = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b
+    l = math.copysign(abs(l) ** (1 / 3), l)
+    m = math.copysign(abs(m) ** (1 / 3), m)
+    s = math.copysign(abs(s) ** (1 / 3), s)
+    return (
+        0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+        1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+        0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s,
+    )
+
+
+def distance_sq(first, second):
+    a = oklab(tuple(first))
+    b = oklab(tuple(second))
+    # Slightly favour lightness accuracy: Doom walls read primarily through
+    # their ramps, while hue errors create the objectionable olive cast.
+    return 1.25 * (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2
+
+
+def is_neutral(color):
+    return color[0] == color[1] == color[2]
+
+
+def is_green(color):
+    return color[1] > color[0] + 18 and color[1] > color[2] + 18
+
+
+def is_blue(color):
+    return color[2] > color[0] + 18 and color[2] > color[1] + 18
+
+
+def is_warm(color):
+    return color[0] >= color[1] + 18 and color[1] >= color[2] and color[0] - color[2] >= 24
+
+
+def is_earth(color):
+    return color[0] >= color[1] + 18 and color[1] >= color[2] + 18
+
+
+def is_muted_brown(color):
+    return color[0] >= 109 and color[0] >= color[1] + 18 and \
+        color[1] >= 36 and abs(color[1] - color[2]) <= 18
+
+
+def is_olive(color):
+    return abs(color[0] - color[1]) <= 18 and color[1] >= color[2] + 18
+
+
+def is_saturated_red(color):
+    return color[0] >= 145 and color[1] <= 36 and color[2] <= 36
+
+
+def _family_sources(histogram, predicate):
+    selected = [(tuple(color), weight) for color, weight in histogram.items()
+                if weight > 0 and predicate(color)]
+    return selected or [(tuple(color), weight) for color, weight in histogram.items() if weight > 0]
+
+
+def _add_greedy_slots(selected, candidates, sources, count):
+    candidates = tuple(sorted(set(candidates)))
+    for _ in range(count):
+        remaining = [candidate for candidate in candidates if candidate not in selected]
+        if not remaining:
+            return
+        best = min(remaining, key=lambda candidate: (
+            sum(weight * min(
+                [distance_sq(source, candidate)] +
+                [distance_sq(source, existing) for existing in selected])
+                for source, weight in sources),
+            candidate,
+        ))
+        selected.append(best)
+
+
+def build_palette(histogram, damage, warning):
+    """Build 16 VDP colours with explicit Doom material-family coverage."""
+    black = (0, 0, 0)
+    damage = md_color(damage)
+    warning = md_color(warning)
+    excluded = {black, damage, warning}
+    available = [color for color in VDP_COLORS if color not in excluded]
+    selected = []
+
+    # Fixed family budgets prevent a sprite-heavy histogram from consuming the
+    # concrete/metal and brown ramps needed by most wall pixels.
+    _add_greedy_slots(selected, [c for c in available if is_neutral(c)],
+                      _family_sources(histogram, lambda c: max(c) - min(c) <= 18), 4)
+    _add_greedy_slots(selected, [c for c in available if is_earth(c) and c[0] <= 145],
+                      _family_sources(histogram, lambda c: is_earth(c) and c[0] <= 145), 1)
+    _add_greedy_slots(selected, [c for c in available if is_earth(c) and c[0] >= 182],
+                      _family_sources(histogram, lambda c: is_earth(c) and c[0] >= 182), 1)
+    _add_greedy_slots(selected, [c for c in available if is_muted_brown(c)],
+                      _family_sources(histogram, is_muted_brown), 1)
+    _add_greedy_slots(selected, [c for c in available
+                                 if is_warm(c) and not is_saturated_red(c) and c[0] <= 182],
+                      _family_sources(histogram, is_warm), 1)
+    _add_greedy_slots(selected, [c for c in available if is_blue(c)],
+                      _family_sources(histogram, is_blue), 1)
+    _add_greedy_slots(selected, [c for c in available if is_green(c)],
+                      _family_sources(histogram, is_green), 1)
+    global_candidates = [color for color in available
+                         if not is_blue(color) and not is_green(color) and
+                         not is_olive(color) and not is_saturated_red(color)]
+    _add_greedy_slots(selected, global_candidates,
+                      _family_sources(histogram, lambda _c: True), 3)
+
+    if len(selected) != 13:
+        raise RuntimeError("PAL3 adaptive slot allocation did not produce 13 colours")
+    selected.sort(key=lambda c: (oklab(c)[0], c))
+    return [black] + selected + [damage, warning]
+
+
+def allowed_indices(rgb, palette, opaque=True):
+    indices = list(range(1 if opaque else 0, len(palette)))
+    if max(rgb) - min(rgb) <= 36:
+        neutral = [index for index in indices if is_neutral(palette[index])]
+        if neutral:
+            return neutral
+    if not is_green(rgb):
+        indices = [index for index in indices if not is_green(palette[index])]
+    if is_warm(rgb):
+        warm_or_neutral = [index for index in indices
+                           if is_warm(palette[index]) or is_neutral(palette[index])]
+        if warm_or_neutral:
+            indices = warm_or_neutral
+    return indices
+
+
+def nearest_index(rgb, palette, allowed=None):
+    indices = range(len(palette)) if allowed is None else allowed
+    return min(indices, key=lambda index: (distance_sq(rgb, palette[index]), index))
+
+
+def best_mix(rgb, palette, opaque=True, allowed=None):
+    """Return (primary, secondary, secondary_coverage_0_to_16)."""
+    indices = allowed_indices(rgb, palette, opaque)
+    if allowed is not None:
+        allowed_set = set(allowed)
+        indices = [index for index in indices if index in allowed_set]
+    target = oklab(tuple(rgb))
+    primary = nearest_index(rgb, palette, indices)
+    primary_error = distance_sq(rgb, palette[primary])
+    if max(rgb) - min(rgb) <= 36:
+        return primary, primary, 0
+    best = (primary_error, primary, primary, 0)
+    for position, first in enumerate(indices):
+        a = oklab(tuple(palette[first]))
+        for second in indices[position + 1:]:
+            if max(abs(palette[first][channel] - palette[second][channel])
+                   for channel in range(3)) > 73:
+                continue
+            b = oklab(tuple(palette[second]))
+            vector = (b[0] - a[0], b[1] - a[1], b[2] - a[2])
+            denom = sum(value * value for value in vector)
+            if denom <= 1e-12:
+                continue
+            amount = sum((target[i] - a[i]) * vector[i] for i in range(3)) / denom
+            amount = max(0.0, min(1.0, amount))
+            mixed = tuple(a[i] + amount * vector[i] for i in range(3))
+            error = (1.25 * (target[0] - mixed[0]) ** 2 +
+                     (target[1] - mixed[1]) ** 2 + (target[2] - mixed[2]) ** 2)
+            coverage = max(0, min(16, int(round(amount * 16))))
+            candidate = (error, first, second, coverage)
+            if candidate < best:
+                best = candidate
+    error, first, second, coverage = best
+    # Avoid high-contrast salt-and-pepper pairs when their average only barely
+    # beats the closest solid colour. Strong gains still receive dithering.
+    if error >= primary_error * 0.65:
+        return primary, primary, 0
+    if coverage == 0:
+        return first, first, 0
+    if coverage == 16:
+        return second, second, 0
+    return first, second, coverage
+
+
+def dither_index(rgb, palette, x, y, opaque=True, cache=None, allowed=None):
+    key = tuple(int(channel * 31 / 255) * 255 // 31 for channel in rgb)
+    if cache is not None and key in cache:
+        first, second, coverage = cache[key]
+    else:
+        first, second, coverage = best_mix(key, palette, opaque, allowed)
+        if cache is not None:
+            cache[key] = (first, second, coverage)
+    return second if BAYER_4X4[y & 3][x & 3] < coverage else first

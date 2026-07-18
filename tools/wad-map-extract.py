@@ -22,21 +22,42 @@ import re
 import struct
 
 from PIL import Image
+import world_palette
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_WAD = os.path.join(PROJECT_ROOT, "DOOM1.WAD")
 DEFAULT_ASSET_OUT = os.path.join(PROJECT_ROOT, "src", "generated_assets.h")
 ASSET_ROOT = os.path.join(PROJECT_ROOT, "res", "originaldoom")
-WALL_TEX_DIM = 32
+RAYCAST_HEADER = os.path.join(PROJECT_ROOT, "src", "raycast.h")
+
+
+def runtime_wall_tex_dim():
+    with open(RAYCAST_HEADER, "r", encoding="utf-8") as stream:
+        match = re.search(r"^#define\s+WALL_TEX_DIM\s+(\d+)\s*$",
+                          stream.read(), re.MULTILINE)
+    if not match:
+        raise RuntimeError("WALL_TEX_DIM is missing from src/raycast.h")
+    dimension = int(match.group(1))
+    if dimension <= 0 or dimension & (dimension - 1):
+        raise RuntimeError("WALL_TEX_DIM must be a positive power of two")
+    return dimension
+
+
+# Converter and runtime intentionally share the public definition in raycast.h.
+WALL_TEX_DIM = runtime_wall_tex_dim()
 FALLBACK_TEXTURE = "__FALLBACK__"
 FALLBACK_TEXTURE_SOURCE = "GRAY7"
 WORLD_COLOR_DAMAGE = 14
 WORLD_COLOR_WARNING = 15
-LEGACY_WORLD_PALETTE = [
-    (0x00,0x00,0x00), (0x00,0x00,0x91), (0x48,0x00,0x00), (0x24,0x24,0x00),
-    (0x24,0x24,0x24), (0x48,0x48,0x24), (0x48,0x48,0x48), (0x6D,0x48,0x24),
-    (0xB6,0x24,0x24), (0x6D,0x48,0x48), (0x6D,0x6D,0x48), (0x6D,0x6D,0x6D),
-    (0xB6,0x6D,0x48), (0xB6,0xB6,0xB6), (0xDA,0x24,0x24), (0xDA,0xB6,0x48),
+WORLD_SPRITE_INPUTS = [
+    "PISGA0", "PISGB0", "PISFA0",
+    "BON1A0", "BKEYA0", "YKEYA0", "RKEYA0", "STIMA0", "MEDIA0",
+    "BON2A0", "ARM1A0", "ARM2A0", "CLIPA0", "AMMOA0", "CANDA0",
+    "CBRAA0", "COLUA0", "ELECA0", "BAR1A0", "TREDA0",
+    "POSSA1", "POSSB1", "POSSC1", "POSSD1", "POSSF1", "POSSH0",
+    "POSSI0", "POSSJ0", "POSSK0", "POSSL0",
+    "BEXPA0", "BEXPB0", "BEXPC0", "BEXPD0", "BEXPE0",
+    "PUFFA0", "PUFFB0", "PUFFC0", "PUFFD0", "BLUDA0", "BLUDB0", "BLUDC0",
 ]
 
 
@@ -183,7 +204,7 @@ def flat_path(name):
 
 def md_color(rgb):
     """Quantize RGB to the Mega Drive's three bits per channel."""
-    return tuple(int(round((c * 7) / 255)) * 255 // 7 for c in rgb)
+    return world_palette.md_color(rgb)
 
 
 def image_average(path):
@@ -198,7 +219,7 @@ def add_image_histogram(histogram, path, size, weight):
         rgba = image.convert("RGBA").resize(size, Image.Resampling.BOX)
         for r, g, b, a in rgba.get_flattened_data():
             if a >= 128:
-                histogram[md_color((r, g, b))] += weight
+                histogram[(r, g, b)] += weight
 
 
 def median_cut_colors(histogram, color_count):
@@ -239,9 +260,7 @@ def median_cut_colors(histogram, color_count):
 
 
 def nearest_palette_index(rgb, palette, allowed=None):
-    indices = range(len(palette)) if allowed is None else allowed
-    return min(indices, key=lambda i: (
-        sum((rgb[ch] - palette[i][ch]) ** 2 for ch in range(3)), i))
+    return world_palette.nearest_index(rgb, palette, allowed)
 
 
 def build_world_palette(texture_names, texture_usage, sectors):
@@ -250,43 +269,30 @@ def build_world_palette(texture_names, texture_usage, sectors):
         weight = max(1, min(16, texture_usage.get(name, 1)))
         add_image_histogram(histogram, texture_path(name), (WALL_TEX_DIM, WALL_TEX_DIM), weight)
 
-    sprite_inputs = [
-        ("sprites/PISGA0.png", (72, 54)), ("sprites/PISGB0.png", (72, 54)),
-        ("sprites/BON1A0.png", (16, 16)), ("sprites/BKEYA0.png", (16, 16)),
-        ("sprites/BAR1A0.png", (16, 16)),
-    ]
-    sprite_inputs.extend(("sprites/POSS%s.png" % frame, (24, 48))
-                         for frame in ("A1", "B1", "C1", "D1", "F1", "H0", "I0", "J0", "K0", "L0"))
-    for relative, size in sprite_inputs:
-        add_image_histogram(histogram, os.path.join(ASSET_ROOT, relative), size, 4)
+    # PAL3 is shared by the 3D scene, weapon and every runtime billboard. Feed
+    # every consumed source into the same deterministic histogram so improving
+    # walls cannot silently recolor actors or effects.
+    for name in WORLD_SPRITE_INPUTS:
+        relative = os.path.join("sprites", name + ".png")
+        add_image_histogram(histogram, os.path.join(ASSET_ROOT, relative),
+                            (32, 32), 4)
 
     flat_usage = Counter()
     for sector in sectors:
         flat_usage[sector["floor_name"]] += 1
         flat_usage[sector["ceiling_name"]] += 1
     for name, count in flat_usage.items():
-        average = md_color(image_average(flat_path(name)))
+        average = image_average(flat_path(name))
         histogram[average] += max(512, count * 128)
 
-    damage = md_color((0xD8, 0x28, 0x18))
-    warning = md_color((0xD8, 0xB0, 0x48))
-    reserved = {(0, 0, 0), damage, warning}
-    adaptive = []
-    for color in median_cut_colors(histogram, 16):
-        if color not in reserved and color not in adaptive:
-            adaptive.append(color)
-    for color, _ in histogram.most_common():
-        if color not in reserved and color not in adaptive:
-            adaptive.append(color)
-        if len(adaptive) >= 13:
-            break
-    fallback_colors = [md_color((v, v, v)) for v in (32, 64, 96, 128, 160, 192, 224)]
-    for color in fallback_colors:
-        if color not in reserved and color not in adaptive:
-            adaptive.append(color)
-    adaptive = adaptive[:13]
-    adaptive.sort(key=lambda c: (c[0] * 30 + c[1] * 59 + c[2] * 11, c))
-    return [(0, 0, 0)] + adaptive + [damage, warning]
+    # Palette candidates already live on the VDP's 3-bit/channel grid. Collapse
+    # the source histogram to that grid before the constrained search: the
+    # objective stays identical at console precision and generation remains fast.
+    vdp_histogram = Counter()
+    for color, weight in histogram.items():
+        vdp_histogram[md_color(color)] += weight
+    return world_palette.build_palette(
+        vdp_histogram, (0xD8, 0x28, 0x18), (0xD8, 0xB0, 0x48))
 
 
 def build_shade_map(palette):
@@ -295,9 +301,19 @@ def build_shade_map(palette):
         if index == 0:
             result.append(0)
             continue
-        luminance = color[0] * 30 + color[1] * 59 + color[2] * 11
+        luminance = world_palette.oklab(tuple(color))[0]
         darker = [i for i, candidate in enumerate(palette)
-                  if (candidate[0] * 30 + candidate[1] * 59 + candidate[2] * 11) < luminance]
+                  if world_palette.oklab(tuple(candidate))[0] < luminance - 1e-6]
+        if world_palette.is_neutral(color):
+            neutral = [i for i in darker
+                       if world_palette.is_neutral(palette[i])]
+            if neutral:
+                darker = neutral
+        elif not world_palette.is_green(color):
+            non_green = [i for i in darker
+                         if not world_palette.is_green(palette[i])]
+            if non_green:
+                darker = non_green
         target = tuple(channel * 2 // 3 for channel in color)
         result.append(nearest_palette_index(target, palette, darker or [0]))
     return result
@@ -315,12 +331,21 @@ def build_shade_lut(palette, levels=4):
 def convert_texture(path, palette):
     with Image.open(path) as image:
         resized = image.convert("RGB").resize((WALL_TEX_DIM, WALL_TEX_DIM), Image.Resampling.BOX)
-        return [[nearest_palette_index(resized.getpixel((x, y)), palette)
+        material_name = os.path.splitext(os.path.basename(path))[0].upper()
+        if material_name.startswith(("GRAY", "METAL", "STONE")):
+            allowed = [index for index in range(0, WORLD_COLOR_DAMAGE)
+                       if world_palette.is_neutral(palette[index])]
+        else:
+            allowed = range(0, WORLD_COLOR_DAMAGE)
+        cache = {}
+        return [[world_palette.dither_index(resized.getpixel((x, y)), palette,
+                                            x, y, False, cache,
+                                            allowed)
                  for x in range(WALL_TEX_DIM)] for y in range(WALL_TEX_DIM)]
 
 
 def texture_u_scale_q12(size):
-    """Map Doom's source-width repeat into the 32-column runtime texture.
+    """Map Doom's source-width repeat into the WALL_TEX_DIM runtime texture.
 
     Doom textures are not restricted to power-of-two widths (E1M2 uses a
     24-pixel-wide material).  A fixed-point scale keeps their world-space
@@ -339,13 +364,22 @@ def emit_world_assets(path, texture_usage, sectors):
         if not os.path.isfile(texture_path(name)):
             raise FileNotFoundError("Wall texture source not found: %s" % texture_path(name))
 
-    # The world palette is a shipped visual contract. Extending the texture
-    # catalog must quantize new surfaces into it, never recolor existing art.
-    palette = LEGACY_WORLD_PALETTE
+    # Derive PAL3 from the exact active-map surfaces plus every runtime sprite.
+    # The result is deterministic, VDP-valid and avoids forcing Doom browns and
+    # grays through the old olive-heavy hand-authored ramp.
+    palette = build_world_palette(texture_names, texture_usage, sectors)
     if len(palette) != 16:
         raise RuntimeError("World palette must contain exactly 16 colors")
     shade_map = build_shade_map(palette)
     shade_lut = build_shade_lut(palette)
+    floor_candidates = [
+        index for index in range(1, WORLD_COLOR_DAMAGE)
+        if world_palette.is_neutral(palette[index])
+    ]
+    if not floor_candidates:
+        raise RuntimeError("World palette has no neutral fixed-floor color")
+    fixed_floor_index = nearest_palette_index(
+        (36, 36, 36), palette, floor_candidates)
     texture_ids = {name: index for index, name in enumerate(texture_names)}
     texture_meta = {}
     converted = []
@@ -364,11 +398,22 @@ def emit_world_assets(path, texture_usage, sectors):
     for sector in sectors:
         colors = []
         for field in ("ceiling_name", "floor_name"):
+            if field == "floor_name":
+                colors.extend((fixed_floor_index, fixed_floor_index, 0))
+                continue
             name = sector[field]
             average = image_average(flat_path(name))
             if name != "F_SKY1":
                 average = tuple(channel * sector["light"] // 255 for channel in average)
-            colors.append(nearest_palette_index(md_color(average), palette, range(0, WORLD_COLOR_DAMAGE)))
+            first, second, coverage = world_palette.best_mix(
+                average, palette, True, range(1, WORLD_COLOR_DAMAGE))
+            # Damage and warning are runtime effects, not flat materials.
+            if first >= WORLD_COLOR_DAMAGE or second >= WORLD_COLOR_DAMAGE:
+                allowed = range(1, WORLD_COLOR_DAMAGE)
+                first = nearest_palette_index(average, palette, allowed)
+                second = first
+                coverage = 0
+            colors.extend((first, second, coverage))
         sector_visuals.append(tuple(colors))
 
     lines = [
@@ -381,6 +426,8 @@ def emit_world_assets(path, texture_usage, sectors):
         "// Generated deterministically by tools/wad-map-extract.py.",
         "// Exact solid-wall texture catalog for E1M1; index 0 is the fallback.",
         "#define FREEDOOM_WALL_TEXTURE_COUNT %d" % len(texture_names),
+        "#define FREEDOOM_SECTOR_VISUAL_COUNT %d" % len(sector_visuals),
+        "#define MEGALDOOM_WORLD_COLOR_FLOOR %d" % fixed_floor_index,
         "#define MEGALDOOM_WORLD_COLOR_DAMAGE %d" % WORLD_COLOR_DAMAGE,
         "#define MEGALDOOM_WORLD_COLOR_WARNING %d" % WORLD_COLOR_WARNING,
     ]
@@ -390,6 +437,14 @@ def emit_world_assets(path, texture_usage, sectors):
         "",
         "static const u32 FREEDOOM_WORLD_PALETTE[16] = {",
         "    " + ", ".join("0x%02X%02X%02X" % color for color in palette),
+        "};",
+        "",
+        "// Per-sector ceiling plus fixed neutral floor: primary, secondary, Bayer coverage.",
+        "static const u8 FREEDOOM_SECTOR_VISUALS[FREEDOOM_SECTOR_VISUAL_COUNT][6] = {",
+    ])
+    for visual in sector_visuals:
+        lines.append("    {%s}," % ", ".join(str(value) for value in visual))
+    lines.extend([
         "};",
         "",
         "static const u8 FREEDOOM_WORLD_SHADE_MAP[16] = {",
@@ -429,10 +484,10 @@ def emit_world_assets(path, texture_usage, sectors):
     lines.extend([
         "};",
         "",
-        "// ROM-resident, shade-ready columns for the stride-4 wall packer.",
-        "// Layout is [door_style][shade][texture][x][y]; each u16 repeats one 4bpp",
-        "// palette index across the four horizontal pixels of a sampled ray.",
-        "static const u16 FREEDOOM_WALL_PACKED_COLUMNS",
+        "// ROM-resident, shade-ready pairs for the shipped stride-2 wall packer.",
+        "// Layout is [door_style][shade][texture][x][y]; each u8 repeats one 4bpp",
+        "// palette index across the two horizontal pixels of a sampled ray.",
+        "static const u8 FREEDOOM_WALL_PACKED_PAIRS",
         "    [2][FREEDOOM_WORLD_SHADE_LEVELS][FREEDOOM_WALL_TEXTURE_COUNT]",
         "    [WALL_TEX_DIM][WALL_TEX_DIM] = {",
     ])
@@ -448,11 +503,13 @@ def emit_world_assets(path, texture_usage, sectors):
                     for tex_y in range(WALL_TEX_DIM):
                         texel = rows[tex_y][tex_x] & 0x0F
                         if door_style:
-                            if tex_x < 2 or tex_x >= WALL_TEX_DIM - 2 or tex_y < 2:
+                            border = WALL_TEX_DIM // 16
+                            safety = WALL_TEX_DIM // 8
+                            if tex_x < border or tex_x >= WALL_TEX_DIM - border or tex_y < border:
                                 texel = 0
-                            elif tex_y >= WALL_TEX_DIM - 4:
-                                texel = WORLD_COLOR_WARNING if tex_x & 4 else 0
-                        colors.append(level[texel] * 0x1111)
+                            elif tex_y >= WALL_TEX_DIM - safety:
+                                texel = WORLD_COLOR_WARNING if tex_x & safety else 0
+                        colors.append(level[texel] * 0x11)
                     lines.append("                {" + ", ".join(
                         "0x%04X" % value for value in colors) + "},")
                 lines.append("            },")
@@ -1132,9 +1189,14 @@ def main():
     # --- Rebuild subsectors with only flat solid/interactive segs. ---------- #
     out_segs = []       # dicts with geometry, exact texture name, offsets and type
     out_ssectors = []   # (first_seg, count)
+    out_ssector_sectors = []
     texture_usage = Counter()
 
     for (count, first) in ssectors:
+        source_seg = segs[first] if count else None
+        source_side = front_side_for(source_seg) if source_seg is not None else 0xFFFF
+        sector_id = sidedefs[source_side]["sector"] if source_side != 0xFFFF else 0
+        out_ssector_sectors.append(sector_id)
         start = len(out_segs)
         for k in range(count):
             seg = segs[first + k]
@@ -1238,7 +1300,7 @@ def main():
     for temp_path in (asset_temp, map_temp):
         if os.path.exists(temp_path):
             os.remove(temp_path)
-    texture_ids, texture_meta, _sector_visuals, palette = emit_world_assets(
+    texture_ids, texture_meta, sector_visuals, palette = emit_world_assets(
         asset_temp, texture_usage, sectors)
     for seg in out_segs:
         name = seg["texture_name"]
@@ -1353,6 +1415,11 @@ def main():
     lines.append("const BspSubsector bsp_subsectors[%d] = {" % len(out_ssectors))
     for first, count in out_ssectors:
         lines.append("    {%d, %d}," % (first, count))
+    lines.append("};")
+    lines.append("const u16 bsp_subsector_sector[%d] = {" % len(out_ssector_sectors))
+    for i in range(0, len(out_ssector_sectors), 16):
+        lines.append("    %s," % ",".join(
+            str(value) for value in out_ssector_sectors[i:i + 16]))
     lines.append("};")
     lines.append("")
 

@@ -99,12 +99,16 @@ if ($Restart) {
 }
 
 if (-not $NoBuild) {
-    $buildArgs = @()
-    if ($NoClean) { $buildArgs += "-NoClean" }
-    if ($Clean) { $buildArgs += "-Clean" }
-    if ($DebugPerf) { $buildArgs += "-DebugPerf" }
-    if ($ForceAssets) { $buildArgs += "-ForceAssets" }
+    # Preserve named switch values when forwarding to the build script. String
+    # array splatting can leave these switches unbound in nested script calls.
+    $buildArgs = @{
+        NoClean = [bool]$NoClean
+        Clean = [bool]$Clean
+        DebugPerf = [bool]$DebugPerf
+        ForceAssets = [bool]$ForceAssets
+    }
     & (Join-Path $PSScriptRoot "build-windows.ps1") @buildArgs
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
 $RomPath = Resolve-LocalPath $RomPath

@@ -1,0 +1,61 @@
+diff --git a/vdp.c b/vdp.c
+--- a/vdp.c
++++ b/vdp.c
+@@ -507,12 +507,14 @@ static int vdp_render_thread_main(void *vcontext)
+ }
+ #endif
+ 
++#ifndef IS_LIB
+ static render_thread vdp_thread;
++#endif
+ vdp_context *init_vdp_context(uint8_t region_pal, uint8_t has_max_vsram, uint8_t type)
+ {
+ 	vdp_context *ret = init_vdp_context_int(region_pal, has_max_vsram, type);
+ 	vdp_context *context;
+-#ifndef _WIN32
++#if !defined(_WIN32) && !defined(IS_LIB)
+ 	if (render_is_threaded_video()) {
+ 		context = ret->renderer = init_vdp_context_int(region_pal, has_max_vsram, type);
+ 		context->is_threaded_renderer = 1;
+@@ -529,7 +531,7 @@ vdp_context *init_vdp_context(uint8_t region_pal, uint8_t has_max_vsram, uint8_t
+ 		context->fb = render_get_framebuffer(FRAMEBUFFER_ODD, &context->output_pitch);
+ 	}
+ 	context->output = (pixel_t *)(((char *)context->fb) + context->output_pitch * context->border_top);
+-#ifndef _WIN32
++#if !defined(_WIN32) && !defined(IS_LIB)
+ 	if (ret->renderer) {
+ 		event_log_mem();
+ 		render_create_thread(&vdp_thread, "vdp_render", vdp_render_thread_main, ret->renderer);
+diff --git a/laseractive.c b/laseractive.c
+--- a/laseractive.c
++++ b/laseractive.c
+@@ -7,6 +7,7 @@
+ #include "blastem.h"
+ #include "paths.h"
+ #include "debug.h"
++#include <stdlib.h>
+ 
+ static void laseractive_next_shake(upd78k2_context *upd, uint8_t port_bit, uint32_t cycle)
+ {
+diff --git a/32x_video.c b/32x_video.c
+--- a/32x_video.c
++++ b/32x_video.c
+@@ -3,6 +3,7 @@
+ #include "32x_video.h"
+ #include "vdp.h"
+ #include "render.h"
++#include <string.h>
+ 
+ #ifdef DO_DEBUG_PRINT
+ #define dprintf printf
+diff --git a/libblastem.c b/libblastem.c
+--- a/libblastem.c
++++ b/libblastem.c
+@@ -3,6 +3,7 @@
+ #include "libretro.h"
+ #include "system.h"
+ #include "util.h"
++#include "paths.h"
+ #include "vdp.h"
+ #include "render.h"
+ #include "io.h"

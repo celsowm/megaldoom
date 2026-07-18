@@ -10,6 +10,32 @@
 // Interaction reach for the "use" action, squared (one cell).
 #define BSP_USE_REACH2 ((s32)FX_ONE * FX_ONE)
 
+static s32 bsp_muls_word(s32 left, s32 right) {
+    s32 result = (s16)left;
+    const s16 operand = (s16)right;
+    __asm__ volatile (
+        "muls.w %1,%0"
+        : "+d" (result)
+        : "d" (operand)
+        : "cc");
+    return result;
+}
+
+// Exact floor((numerator * 256) / denominator) for 0<=numerator<denominator.
+// Eight shift/subtract steps avoid a generic 32-bit divide in circle collision.
+static u16 bsp_ratio_q8(u32 numerator, u32 denominator) {
+    u16 quotient = 0;
+    for (u16 bit = 0; bit < 8; bit++) {
+        numerator <<= 1;
+        quotient <<= 1;
+        if (numerator >= denominator) {
+            numerator -= denominator;
+            quotient++;
+        }
+    }
+    return quotient;
+}
+
 // Runtime state is stored once per physical door. Every BSP face generated for
 // that door points at the same group, so collision/rendering can never disagree.
 // Lift is Q8: 0 is closed, 256 is fully raised. Eight units per vblank makes a
@@ -99,6 +125,17 @@ bool bsp_update_doors(u16 elapsed_vblanks) {
 
 u16 bsp_get_visibility_revision(void) { return g_visibility_revision; }
 
+u16 bsp_find_subsector(s32 x, s32 y) {
+    u16 child = bsp_root_node;
+    while (!BSP_CHILD_IS_SUBSECTOR(child)) {
+        const BspNode *node = &bsp_nodes[child];
+        const s32 cross = bsp_muls_word(x - node->px, node->dy) -
+                          bsp_muls_word(y - node->py, node->dx);
+        child = (cross >= 0) ? node->front : node->back;
+    }
+    return BSP_CHILD_INDEX(child);
+}
+
 // Squared distance from point (px, py) to the finite segment of seg s.
 static s32 seg_point_dist2(const BspSeg *s, s32 px, s32 py) {
     const BspVertex *a = &bsp_vertices[s->v1];
@@ -107,14 +144,14 @@ static s32 seg_point_dist2(const BspSeg *s, s32 px, s32 py) {
     const s32 aby = (s32)b->y - a->y;
     const s32 apx = px - a->x;
     const s32 apy = py - a->y;
-    const s32 ab2 = abx * abx + aby * aby;
+    const s32 ab2 = bsp_muls_word(abx, abx) + bsp_muls_word(aby, aby);
     s32 cx, cy;
 
     if (ab2 <= 0) {
         cx = a->x;
         cy = a->y;
     } else {
-        const s32 dot = apx * abx + apy * aby;
+        const s32 dot = bsp_muls_word(apx, abx) + bsp_muls_word(apy, aby);
         if (dot <= 0) {
             cx = a->x;
             cy = a->y;
@@ -122,15 +159,15 @@ static s32 seg_point_dist2(const BspSeg *s, s32 px, s32 py) {
             cx = b->x;
             cy = b->y;
         } else {
-            const s32 tq = (dot << FX_SHIFT) / ab2; // 0..256
-            cx = a->x + ((abx * tq) >> FX_SHIFT);
-            cy = a->y + ((aby * tq) >> FX_SHIFT);
+            const s32 tq = bsp_ratio_q8((u32)dot, (u32)ab2);
+            cx = a->x + (bsp_muls_word(abx, tq) >> FX_SHIFT);
+            cy = a->y + (bsp_muls_word(aby, tq) >> FX_SHIFT);
         }
     }
 
     const s32 dx = px - cx;
     const s32 dy = py - cy;
-    return dx * dx + dy * dy;
+    return bsp_muls_word(dx, dx) + bsp_muls_word(dy, dy);
 }
 
 static void clear_query_seen(void) {
@@ -161,7 +198,7 @@ static bool grid_cell_valid(s32 cx, s32 cy) {
 }
 
 bool bsp_circle_blocked(s32 x, s32 y, s32 radius) {
-    const s32 r2 = radius * radius;
+    const s32 r2 = bsp_muls_word(radius, radius);
     s32 cx0 = grid_coord(x - radius, bsp_grid_min_x);
     s32 cx1 = grid_coord(x + radius, bsp_grid_min_x);
     s32 cy0 = grid_coord(y - radius, bsp_grid_min_y);
@@ -218,7 +255,8 @@ bool bsp_circle_blocked(s32 x, s32 y, s32 radius) {
 }
 
 static s32 cross3(s32 ax, s32 ay, s32 bx, s32 by, s32 cx, s32 cy) {
-    return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+    return bsp_muls_word(bx - ax, cy - ay) -
+           bsp_muls_word(by - ay, cx - ax);
 }
 
 static bool point_on_segment(s32 ax, s32 ay, s32 bx, s32 by, s32 px, s32 py) {
@@ -312,8 +350,8 @@ static bool segment_hits_wall(s32 x0, s32 y0, s32 x1, s32 y1,
             ((step_y > 0 ? cy + 1 : cy) * BSP_GRID_CELL_SIZE);
         const s32 x_distance = (step_x > 0) ? x_boundary - x0 : x0 - x_boundary;
         const s32 y_distance = (step_y > 0) ? y_boundary - y0 : y0 - y_boundary;
-        const s32 lhs = x_distance * ray_dy;
-        const s32 rhs = y_distance * ray_dx;
+        const s32 lhs = bsp_muls_word(x_distance, ray_dy);
+        const s32 rhs = bsp_muls_word(y_distance, ray_dx);
         if (lhs == rhs) { cx += step_x; cy += step_y; }
         else if (lhs < rhs) cx += step_x;
         else cy += step_y;

@@ -123,6 +123,18 @@ static u8 separate_dummies(u16 left_index, BillboardObject *left,
 static bool update_dummy_alive(u16 index, BillboardObject *object, const PlayerState *player, u16 *hits) {
     const s32 player_dx = player->x - object->x;
     const s32 player_dy = player->y - object->y;
+    const s32 abs_player_dx = (player_dx < 0) ? -player_dx : player_dx;
+    const s32 abs_player_dy = (player_dy < 0) ? -player_dy : player_dy;
+    // Almost every map enemy is dormant and far away. Reject the bounding
+    // square before the four libgcc-backed 32-bit multiplies needed by d^2.
+    if (!object->has_last_seen &&
+        (abs_player_dx > DUMMY_WAKE_RANGE || abs_player_dy > DUMMY_WAKE_RANGE)) {
+        object->saw_player = FALSE;
+        object->spot_cooldown = 0;
+        object->anim_frame = 0;
+        object->anim_timer = 0;
+        return FALSE;
+    }
     const s32 player_dist_sq = (player_dx * player_dx) + (player_dy * player_dy);
     const bool perception_candidate =
         (player_dist_sq <= DUMMY_WAKE_RANGE_SQ) || object->has_last_seen;

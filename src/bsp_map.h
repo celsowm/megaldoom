@@ -112,9 +112,15 @@ typedef struct {
 // Upper bound on solid segs across any map, for the door-state array.
 #define BSP_MAX_SEGS 2048
 
+// Upper bound for the renderer's per-frame transformed-vertex cache. E1M1 has
+// 467 vertices; keeping a little headroom retains the hand-map/test contract
+// while making the RAM cost explicit and guarded.
+#define BSP_MAX_VERTICES 512
+
 extern const BspVertex bsp_vertices[];
 extern const BspSeg bsp_segs[];
 extern const BspSubsector bsp_subsectors[];
+extern const u16 bsp_subsector_sector[];
 extern const BspNode bsp_nodes[];
 extern const u16 bsp_root_node;
 extern const u16 bsp_seg_count;
@@ -179,6 +185,9 @@ bool bsp_update_doors(u16 elapsed_vblanks);
 // Monotonic revision for cached visibility. Changes whenever door state or the
 // active map resets, so billboard LOS results never survive world-geometry changes.
 u16 bsp_get_visibility_revision(void);
+
+// Locate the authored Doom subsector containing a world-space point.
+u16 bsp_find_subsector(s32 x, s32 y);
 
 // Collision: is a circle of the given radius at world (x, y) touching a solid
 // (closed) wall segment? Used by player and enemy movement.

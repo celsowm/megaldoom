@@ -36,6 +36,7 @@
 #define HUD_NUMBER_ARMOR_TILE_COUNT (HUD_NUMBER_ARMOR_TILE_W * HUD_NUMBER_TILE_H)
 #define HUD_NUMBER_TILE_COUNT (HUD_NUMBER_AMMO_TILE_COUNT + HUD_NUMBER_HEALTH_TILE_COUNT + HUD_NUMBER_FRAGS_TILE_COUNT + HUD_NUMBER_ARMOR_TILE_COUNT)
 #define HUD_NUMBER_MAX_FIELD_TILES HUD_NUMBER_ARMOR_TILE_COUNT
+#define WEAPON_TILE_BASE (HUD_NUMBER_TILE_BASE + HUD_NUMBER_TILE_COUNT)
 #define HUD_VRAM_SAFE_TILE_LIMIT 1440
 #define VIEW_TILEMAP_X 10
 #define VIEW_TILEMAP_Y 5
@@ -77,7 +78,6 @@
 #endif
 
 extern u32 g_view_tiles[VIEW_TILE_COUNT][8];
-extern u32 g_base_view_tiles[VIEW_TILE_COUNT][8];
 extern u32 g_view_bank_dirty_bits[VIEW_BANK_COUNT][VIEW_DIRTY_WORD_COUNT];
 extern u16 g_view_bank_dirty_count[VIEW_BANK_COUNT];
 extern u16 g_view_vram_bank;
@@ -97,6 +97,7 @@ void renderer_overlay_base_rebuilt(void);
 void renderer_overlay_restore_previous(void);
 void renderer_overlay_begin(void);
 void renderer_overlay_finish(void);
+bool renderer_overlay_requires_base_rebuild(void);
 void renderer_set_bg_pair_tile(u16 x, u16 y, u8 left_color, u8 right_color);
 void renderer_set_view_vram_bank(u16 bank);
 void renderer_prepare_full_base_upload(void);

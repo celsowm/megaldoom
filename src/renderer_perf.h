@@ -4,6 +4,16 @@
 #include <genesis.h>
 
 #if DEBUG_PERF
+typedef enum {
+    RENDERER_PERF_DEEP_BSP_SIDE = 0,
+    RENDERER_PERF_DEEP_BSP_BOX,
+    RENDERER_PERF_DEEP_BSP_SEGMENT,
+    RENDERER_PERF_DEEP_PACK_MIXED,
+    RENDERER_PERF_DEEP_PACK_FLAT,
+    RENDERER_PERF_DEEP_PICKUP_POSTS,
+    RENDERER_PERF_DEEP_COUNT
+} RendererPerfDeepPhase;
+
 typedef struct {
     u16 upload_dirty_tiles;
     u16 upload_tiles;
@@ -22,9 +32,20 @@ typedef struct {
     u32 weapon_subticks;
     u32 upload_prepare_subticks;
     u32 dma_wait_subticks;
+    u32 diagnostics_subticks;
     u16 total_vblanks;
+    u16 average_vblanks_x10;
+    u16 p95_vblanks;
     u16 max_vblanks;
     u16 missed_deadlines;
+    u32 deep_subticks[RENDERER_PERF_DEEP_COUNT];
+    u16 deep_units[RENDERER_PERF_DEEP_COUNT];
+    u8 deep_phase;
+    u16 asm_compare_tile;
+    u16 asm_checked_tiles;
+    u16 asm_mismatches;
+    u16 asm_canary_failures;
+    u16 asm_cycles;
 } RendererPerfSnapshot;
 
 void renderer_debug_set_cast_subticks(u32 subticks);
@@ -41,6 +62,11 @@ void renderer_perf_record_overlay_restore(void);
 void renderer_perf_begin_upload(u16 dirty_tiles, bool full, bool swap);
 void renderer_perf_record_upload_run(u16 tiles, u32 issue_subticks);
 void renderer_perf_record_dma_wait(u32 subticks);
+void renderer_perf_record_diagnostics(u32 subticks);
+RendererPerfDeepPhase renderer_perf_get_deep_phase(void);
+void renderer_perf_record_deep(RendererPerfDeepPhase phase, u32 subticks, u16 units);
+void renderer_perf_record_asm_compare(u16 tile, bool mismatch, bool canary_failure,
+                                      bool completed_cycle);
 RendererPerfSnapshot renderer_get_perf_snapshot(void);
 #endif
 

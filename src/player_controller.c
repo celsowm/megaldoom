@@ -13,61 +13,107 @@
 #define TURN_MIN_FP (TURN_FP_ONE / 2)
 #define TURN_MAX_FP (4 * TURN_FP_ONE)
 #define TURN_ACCEL_FP ((3 * TURN_FP_ONE) / 2)
-// Translation uses velocity ramps for inertia instead of instant on/off. These are
-// per-iteration values: player_try_move runs once per main-loop iteration regardless
-// of vsync count, so fewer iterations/sec means less real-world speed unless
-// compensated. The cadence follows TARGET_FRAME_VSYNCS (currently 2 = 30 iterations/sec,
-// 2/3 of the old 30fps), so the magnitudes are scaled by 3/2 relative to the 30fps
-// baseline to preserve the same real-world walk/strafe speed. player_try_move
-// sub-steps the displacement (PLAYER_MOVE_SUBSTEP), so the larger per-iteration step
-// cannot tunnel through walls.
-#define MOVE_MAX 180
-#define STRAFE_MAX 144
-#define MOVE_ACCEL 60 // per iteration, ramping up toward the target speed
-#define MOVE_DECEL 96 // per iteration, ramping down when released or reversing
-#define RUN_SPEED_NUMERATOR 3
-#define RUN_SPEED_DENOMINATOR 2
-#define RUN_SPEED(value) (((value) * RUN_SPEED_NUMERATOR) / RUN_SPEED_DENOMINATOR)
+// Doom movement runs at 35 game tics regardless of video cadence. Commands,
+// thrust and friction are the original integer contracts from linuxdoom 1.10.
+#define DOOM_TICS_PER_SECOND 35
+#define VIDEO_VBLANKS_PER_SECOND 60
+#define DOOM_FORWARD_WALK 25
+#define DOOM_FORWARD_RUN 50
+#define DOOM_STRAFE_WALK 24
+#define DOOM_STRAFE_RUN 40
+#define DOOM_THRUST_SCALE 2048
+#define DOOM_FRICTION 0xE800L
+#define DOOM_STOP_SPEED 0x1000L
+#define DOOM_MAX_MOVE (30L << 16)
 
 #define THREE_BUTTON_AUTOMAP_CHORD (BUTTON_A | BUTTON_B | BUTTON_C)
 
 static u16 s_previous_joy = 0;
 static bool s_three_button_map_chord_active = FALSE;
-static s16 s_vel_forward = 0;
-static s16 s_vel_strafe = 0;
+static s32 s_momentum_x = 0;
+static s32 s_momentum_y = 0;
+static s32 s_position_remainder_x = 0;
+static s32 s_position_remainder_y = 0;
+static u16 s_doom_tic_accumulator = 0;
 static s16 s_turn_speed_fp = 0; // per-vsync fixed-point turn rate
 static s16 s_turn_remainder_fp = 0;
 static s16 s_turn_dir = 0;
 
-// Move `vel` toward `target` by at most `accel` (ramp up) or `decel` (ramp down).
-static s16 approach_velocity(s16 vel, s16 target, s16 accel, s16 decel) {
-    const s16 abs_vel = (s16)((vel < 0) ? -vel : vel);
-    const s16 abs_target = (s16)((target < 0) ? -target : target);
-    const bool same_dir = (vel == 0) || ((vel < 0) == (target < 0));
-    // Ramp up only when building speed in the target's direction; otherwise (stop
-    // or reverse) decelerate.
-    const bool ramping_up = (target != 0) && same_dir && (abs_vel < abs_target);
-    const s16 rate = ramping_up ? accel : decel;
+static s32 player_muls_word(s16 left, s16 right) {
+    s32 result = left;
+    __asm__ volatile (
+        "muls.w %1,%0"
+        : "+d" (result)
+        : "d" (right)
+        : "cc");
+    return result;
+}
 
-    if (vel < target) {
-        vel = (s16)(vel + rate);
-        if (vel > target) {
-            vel = target;
-        }
-    } else if (vel > target) {
-        vel = (s16)(vel - rate);
-        if (vel < target) {
-            vel = target;
-        }
+static s32 clamp_momentum(s32 value) {
+    if (value > DOOM_MAX_MOVE) return DOOM_MAX_MOVE;
+    if (value < -DOOM_MAX_MOVE) return -DOOM_MAX_MOVE;
+    return value;
+}
+
+// DOOM_FRICTION is exactly 29/32. This form stays inside signed 32-bit range
+// on the 68000 and avoids pulling in a 64-bit multiplication helper.
+static s32 apply_doom_friction(s32 value) {
+    return value - ((value * 3) >> 5);
+}
+
+static s32 consume_position_delta(s32 momentum, s32 *remainder) {
+    const s32 total = momentum + *remainder;
+    // C division truncates toward zero. Spell the power-of-two case explicitly
+    // so GCC cannot pull the 32-bit __divsi3 helper into every Doom tic.
+    const s32 whole = (total >= 0) ? (total >> 16) : -((-total) >> 16);
+    *remainder = (total >= 0) ? (total & 0xFFFFL) : -((-total) & 0xFFFFL);
+    return whole;
+}
+
+static bool simulate_doom_movement_tic(PlayerState *player, s16 forward_command,
+                                       s16 strafe_command) {
+    const s16 dir_x = fx_cos(player->angle);
+    const s16 dir_y = fx_sin(player->angle);
+    const s16 side_x = (s16)-dir_y;
+    const s16 side_y = dir_x;
+    const s32 old_x = player->x;
+    const s32 old_y = player->y;
+
+    // (basis * (command * 2048)) >> 8 == (basis * command) << 3.
+    // Keeping the actual multiply word-sized avoids four __mulsi3 calls/tic.
+    const s16 thrust_x = (s16)(player_muls_word(dir_x, forward_command) +
+                               player_muls_word(side_x, strafe_command));
+    const s16 thrust_y = (s16)(player_muls_word(dir_y, forward_command) +
+                               player_muls_word(side_y, strafe_command));
+    s_momentum_x = clamp_momentum(s_momentum_x + player_muls_word(thrust_x, 8));
+    s_momentum_y = clamp_momentum(s_momentum_y + player_muls_word(thrust_y, 8));
+
+    player_apply_world_push(player,
+        consume_position_delta(s_momentum_x, &s_position_remainder_x),
+        consume_position_delta(s_momentum_y, &s_position_remainder_y));
+
+    if (forward_command == 0 && strafe_command == 0 &&
+        s_momentum_x > -DOOM_STOP_SPEED && s_momentum_x < DOOM_STOP_SPEED &&
+        s_momentum_y > -DOOM_STOP_SPEED && s_momentum_y < DOOM_STOP_SPEED) {
+        s_momentum_x = 0;
+        s_momentum_y = 0;
+        s_position_remainder_x = 0;
+        s_position_remainder_y = 0;
+    } else {
+        s_momentum_x = apply_doom_friction(s_momentum_x);
+        s_momentum_y = apply_doom_friction(s_momentum_y);
     }
-    return vel;
+    return player->x != old_x || player->y != old_y;
 }
 
 void player_controller_reset(void) {
     s_previous_joy = 0;
     s_three_button_map_chord_active = FALSE;
-    s_vel_forward = 0;
-    s_vel_strafe = 0;
+    s_momentum_x = 0;
+    s_momentum_y = 0;
+    s_position_remainder_x = 0;
+    s_position_remainder_y = 0;
+    s_doom_tic_accumulator = 0;
     s_turn_speed_fp = 0;
     s_turn_remainder_fp = 0;
     s_turn_dir = 0;
@@ -86,8 +132,8 @@ u16 player_controller_update(PlayerState *player, u16 elapsed_frames) {
     const bool turning_right = !strafing && ((joy & BUTTON_RIGHT) != 0);
     const bool running = ((joy & BUTTON_A) != 0) && !three_button_map_chord;
     const s16 desired_turn = (turning_right && !turning_left) ? 1 : ((turning_left && !turning_right) ? -1 : 0);
-    const s16 move_max = running ? RUN_SPEED(MOVE_MAX) : MOVE_MAX;
-    const s16 strafe_max = running ? RUN_SPEED(STRAFE_MAX) : STRAFE_MAX;
+    const s16 move_command = running ? DOOM_FORWARD_RUN : DOOM_FORWARD_WALK;
+    const s16 strafe_command = running ? DOOM_STRAFE_RUN : DOOM_STRAFE_WALK;
     s16 target_forward = 0;
     s16 target_strafe = 0;
     u16 result = 0;
@@ -105,13 +151,15 @@ u16 player_controller_update(PlayerState *player, u16 elapsed_frames) {
             }
         }
 
-        const s32 delta_fp = ((s32)s_turn_speed_fp * elapsed_frames) + s_turn_remainder_fp;
+        const s32 delta_fp = player_muls_word(s_turn_speed_fp, (s16)elapsed_frames) +
+                             s_turn_remainder_fp;
         const s16 turn = (s16)(delta_fp >> TURN_FP_SHIFT);
 
         s_turn_remainder_fp = (s16)(delta_fp & (TURN_FP_ONE - 1));
 
         if (turn != 0) {
-            player->angle = (u16)((player->angle + (desired_turn * turn)) & ANGLE_MASK);
+            player->angle = (u16)((player->angle +
+                ((desired_turn < 0) ? -turn : turn)) & ANGLE_MASK);
             result |= PLAYER_CONTROL_CHANGED;
         }
     } else {
@@ -121,27 +169,27 @@ u16 player_controller_update(PlayerState *player, u16 elapsed_frames) {
     s_turn_dir = desired_turn;
 
     if (!three_button_map_chord && ((joy & BUTTON_UP) != 0)) {
-        target_forward += move_max;
+        target_forward += move_command;
     }
     if (!three_button_map_chord && ((joy & BUTTON_DOWN) != 0)) {
-        target_forward -= move_max;
+        target_forward -= move_command;
     }
     if (!three_button_map_chord && strafing) {
         if ((joy & BUTTON_LEFT) != 0) {
-            target_strafe -= strafe_max;
+            target_strafe -= strafe_command;
         }
         if ((joy & BUTTON_RIGHT) != 0) {
-            target_strafe += strafe_max;
+            target_strafe += strafe_command;
         }
     }
 
-    s_vel_forward = approach_velocity(s_vel_forward, target_forward, MOVE_ACCEL, MOVE_DECEL);
-    s_vel_strafe = approach_velocity(s_vel_strafe, target_strafe, MOVE_ACCEL, MOVE_DECEL);
-
-    if ((s_vel_forward != 0) || (s_vel_strafe != 0)) {
-        player_try_move(player, s_vel_forward, s_vel_strafe);
-        // Keep redrawing/moving while velocity decays after the button is released.
-        result |= PLAYER_CONTROL_CHANGED;
+    s_doom_tic_accumulator = (u16)(s_doom_tic_accumulator +
+        (elapsed_frames << 5) + (elapsed_frames << 1) + elapsed_frames);
+    while (s_doom_tic_accumulator >= VIDEO_VBLANKS_PER_SECOND) {
+        s_doom_tic_accumulator -= VIDEO_VBLANKS_PER_SECOND;
+        if (simulate_doom_movement_tic(player, target_forward, target_strafe)) {
+            result |= PLAYER_CONTROL_CHANGED;
+        }
     }
 
     if (three_button_map_chord) {

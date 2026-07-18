@@ -5,7 +5,7 @@
 
 #define IMPACT_POOL_COUNT BILLBOARD_MAX_PROJECTED_EFFECTS
 #define IMPACT_FRAME_HOLD 2
-#define IMPACT_WORLD_SCALE BILLBOARD_WORLD_GEOMETRY_SCALE
+#define IMPACT_WORLD_SCALE 1
 #define IMPACT_MIN_SCREEN_RADIUS 2
 // RAY_PROJ_X<<12 still fits a u16 reciprocal scale at depth 12 and beyond.
 #define IMPACT_MIN_DEPTH 11
@@ -26,6 +26,16 @@ typedef struct {
 
 static BillboardImpact s_impacts[IMPACT_POOL_COUNT];
 static u8 s_replace_cursor;
+
+static s32 impact_muls_word(s16 left, s16 right) {
+    s32 result = left;
+    __asm__ volatile (
+        "muls.w %1,%0"
+        : "+d" (result)
+        : "d" (right)
+        : "cc");
+    return result;
+}
 
 static void spawn_impact(s32 x, s32 y, u8 type) {
     u8 slot = s_replace_cursor;
@@ -90,7 +100,8 @@ bool billboard_update_effects(void) {
 }
 
 static s16 project_scaled(s16 value, u16 scale_q12) {
-    const s32 product = (s32)value * IMPACT_WORLD_SCALE * scale_q12;
+    const s32 product = impact_muls_word(
+        (s16)(value * IMPACT_WORLD_SCALE), (s16)scale_q12);
     return (s16)(product >> 12);
 }
 
@@ -103,24 +114,28 @@ u16 billboard_project_effects(const PlayerState *player,
 
     for (u8 i = 0; i < IMPACT_POOL_COUNT && count < max_objects; i++) {
         const BillboardImpact *impact = &s_impacts[i];
+        if (!impact->active) continue;
         const s32 dx = impact->x - player->x;
         const s32 dy = impact->y - player->y;
-        const s32 forward = (((s32)cos_a * dx) + ((s32)sin_a * dy)) >> FX_SHIFT;
-        const s32 side = (((s32)cos_a * dy) - ((s32)sin_a * dx)) >> FX_SHIFT;
+        const s32 forward = (impact_muls_word(cos_a, (s16)dx) +
+                             impact_muls_word(sin_a, (s16)dy)) >> FX_SHIFT;
+        const s32 side = (impact_muls_word(cos_a, (s16)dy) -
+                          impact_muls_word(sin_a, (s16)dx)) >> FX_SHIFT;
         const s16 *geometry;
         u16 scale_q12;
         s16 center_col;
         ProjectedBillboard *projected;
 
-        if (!impact->active || forward <= IMPACT_MIN_DEPTH || forward > 0xFFFF) continue;
+        if (forward <= IMPACT_MIN_DEPTH || forward > 0x7FFF) continue;
 
         if (impact->type == IMPACT_PUFF) {
             geometry = FREEDOOM_BILLBOARD_PUFF_GEOMETRY[impact->frame];
         } else {
             geometry = FREEDOOM_BILLBOARD_BLOOD_GEOMETRY[impact->frame];
         }
-        scale_q12 = (u16)(((u32)RAY_PROJ_X << 12) / (u16)forward);
-        center_col = (s16)(RAY_VIEW_CENTER_X + ((side * RAY_PROJ_X) / forward));
+        scale_q12 = divu((u32)RAY_PROJ_X << 12, (u16)forward);
+        center_col = (s16)(RAY_VIEW_CENTER_X +
+            divs(impact_muls_word((s16)side, RAY_PROJ_X), (s16)forward));
         projected = &objects[count];
         projected->left = (s16)(center_col - project_scaled(geometry[2], scale_q12));
         projected->right = (s16)(center_col +

@@ -3,6 +3,7 @@
 #include "bsp_traverse.h"
 #include "fixed_math.h"
 #include "generated_assets.h"
+#include "renderer_perf.h"
 
 // draw_seg only computes the height/texture fields at columns on a RAY_COL_STRIDE
 // boundary, matching the columns build_bsp_tilemap actually samples. That
@@ -12,10 +13,8 @@
 #endif
 
 // --- Projection constants ---------------------------------------------------
-// View is RAY_VIEW_COLS (160) px wide; center column is 80. PROJ is tuned so the
-// horizontal field of view is 48 degrees:
-//   at the screen edge, |lateral/depth| = tan(24deg) ~= 0.445 maps to +/-80,
-//   so PROJ = 80 / 0.445 ~= 180.
+// View is RAY_VIEW_COLS (160) px wide; the 80px focal length maps
+// |lateral/depth| = 1 to either edge, producing a 90-degree horizontal FOV.
 // Division-free frustum-rejection half-plane scales. screen = center +
 // perspective_divide(PROJ*lateral, depth); perspective_divide truncates toward
 // zero, so the linear plane tests below are a conservative superset of the old
@@ -28,8 +27,6 @@
 #define RIGHT_REJECT_SCALE (RAY_VIEW_COLS + RAY_COL_STRIDE - RAY_VIEW_CENTER_X)
 #define BSP_NEAR 16          // near clip plane, in world units
 #define BSP_INV_SCALE 16384  // fixed-point scale for 1/depth interpolation (1<<14)
-#define BSP_CEILING_COLOR 4  // dark gray
-#define BSP_FLOOR_COLOR 11   // standard gray
 #define BSP_SAMPLE_COLS (RAY_VIEW_COLS / RAY_COL_STRIDE)
 #define BSP_SOLID_WORD_COUNT ((BSP_SAMPLE_COLS + 31) / 32)
 
@@ -37,7 +34,6 @@
 static s16 g_fwx, g_fwy; // forward axis (cos, sin), Q8
 static s16 g_rx, g_ry;   // right axis, Q8
 static s32 g_px, g_py;   // camera position, world units
-static bool g_native_word_math;
 
 // Successor set for open samples. Once a solid wall claims a sample, its entry
 // points at the next still-open sample, so farther overlapping segments skip
@@ -46,6 +42,14 @@ static bool g_native_word_math;
 static u8 g_next_open[BSP_SAMPLE_COLS + 1];
 static u32 g_solid_words[BSP_SOLID_WORD_COUNT];
 static u16 g_solid_count;
+
+// Seg endpoints are heavily shared. Cache their view-space transform for the
+// current cast so each distinct vertex pays four MULS.W only once. A byte
+// generation avoids clearing the 512-entry depth/lateral arrays every frame.
+static s16 g_vertex_depth[BSP_MAX_VERTICES];
+static s16 g_vertex_lateral[BSP_MAX_VERTICES];
+static u8 g_vertex_generation[BSP_MAX_VERTICES];
+static u8 g_cast_generation;
 static RayColumn *g_columns;
 static BspTraverseLeafFn g_visit_leaf;
 static BspTraverseRangeClosedFn g_range_closed;
@@ -81,6 +85,9 @@ static u16 g_bsp_dbg_segments_drawn;
 static u32 g_bsp_dbg_side_cache_subticks;
 static u32 g_bsp_dbg_box_projection_subticks;
 static u32 g_bsp_dbg_segment_raster_subticks;
+static bool g_bsp_dbg_measure_side;
+static bool g_bsp_dbg_measure_box;
+static bool g_bsp_dbg_measure_segment;
 #define BSP_DBG_INC(c) (g_bsp_dbg_##c)++
 #define BSP_DBG_RESET() do { g_bsp_dbg_nodes_visited = 0; \
         g_bsp_dbg_boxes_rejected_cheap = 0; \
@@ -98,10 +105,9 @@ static u32 g_bsp_dbg_segment_raster_subticks;
 
 static void render_node(u16 child);
 
-// A signed-word multiply maps directly to the stock 68000 MULS.W instruction.
-// The generated map bounds let bsp_traverse_front_to_back prove once per frame
-// that all camera-relative geometry fits s16. Unusual cameras retain the exact
-// compiler-provided 32-bit multiply path.
+// All E1M1 vertices, node deltas and collision-constrained camera coordinates
+// fit signed words (the generated map spans only 4576x2816 units). Keeping this
+// primitive word-typed makes every BSP dot/cross product one stock MULS.W.
 static s32 native_muls_word(s16 left, s16 right) {
     s32 result = left;
     __asm__ volatile (
@@ -113,18 +119,29 @@ static s32 native_muls_word(s16 left, s16 right) {
 }
 
 static s32 render_mul(s32 left, s32 right) {
-    if (g_native_word_math) {
-        return native_muls_word((s16)left, (s16)right);
-    }
-    return left * right;
+    return native_muls_word((s16)left, (s16)right);
 }
 
-static bool camera_supports_native_word_math(s32 px, s32 py) {
-    return (bool)(
-        px >= (s32)bsp_map_max_x - 32767 &&
-        px <= (s32)bsp_map_min_x + 32768 &&
-        py >= (s32)bsp_map_max_y - 32767 &&
-        py <= (s32)bsp_map_min_y + 32768);
+static u32 native_mulu_word(u16 left, u16 right) {
+    u32 result = left;
+    __asm__ volatile (
+        "mulu.w %1,%0"
+        : "+d" (result)
+        : "d" (right)
+        : "cc");
+    return result;
+}
+
+// Exact 32x16 multiply assembled from the 68000's two 16x16 partial products.
+// This replaces libgcc's bit-at-a-time __mulsi3 in UV interpolation while
+// preserving the full signed 32-bit result used by the reference C renderer.
+static s32 native_mul_long_unsigned(s32 left, u16 right) {
+    const bool negative = (bool)(left < 0);
+    const u32 magnitude = negative ? (u32)(-left) : (u32)left;
+    const u32 low = native_mulu_word((u16)magnitude, right);
+    const u32 high = native_mulu_word((u16)(magnitude >> 16), right) << 16;
+    const u32 product = low + high;
+    return negative ? -(s32)product : (s32)product;
 }
 
 // These reciprocal quotients are always non-negative and fit in a u16 on the
@@ -132,11 +149,7 @@ static bool camera_supports_native_word_math(s32 px, s32 py) {
 // compiler-emitted signed 32-bit division helper while preserving the exact
 // integer result. Keep a general fallback for unusual map coordinates.
 static u16 reciprocal_depth(s32 depth) {
-    if ((depth > 0) && (depth <= 0xFFFF)) {
-        return divu(BSP_INV_SCALE, (u16)depth);
-    }
-
-    return (u16)(BSP_INV_SCALE / depth);
+    return divu(BSP_INV_SCALE, (u16)depth);
 }
 
 static s32 reciprocal_span(s32 span) {
@@ -145,28 +158,39 @@ static s32 reciprocal_span(s32 span) {
     if (span == 1) {
         return (s32)numerator;
     }
-    if ((span > 1) && (span <= 0xFFFF)) {
-        return (s32)divu(numerator, (u16)span);
-    }
-
-    return (s32)(numerator / (u32)span);
+    return (s32)divu(numerator, (u16)span);
 }
 
-// DIVS.W produces a 16-bit quotient. Screen projection and texture coordinates
-// normally stay in that range; use it when they do and retain the old 32-bit
-// expression for an exact overflow-safe fallback.
+// Collision keeps the camera inside E1M1, whose generated bounds prove every
+// BSP screen/clip/UV quotient fits a signed word. Avoid retaining an unreachable
+// generic division branch in each inlined projection call.
 static s32 perspective_divide(s32 numerator, s32 denominator) {
-    if ((denominator > 0) && (denominator <= 0x7FFF)) {
-        const s32 min_quotient_numerator = -((s32)denominator << 15);
-        const s32 max_quotient_numerator = ((s32)denominator << 15) - denominator;
+    return (s32)divs(numerator, (s16)denominator);
+}
 
-        if ((numerator >= min_quotient_numerator) &&
-            (numerator <= max_quotient_numerator)) {
-            return (s32)divs(numerator, (s16)denominator);
-        }
+static void transform_vertex(u16 vertex_index, s32 *depth, s32 *lateral) {
+    if (vertex_index < BSP_MAX_VERTICES &&
+        g_vertex_generation[vertex_index] == g_cast_generation) {
+        *depth = g_vertex_depth[vertex_index];
+        *lateral = g_vertex_lateral[vertex_index];
+        return;
     }
 
-    return numerator / denominator;
+    const BspVertex *vertex = &bsp_vertices[vertex_index];
+    const s32 relx = (s32)vertex->x - g_px;
+    const s32 rely = (s32)vertex->y - g_py;
+    const s32 transformed_depth =
+        (render_mul(relx, g_fwx) + render_mul(rely, g_fwy)) >> FX_SHIFT;
+    const s32 transformed_lateral =
+        (render_mul(relx, g_rx) + render_mul(rely, g_ry)) >> FX_SHIFT;
+
+    *depth = transformed_depth;
+    *lateral = transformed_lateral;
+    if (vertex_index < BSP_MAX_VERTICES) {
+        g_vertex_depth[vertex_index] = (s16)transformed_depth;
+        g_vertex_lateral[vertex_index] = (s16)transformed_lateral;
+        g_vertex_generation[vertex_index] = g_cast_generation;
+    }
 }
 
 static u16 find_next_open(u16 sample) {
@@ -228,7 +252,6 @@ static void draw_seg(u16 seg_index) {
     const u16 door_lift = bsp_seg_door_lift(seg_index);
     const bool moving_door = (bool)(seg->type == BSP_SEG_DOOR && door_lift > 0);
     const BspVertex *a = &bsp_vertices[seg->v1];
-    const BspVertex *b = &bsp_vertices[seg->v2];
 
     // Backface / one-sided cull: draw only when the camera is on the seg's
     // front side (the side its normal points toward).
@@ -239,15 +262,13 @@ static void draw_seg(u16 seg_index) {
     }
 
     // Transform both endpoints into view space (depth = forward, lat = right).
-    s32 relx = (s32)a->x - g_px;
-    s32 rely = (s32)a->y - g_py;
-    s32 depthA = (render_mul(relx, g_fwx) + render_mul(rely, g_fwy)) >> FX_SHIFT;
-    s32 latA = (render_mul(relx, g_rx) + render_mul(rely, g_ry)) >> FX_SHIFT;
-
-    relx = (s32)b->x - g_px;
-    rely = (s32)b->y - g_py;
-    s32 depthB = (render_mul(relx, g_fwx) + render_mul(rely, g_fwy)) >> FX_SHIFT;
-    s32 latB = (render_mul(relx, g_rx) + render_mul(rely, g_ry)) >> FX_SHIFT;
+    // Shared endpoints hit the generation cache after their first segment.
+    s32 depthA;
+    s32 latA;
+    s32 depthB;
+    s32 latB;
+    transform_vertex(seg->v1, &depthA, &latA);
+    transform_vertex(seg->v2, &depthB, &latB);
 
     // Texture coordinate along the wall (world units), repeating every 256 px
     // like the BSP projection. u goes 0 -> wall_length from v1 -> v2. The wall
@@ -265,13 +286,13 @@ static void draw_seg(u16 seg_index) {
         const s32 t = perspective_divide(((s32)BSP_NEAR - depthA) << FX_SHIFT,
                                          depthB - depthA);
         latA += render_mul(latB - latA, t) >> FX_SHIFT;
-        uA += ((uB - uA) * t) >> FX_SHIFT;
+        uA += native_mul_long_unsigned(uB - uA, (u16)t) >> FX_SHIFT;
         depthA = BSP_NEAR;
     } else if (depthB < BSP_NEAR) {
         const s32 t = perspective_divide(((s32)BSP_NEAR - depthB) << FX_SHIFT,
                                          depthA - depthB);
         latB += render_mul(latA - latB, t) >> FX_SHIFT;
-        uB += ((uA - uB) * t) >> FX_SHIFT;
+        uB += native_mul_long_unsigned(uA - uB, (u16)t) >> FX_SHIFT;
         depthB = BSP_NEAR;
     }
 
@@ -294,8 +315,8 @@ static void draw_seg(u16 seg_index) {
     // Perspective-correct interpolation is linear in 1/depth and u/depth.
     const s32 invzL = reciprocal_depth(depthL);
     const s32 invzR = reciprocal_depth(depthR);
-    const s32 uzL = uL * invzL;
-    const s32 uzR = uR * invzR;
+    const s32 uzL = native_mul_long_unsigned(uL, (u16)invzL);
+    const s32 uzR = native_mul_long_unsigned(uR, (u16)invzR);
     // Reciprocal of the span, Q8, computed once per seg so the inner loop's
     // horizontal fraction is a multiply instead of a per-column divide. Matches
     // the old ((x-xL)<<8)/span to within the reciprocal's truncation.
@@ -327,7 +348,8 @@ static void draw_seg(u16 seg_index) {
     u16 sample = find_next_open(first_sample);
     while (sample <= last_sample) {
         const s32 x = (s32)sample * RAY_COL_STRIDE;
-        const s32 sfix = (((x - xL) * inv_span) >> FX_SHIFT); // 0..256 across span
+        const s32 sfix = (span == 1) ? 0 :
+            (native_mul_long_unsigned(x - xL, (u16)inv_span) >> FX_SHIFT);
         RayColumn *col = &g_columns[x];
 
         const s32 invz = invzL + (render_mul(invzR - invzL, sfix) >> FX_SHIFT);
@@ -341,7 +363,7 @@ static void draw_seg(u16 seg_index) {
             depth_col = 1;
         }
 
-        const s32 uz = uzL + (((uzR - uzL) * sfix) >> FX_SHIFT);
+        const s32 uz = uzL + (native_mul_long_unsigned(uzR - uzL, (u16)sfix) >> FX_SHIFT);
         const s32 u_col = perspective_divide(uz, invz);
 
         // height = RAY_PROJ_Y*RAY_WORLD_WALL_HEIGHT / depth_col, but depth_col =
@@ -353,7 +375,7 @@ static void draw_seg(u16 seg_index) {
             height = RAY_VIEW_ROWS;
         }
 
-        const s32 scaled_u = (u_col * (s32)u_scale_q12) >> 12;
+        const s32 scaled_u = native_mul_long_unsigned(u_col, u_scale_q12) >> 12;
         if (moving_door) {
             RayDoorOverlay *door = &col->door;
             if (door->height != 0 && depth_col >= door->depth) {
@@ -407,6 +429,8 @@ static bool project_box_range(const BspBox *box, s16 *left, s16 *right) {
     s32 laterals[4];
     s32 min_depth = 0x7FFFFFFF;
     s32 max_depth = -0x7FFFFFFF;
+    s32 min_lateral = 0x7FFFFFFF;
+    s32 max_lateral = -0x7FFFFFFF;
     // Track the division-free half-plane extrema in the same pass that computes
     // depth/lateral, so surviving boxes reuse these arrays for the projections
     // below without a second transform pass.
@@ -442,6 +466,8 @@ static bool project_box_range(const BspBox *box, s16 *left, s16 *right) {
         const s32 lateral = laterals[i];
         if (depth < min_depth) min_depth = depth;
         if (depth > max_depth) max_depth = depth;
+        if (lateral < min_lateral) min_lateral = lateral;
+        if (lateral > max_lateral) max_lateral = lateral;
 
         const s32 projected_lateral = render_mul(RAY_PROJ_X, lateral);
         const s32 left_plane = projected_lateral + render_mul(LEFT_REJECT_SCALE, depth);
@@ -508,19 +534,18 @@ static bool project_box_range(const BspBox *box, s16 *left, s16 *right) {
         return FALSE;
     }
 
-    s32 min_screen = 0x7FFFFFFF;
-    s32 max_screen = -0x7FFFFFFF;
     BSP_DBG_INC(boxes_projected);
-    // Four native DIVS.W projections are cheaper on a 68000 than the old two
-    // divisions plus twelve generic 32-bit cross-products used to select ratio
-    // extrema. Taking min/max of the exact projected values preserves the same
-    // conservative range.
-    for (u16 i = 0; i < 4; i++) {
-        const s32 screen = RAY_VIEW_CENTER_X + perspective_divide(
-            render_mul(laterals[i], RAY_PROJ_X), depths[i]);
-        if (screen < min_screen) min_screen = screen;
-        if (screen > max_screen) max_screen = screen;
-    }
+    // Bound the four projected ratios by the enclosing lateral/depth rectangle.
+    // For negative lateral the nearest depth is the most-negative projection;
+    // for positive lateral it is the most-positive one. The opposite extrema
+    // use max_depth. This is a conservative superset of the old four exact
+    // corner projections and costs only two native DIVS.W.
+    const s32 min_denominator = (min_lateral < 0) ? min_depth : max_depth;
+    const s32 max_denominator = (max_lateral > 0) ? min_depth : max_depth;
+    s32 min_screen = RAY_VIEW_CENTER_X + perspective_divide(
+        render_mul(min_lateral, RAY_PROJ_X), min_denominator);
+    s32 max_screen = RAY_VIEW_CENTER_X + perspective_divide(
+        render_mul(max_lateral, RAY_PROJ_X), max_denominator);
 
     // Cover integer projection/truncation at box edges and the renderer's
     // horizontal sample stride before making an outside-FOV decision.
@@ -541,12 +566,16 @@ static void render_boxed_child(u16 child, const BspBox *box) {
     s16 left;
     s16 right;
 #if DEBUG_PERF
-    const u32 projection_start = getSubTick();
+    const u32 projection_start = g_bsp_dbg_measure_box ? getSubTick() : 0;
 #endif
 
     const bool projected = project_box_range(box, &left, &right);
 #if DEBUG_PERF
-    g_bsp_dbg_box_projection_subticks += getSubTick() - projection_start;
+    if (g_bsp_dbg_measure_box) {
+        const u32 elapsed = getSubTick() - projection_start;
+        g_bsp_dbg_box_projection_subticks += elapsed;
+        renderer_perf_record_deep(RENDERER_PERF_DEEP_BSP_BOX, elapsed, 1);
+    }
 #endif
     if (!projected) {
         return;
@@ -585,7 +614,7 @@ static void render_node(u16 child) {
     const u8 side_bit = (u8)(1u << (child & 7));
     if (g_node_side_generation[child] != g_position_generation) {
 #if DEBUG_PERF
-        const u32 side_start = getSubTick();
+        const u32 side_start = g_bsp_dbg_measure_side ? getSubTick() : 0;
 #endif
         const s32 cross = render_mul(g_px - n->px, n->dy) -
                           render_mul(g_py - n->py, n->dx);
@@ -593,7 +622,11 @@ static void render_node(u16 child) {
         else g_node_side_bits[child >> 3] &= (u8)~side_bit;
         g_node_side_generation[child] = g_position_generation;
 #if DEBUG_PERF
-        g_bsp_dbg_side_cache_subticks += getSubTick() - side_start;
+        if (g_bsp_dbg_measure_side) {
+            const u32 elapsed = getSubTick() - side_start;
+            g_bsp_dbg_side_cache_subticks += elapsed;
+            renderer_perf_record_deep(RENDERER_PERF_DEEP_BSP_SIDE, elapsed, 1);
+        }
 #endif
     }
     if (g_node_side_bits[child >> 3] & side_bit) {
@@ -617,11 +650,25 @@ void bsp_traverse_front_to_back(const PlayerState *player,
     g_ry = g_fwx;
     g_px = player->x;
     g_py = player->y;
-    g_native_word_math = camera_supports_native_word_math(g_px, g_py);
     g_visit_leaf = visit_leaf;
     g_range_closed = range_closed;
     g_all_closed = all_closed;
     g_traverse_context = context;
+
+#if DEBUG_PERF
+    {
+        const RendererPerfDeepPhase phase = renderer_perf_get_deep_phase();
+        g_bsp_dbg_measure_side = (bool)(phase == RENDERER_PERF_DEEP_BSP_SIDE);
+        g_bsp_dbg_measure_box = (bool)(phase == RENDERER_PERF_DEEP_BSP_BOX);
+        g_bsp_dbg_measure_segment = (bool)(phase == RENDERER_PERF_DEEP_BSP_SEGMENT);
+    }
+#endif
+
+    g_cast_generation++;
+    if (g_cast_generation == 0) {
+        for (u16 i = 0; i < BSP_MAX_VERTICES; i++) g_vertex_generation[i] = 0;
+        g_cast_generation = 1;
+    }
 
     if (!g_node_cache_valid || g_px != g_node_cache_px || g_py != g_node_cache_py) {
         g_position_generation++;
@@ -642,11 +689,15 @@ static void bsp_visit_leaf(u16 subsector_id, void *context) {
     (void)context;
     for (u16 i = 0; i < ss->seg_count; i++) {
 #if DEBUG_PERF
-        const u32 raster_start = getSubTick();
+        const u32 raster_start = g_bsp_dbg_measure_segment ? getSubTick() : 0;
 #endif
         draw_seg((u16)(ss->first_seg + i));
 #if DEBUG_PERF
-        g_bsp_dbg_segment_raster_subticks += getSubTick() - raster_start;
+        if (g_bsp_dbg_measure_segment) {
+            const u32 elapsed = getSubTick() - raster_start;
+            g_bsp_dbg_segment_raster_subticks += elapsed;
+            renderer_perf_record_deep(RENDERER_PERF_DEEP_BSP_SEGMENT, elapsed, 1);
+        }
 #endif
     }
 }
@@ -672,13 +723,19 @@ void bsp_init(void) {
     g_node_cache_valid = FALSE;
     g_position_generation = 1;
     for (u16 i = 0; i < BSP_MAX_NODES; i++) g_node_side_generation[i] = 0;
+    g_cast_generation = 0;
+    for (u16 i = 0; i < BSP_MAX_VERTICES; i++) g_vertex_generation[i] = 0;
 }
 
 void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColors *scene_colors) {
     g_columns = columns;
 
-    scene_colors->ceiling_color = BSP_CEILING_COLOR;
-    scene_colors->floor_color = BSP_FLOOR_COLOR;
+    const u16 subsector = bsp_find_subsector(player->x, player->y);
+    u16 sector = (subsector < bsp_subsector_count) ? bsp_subsector_sector[subsector] : 0;
+    if (sector >= FREEDOOM_SECTOR_VISUAL_COUNT) sector = 0;
+    const u8 *visual = FREEDOOM_SECTOR_VISUALS[sector];
+    scene_colors->ceiling = (RayFlatColor){visual[0], visual[1], visual[2]};
+    scene_colors->floor = (RayFlatColor){visual[3], visual[4], visual[5]};
 
     // Clear occlusion and seed every column with a far/empty default so columns
     // no wall covers still render (as distant, mostly sky/floor).

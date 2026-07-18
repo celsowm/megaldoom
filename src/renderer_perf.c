@@ -2,7 +2,15 @@
 #include "player_controller.h"
 
 #if DEBUG_PERF
+#define PERF_VBLANK_HISTORY 60
+#define PERF_VBLANK_BUCKETS 32
+
 static RendererPerfSnapshot s_perf;
+static u8 s_vblank_history[PERF_VBLANK_HISTORY];
+static u8 s_vblank_buckets[PERF_VBLANK_BUCKETS];
+static u16 s_vblank_history_sum;
+static u16 s_vblank_history_count;
+static u16 s_vblank_history_cursor;
 
 void renderer_debug_set_cast_subticks(u32 subticks) {
     s_perf.cast_subticks = subticks;
@@ -17,9 +25,35 @@ void renderer_debug_set_redraw_reasons(u16 reasons) {
 }
 
 void renderer_debug_set_total_vblanks(u16 vblanks) {
+    const u8 sample = (u8)((vblanks < (PERF_VBLANK_BUCKETS - 1)) ?
+                               vblanks : (PERF_VBLANK_BUCKETS - 1));
+
     s_perf.total_vblanks = vblanks;
     if (vblanks > s_perf.max_vblanks) s_perf.max_vblanks = vblanks;
     if (vblanks > TARGET_FRAME_VSYNCS) s_perf.missed_deadlines++;
+
+    if (s_vblank_history_count == PERF_VBLANK_HISTORY) {
+        const u8 previous = s_vblank_history[s_vblank_history_cursor];
+        s_vblank_history_sum = (u16)(s_vblank_history_sum - previous);
+        s_vblank_buckets[previous]--;
+    } else {
+        s_vblank_history_count++;
+    }
+    s_vblank_history[s_vblank_history_cursor] = sample;
+    s_vblank_history_sum = (u16)(s_vblank_history_sum + sample);
+    s_vblank_buckets[sample]++;
+    s_vblank_history_cursor++;
+    if (s_vblank_history_cursor == PERF_VBLANK_HISTORY) s_vblank_history_cursor = 0;
+    s_perf.average_vblanks_x10 = divu((u32)s_vblank_history_sum * 10u,
+                                      s_vblank_history_count);
+
+    // Deep instrumentation rotates once per completed game frame. The next
+    // phase is cleared here, so its timer contains exactly one representative
+    // sample and the other five retain their last measurements for the overlay.
+    s_perf.deep_phase++;
+    if (s_perf.deep_phase >= RENDERER_PERF_DEEP_COUNT) s_perf.deep_phase = 0;
+    s_perf.deep_subticks[s_perf.deep_phase] = 0;
+    s_perf.deep_units[s_perf.deep_phase] = 0;
 }
 
 void renderer_perf_set_pack_subticks(u32 subticks) {
@@ -71,6 +105,41 @@ void renderer_perf_record_upload_run(u16 tiles, u32 issue_subticks) {
 
 void renderer_perf_record_dma_wait(u32 subticks) {
     s_perf.dma_wait_subticks += subticks;
+}
+
+void renderer_perf_record_diagnostics(u32 subticks) {
+    u16 accumulated = 0;
+    const u16 target = divu((u32)s_vblank_history_count * 95u + 99u, 100u);
+
+    s_perf.diagnostics_subticks = subticks;
+    for (u16 bucket = 0; bucket < PERF_VBLANK_BUCKETS; bucket++) {
+        accumulated = (u16)(accumulated + s_vblank_buckets[bucket]);
+        if (accumulated >= target) {
+            s_perf.p95_vblanks = bucket;
+            break;
+        }
+    }
+}
+
+RendererPerfDeepPhase renderer_perf_get_deep_phase(void) {
+    return (RendererPerfDeepPhase)s_perf.deep_phase;
+}
+
+void renderer_perf_record_deep(RendererPerfDeepPhase phase, u32 subticks, u16 units) {
+    if (phase != (RendererPerfDeepPhase)s_perf.deep_phase) return;
+    s_perf.deep_subticks[phase] += subticks;
+    s_perf.deep_units[phase] = (u16)(s_perf.deep_units[phase] + units);
+}
+
+void renderer_perf_record_asm_compare(u16 tile, bool mismatch, bool canary_failure,
+                                      bool completed_cycle) {
+    s_perf.asm_compare_tile = tile;
+    if (s_perf.asm_checked_tiles != 0xFFFF) s_perf.asm_checked_tiles++;
+    if (mismatch && s_perf.asm_mismatches != 0xFFFF) s_perf.asm_mismatches++;
+    if (canary_failure && s_perf.asm_canary_failures != 0xFFFF) {
+        s_perf.asm_canary_failures++;
+    }
+    if (completed_cycle && s_perf.asm_cycles != 0xFFFF) s_perf.asm_cycles++;
 }
 
 RendererPerfSnapshot renderer_get_perf_snapshot(void) {

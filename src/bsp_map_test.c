@@ -42,6 +42,7 @@ const BspSubsector bsp_subsectors[] = {
     {0, 6}, // 0 west
     {6, 6}, // 1 east
 };
+const u16 bsp_subsector_sector[] = {0, 0};
 
 const BspNode bsp_nodes[] = {
     {1024, 256, 0, 1536,

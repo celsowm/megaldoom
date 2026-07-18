@@ -50,7 +50,13 @@ def has_stale_dependencies(output: Path, root: Path | None = None) -> bool:
         return False
     root = root or output.parent
     for depfile in output.rglob("*.d"):
-        for prerequisite in dependency_prerequisites(depfile, root):
+        prerequisites = dependency_prerequisites(depfile, root)
+        # Removed sources can leave orphan .o/.d pairs because SGDK's clean
+        # target only enumerates the current object list. The first prerequisite
+        # is the translation unit itself; if it is gone, ignore the stale rule.
+        if not prerequisites or not prerequisites[0].exists():
+            continue
+        for prerequisite in prerequisites:
             if not prerequisite.exists():
                 return True
     return False

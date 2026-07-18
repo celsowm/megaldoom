@@ -16,6 +16,31 @@ typedef struct {
     u8 h;
 } BillboardTex;
 
+// Explicit ROM pointer tables avoid GCC's generic 32-bit frame*stride helper
+// for non-power-of-two sprite sheets. Selection is one indexed pointer load.
+static const u8 *const ENEMY_FRAME_PIXELS[FREEDOOM_BILLBOARD_ENEMY_FRAME_COUNT] = {
+    (const u8 *)FREEDOOM_BILLBOARD_ENEMY_FRAMES[0], (const u8 *)FREEDOOM_BILLBOARD_ENEMY_FRAMES[1],
+    (const u8 *)FREEDOOM_BILLBOARD_ENEMY_FRAMES[2], (const u8 *)FREEDOOM_BILLBOARD_ENEMY_FRAMES[3],
+    (const u8 *)FREEDOOM_BILLBOARD_ENEMY_FRAMES[4], (const u8 *)FREEDOOM_BILLBOARD_ENEMY_FRAMES[5],
+    (const u8 *)FREEDOOM_BILLBOARD_ENEMY_FRAMES[6], (const u8 *)FREEDOOM_BILLBOARD_ENEMY_FRAMES[7],
+    (const u8 *)FREEDOOM_BILLBOARD_ENEMY_FRAMES[8], (const u8 *)FREEDOOM_BILLBOARD_ENEMY_FRAMES[9],
+};
+static const u8 *const BARREL_FRAME_PIXELS[FREEDOOM_BILLBOARD_BARREL_EXPLOSION_FRAME_COUNT] = {
+    (const u8 *)FREEDOOM_BILLBOARD_BARREL_EXPLOSION_FRAMES[0],
+    (const u8 *)FREEDOOM_BILLBOARD_BARREL_EXPLOSION_FRAMES[1],
+    (const u8 *)FREEDOOM_BILLBOARD_BARREL_EXPLOSION_FRAMES[2],
+    (const u8 *)FREEDOOM_BILLBOARD_BARREL_EXPLOSION_FRAMES[3],
+    (const u8 *)FREEDOOM_BILLBOARD_BARREL_EXPLOSION_FRAMES[4],
+};
+static const u8 *const PUFF_FRAME_PIXELS[FREEDOOM_BILLBOARD_PUFF_FRAME_COUNT] = {
+    (const u8 *)FREEDOOM_BILLBOARD_PUFF_FRAMES[0], (const u8 *)FREEDOOM_BILLBOARD_PUFF_FRAMES[1],
+    (const u8 *)FREEDOOM_BILLBOARD_PUFF_FRAMES[2], (const u8 *)FREEDOOM_BILLBOARD_PUFF_FRAMES[3],
+};
+static const u8 *const BLOOD_FRAME_PIXELS[FREEDOOM_BILLBOARD_BLOOD_FRAME_COUNT] = {
+    (const u8 *)FREEDOOM_BILLBOARD_BLOOD_FRAMES[0], (const u8 *)FREEDOOM_BILLBOARD_BLOOD_FRAMES[1],
+    (const u8 *)FREEDOOM_BILLBOARD_BLOOD_FRAMES[2],
+};
+
 #define PUFF_WALL_DEPTH_TOLERANCE 64
 
 static bool billboard_depth_visible(const ProjectedBillboard *object,
@@ -33,23 +58,23 @@ static BillboardTex get_billboard_texture(u8 visual_id, u8 frame) {
         case BILLBOARD_VISUAL_DUMMY_DAMAGED:
         case BILLBOARD_VISUAL_DUMMY: {
             const u8 f = (frame < FREEDOOM_BILLBOARD_ENEMY_FRAME_COUNT) ? frame : 0;
-            return (BillboardTex){(const u8 *)FREEDOOM_BILLBOARD_ENEMY_FRAMES[f],
+            return (BillboardTex){ENEMY_FRAME_PIXELS[f],
                                   FREEDOOM_BILLBOARD_ENEMY_W, FREEDOOM_BILLBOARD_ENEMY_H};
         }
         case BILLBOARD_VISUAL_BARREL_EXPLODING: {
             const u8 f = (frame < FREEDOOM_BILLBOARD_BARREL_EXPLOSION_FRAME_COUNT) ? frame : 0;
-            return (BillboardTex){(const u8 *)FREEDOOM_BILLBOARD_BARREL_EXPLOSION_FRAMES[f],
+            return (BillboardTex){BARREL_FRAME_PIXELS[f],
                                   FREEDOOM_BILLBOARD_BARREL_EXPLOSION_W,
                                   FREEDOOM_BILLBOARD_BARREL_EXPLOSION_H};
         }
         case BILLBOARD_VISUAL_PUFF: {
             const u8 f = (frame < FREEDOOM_BILLBOARD_PUFF_FRAME_COUNT) ? frame : 0;
-            return (BillboardTex){(const u8 *)FREEDOOM_BILLBOARD_PUFF_FRAMES[f],
+            return (BillboardTex){PUFF_FRAME_PIXELS[f],
                                   FREEDOOM_BILLBOARD_PUFF_W, FREEDOOM_BILLBOARD_PUFF_H};
         }
         case BILLBOARD_VISUAL_BLOOD: {
             const u8 f = (frame < FREEDOOM_BILLBOARD_BLOOD_FRAME_COUNT) ? frame : 0;
-            return (BillboardTex){(const u8 *)FREEDOOM_BILLBOARD_BLOOD_FRAMES[f],
+            return (BillboardTex){BLOOD_FRAME_PIXELS[f],
                                   FREEDOOM_BILLBOARD_BLOOD_W, FREEDOOM_BILLBOARD_BLOOD_H};
         }
         default:
@@ -72,6 +97,7 @@ static BillboardTex get_billboard_texture(u8 visual_id, u8 frame) {
 #define FOG_SHIFT 9
 static u8 g_shade_luts[SHADE_LEVELS][16];
 static u16 g_last_compass_angle = 0xFFFF;
+static s16 g_last_weapon_variant = -1;
 static bool g_upload_requires_bank_swap = FALSE;
 static bool g_compass_dirty = TRUE;
 
@@ -109,22 +135,78 @@ static void clear_all_view_banks_dirty(void) {
 // Pixel-replication table for the active stride (guarded so the unused one isn't
 // compiled): REP4[c] == c*0x1111 spreads a colour across 4px (stride 4); REP2[c] ==
 // c*0x11 spreads it across 2px (stride 2, four cast columns per 8px tile).
+static const u8 FLAT_BAYER_4X4[4][4] = {
+    {0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5},
+};
+
+static u8 sample_flat_color(const RayFlatColor *material, u16 x, u16 y) {
+    return (FLAT_BAYER_4X4[y & 3][x & 3] < material->secondary_coverage) ?
+        material->secondary : material->primary;
+}
+
 #if RAY_COL_STRIDE == 4
 static const u32 REP4[16] = {
     0x0000, 0x1111, 0x2222, 0x3333, 0x4444, 0x5555, 0x6666, 0x7777,
     0x8888, 0x9999, 0xAAAA, 0xBBBB, 0xCCCC, 0xDDDD, 0xEEEE, 0xFFFF,
 };
+
+static u16 pack_flat_quad(const RayFlatColor *material, u16 x, u16 y) {
+    return (u16)REP4[sample_flat_color(material, x, y) & 0x0F];
+}
 #else /* RAY_COL_STRIDE == 2 */
 static const u32 REP2[16] = {
     0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
     0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF,
 };
 
-static u32 pack_flat_row(u8 color) {
-    const u32 replicated = REP2[color & 0x0F];
-    return (replicated << 24) | (replicated << 16) | (replicated << 8) | replicated;
+static u8 pack_flat_pair(const RayFlatColor *material, u16 x, u16 y) {
+    return (u8)((sample_flat_color(material, x, y) << 4) |
+                sample_flat_color(material, (u16)(x + 1), y));
+}
+
+static u32 pack_flat_row(const RayFlatColor *material, u16 x, u16 y) {
+    return ((u32)pack_flat_pair(material, x, y) << 24) |
+           ((u32)pack_flat_pair(material, (u16)(x + 2), y) << 16) |
+           ((u32)pack_flat_pair(material, (u16)(x + 4), y) << 8) |
+           pack_flat_pair(material, (u16)(x + 6), y);
 }
 #endif
+
+typedef struct {
+    u32 ceiling[4];
+    u32 floor[4];
+} PackedFlatRows;
+
+static PackedFlatRows build_flat_rows(const RaySceneColors *scene_colors) {
+    PackedFlatRows rows;
+    const u32 fixed_floor = (u32)MEGALDOOM_WORLD_COLOR_FLOOR * 0x11111111u;
+    for (u16 y = 0; y < 4; y++) {
+#if RAY_COL_STRIDE == 4
+        const u16 ceiling = pack_flat_quad(&scene_colors->ceiling, 0, y);
+        rows.ceiling[y] = ((u32)ceiling << 16) | ceiling;
+#else
+        rows.ceiling[y] = pack_flat_row(&scene_colors->ceiling, 0, y);
+#endif
+        // Floors are deliberately invariant across sectors. This constant ROM
+        // material eliminates both Bayer sampling and the blue/yellow/brown
+        // transitions that did not add useful navigation information.
+        rows.floor[y] = fixed_floor;
+    }
+    return rows;
+}
+
+// Tile bands always begin at y%4 == 0, so the four prepacked Bayer rows repeat
+// exactly twice. Three MOVEM.L instructions replace two eight-iteration C
+// loops for every whole ceiling/floor tile without changing a nibble.
+static inline void write_repeated_flat_tile(u32 *target, const u32 rows[4]) {
+    __asm__ volatile (
+        "movem.l (%1),%%d0-%%d3\n\t"
+        "movem.l %%d0-%%d3,(%0)\n\t"
+        "movem.l %%d0-%%d3,16(%0)"
+        :
+        : "a" (target), "a" (rows)
+        : "d0", "d1", "d2", "d3", "memory");
+}
 
 // Precomposed weapon overlay: the weapon bitmap is static per variant (idle /
 // fire), so instead of re-testing ~72x54 pixels every redraw we bake, once at
@@ -143,6 +225,7 @@ static u32 pack_flat_row(u8 color) {
 void renderer_scene_init(void) {
     build_shade_luts();
     g_last_compass_angle = 0xFFFF;
+    g_last_weapon_variant = -1;
     g_upload_requires_bank_swap = FALSE;
     g_compass_dirty = TRUE;
     g_view_upload = (ViewUploadState){FALSE, FALSE, FALSE, 0, 0};
@@ -152,6 +235,7 @@ void renderer_scene_init(void) {
 
 void renderer_invalidate_scene(void) {
     g_last_compass_angle = 0xFFFF;
+    g_last_weapon_variant = -1;
     g_upload_requires_bank_swap = FALSE;
     g_compass_dirty = TRUE;
     renderer_overlay_reset();
@@ -171,6 +255,9 @@ typedef struct {
     u8 shade_level;
     u8 flags;
 } WallColumnDescriptor;
+
+#define DOOR_FRAME_TEXELS (WALL_TEX_DIM / 16)
+#define DOOR_SAFETY_TEXELS (WALL_TEX_DIM / 8)
 
 static WallColumnDescriptor describe_textured_column(u16 wall_h,
                                                      u16 depth,
@@ -224,47 +311,35 @@ static u8 style_wall_texel(const WallColumnDescriptor *descriptor,
                            u8 texel) {
     if ((descriptor->flags & RAY_COLUMN_FLAG_DOOR) == 0) return texel;
 
-    // At 40 sampled wall columns, the original 128px BIGDOOR art collapses
-    // into gray noise. Give every interactive slab a stable low-resolution
-    // silhouette: a dark metal frame plus a yellow/black moving safety edge.
+    // At 80 sampled wall columns, preserve a stable interactive silhouette
+    // around the original BIGDOOR art: a dark metal frame plus a yellow/black
+    // moving safety edge.
     // The centre remains the real WAD texture.
-    if (descriptor->tex_x < 2 || descriptor->tex_x >= (WALL_TEX_DIM - 2) ||
-        tex_y < 2) {
+    if (descriptor->tex_x < DOOR_FRAME_TEXELS ||
+        descriptor->tex_x >= (WALL_TEX_DIM - DOOR_FRAME_TEXELS) ||
+        tex_y < DOOR_FRAME_TEXELS) {
         return 0;
     }
-    if (tex_y >= (WALL_TEX_DIM - 4)) {
-        return (descriptor->tex_x & 4) ? MEGALDOOM_WORLD_COLOR_WARNING : 0;
+    if (tex_y >= (WALL_TEX_DIM - DOOR_SAFETY_TEXELS)) {
+        return (descriptor->tex_x & DOOR_SAFETY_TEXELS) ?
+                   MEGALDOOM_WORLD_COLOR_WARNING : 0;
     }
     return texel;
 }
 
-static u8 sample_wall_descriptor(const WallColumnDescriptor *descriptor,
-                                 const RaySceneColors *scene_colors,
-                                 u16 y) {
-    if (y < descriptor->top) {
-        return scene_colors->ceiling_color;
-    }
-    if (y >= descriptor->bottom) {
-        return scene_colors->floor_color;
-    }
-
-    const u8 tex_y = (u8)((descriptor->vertical_samples[y - descriptor->top] +
-                           descriptor->tex_y) & WALL_TEX_DIM_MASK);
-    const u8 texel = descriptor->texture[(tex_y * WALL_TEX_DIM) +
-                                          descriptor->tex_x] & 0x0F;
-    return descriptor->shade_map[style_wall_texel(descriptor, tex_y, texel)];
-}
 #else
 static u8 style_wall_texel(const WallColumnDescriptor *descriptor,
                            u8 tex_y,
                            u8 texel) {
     if ((descriptor->flags & RAY_COLUMN_FLAG_DOOR) == 0) return texel;
-    if (descriptor->tex_x < 2 || descriptor->tex_x >= (WALL_TEX_DIM - 2) ||
-        tex_y < 2) {
+    if (descriptor->tex_x < DOOR_FRAME_TEXELS ||
+        descriptor->tex_x >= (WALL_TEX_DIM - DOOR_FRAME_TEXELS) ||
+        tex_y < DOOR_FRAME_TEXELS) {
         return 0;
     }
-    if (tex_y >= (WALL_TEX_DIM - 4)) {
-        return (descriptor->tex_x & 4) ? MEGALDOOM_WORLD_COLOR_WARNING : 0;
+    if (tex_y >= (WALL_TEX_DIM - DOOR_SAFETY_TEXELS)) {
+        return (descriptor->tex_x & DOOR_SAFETY_TEXELS) ?
+                   MEGALDOOM_WORLD_COLOR_WARNING : 0;
     }
     return texel;
 }
@@ -278,17 +353,13 @@ static u8 style_wall_texel(const WallColumnDescriptor *descriptor,
 static void build_bsp_tilemap(const RayColumn *columns,
                                    const RaySceneColors *scene_colors,
                                    u32 target[][8]) {
+    const PackedFlatRows flat_rows = build_flat_rows(scene_colors);
     // Each 8px-wide tile column maps to two cast columns (px 0 and 4), each
     // replicated 4x. Pre-shade each column's 32 texels once, then pack directly
     // into each tile row. Whole-tile ceiling/floor bands skip per-row wall
     // sampling, and the two 120-entry u16 strips are gone: the packer writes
     // each output u32 exactly once instead of building and re-reading a
     // full-height temporary (~19 KB of intermediate traffic per base frame).
-    const u16 ceiling_packed = (u16)REP4[scene_colors->ceiling_color];
-    const u16 floor_packed = (u16)REP4[scene_colors->floor_color];
-    const u32 ceiling_row = ((u32)ceiling_packed << 16) | ceiling_packed;
-    const u32 floor_row = ((u32)floor_packed << 16) | floor_packed;
-
     for (u16 tile_x = 0; tile_x < VIEW_TILE_W; tile_x++) {
         const u16 base_col = (u16)(tile_x * 8);
         const WallColumnDescriptor column_a = describe_wall_column(&columns[base_col]);
@@ -308,14 +379,10 @@ static void build_bsp_tilemap(const RayColumn *columns,
 
             if ((pixel_y + 7) < column_a.top && (pixel_y + 7) < column_b.top) {
                 // Whole-tile ceiling: this 8px band lies entirely above both walls.
-                for (u16 row = 0; row < 8; row++) {
-                    tile[row] = ceiling_row;
-                }
+                write_repeated_flat_tile(tile, flat_rows.ceiling);
             } else if (pixel_y >= column_a.bottom && pixel_y >= column_b.bottom) {
                 // Whole-tile floor: this 8px band lies entirely below both walls.
-                for (u16 row = 0; row < 8; row++) {
-                    tile[row] = floor_row;
-                }
+                write_repeated_flat_tile(tile, flat_rows.floor);
             } else {
                 // Mixed band: resolve each of the 8 rows directly from the two
                 // pre-shaded columns. Output is byte-identical to the old
@@ -324,9 +391,9 @@ static void build_bsp_tilemap(const RayColumn *columns,
                     const u16 py = (u16)(pixel_y + row);
                     u16 val_a;
                     if (py < column_a.top) {
-                        val_a = ceiling_packed;
+                        val_a = (u16)(flat_rows.ceiling[py & 3] >> 16);
                     } else if (py >= column_a.bottom) {
-                        val_a = floor_packed;
+                        val_a = (u16)(flat_rows.floor[py & 3] >> 16);
                     } else {
                         val_a = packed_column_a[
                             (column_a.vertical_samples[py - column_a.top] +
@@ -334,9 +401,9 @@ static void build_bsp_tilemap(const RayColumn *columns,
                     }
                     u16 val_b;
                     if (py < column_b.top) {
-                        val_b = ceiling_packed;
+                        val_b = (u16)flat_rows.ceiling[py & 3];
                     } else if (py >= column_b.bottom) {
-                        val_b = floor_packed;
+                        val_b = (u16)flat_rows.floor[py & 3];
                     } else {
                         val_b = packed_column_b[
                             (column_b.vertical_samples[py - column_b.top] +
@@ -349,48 +416,213 @@ static void build_bsp_tilemap(const RayColumn *columns,
     }
 }
 #else /* RAY_COL_STRIDE == 2 */
+#ifndef RENDERER_HOTPATH_C_REFERENCE
+#define RENDERER_HOTPATH_C_REFERENCE 1
+#endif
+
+void renderer_write_mixed_stride2_tile_asm(
+    u32 *tile,
+    u16 pixel_y,
+    const WallColumnDescriptor descriptors[4],
+    const u8 *const packed_columns[4],
+    const PackedFlatRows *flat_rows);
+
+#if DEBUG_PERF
+#define ASM_PROBE_CANARY_A 0x51A7C0DEu
+#define ASM_PROBE_CANARY_B 0xC001D00Du
+typedef struct {
+    u32 before[2];
+    u32 tile[8];
+    u32 after[2];
+} AsmTileProbe;
+
+static AsmTileProbe g_asm_tile_probe;
+static u16 g_asm_compare_cursor;
+
+// Check one framebuffer tile per rebuilt frame. A ten-second 30fps route
+// therefore covers all 300 tiles without paying for a second full framebuffer
+// every frame. Assembly writes only to the guarded scratch tile; C remains the
+// displayed result even after a perfect comparison.
+static void compare_stride2_tile_asm(u16 tile_index,
+                                    bool mixed,
+                                    const u32 c_tile[8],
+                                    u16 pixel_y,
+                                    const WallColumnDescriptor descriptors[4],
+                                    const u8 *const packed_columns[4],
+                                    const PackedFlatRows *flat_rows) {
+    bool mismatch = FALSE;
+    bool canary_failure = FALSE;
+    bool completed_cycle;
+
+    if (tile_index != g_asm_compare_cursor) return;
+    g_asm_tile_probe.before[0] = ASM_PROBE_CANARY_A;
+    g_asm_tile_probe.before[1] = ASM_PROBE_CANARY_B;
+    g_asm_tile_probe.after[0] = ASM_PROBE_CANARY_B;
+    g_asm_tile_probe.after[1] = ASM_PROBE_CANARY_A;
+
+    if (mixed) {
+        for (u16 row = 0; row < 8; row++) g_asm_tile_probe.tile[row] = 0xA5A5A5A5u;
+        renderer_write_mixed_stride2_tile_asm(g_asm_tile_probe.tile, pixel_y,
+                                              descriptors, packed_columns, flat_rows);
+        for (u16 row = 0; row < 8; row++) {
+            if (g_asm_tile_probe.tile[row] != c_tile[row]) mismatch = TRUE;
+        }
+    }
+    canary_failure = (bool)(g_asm_tile_probe.before[0] != ASM_PROBE_CANARY_A ||
+                            g_asm_tile_probe.before[1] != ASM_PROBE_CANARY_B ||
+                            g_asm_tile_probe.after[0] != ASM_PROBE_CANARY_B ||
+                            g_asm_tile_probe.after[1] != ASM_PROBE_CANARY_A);
+    completed_cycle = (bool)(g_asm_compare_cursor == (VIEW_TILE_COUNT - 1));
+    renderer_perf_record_asm_compare(tile_index, mismatch, canary_failure,
+                                     completed_cycle);
+    g_asm_compare_cursor++;
+    if (g_asm_compare_cursor == VIEW_TILE_COUNT) g_asm_compare_cursor = 0;
+}
+#endif
+
+// A mixed tile used to resolve four columns for each row, then shift/OR four
+// bytes into a u32. On the big-endian 68000 the four packed pairs are already
+// the four bytes of that u32, so write each lane directly. Splitting each lane
+// into ceiling/wall/floor runs removes the four per-row branches and all of the
+// long shifts from the hottest packing path.
+#if RENDERER_HOTPATH_C_REFERENCE
+static __attribute__((noinline)) void write_mixed_stride2_tile_reference(
+    u32 *tile,
+    u16 pixel_y,
+    const WallColumnDescriptor descriptors[4],
+    const u8 *const packed_columns[4],
+    const PackedFlatRows *flat_rows) {
+    u8 *const tile_bytes = (u8 *)tile;
+    const u8 *const ceiling_bytes = (const u8 *)flat_rows->ceiling;
+    const u8 *const floor_bytes = (const u8 *)flat_rows->floor;
+    const u16 end_y = (u16)(pixel_y + 8);
+
+    for (u16 lane = 0; lane < 4; lane++) {
+        const WallColumnDescriptor *const descriptor = &descriptors[lane];
+        const u8 *const packed_column = packed_columns[lane];
+        u8 *dst = &tile_bytes[lane];
+        u16 y = pixel_y;
+        u16 run_end = descriptor->top;
+        if (run_end > end_y) run_end = end_y;
+
+        while (y < run_end) {
+            *dst = ceiling_bytes[((y & 3) << 2) + lane];
+            dst += 4;
+            y++;
+        }
+
+        if (y < descriptor->top) y = descriptor->top;
+        run_end = descriptor->bottom;
+        if (run_end > end_y) run_end = end_y;
+        while (y < run_end) {
+            *dst = packed_column[
+                (descriptor->vertical_samples[y - descriptor->top] +
+                 descriptor->tex_y) & WALL_TEX_DIM_MASK];
+            dst += 4;
+            y++;
+        }
+
+        while (y < end_y) {
+            *dst = floor_bytes[((y & 3) << 2) + lane];
+            dst += 4;
+            y++;
+        }
+    }
+}
+#define write_mixed_stride2_tile write_mixed_stride2_tile_reference
+#else
+#define write_mixed_stride2_tile renderer_write_mixed_stride2_tile_asm
+#endif
+
 static void build_bsp_tilemap(const RayColumn *columns,
                                   const RaySceneColors *scene_colors,
                                   u32 target[][8]) {
+    const PackedFlatRows flat_rows = build_flat_rows(scene_colors);
+#if DEBUG_PERF
+    const RendererPerfDeepPhase deep_phase = renderer_perf_get_deep_phase();
+    const bool measure_mixed = (bool)(deep_phase == RENDERER_PERF_DEEP_PACK_MIXED);
+    const bool measure_flat = (bool)(deep_phase == RENDERER_PERF_DEEP_PACK_FLAT);
+#endif
     // Each 8px-wide tile column maps to four cast columns (px 0, 2, 4, 6), each
     // replicated 2x -> twice the horizontal detail of the stride-4 packer at the
     // same tile count / DMA cost. Describe each column once and pack MSB-first.
     for (u16 tile_x = 0; tile_x < VIEW_TILE_W; tile_x++) {
         const u16 base_col = (u16)(tile_x * 8);
-        const WallColumnDescriptor column_a = describe_wall_column(&columns[base_col]);
-        const WallColumnDescriptor column_b = describe_wall_column(&columns[base_col + 2]);
-        const WallColumnDescriptor column_c = describe_wall_column(&columns[base_col + 4]);
-        const WallColumnDescriptor column_d = describe_wall_column(&columns[base_col + 6]);
-        const u32 ceiling_row = pack_flat_row(scene_colors->ceiling_color);
-        const u32 floor_row = pack_flat_row(scene_colors->floor_color);
-
+        const WallColumnDescriptor descriptors[4] = {
+            describe_wall_column(&columns[base_col]),
+            describe_wall_column(&columns[base_col + 2]),
+            describe_wall_column(&columns[base_col + 4]),
+            describe_wall_column(&columns[base_col + 6])
+        };
+        const u8 *const packed_columns[4] = {
+            FREEDOOM_WALL_PACKED_PAIRS[
+                (descriptors[0].flags & RAY_COLUMN_FLAG_DOOR) != 0]
+                [descriptors[0].shade_level][descriptors[0].texture_id][descriptors[0].tex_x],
+            FREEDOOM_WALL_PACKED_PAIRS[
+                (descriptors[1].flags & RAY_COLUMN_FLAG_DOOR) != 0]
+                [descriptors[1].shade_level][descriptors[1].texture_id][descriptors[1].tex_x],
+            FREEDOOM_WALL_PACKED_PAIRS[
+                (descriptors[2].flags & RAY_COLUMN_FLAG_DOOR) != 0]
+                [descriptors[2].shade_level][descriptors[2].texture_id][descriptors[2].tex_x],
+            FREEDOOM_WALL_PACKED_PAIRS[
+                (descriptors[3].flags & RAY_COLUMN_FLAG_DOOR) != 0]
+                [descriptors[3].shade_level][descriptors[3].texture_id][descriptors[3].tex_x]
+        };
         for (u16 tile_y = 0; tile_y < VIEW_TILE_H; tile_y++) {
             const u16 tile_index = (u16)((tile_y * VIEW_TILE_W) + tile_x);
-            u16 pixel_y = (u16)(tile_y * 8);
+            const u16 pixel_y = (u16)(tile_y * 8);
 
-            if (((pixel_y + 7) < column_a.top) && ((pixel_y + 7) < column_b.top) &&
-                ((pixel_y + 7) < column_c.top) && ((pixel_y + 7) < column_d.top)) {
-                for (u16 row = 0; row < 8; row++) {
-                    target[tile_index][row] = ceiling_row;
+            if (((pixel_y + 7) < descriptors[0].top) &&
+                ((pixel_y + 7) < descriptors[1].top) &&
+                ((pixel_y + 7) < descriptors[2].top) &&
+                ((pixel_y + 7) < descriptors[3].top)) {
+#if DEBUG_PERF
+                const u32 flat_start = measure_flat ? getSubTick() : 0;
+#endif
+                write_repeated_flat_tile(target[tile_index], flat_rows.ceiling);
+#if DEBUG_PERF
+                if (measure_flat) {
+                    renderer_perf_record_deep(RENDERER_PERF_DEEP_PACK_FLAT,
+                                              getSubTick() - flat_start, 1);
                 }
+                compare_stride2_tile_asm(tile_index, FALSE, target[tile_index],
+                                         pixel_y, descriptors, packed_columns, &flat_rows);
+#endif
                 continue;
             }
 
-            if ((pixel_y >= column_a.bottom) && (pixel_y >= column_b.bottom) &&
-                (pixel_y >= column_c.bottom) && (pixel_y >= column_d.bottom)) {
-                for (u16 row = 0; row < 8; row++) {
-                    target[tile_index][row] = floor_row;
+            if ((pixel_y >= descriptors[0].bottom) &&
+                (pixel_y >= descriptors[1].bottom) &&
+                (pixel_y >= descriptors[2].bottom) &&
+                (pixel_y >= descriptors[3].bottom)) {
+#if DEBUG_PERF
+                const u32 flat_start = measure_flat ? getSubTick() : 0;
+#endif
+                write_repeated_flat_tile(target[tile_index], flat_rows.floor);
+#if DEBUG_PERF
+                if (measure_flat) {
+                    renderer_perf_record_deep(RENDERER_PERF_DEEP_PACK_FLAT,
+                                              getSubTick() - flat_start, 1);
                 }
+                compare_stride2_tile_asm(tile_index, FALSE, target[tile_index],
+                                         pixel_y, descriptors, packed_columns, &flat_rows);
+#endif
                 continue;
             }
 
-            for (u16 row = 0; row < 8; row++, pixel_y++) {
-                target[tile_index][row] =
-                    (REP2[sample_wall_descriptor(&column_a, scene_colors, pixel_y)] << 24) |
-                    (REP2[sample_wall_descriptor(&column_b, scene_colors, pixel_y)] << 16) |
-                    (REP2[sample_wall_descriptor(&column_c, scene_colors, pixel_y)] << 8) |
-                    REP2[sample_wall_descriptor(&column_d, scene_colors, pixel_y)];
+#if DEBUG_PERF
+            const u32 mixed_start = measure_mixed ? getSubTick() : 0;
+#endif
+            write_mixed_stride2_tile(target[tile_index], pixel_y,
+                                     descriptors, packed_columns, &flat_rows);
+#if DEBUG_PERF
+            if (measure_mixed) {
+                renderer_perf_record_deep(RENDERER_PERF_DEEP_PACK_MIXED,
+                                          getSubTick() - mixed_start, 1);
             }
+            compare_stride2_tile_asm(tile_index, TRUE, target[tile_index],
+                                     pixel_y, descriptors, packed_columns, &flat_rows);
+#endif
         }
     }
 }
@@ -481,6 +713,38 @@ static u32 divu32_16_exact(u32 numerator, u16 denominator) {
     return ((u32)quotient_high << 16) | quotient_low;
 }
 
+static u32 scene_mulu_word(u16 left, u16 right) {
+    u32 result = left;
+    __asm__ volatile (
+        "mulu.w %1,%0"
+        : "+d" (result)
+        : "d" (right)
+        : "cc");
+    return result;
+}
+
+static u32 scene_mul_u32_u16(u32 left, u16 right) {
+    return scene_mulu_word((u16)left, right) +
+           (scene_mulu_word((u16)(left >> 16), right) << 16);
+}
+
+// Generated pickup posts are an exact ROM copy of each source column's opaque
+// spans. Only sparse collectible textures take this path; dense sprites remain
+// on the row/tile packer where an extra post lookup would cost more than the
+// transparent texel test it replaces.
+static inline bool pickup_post_contains(u8 visual_id, u8 tex_x, u8 tex_y) {
+    const u16 begin = FREEDOOM_BILLBOARD_PICKUP_POST_OFFSETS[visual_id][tex_x];
+    const u16 end = FREEDOOM_BILLBOARD_PICKUP_POST_OFFSETS[visual_id][tex_x + 1];
+
+    for (u16 post = begin; post < end; post++) {
+        const u8 top = FREEDOOM_BILLBOARD_PICKUP_POSTS[post][0];
+        const u8 length = FREEDOOM_BILLBOARD_PICKUP_POSTS[post][1];
+        if (tex_y < top) return FALSE;
+        if ((u8)(tex_y - top) < length) return TRUE;
+    }
+    return FALSE;
+}
+
 // Draw projected billboards object-by-object in painter order. Texture and depth
 // decisions remain pixel-exact, but pixels sharing one 8-pixel tile row are
 // accumulated into a mask/value pair and committed with one RAM RMW. The old
@@ -488,6 +752,10 @@ static u32 divu32_16_exact(u32 numerator, u16 denominator) {
 static void draw_projected_billboards(const RayColumn *columns,
                                       const ProjectedBillboard *objects,
                                       u16 object_count) {
+#if DEBUG_PERF
+    const bool measure_pickup_posts = (bool)(
+        renderer_perf_get_deep_phase() == RENDERER_PERF_DEEP_PICKUP_POSTS);
+#endif
     for (u16 i = 0; i < object_count; i++) {
         const ProjectedBillboard *object = &objects[i];
         const s16 height = (s16)(object->bottom - object->top + 1);
@@ -495,6 +763,9 @@ static void draw_projected_billboards(const RayColumn *columns,
         const BillboardTex tex = get_billboard_texture(object->visual_id, object->frame);
         const u8 *lut = MEGALDOOM_BILLBOARD_REMAP[
             (object->visual_id < 6) ? object->visual_id : BILLBOARD_VISUAL_BONUS];
+        const bool use_pickup_posts = (bool)(
+            object->visual_id < FREEDOOM_BILLBOARD_PICKUP_TEXTURE_COUNT &&
+            FREEDOOM_BILLBOARD_PICKUP_USE_POSTS[object->visual_id]);
         // 0xFF marks a clipped/wall-hidden screen column. Generated atlas X
         // coordinates are far below 255, so the sentinel cannot alias a texel.
         u8 tex_x_by_screen_col[RAY_VIEW_COLS];
@@ -530,6 +801,10 @@ static void draw_projected_billboards(const RayColumn *columns,
         if ((x0 > x1) || (y0 > y1)) {
             continue;
         }
+#if DEBUG_PERF
+        const u32 pickup_post_start = (measure_pickup_posts && use_pickup_posts) ?
+                                          getSubTick() : 0;
+#endif
         first_tile_x = (u16)(x0 >> 3);
         last_tile_x = (u16)(x1 >> 3);
 
@@ -537,7 +812,7 @@ static void draw_projected_billboards(const RayColumn *columns,
         // once. Door slabs remain a per-pixel vertical test below.
         {
             u32 tex_x_acc = ((u32)object->atlas_x << 8) +
-                ((u32)(x0 - object->left) * tex_x_step);
+                scene_mulu_word((u16)(x0 - object->left), (u16)tex_x_step);
             for (s16 col = x0; col <= x1; col++) {
                 u8 tex_x = (u8)(tex_x_acc >> 8);
                 const u16 wall_col = (u16)(col & ~(RAY_COL_STRIDE - 1));
@@ -575,7 +850,8 @@ static void draw_projected_billboards(const RayColumn *columns,
         const u32 tex_y_step = divu32_16_exact((u32)object->atlas_h << 16,
                                                (u16)height);
         u32 tex_y_acc = ((u32)object->atlas_y << 16) +
-                        ((u32)(y0 - object->top) * tex_y_step);
+                        scene_mul_u32_u16(tex_y_step,
+                                         (u16)(y0 - object->top));
         const u8 atlas_y_last = (u8)(object->atlas_y + object->atlas_h - 1);
         for (s16 y = y0; y <= y1; y++) {
             u8 tex_y = (u8)(tex_y_acc >> 16);
@@ -583,7 +859,7 @@ static void draw_projected_billboards(const RayColumn *columns,
             const u16 row_y = (u16)(y & 7);
             if (tex_y > atlas_y_last) tex_y = atlas_y_last;
             tex_y_acc += tex_y_step;
-            const u8 *tex_row = &tex.pixels[(u16)tex_y * tex.w];
+            const u8 *tex_row = &tex.pixels[scene_mulu_word(tex_y, tex.w)];
 
             for (u16 tile_x = first_tile_x; tile_x <= last_tile_x; tile_x++) {
                 const s16 tile_left = (s16)(tile_x * 8);
@@ -593,18 +869,36 @@ static void draw_projected_billboards(const RayColumn *columns,
                 u32 clear_mask = 0;
                 u32 value = 0;
 
-                for (s16 col = col_begin; col <= col_end; col++) {
-                    const u8 tex_x = tex_x_by_screen_col[col];
-                    if (tex_x == 0xFF) continue;
+                // Raster one wall sample (two screen pixels) per iteration.
+                // Both authored texels are still sampled independently, so the
+                // packed framebuffer is byte-identical to the scalar reference.
+                for (s16 pair_col = (s16)(col_begin & ~(RAY_COL_STRIDE - 1));
+                     pair_col <= col_end; pair_col += RAY_COL_STRIDE) {
+                    const u16 wall_col = (u16)pair_col;
+                    u32 pair_mask = 0;
+                    u32 pair_value = 0;
 
-                    const u16 wall_col = (u16)(col & ~(RAY_COL_STRIDE - 1));
-                    const u8 texel = lut[tex_row[tex_x] & 0x0F];
-                    if (texel != 0 && (!has_door_overlay ||
+                    for (u16 pixel = 0; pixel < RAY_COL_STRIDE; pixel++) {
+                        const s16 col = (s16)(pair_col + pixel);
+                        if (col < col_begin || col > col_end) continue;
+                        const u8 tex_x = tex_x_by_screen_col[col];
+                        if (tex_x == 0xFF) continue;
+                        if (use_pickup_posts &&
+                            !pickup_post_contains(object->visual_id, tex_x, tex_y)) {
+                            continue;
+                        }
+                        const u8 texel = lut[tex_row[tex_x] & 0x0F];
+                        if (texel != 0) {
+                            const u16 shift = (u16)((7 - (col & 7)) * 4);
+                            pair_mask |= (u32)0x0F << shift;
+                            pair_value |= (u32)texel << shift;
+                        }
+                    }
+                    if (pair_mask != 0 && (!has_door_overlay ||
                             !door_overlay_blocks_pixel(&columns[wall_col],
                                                        object->depth, (u16)y))) {
-                        const u16 shift = (u16)((7 - (col & 7)) * 4);
-                        clear_mask |= (u32)0x0F << shift;
-                        value |= (u32)texel << shift;
+                        clear_mask |= pair_mask;
+                        value |= pair_value;
                     }
                 }
 
@@ -617,35 +911,34 @@ static void draw_projected_billboards(const RayColumn *columns,
                 }
             }
         }
+#if DEBUG_PERF
+        if (measure_pickup_posts && use_pickup_posts) {
+            renderer_perf_record_deep(RENDERER_PERF_DEEP_PICKUP_POSTS,
+                                      getSubTick() - pickup_post_start, 1);
+        }
+#endif
     }
 }
 
-// Draw the static weapon overlay from its precomposed per-tile-row ops (built
-// once in the asset generator). Each op is a single u32 read-modify-write,
-// so an idle frame costs a few hundred RMWs instead of one per-pixel test across
-// the weapon draw box (FREEDOOM_WEAPON_DRAW_W x FREEDOOM_WEAPON_DRAW_H).
-// The clear masks are generated alongside the values (static const ROM data),
-// so the hot loop is just *dst = (*dst & ~clear) | val with no per-op mask
-// reconstruction.
+// The weapon is a transparent BG_A tile layer. Camera movement therefore never
+// recomposes it into the 300 dynamic view tiles; only idle/fire transitions
+// rewrite this small tilemap rectangle.
 static void draw_weapon_overlay(bool flash) {
-    const u16 v = flash ? 1 : 0;
-    const u16 *dst_idx = v ? MEGALDOOM_WEAPON_DST_FIRE : MEGALDOOM_WEAPON_DST_IDLE;
-    const u32 *values = v ? MEGALDOOM_WEAPON_VALUE_FIRE : MEGALDOOM_WEAPON_VALUE_IDLE;
-    const u32 *clear_masks = v ? MEGALDOOM_WEAPON_CLEAR_FIRE : MEGALDOOM_WEAPON_CLEAR_IDLE;
-    const u16 count = MEGALDOOM_WEAPON_OP_COUNT[v];
-    u32 *base = &g_view_tiles[0][0];
-    u16 last_marked_tile = 0xFFFF;
+    const s16 variant = flash ? 1 : 0;
+    u16 tilemap[MEGALDOOM_WEAPON_TILE_W * MEGALDOOM_WEAPON_TILE_H];
+    if (variant == g_last_weapon_variant) return;
 
-    for (u16 i = 0; i < count; i++) {
-        u32 *dst = base + dst_idx[i];
-        const u16 tile_index = (u16)(dst_idx[i] / 8);
-
-        if (tile_index != last_marked_tile) {
-            renderer_mark_overlay_tile(tile_index);
-            last_marked_tile = tile_index;
-        }
-        *dst = (*dst & ~clear_masks[i]) | values[i];
+    for (u16 i = 0; i < (MEGALDOOM_WEAPON_TILE_W * MEGALDOOM_WEAPON_TILE_H); i++) {
+        const u16 tile = MEGALDOOM_WEAPON_TILEMAP[variant][i];
+        tilemap[i] = TILE_ATTR_FULL(PAL3, FALSE, FALSE, FALSE,
+            (tile == 0xFFFF) ? 0 : (WEAPON_TILE_BASE + tile));
     }
+    VDP_setTileMapDataRect(BG_A, tilemap,
+        VIEW_TILEMAP_X + MEGALDOOM_WEAPON_TILE_X,
+        VIEW_TILEMAP_Y + MEGALDOOM_WEAPON_TILE_Y,
+        MEGALDOOM_WEAPON_TILE_W, MEGALDOOM_WEAPON_TILE_H,
+        MEGALDOOM_WEAPON_TILE_W, CPU);
+    g_last_weapon_variant = variant;
 }
 
 static void draw_overlay_ops(const MegalDoomOverlayRowOp *ops, u16 count) {
@@ -859,6 +1152,8 @@ void renderer_render_scene(const RayColumn *columns,
                            bool weapon_flash,
                            bool damage_flash,
                            bool low_health_warning) {
+    const bool rebuild_base = (bool)(base_dirty ||
+        renderer_overlay_requires_base_rebuild());
 #if DEBUG_PERF
     u32 stage_start = getSubTick();
     renderer_reset_frame_modified();
@@ -871,7 +1166,7 @@ void renderer_render_scene(const RayColumn *columns,
     renderer_perf_set_projection_subticks(getSubTick() - stage_start);
 #endif
 
-    if (base_dirty) {
+    if (rebuild_base) {
         g_upload_requires_bank_swap = TRUE;
         renderer_prepare_full_base_upload();
         renderer_overlay_base_rebuilt();

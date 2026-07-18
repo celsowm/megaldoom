@@ -86,7 +86,8 @@ def main():
     assert "BILLBOARD_MAX_PROJECTED_EFFECTS 4" in billboard_h
     assert "IMPACT_POOL_COUNT BILLBOARD_MAX_PROJECTED_EFFECTS" in effects_c
     assert "IMPACT_FRAME_HOLD 2" in effects_c
-    assert "IMPACT_WORLD_SCALE BILLBOARD_WORLD_GEOMETRY_SCALE" in effects_c
+    assert "#define IMPACT_WORLD_SCALE 1" in effects_c
+    assert "#define BILLBOARD_WORLD_GEOMETRY_SCALE 1" in internal_h
     assert "IMPACT_MIN_SCREEN_RADIUS 2" in effects_c
     assert "PUFF_WALL_DEPTH_TOLERANCE 64" in renderer_c
     assert "billboard_depth_visible(object, columns[wall_col].depth)" in renderer_c
