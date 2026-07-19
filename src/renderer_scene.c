@@ -222,6 +222,14 @@ static inline void write_repeated_flat_tile(u32 *target, const u32 rows[4]) {
 //
 // Theoretical max = affected tile span (10 x 8 tiles) * 8 rows; assets currently
 // use 331 (idle) / 277 (fire). The builder guards against overflow.
+// Pack-stage tile-column coherence: when the four wall descriptors feeding a
+// tile column are byte-identical to the previous base build, its 15 packed
+// tiles are unchanged and re-packing them is pure waste. FALSE forces a full
+// repack next build; every discontinuity (init, level reset, menu return, or
+// anything that rebuilds the CPU tile buffer from scratch) must clear it so we
+// never skip against stale cached descriptors. See build_bsp_tilemap().
+static bool s_coherence_valid = FALSE;
+
 void renderer_scene_init(void) {
     build_shade_luts();
     g_last_compass_angle = 0xFFFF;
@@ -229,6 +237,7 @@ void renderer_scene_init(void) {
     g_upload_requires_bank_swap = FALSE;
     g_compass_dirty = TRUE;
     g_view_upload = (ViewUploadState){FALSE, FALSE, FALSE, 0, 0};
+    s_coherence_valid = FALSE;
     renderer_overlay_reset();
     clear_all_view_banks_dirty();
 }
@@ -238,6 +247,7 @@ void renderer_invalidate_scene(void) {
     g_last_weapon_variant = -1;
     g_upload_requires_bank_swap = FALSE;
     g_compass_dirty = TRUE;
+    s_coherence_valid = FALSE;
     renderer_overlay_reset();
     clear_all_view_banks_dirty();
     g_view_dirty_bank_mask = 0;
@@ -534,10 +544,59 @@ static __attribute__((noinline)) void write_mixed_stride2_tile_reference(
 #define write_mixed_stride2_tile renderer_write_mixed_stride2_tile_asm
 #endif
 
+// Previous base build's per-tile-column packing inputs, for coherence skipping.
+static WallColumnDescriptor s_prev_desc[VIEW_TILE_W][4];
+static PackedFlatRows s_prev_flat_rows;
+static u8 s_prev_door_active[VIEW_TILE_W];
+
+// A tile column's 15 packed tiles are a pure function of its four wall
+// descriptors and the shared flat rows, so field-wise equality of those
+// descriptors is sufficient to prove the packed output is unchanged. (Compared
+// by field rather than memcmp so the struct's padding byte cannot spuriously
+// force a repack.)
+static inline bool wall_desc_equal(const WallColumnDescriptor *a,
+                                   const WallColumnDescriptor *b) {
+    return (bool)(a->top == b->top && a->bottom == b->bottom &&
+                  a->texture == b->texture && a->shade_map == b->shade_map &&
+                  a->vertical_samples == b->vertical_samples &&
+                  a->tex_x == b->tex_x && a->tex_y == b->tex_y &&
+                  a->texture_id == b->texture_id &&
+                  a->shade_level == b->shade_level && a->flags == b->flags);
+}
+
+static inline bool flat_rows_equal(const PackedFlatRows *a,
+                                   const PackedFlatRows *b) {
+    for (u16 i = 0; i < 4; i++) {
+        if (a->ceiling[i] != b->ceiling[i] || a->floor[i] != b->floor[i]) {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+// A column carries an active door overlay when any of its four sampled columns
+// has a door in front of the wall. draw_door_overlays() (run after packing)
+// read-modify-writes those tiles every frame and only rewrites the door's own
+// pixel span, so a column with a door now, or one last frame, must be repacked:
+// otherwise the wall behind a lifting door would keep stale door pixels in the
+// newly revealed gap. Mirrors the guard in draw_door_overlays().
+static inline bool column_door_active(const RayColumn *columns, u16 base_col) {
+    for (u16 i = 0; i < 8; i += 2) {
+        const RayColumn *column = &columns[base_col + i];
+        const RayDoorOverlay *door = &column->door;
+        if (door->height != 0 && door->depth < column->depth) return TRUE;
+    }
+    return FALSE;
+}
+
 static void build_bsp_tilemap(const RayColumn *columns,
                                   const RaySceneColors *scene_colors,
                                   u32 target[][8]) {
     const PackedFlatRows flat_rows = build_flat_rows(scene_colors);
+    // Ceiling/floor colour changes (e.g. lighting) invalidate every column at
+    // once; otherwise coherence is decided per column below.
+    const bool flat_changed = (bool)(!s_coherence_valid ||
+                                     !flat_rows_equal(&flat_rows, &s_prev_flat_rows));
 #if DEBUG_PERF
     const RendererPerfDeepPhase deep_phase = renderer_perf_get_deep_phase();
     const bool measure_mixed = (bool)(deep_phase == RENDERER_PERF_DEEP_PACK_MIXED);
@@ -554,6 +613,24 @@ static void build_bsp_tilemap(const RayColumn *columns,
             describe_wall_column(&columns[base_col + 4]),
             describe_wall_column(&columns[base_col + 6])
         };
+        const bool door_active = column_door_active(columns, base_col);
+        // Skip the whole tile column when its packed output cannot have changed:
+        // identical descriptors, unchanged flat rows, and no door RMW to redo
+        // (neither this frame nor last). g_view_tiles already holds the correct
+        // bytes, and the upload ships them, so this only elides redundant packing.
+        if (!flat_changed && !door_active && !s_prev_door_active[tile_x] &&
+            wall_desc_equal(&descriptors[0], &s_prev_desc[tile_x][0]) &&
+            wall_desc_equal(&descriptors[1], &s_prev_desc[tile_x][1]) &&
+            wall_desc_equal(&descriptors[2], &s_prev_desc[tile_x][2]) &&
+            wall_desc_equal(&descriptors[3], &s_prev_desc[tile_x][3])) {
+            continue;
+        }
+        s_prev_desc[tile_x][0] = descriptors[0];
+        s_prev_desc[tile_x][1] = descriptors[1];
+        s_prev_desc[tile_x][2] = descriptors[2];
+        s_prev_desc[tile_x][3] = descriptors[3];
+        s_prev_door_active[tile_x] = (u8)door_active;
+
         const u8 *const packed_columns[4] = {
             FREEDOOM_WALL_PACKED_PAIRS[
                 (descriptors[0].flags & RAY_COLUMN_FLAG_DOOR) != 0]
@@ -625,6 +702,8 @@ static void build_bsp_tilemap(const RayColumn *columns,
 #endif
         }
     }
+    s_prev_flat_rows = flat_rows;
+    s_coherence_valid = TRUE;
 }
 #endif
 
