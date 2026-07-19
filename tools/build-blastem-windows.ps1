@@ -80,6 +80,8 @@ foreach ($runtimeFile in @("default.cfg", "systems.cfg", "rom.db", "menu.bin", "
     $runtimeSource = Join-Path $Source $runtimeFile
     if (Test-Path $runtimeSource) { Copy-Item $runtimeSource (Join-Path $Output $runtimeFile) -Force }
 }
+$shadersSource = Join-Path $Source "shaders"
+if (Test-Path $shadersSource) { Copy-Item $shadersSource (Join-Path $Output "shaders") -Recurse -Force }
 
 Write-Host "Custom Windows BlastEm built:" -ForegroundColor Green
 Write-Host "  $(Join-Path $Output 'blastem.exe')"
