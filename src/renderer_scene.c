@@ -597,6 +597,11 @@ static void build_bsp_tilemap(const RayColumn *columns,
     // once; otherwise coherence is decided per column below.
     const bool flat_changed = (bool)(!s_coherence_valid ||
                                      !flat_rows_equal(&flat_rows, &s_prev_flat_rows));
+    // Columns a restorable overlay (billboard / damage-flash) baked into
+    // g_view_tiles last frame must be re-packed so those pixels are erased back
+    // to the wall/flat behind them: the rebuild path never runs restore_previous,
+    // so re-packing the base is the only thing that clears a moved overlay.
+    const u32 overlay_columns = renderer_overlay_prev_columns();
 #if DEBUG_PERF
     const RendererPerfDeepPhase deep_phase = renderer_perf_get_deep_phase();
     const bool measure_mixed = (bool)(deep_phase == RENDERER_PERF_DEEP_PACK_MIXED);
@@ -619,6 +624,7 @@ static void build_bsp_tilemap(const RayColumn *columns,
         // (neither this frame nor last). g_view_tiles already holds the correct
         // bytes, and the upload ships them, so this only elides redundant packing.
         if (!flat_changed && !door_active && !s_prev_door_active[tile_x] &&
+            !(overlay_columns & ((u32)1u << tile_x)) &&
             wall_desc_equal(&descriptors[0], &s_prev_desc[tile_x][0]) &&
             wall_desc_equal(&descriptors[1], &s_prev_desc[tile_x][1]) &&
             wall_desc_equal(&descriptors[2], &s_prev_desc[tile_x][2]) &&

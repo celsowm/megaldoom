@@ -97,6 +97,7 @@ void renderer_overlay_base_rebuilt(void);
 void renderer_overlay_restore_previous(void);
 void renderer_overlay_begin(void);
 void renderer_overlay_finish(void);
+u32 renderer_overlay_prev_columns(void);
 bool renderer_overlay_requires_base_rebuild(void);
 void renderer_set_bg_pair_tile(u16 x, u16 y, u8 left_color, u8 right_color);
 void renderer_set_view_vram_bank(u16 bank);

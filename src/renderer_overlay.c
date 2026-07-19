@@ -3,6 +3,15 @@
 
 static u32 s_previous_bits[VIEW_DIRTY_WORD_COUNT];
 static u32 s_current_bits[VIEW_DIRTY_WORD_COUNT];
+// Bit set of tile columns (0..VIEW_TILE_W-1) whose tiles a restorable overlay
+// (billboard / damage-flash) baked into g_view_tiles. build_bsp_tilemap must
+// force-repack any column that carried such an overlay LAST frame; otherwise a
+// coherence-skipped column keeps stale overlay pixels once the overlay moves,
+// because the rebuild path erases old overlays only by re-packing the base (it
+// never runs restore_previous). Weapon art lives on a separate BG_A layer and
+// never enters g_view_tiles, so it is deliberately not tracked here.
+static u32 s_prev_overlay_columns;
+static u32 s_cur_overlay_columns;
 #define OVERLAY_SNAPSHOT_TILE_LIMIT 128
 static u32 s_snapshot_rows[OVERLAY_SNAPSHOT_TILE_LIMIT][8];
 static s16 s_snapshot_slot_by_tile[VIEW_TILE_COUNT];
@@ -22,7 +31,15 @@ void renderer_overlay_reset(void) {
         s_previous_bits[i] = 0;
         s_current_bits[i] = 0;
     }
+    s_prev_overlay_columns = 0;
+    s_cur_overlay_columns = 0;
     clear_snapshot_cache();
+}
+
+// Columns that a restorable overlay baked into g_view_tiles on the last
+// completed frame. build_bsp_tilemap() consults this before coherence-skipping.
+u32 renderer_overlay_prev_columns(void) {
+    return s_prev_overlay_columns;
 }
 
 void renderer_overlay_base_rebuilt(void) {
@@ -51,12 +68,14 @@ void renderer_overlay_restore_previous(void) {
 
 void renderer_overlay_begin(void) {
     for (u16 i = 0; i < VIEW_DIRTY_WORD_COUNT; i++) s_current_bits[i] = 0;
+    s_cur_overlay_columns = 0;
 }
 
 void renderer_overlay_finish(void) {
     for (u16 i = 0; i < VIEW_DIRTY_WORD_COUNT; i++) {
         s_previous_bits[i] = s_current_bits[i];
     }
+    s_prev_overlay_columns = s_cur_overlay_columns;
 }
 
 bool renderer_overlay_requires_base_rebuild(void) {
@@ -66,6 +85,10 @@ bool renderer_overlay_requires_base_rebuild(void) {
 void renderer_mark_overlay_tile(u16 tile_index) {
     const u16 word = (u16)(tile_index >> 5);
     const u32 mask = (u32)1u << (tile_index & 31);
+
+    // Record the column even for a repeat touch is unnecessary — a repeat means
+    // the column bit is already set — so track it alongside the first-touch path.
+    s_cur_overlay_columns |= (u32)1u << (tile_index % VIEW_TILE_W);
 
     if ((s_current_bits[word] & mask) != 0) return;
 #if DEBUG_PERF
