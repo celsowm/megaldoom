@@ -93,7 +93,7 @@ diff --git a/megaldoom_runner.c b/megaldoom_runner.c
 new file mode 100644
 --- /dev/null
 +++ b/megaldoom_runner.c
-@@ -0,0 +1,141 @@
+@@ -0,0 +1,152 @@
 +#include "megaldoom_runner.h"
 +#include "genesis.h"
 +#include "io.h"
@@ -120,13 +120,24 @@ new file mode 100644
 +static char *copy_string(const char *value) { size_t n = strlen(value) + 1; char *out = malloc(n); if (out) memcpy(out, value, n); return out; }
 +static void set_string(char **out, const char *value) { free(*out); *out = copy_string(value); }
 +
++/* Each line is a (frame, mask) edge: the mask takes effect at `frame` and
++ * holds for every subsequent frame until the next line changes it (a route
++ * that presses a button at frame 10 and releases it at frame 50 only needs
++ * those two lines, not one per held frame). Without the forward-fill below,
++ * any frame not explicitly listed defaulted to 0 (via the memset on growth),
++ * so a held button was released again on the very next frame -- set_input()
++ * saw mask 0 versus a previous mask with the bit set and called gamepad_up
++ * immediately, one frame after the gamepad_down. */
 +void megaldoom_route_load(const char *path)
 +{
 +    FILE *file = fopen(path, "r"); uint32_t frame, mask, capacity = 0;
++    uint32_t prev_frame = 0, prev_mask = 0; int have_prev = 0;
 +    if (!file) fatal_error("Could not open deterministic route %s\n", path);
 +    while (fscanf(file, "%u %x", &frame, &mask) == 2) {
 +        if (frame >= capacity) { uint32_t next = capacity ? capacity : 256; while (frame >= next) next *= 2; state.masks = realloc(state.masks, sizeof(*state.masks) * next); if (!state.masks) fatal_error("Out of memory loading route\n"); memset(state.masks + capacity, 0, sizeof(*state.masks) * (next - capacity)); capacity = next; }
++        if (have_prev) { for (uint32_t f = prev_frame; f < frame; f++) state.masks[f] = prev_mask; }
 +        state.masks[frame] = mask; state.count = frame + 1;
++        prev_frame = frame; prev_mask = mask; have_prev = 1;
 +    }
 +    fclose(file);
 +}

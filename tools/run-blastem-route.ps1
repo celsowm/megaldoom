@@ -4,6 +4,8 @@ param(
     [string]$RomPath = "out\rom.bin",
     [string]$Report = "out\blastem-route-report.json",
     [string]$Mailbox = "",
+    [string]$PerfMailbox = "",
+    [string]$RequireCheckpoints = "",
     [string]$CaptureDir = "",
     [int]$CaptureEvery = 0
 )
@@ -27,6 +29,8 @@ New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Report) | Out-Nul
 
 $args = @("-b", $Frames, "--md-route", $Route, "--md-report", $Report)
 if ($Mailbox) { $args += @("--md-mailbox", $Mailbox) }
+if ($PerfMailbox) { $args += @("--md-perf-mailbox", $PerfMailbox) }
+if ($RequireCheckpoints) { $args += @("--md-require-checkpoints", $RequireCheckpoints) }
 if ($CaptureDir) {
     $CaptureDir = AbsolutePath $CaptureDir
     New-Item -ItemType Directory -Force -Path $CaptureDir | Out-Null
