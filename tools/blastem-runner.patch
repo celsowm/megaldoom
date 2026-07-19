@@ -1,76 +1,29 @@
 diff --git a/Makefile b/Makefile
 --- a/Makefile
 +++ b/Makefile
-@@
+@@ -281,7 +281,7 @@ else
+ RENDEROBJS+= $(LIBZOBJS) png.o
+ endif
+ 
 -COREOBJS:=system.o genesis.o vdp.o io.o romdb.o hash.o xband.o realtec.o i2c.o nor.o $(M68KOBJS) \
 +COREOBJS:=system.o genesis.o vdp.o io.o romdb.o hash.o xband.o realtec.o i2c.o nor.o megaldoom_runner.o $(M68KOBJS) \
-diff --git a/megaldoom_runner.h b/megaldoom_runner.h
-new file mode 100644
---- /dev/null
-+++ b/megaldoom_runner.h
-@@
-+#ifndef MEGALDOOM_RUNNER_H_
-+#define MEGALDOOM_RUNNER_H_
-+#include <stdint.h>
-+#include "system.h"
-+void megaldoom_route_load(const char *path);
-+void megaldoom_runner_set_report(const char *path);
-+void megaldoom_runner_set_mailbox(uint32_t address, uint32_t bytes);
-+void megaldoom_runner_set_capture(const char *directory, uint32_t every);
-+void megaldoom_runner_set_capture_every(uint32_t every);
-+void megaldoom_runner_on_frame(system_header *system, uint32_t frame, uint32_t cycles);
-+void megaldoom_runner_finish(void);
-+#endif
-diff --git a/megaldoom_runner.c b/megaldoom_runner.c
-new file mode 100644
---- /dev/null
-+++ b/megaldoom_runner.c
-@@
-+#include "megaldoom_runner.h"
-+#include "genesis.h"
-+#include "io.h"
-+#include "render.h"
-+#include "util.h"
-+#include <stdio.h>
-+#include <stdlib.h>
-+#include <string.h>
-+typedef struct { uint32_t *masks, count, active, first, last, pc[64], mailbox, bytes; char *report, *capture, hex[1025]; uint32_t every; } state_t;
-+static state_t s;
-+static char *dup(const char *v) { size_t n=strlen(v)+1; char *r=malloc(n); if(r) memcpy(r,v,n); return r; }
-+void megaldoom_route_load(const char *p) { FILE *f=fopen(p,"r"); uint32_t n,m,cap=0; if(!f) fatal_error("Could not open route %s\n",p); while(fscanf(f,"%u %x",&n,&m)==2) { if(n>=cap) { uint32_t x=cap?cap:256; while(n>=x)x*=2; s.masks=realloc(s.masks,x*4); memset(s.masks+cap,0,(x-cap)*4); cap=x; } s.masks[n]=m; s.count=n+1; } fclose(f); }
-+void megaldoom_runner_set_report(const char *p) { s.report=dup(p); }
-+void megaldoom_runner_set_mailbox(uint32_t a,uint32_t b) { s.mailbox=a;s.bytes=b>512?512:b; }
-+void megaldoom_runner_set_capture(const char *p,uint32_t e) { s.capture=dup(p);s.every=e; }
-+void megaldoom_runner_set_capture_every(uint32_t e) { s.every=e; }
-+void megaldoom_runner_on_frame(system_header *h,uint32_t f,uint32_t c) { static uint32_t old; static const uint8_t b[]={DPAD_UP,DPAD_DOWN,DPAD_LEFT,DPAD_RIGHT,BUTTON_A,BUTTON_B,BUTTON_C,BUTTON_START,BUTTON_X,BUTTON_Y,BUTTON_Z,BUTTON_MODE}; uint32_t m=f<s.count?s.masks[f]:0; for(uint8_t i=0;i<12;i++)if((m&(1u<<i))!=(old&(1u<<i)) { if(m&(1u<<i))h->gamepad_down(h,1,b[i]);else h->gamepad_up(h,1,b[i]); } old=m; if(!s.active++)s.first=c;s.last=c; if(h->type==SYSTEM_GENESIS){genesis_context*g=(genesis_context*)h;s.pc[(g->m68k->last_prefetch_address>>1)&63]++; if(s.mailbox>=0xFF0000&&s.bytes){uint32_t o=s.mailbox-0xFF0000; static const char x[]="0123456789abcdef";for(uint32_t i=0;i<s.bytes&&o+i<RAM_WORDS*2;i++){uint8_t v=((uint8_t*)g->work_ram)[(o+i)^1];s.hex[2*i]=x[v>>4];s.hex[2*i+1]=x[v&15];}}} if(s.capture&&s.every&&!(f%s.every)){char p[1024];snprintf(p,sizeof(p),"%s/frame-%06u.ppm",s.capture,f);render_save_screenshot(p);} }
-+void megaldoom_runner_finish(void) { if(!s.report)return;FILE*f=fopen(s.report,"w");if(!f)return;fprintf(f,"{\"frames\":%u,\"cycles\":%u,\"pcHistogram\":[",s.active,s.last-s.first);for(uint32_t i=0;i<64;i++)fprintf(f,"%s%u",i?",":"",s.pc[i]);fprintf(f,"],\"mailbox\":\"%s\"}\n",s.hex);fclose(f); }
-diff --git a/genesis.c b/genesis.c
---- a/genesis.c
-+++ b/genesis.c
-@@
- #include "event_log.h"
-+#include "megaldoom_runner.h"
-@@
- 		gen->last_frame = v_context->frame;
-+		megaldoom_runner_on_frame(&gen->header, gen->last_frame, mclks);
-@@
- 		gen->last_frame = v_context->frame;
-+		megaldoom_runner_on_frame(&gen->header, gen->last_frame, mclks);
-@@
--				exit(0);
-+				megaldoom_runner_finish();
-+				exit(0);
-@@
--				exit(0);
-+				megaldoom_runner_finish();
-+				exit(0);
+ 	sega_mapper.o multi_game.o megawifi.o $(NET) serialize.o $(TERMINAL) $(CONFIGOBJS) gst.o \
+ 	$(TRANSOBJS) $(AUDIOOBJS) saves.o jcart.o gen_player.o coleco.o pico_pcm.o ymz263b.o \
+ 	segacd.o lc8951.o cdimage.o cdd_mcu.o cd_graphics.o cdd_fader.o sft_mapper.o mediaplayer.o \
 diff --git a/blastem.c b/blastem.c
 --- a/blastem.c
 +++ b/blastem.c
-@@
+@@ -31,6 +31,7 @@
+ #include "zip.h"
+ #include "cdimage.h"
  #include "event_log.h"
 +#include "megaldoom_runner.h"
-@@
+ #ifndef DISABLE_NUKLEAR
+ #include "nuklear_ui/blastem_nuklear.h"
+ #endif
+@@ -427,6 +428,17 @@ int main(int argc, char ** argv)
+ 	uint8_t debug_target = 0;
+ 	char *port;
  	for (int i = 1; i < argc; i++) {
 +		if (!strcmp(argv[i], "--md-route") || !strcmp(argv[i], "--md-report") || !strcmp(argv[i], "--md-capture-dir")) {
 +			if (++i >= argc) fatal_error("%s needs a value\n", argv[i-1]);
@@ -81,8 +34,229 @@ diff --git a/blastem.c b/blastem.c
 +		}
 +		if (!strcmp(argv[i], "--md-capture-every")) { if (++i >= argc) fatal_error("--md-capture-every needs a value\n"); megaldoom_runner_set_capture_every(atoi(argv[i])); continue; }
 +		if (!strcmp(argv[i], "--md-mailbox")) { uint32_t address, bytes = 128; if (++i >= argc || sscanf(argv[i], "%x:%u", &address, &bytes) < 1) fatal_error("--md-mailbox needs ADDRESS[:BYTES]\n"); megaldoom_runner_set_mailbox(address, bytes); continue; }
-@@
--	return 0;
++		if (!strcmp(argv[i], "--md-perf-mailbox")) { uint32_t address, bytes = 128; if (++i >= argc || sscanf(argv[i], "%x:%u", &address, &bytes) < 1) fatal_error("--md-perf-mailbox needs ADDRESS[:BYTES]\n"); megaldoom_runner_set_perf_mailbox(address, bytes); continue; }
++		if (!strcmp(argv[i], "--md-require-checkpoints")) { uint32_t mask; if (++i >= argc || sscanf(argv[i], "%x", &mask) != 1) fatal_error("--md-require-checkpoints needs a hex MASK\n"); megaldoom_runner_set_require_checkpoints(mask); continue; }
+ 		if (argv[i][0] == '-') {
+ 			switch(argv[i][1]) {
+ 			case 'b':
+@@ -779,5 +791,6 @@ int main(int argc, char ** argv)
+ 	}
+ #endif //__EMSCRIPTEN__
+ 
 +	megaldoom_runner_finish();
-+	return 0;
+ 	return 0;
  }
+diff --git a/genesis.c b/genesis.c
+--- a/genesis.c
++++ b/genesis.c
+@@ -22,6 +22,7 @@
+ #include "radica.h"
+ #include "config.h"
+ #include "event_log.h"
++#include "megaldoom_runner.h"
+ #include "paths.h"
+ #define MCLKS_NTSC 53693175
+ #define MCLKS_PAL  53203395
+@@ -599,6 +600,7 @@ static m68k_context *sync_components(m68k_context * context, uint32_t address)
+ 		//printf("reached frame end %d | MCLK Cycles: %d, Target: %d, VDP cycles: %d, vcounter: %d, hslot: %d\n", gen->last_frame, mclks, gen->frame_end, v_context->cycles, v_context->vcounter, v_context->hslot);
+ 		uint32_t elapsed = v_context->frame - gen->last_frame;
+ 		gen->last_frame = v_context->frame;
++		megaldoom_runner_on_frame(&gen->header, gen->last_frame, mclks);
+ 		event_flush(mclks);
+ 		gen->last_flush_cycle = mclks;
+ 		if (gen->header.enter_debugger_frames) {
+@@ -612,6 +614,7 @@ static m68k_context *sync_components(m68k_context * context, uint32_t address)
+ 
+ 		if(exit_after){
+ 			if (elapsed >= exit_after) {
++				megaldoom_runner_finish();
+ 				exit(0);
+ 			} else {
+ 				exit_after -= elapsed;
+@@ -876,6 +879,7 @@ static m68k_context* sync_components_pico(m68k_context * context, uint32_t addre
+ 		//printf("reached frame end %d | MCLK Cycles: %d, Target: %d, VDP cycles: %d, vcounter: %d, hslot: %d\n", gen->last_frame, mclks, gen->frame_end, v_context->cycles, v_context->vcounter, v_context->hslot);
+ 		uint32_t elapsed = v_context->frame - gen->last_frame;
+ 		gen->last_frame = v_context->frame;
++		megaldoom_runner_on_frame(&gen->header, gen->last_frame, mclks);
+ 		event_flush(mclks);
+ 		gen->last_flush_cycle = mclks;
+ 		if (gen->header.enter_debugger_frames) {
+@@ -889,6 +893,7 @@ static m68k_context* sync_components_pico(m68k_context * context, uint32_t addre
+ 
+ 		if(exit_after){
+ 			if (elapsed >= exit_after) {
++				megaldoom_runner_finish();
+ 				exit(0);
+ 			} else {
+ 				exit_after -= elapsed;
+diff --git a/megaldoom_runner.c b/megaldoom_runner.c
+new file mode 100644
+--- /dev/null
++++ b/megaldoom_runner.c
+@@ -0,0 +1,141 @@
++#include "megaldoom_runner.h"
++#include "genesis.h"
++#include "io.h"
++#include "ppm.h"
++#include "util.h"
++#include "vdp.h"
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++typedef struct {
++    uint32_t *masks, count, active, cycles_first, cycles_last;
++    uint32_t pc[64];
++    char *report, *capture;
++    uint32_t capture_every, capture_failed;
++    uint32_t mailbox, mailbox_bytes;
++    char mailbox_hex[1025];
++    uint32_t perf_mailbox, perf_mailbox_bytes;
++    char perf_mailbox_hex[1025];
++    uint32_t require_checkpoints, checkpoints_seen;
++} runner_state;
++static runner_state state;
++
++static char *copy_string(const char *value) { size_t n = strlen(value) + 1; char *out = malloc(n); if (out) memcpy(out, value, n); return out; }
++static void set_string(char **out, const char *value) { free(*out); *out = copy_string(value); }
++
++void megaldoom_route_load(const char *path)
++{
++    FILE *file = fopen(path, "r"); uint32_t frame, mask, capacity = 0;
++    if (!file) fatal_error("Could not open deterministic route %s\n", path);
++    while (fscanf(file, "%u %x", &frame, &mask) == 2) {
++        if (frame >= capacity) { uint32_t next = capacity ? capacity : 256; while (frame >= next) next *= 2; state.masks = realloc(state.masks, sizeof(*state.masks) * next); if (!state.masks) fatal_error("Out of memory loading route\n"); memset(state.masks + capacity, 0, sizeof(*state.masks) * (next - capacity)); capacity = next; }
++        state.masks[frame] = mask; state.count = frame + 1;
++    }
++    fclose(file);
++}
++void megaldoom_runner_set_report(const char *path) { set_string(&state.report, path); }
++void megaldoom_runner_set_mailbox(uint32_t address, uint32_t bytes) { state.mailbox = address; state.mailbox_bytes = bytes > 512 ? 512 : bytes; }
++void megaldoom_runner_set_perf_mailbox(uint32_t address, uint32_t bytes) { state.perf_mailbox = address; state.perf_mailbox_bytes = bytes > 512 ? 512 : bytes; }
++void megaldoom_runner_set_require_checkpoints(uint32_t mask) { state.require_checkpoints = mask; }
++void megaldoom_runner_set_capture(const char *directory, uint32_t every) { set_string(&state.capture, directory); state.capture_every = every; }
++void megaldoom_runner_set_capture_every(uint32_t every) { state.capture_every = every; }
++
++static void set_input(system_header *system, uint32_t mask)
++{
++    static uint32_t previous; static const uint8_t buttons[] = {DPAD_UP, DPAD_DOWN, DPAD_LEFT, DPAD_RIGHT, BUTTON_A, BUTTON_B, BUTTON_C, BUTTON_START, BUTTON_X, BUTTON_Y, BUTTON_Z, BUTTON_MODE};
++    for (uint8_t i = 0; i < sizeof(buttons); i++) { uint32_t bit = 1u << i; if ((mask & bit) != (previous & bit)) { if (mask & bit) system->gamepad_down(system, 1, buttons[i]); else system->gamepad_up(system, 1, buttons[i]); } }
++    previous = mask;
++}
++
++/* Reads `bytes` from Genesis work RAM at `address` into `hex_out` (a
++ * 2*bytes+1 char buffer) as lowercase hex, and returns the first byte raw
++ * (used for checkpoint-bit accumulation) or -1 if the range is invalid/out
++ * of bounds. Shared by the generic mailbox and the perf mailbox so both
++ * follow the same bounds checking. */
++static int read_mailbox(genesis_context *gen, uint32_t address, uint32_t bytes, char *hex_out)
++{
++    static const char hex[] = "0123456789abcdef";
++    uint32_t offset;
++    if (address < 0xFF0000 || address >= 0x1000000 || !bytes) return -1;
++    offset = address - 0xFF0000;
++    if (offset + bytes > RAM_WORDS * 2) return -1;
++    for (uint32_t i = 0; i < bytes; i++) {
++        uint8_t value = ((uint8_t *)gen->work_ram)[(offset + i) ^ 1];
++        hex_out[i * 2] = hex[value >> 4];
++        hex_out[i * 2 + 1] = hex[value & 15];
++        if (i == 0) hex_out[bytes * 2] = 0;
++    }
++    return ((uint8_t *)gen->work_ram)[offset ^ 1];
++}
++
++/* MEGALDOOM_MIN_CAPTURE_FRAME: the VDP hasn't finished a real frame yet on
++ * the very first megaldoom_runner_on_frame call, so a capture requested at
++ * frame 0 would read a framebuffer that's still zeroed/partial. Delay
++ * capture until at least one full frame has been observed. */
++#define MEGALDOOM_MIN_CAPTURE_FRAME 2
++
++/* Deterministic routes always run BlastEm in headless batch mode (-b), where
++ * the VDP renders into a plain malloc'd buffer (see vdp.c's init_vdp_context:
++ * "if (headless) { context->fb = malloc(...); }") and the normal SDL present
++ * path in render_sdl.c -- the only place that ever consumes a path queued via
++ * render_save_screenshot() -- never runs. Calling render_save_screenshot()
++ * here would silently queue a path that's never written; export the VDP
++ * framebuffer directly with BlastEm's own save_ppm() instead. */
++static void request_capture(genesis_context *gen, uint32_t frame)
++{
++    char path[1024];
++    int written = snprintf(path, sizeof(path), "%s/frame-%06u.ppm", state.capture, frame);
++    if (written <= 0 || (size_t)written >= sizeof(path)) {
++        state.capture_failed = 1;
++        fatal_error("Capture path too long for frame %u in %s\n", frame, state.capture);
++    }
++    FILE *file = fopen(path, "wb");
++    if (!file) {
++        state.capture_failed = 1;
++        fatal_error("Could not open capture file %s for frame %u\n", path, frame);
++    }
++    /* context->output_lines is reset to 0 the instant a frame completes (see
++     * vdp.c's frame-boundary handling, "context->output_lines = 0;"), which
++     * happens before control returns up to the genesis.c call site that
++     * invokes megaldoom_runner_on_frame -- by the time we get here it's
++     * already 0. inactive_start/border_top/border_bot are only touched on
++     * mode-register writes, not per frame, so their sum is a stable height
++     * for the currently configured video mode. */
++    uint32_t height = gen->vdp->inactive_start + gen->vdp->border_top + gen->vdp->border_bot;
++    save_ppm(file, gen->vdp->fb, LINEBUF_SIZE, height, gen->vdp->output_pitch);
++    fclose(file);
++}
++
++void megaldoom_runner_on_frame(system_header *system, uint32_t frame, uint32_t cycles)
++{
++    if (state.masks) set_input(system, frame < state.count ? state.masks[frame] : 0);
++    if (!state.active++) state.cycles_first = cycles; state.cycles_last = cycles;
++    if (system->type == SYSTEM_GENESIS) {
++        genesis_context *gen = (genesis_context *)system;
++        int checkpoint_byte;
++        state.pc[(gen->m68k->last_prefetch_address >> 1) & 63]++;
++        checkpoint_byte = read_mailbox(gen, state.mailbox, state.mailbox_bytes, state.mailbox_hex);
++        /* Checkpoint bits ride on byte 0 of the generic --md-mailbox range
++         * (the game publishes them at a src/debug_checkpoint.c-owned
++         * address); OR across the whole run since bits like MENU are
++         * transient and would otherwise be lost once gameplay starts. */
++        if (checkpoint_byte >= 0) state.checkpoints_seen |= (uint32_t)checkpoint_byte;
++        read_mailbox(gen, state.perf_mailbox, state.perf_mailbox_bytes, state.perf_mailbox_hex);
++        if (state.capture && state.capture_every && frame >= MEGALDOOM_MIN_CAPTURE_FRAME && !(frame % state.capture_every)) {
++            request_capture(gen, frame);
++        }
++    }
++}
++void megaldoom_runner_finish(void)
++{
++    if (!state.report) return;
++    FILE *file = fopen(state.report, "w"); if (!file) return;
++    uint32_t checkpoints_ok = (state.checkpoints_seen & state.require_checkpoints) == state.require_checkpoints;
++    fprintf(file, "{\n  \"schemaVersion\": 2,\n  \"frames\": %u,\n  \"cycles\": %u,\n  \"pcHistogram\": [", state.active, state.cycles_last - state.cycles_first);
++    for (uint32_t i = 0; i < 64; i++) fprintf(file, "%s%u", i ? ", " : "", state.pc[i]);
++    fprintf(file, "],\n  \"captureFailed\": %s,\n  \"mailbox\": \"%s\",\n  \"perfMailbox\": \"%s\",\n  \"checkpoints\": {\"seen\": %u, \"required\": %u, \"ok\": %s}\n}\n",
++            state.capture_failed ? "true" : "false", state.mailbox_hex, state.perf_mailbox_hex,
++            state.checkpoints_seen, state.require_checkpoints, checkpoints_ok ? "true" : "false");
++    fclose(file);
++}
+diff --git a/megaldoom_runner.h b/megaldoom_runner.h
+new file mode 100644
+--- /dev/null
++++ b/megaldoom_runner.h
+@@ -0,0 +1,20 @@
++#ifndef MEGALDOOM_RUNNER_H_
++#define MEGALDOOM_RUNNER_H_
++
++#include <stdint.h>
++#include "system.h"
++
++/* Automation hook intentionally kept out of normal input bindings. Route files
++ * use `frame mask` lines; mask bits map to Up, Down, Left, Right, A, B, C,
++ * Start, X, Y, Z and Mode respectively. */
++void megaldoom_route_load(const char *path);
++void megaldoom_runner_set_report(const char *path);
++void megaldoom_runner_set_mailbox(uint32_t address, uint32_t bytes);
++void megaldoom_runner_set_perf_mailbox(uint32_t address, uint32_t bytes);
++void megaldoom_runner_set_require_checkpoints(uint32_t mask);
++void megaldoom_runner_set_capture(const char *directory, uint32_t every);
++void megaldoom_runner_set_capture_every(uint32_t every);
++void megaldoom_runner_on_frame(system_header *system, uint32_t frame, uint32_t cycles);
++void megaldoom_runner_finish(void);
++
++#endif

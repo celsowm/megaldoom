@@ -1,6 +1,7 @@
 #include "renderer_internal.h"
 #include "renderer_perf.h"
 #include "bsp_render.h"
+#include "debug_checkpoint.h"
 
 #if DEBUG_PERF
 
@@ -75,6 +76,7 @@ void renderer_draw_perf_overlay(bool frame_complete) {
     refresh_counter = 0;
     diagnostics_start = getSubTick();
     perf = renderer_get_perf_snapshot();
+    debug_checkpoint_publish_perf(&perf, sizeof(perf));
     size_c = (perf.upload_dirty_tiles == 0) ? 'N' : (perf.upload_full ? 'F' : 'P');
     bank_c = perf.upload_swap ? 'I' : 'A';
     displayed_deep_phase = (perf.deep_phase == 0) ?

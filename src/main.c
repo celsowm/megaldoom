@@ -2,6 +2,7 @@
 #include "billboard.h"
 #include "bsp_map.h"
 #include "bsp_render.h"
+#include "debug_checkpoint.h"
 #include "fixed_math.h"
 #include "frontend.h"
 #include "game_audio.h"
@@ -35,6 +36,12 @@
 #define DEBUG_PERF 0
 #endif
 
+// Checkpoint mailbox for BlastEm's deterministic-route runner. Set to 0 (or
+// build with -DDEBUG_BLASTEM_CHECKPOINT=0) for clean release builds.
+#ifndef DEBUG_BLASTEM_CHECKPOINT
+#define DEBUG_BLASTEM_CHECKPOINT 0
+#endif
+
 static PlayerState g_player;
 static RayColumn g_ray_columns[RAY_VIEW_COLS];
 static RaySceneColors g_scene_colors;
@@ -42,6 +49,10 @@ static u16 g_weapon_flash = 0;
 static u16 g_player_damage_flash = 0;
 static u16 g_player_invuln = 0;
 static RendererHudState g_hud;
+#if DEBUG_BLASTEM_CHECKPOINT
+static s32 g_checkpoint_prev_x;
+static s32 g_checkpoint_prev_y;
+#endif
 
 static u8 get_portrait_state(u16 player_health) {
     if (g_player_damage_flash > 0) {
@@ -156,6 +167,7 @@ int main(bool hard) {
         JOY_update();
         previous_system_joy = JOY_readJoypad(JOY_1);
         prev_vtimer = vtimer;
+        debug_checkpoint_mark(DEBUG_CHECKPOINT_GAMEPLAY);
 
 #if DEBUG_PERF
     // Scanline cursor (sprite 0): top = 0% load, bottom = 100% load, averaged.
@@ -246,6 +258,17 @@ int main(bool hard) {
 
         if (!level_cleared) {
             control = player_controller_update(&g_player, elapsed_frames);
+#if DEBUG_BLASTEM_CHECKPOINT
+            {
+                const s32 dx = g_player.x - g_checkpoint_prev_x;
+                const s32 dy = g_player.y - g_checkpoint_prev_y;
+                if (dx > FX_ONE || dx < -FX_ONE || dy > FX_ONE || dy < -FX_ONE) {
+                    debug_checkpoint_mark(DEBUG_CHECKPOINT_MOVED);
+                }
+                g_checkpoint_prev_x = g_player.x;
+                g_checkpoint_prev_y = g_player.y;
+            }
+#endif
         } else if ((system_pressed & BUTTON_A) != 0) {
             phase_index = (u16)((phase_index + 1) & 1);
             reset_level(phase_index, &level_cleared, &shot_cooldown, &player_health,
@@ -304,6 +327,7 @@ int main(bool hard) {
             BillboardShotResult shot = BILLBOARD_SHOT_NONE;
 
             if ((shot_cooldown == 0) && (player_ammo > 0)) {
+                debug_checkpoint_mark(DEBUG_CHECKPOINT_COMBAT);
                 fire_result = billboard_fire_center(
                     &g_player, g_ray_columns[RAY_VIEW_COLS / 2].depth);
                 shot = fire_result.status;

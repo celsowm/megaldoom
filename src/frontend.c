@@ -1,4 +1,5 @@
 #include "frontend.h"
+#include "debug_checkpoint.h"
 #include "game_audio.h"
 #include "resources.h"
 
@@ -167,6 +168,7 @@ static bool run_main_menu(u16 menu_base, u16 overlay_base) {
     u32 ticks = 0;
     bool last_frame = FALSE;
 
+    debug_checkpoint_mark(DEBUG_CHECKPOINT_MENU);
     clear_plane_cpu(BG_A);
     clear_plane_cpu(BG_B);
     game_audio_suspend_for_video();
@@ -237,6 +239,8 @@ FrontendAction frontend_run(void) {
         const u16 menu_base = TILE_USER_INDEX;
         const u16 overlay_base = (u16)(menu_base + frontend_main_menu.tileset->numTile);
 
+        debug_checkpoint_reset();
+        debug_checkpoint_mark(DEBUG_CHECKPOINT_TITLE);
         frontend_video_init();
         VDP_drawImageEx(BG_B, &frontend_title,
                         TILE_ATTR_FULL(PAL0, FALSE, FALSE, FALSE, title_base),

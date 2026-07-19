@@ -34,12 +34,39 @@ if (-not $clang -or -not $windres -or -not $sdl -or -not (Test-Path (Join-Path $
 # so no global MinGW/MSYS installation leaks into the build.
 $wsl = Get-Command wsl.exe -ErrorAction SilentlyContinue
 if (-not $wsl) { throw "WSL with GNU make is required to drive this portable Windows toolchain." }
-$sourceWsl = (& wsl.exe -- wslpath -a ($Source -replace '\\', '/')).Trim()
-$clangWsl = (& wsl.exe -- wslpath -a ($clang.FullName -replace '\\', '/')).Trim()
-$windresWsl = (& wsl.exe -- wslpath -a ($windres.FullName -replace '\\', '/')).Trim()
-$sdlWsl = (& wsl.exe -- wslpath -a ($sdl.FullName -replace '\\', '/')).Trim()
-$glewWsl = (& wsl.exe -- wslpath -a ($glew -replace '\\', '/')).Trim()
-$makeArgs = "OS=Windows CPU=x86_64 CC='$clangWsl' WINDRES='$windresWsl' SDL2_PREFIX='$sdlWsl' GLEW_PREFIX='$glewWsl' NOLTO=1 NONUKLEAR=1"
+
+# A failed wslpath conversion silently yields an empty string here, which then
+# turns "cd '$sourceWsl'" into "cd ''" (WSL's home directory) and surfaces as a
+# confusing "no rule to make target" instead of naming the real problem. Check
+# each conversion explicitly so a broken toolchain path fails clearly.
+function Convert-ToWslPath([string]$WindowsPath, [string]$Description) {
+    $converted = (& wsl.exe -- wslpath -a ($WindowsPath -replace '\\', '/')).Trim()
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($converted)) {
+        throw "Could not convert $Description path to a WSL path: $WindowsPath"
+    }
+    return $converted
+}
+# $sourceWsl/$clangWsl/$windresWsl are consumed by WSL's own bash/make (cd and
+# exec), so they need WSL-style paths. SDL2_PREFIX/GLEW_PREFIX, however, only
+# ever reach x86_64-w64-mingw32-clang.exe as -I/-L flags -- that's a native
+# Windows binary invoked *from* WSL, and it does not understand /mnt/c-style
+# paths (confirmed: passing a WSL path here fails with "SDL.h file not found"
+# even though the file exists and is readable from WSL). Keep these two as
+# plain Windows paths; the Makefile's forward-slash concatenation onto them
+# (e.g. "$(SDL2_PREFIX)/include/$(SDL_UPPER)") mixes separators, which clang
+# accepts fine on Windows.
+$sourceWsl = Convert-ToWslPath $Source "BlastEm source"
+$clangWsl = Convert-ToWslPath $clang.FullName "clang compiler"
+$windresWsl = Convert-ToWslPath $windres.FullName "windres"
+# Forward slashes, not backslashes: GLEW32S_LIB is composed from GLEW_PREFIX
+# and used unquoted in the Makefile's link recipe (LDFLAGS+= $(GLEW32S_LIB) ...),
+# so a backslash-laden Windows path gets partially eaten as shell escapes when
+# make hands the recipe to WSL's bash (e.g. "C:\Users" becomes "CUsers").
+# Windows and clang both accept forward slashes, so this sidesteps the escaping
+# issue without needing to touch the Makefile's quoting.
+$sdlWindows = $sdl.FullName -replace '\\', '/'
+$glewWindows = $glew -replace '\\', '/'
+$makeArgs = "OS=Windows CPU=x86_64 CC='$clangWsl' WINDRES='$windresWsl' SDL2_PREFIX='$sdlWindows' GLEW_PREFIX='$glewWindows' NOLTO=1 NONUKLEAR=1"
 if ($Debug) { $makeArgs += " DEBUG=1" }
 $makeCommand = "set -e; command -v make >/dev/null; cd '$sourceWsl'; make $makeArgs blastem.exe"
 & wsl.exe -- bash -lc $makeCommand
