@@ -151,29 +151,51 @@ raised to 256 B (`DEBUG_CHECKPOINT_PERF_MAILBOX_BYTES`) to fit the aggregates.
 
 Captured across the three routes (avg / max over gameplay rebuild frames):
 
-| Route | dyn wall | overlay | est DMA bytes | verdict |
-|-------|----------|---------|----------------|---------|
+| Route | dyn wall | overlay | est DMA bytes (incl. 600B tilemap) | verdict |
+|-------|----------|---------|----------------------------------------|---------|
 | `checkpoints.txt` (movement) | 10.5 / 64 | 64.5 / 75 | 3000 / 3320 | GO |
 | `stationary-combat.txt` | 5.3 / 64 | 68.8 / 75 | 2971 / 3000 | GO |
-| `slow-turn.txt` | 13.3 / 64 | 73.6 / 105 | 3381 / 4504 | GO |
+| `slow-turn.txt` | 13.3 / 64 | 73.6 / 105 | 3381 / 4504 | GO (prototype) |
 
-Gate (from plan §15, 120 dyn tiles / ~4200 B safe): every route is far
-under. **Only ~5–13% of the changed-column tiles are wall** — the rest is
-ceiling/floor served statically. Overlay (billboard copy-on-write) is now the
+**Budget math (corrected):** `est_dma_bytes = (dyn_wall + overlay) * 32 + 600`.
+Nominal VBlank ≈ 4800 B = 150 tiles * 32. Reserve 600 B for the mixed
+tilemap commit → 4200 B remaining = 131 tiles. The **conservative safe gate
+is 120 tiles (3840 B)** to leave headroom for per-run DMA command overhead,
+HUD, and other VBlank work. Peak dynamic tiles = (max_dma − 600) / 32:
+- movement peak: (3320 − 600)/32 = **85 tiles** → well under 120
+- stationary peak: (3000 − 600)/32 = **75 tiles** → well under 120
+- slow-turn peak: (4504 − 600)/32 = **122 tiles** → **over the 120 safe
+  gate by 2 tiles / 64 B, but still under the 131-tile / 4504-B nominal
+  budget (≈ 4800 − 4504 = 296 B, ~6% margin)**
+
+So: average routes are comfortably within budget; **slow-turn's maximum (4504 B)
+is close to the nominal 4800-B VBlank budget and over the 120-tile safe gate**.
+That makes it a **GO for a prototype**, not "well under" — implementation
+requires real DMA timing, run-count measurement, and overflow handling.
+
+**Only ~5–13% of the changed-column tiles are wall** — the rest is
+ceiling/floor served statically. Overlay (billboard copy-on-write) is the
 dominant dynamic cost (~65–75 tiles, i.e. ~4–5 columns' worth), not the
-wall. So the sparse semantic framebuffer is the right next architecture; the
-double-buffer-per-column hypothesis was the wrong lever.
+wall: e.g. movement = 10.5 wall vs 64.5 overlay; slow-turn = 13.3 wall
+vs 73.6 overlay. So the sparse architecture should be designed primarily
+around **billboard copy-on-write**, not just walls. The double-buffer-per-
+column hypothesis was the wrong lever; the sparse semantic framebuffer is the
+right next architecture.
 
 Caveat: this oracle counts tiles the **packer** emits. It does NOT yet measure
 the actual sparse *upload* (one DMA run per wall column + the 600-B tilemap
-commit). The 120-tile gate is a DMA-byte estimate (dyn_wall*32 + overlay*32
-+ 600); the true budget also pays per-run DMA command overhead, HUD, and other
-VBlank work, so re-measure against the real upload path before declaring 60fps.
+commit + billboard COW tiles). The 120-tile gate is a DMA-byte estimate; the
+true budget also pays per-run DMA command overhead, HUD, and other VBlank
+work, so re-measure against the real upload path before declaring 60fps.
 Also: `sparse_overlay_max` already hits 105 (slow-turn) — many-on-screen
 enemies is the next risk to capture, since each is a copy-on-write of a
-static tile.
+static tile. The definitive test is not the oracle but: `average_vblanks_x10`
+near 10, no increase in missed deadlines, no tearing, no visual regression.
 
 **Before building the sparse architecture:** the sparse oracle is DEBUG_PERF-
-only and free to leave in. Use it to re-measure after any content change
-(larger view, more enemies). Do NOT re-attempt per-column double-buffer — its
-NO-GO is documented above and the sparse path supersedes it.
+only and free to leave in. Do NOT re-attempt per-column double-buffer — its
+NO-GO is documented above and the sparse path supersedes it. Build the sparse
+path behind a compile-time flag, keep the full positional `g_view_tiles`
+framebuffer in RAM at first (reduce DMA only; don't mix in a CPU/raster
+change simultaneously), and re-measure real DMA timing/run-count before
+removing the existing uploader.
