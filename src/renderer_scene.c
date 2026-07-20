@@ -606,6 +606,10 @@ static void build_bsp_tilemap(const RayColumn *columns,
     const RendererPerfDeepPhase deep_phase = renderer_perf_get_deep_phase();
     const bool measure_mixed = (bool)(deep_phase == RENDERER_PERF_DEEP_PACK_MIXED);
     const bool measure_flat = (bool)(deep_phase == RENDERER_PERF_DEEP_PACK_FLAT);
+    // ColumnReuseOracle: count how many tile columns the coherence cache
+    // actually repacks this frame. This is a pure measurement of how much a
+    // future per-column uploader could skip; it does not change any output.
+    u16 oracle_changed_columns = 0;
 #endif
     // Each 8px-wide tile column maps to four cast columns (px 0, 2, 4, 6), each
     // replicated 2x -> twice the horizontal detail of the stride-4 packer at the
@@ -631,6 +635,9 @@ static void build_bsp_tilemap(const RayColumn *columns,
             wall_desc_equal(&descriptors[3], &s_prev_desc[tile_x][3])) {
             continue;
         }
+#if DEBUG_PERF
+        oracle_changed_columns++;
+#endif
         s_prev_desc[tile_x][0] = descriptors[0];
         s_prev_desc[tile_x][1] = descriptors[1];
         s_prev_desc[tile_x][2] = descriptors[2];
@@ -710,6 +717,12 @@ static void build_bsp_tilemap(const RayColumn *columns,
     }
     s_prev_flat_rows = flat_rows;
     s_coherence_valid = TRUE;
+#if DEBUG_PERF
+    renderer_perf_record_column_reuse(
+        oracle_changed_columns,
+        (u16)(VIEW_TILE_W - oracle_changed_columns),
+        (u16)(oracle_changed_columns * VIEW_TILE_H));
+#endif
 }
 #endif
 

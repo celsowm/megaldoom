@@ -46,6 +46,19 @@ typedef struct {
     u16 asm_mismatches;
     u16 asm_canary_failures;
     u16 asm_cycles;
+    // ColumnReuseOracle (Phase 2 measurement): how the per-column coherence
+    // cache would translate into per-column DMA. columns_changed/reused are the
+    // last base-rebuild frame's split; hypothetical_tiles_uploaded is
+    // columns_changed * VIEW_TILE_H (what a per-column uploader would ship vs
+    // the current unconditional 300).
+    u16 columns_changed;
+    u16 columns_reused;
+    u16 hypothetical_tiles_uploaded;
+    // Aggregated across every base-rebuild frame in the run so a single mailbox
+    // read at end-of-route yields the distribution, not just the last frame.
+    u16 columns_changed_max;
+    u16 columns_rebuild_frames;
+    u32 columns_changed_sum;
 } RendererPerfSnapshot;
 
 void renderer_debug_set_cast_subticks(u32 subticks);
@@ -67,6 +80,8 @@ RendererPerfDeepPhase renderer_perf_get_deep_phase(void);
 void renderer_perf_record_deep(RendererPerfDeepPhase phase, u32 subticks, u16 units);
 void renderer_perf_record_asm_compare(u16 tile, bool mismatch, bool canary_failure,
                                       bool completed_cycle);
+void renderer_perf_record_column_reuse(u16 columns_changed, u16 columns_reused,
+                                       u16 hypothetical_tiles_uploaded);
 RendererPerfSnapshot renderer_get_perf_snapshot(void);
 #endif
 

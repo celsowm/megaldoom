@@ -142,6 +142,18 @@ void renderer_perf_record_asm_compare(u16 tile, bool mismatch, bool canary_failu
     if (completed_cycle && s_perf.asm_cycles != 0xFFFF) s_perf.asm_cycles++;
 }
 
+void renderer_perf_record_column_reuse(u16 columns_changed, u16 columns_reused,
+                                       u16 hypothetical_tiles_uploaded) {
+    s_perf.columns_changed = columns_changed;
+    s_perf.columns_reused = columns_reused;
+    s_perf.hypothetical_tiles_uploaded = hypothetical_tiles_uploaded;
+    if (columns_changed > s_perf.columns_changed_max) {
+        s_perf.columns_changed_max = columns_changed;
+    }
+    s_perf.columns_changed_sum += columns_changed;
+    s_perf.columns_rebuild_frames++;
+}
+
 RendererPerfSnapshot renderer_get_perf_snapshot(void) {
     return s_perf;
 }

@@ -85,3 +85,55 @@ purely a perf regression, caught by measuring before declaring victory.
   column.
 - Don't just re-run the same tile-level design expecting a different result
   on the same route — the two capture-and-revert cycles already did that.
+
+## Column-major view buffer + per-column upload oracle (2026-07-19)
+
+`g_view_tiles` is now **column-major**: screen `(tile_x, tile_y)` maps to slot
+`tile_x * VIEW_TILE_H + tile_y` (`view_tile_index` in `renderer_internal.h`),
+so a screen column's 15 tiles are contiguous and *could* ship as one DMA run.
+The tilemap array stays row-major (VDP scans screen rows) but each entry now
+points at the column-major VRAM slot (`build_view_bank_tilemaps` in
+`renderer.c`). This was a behavior-preserving refactor: `asm_mismatches=0` on
+every route, pixels byte-identical.
+
+**Watch out — the asm-verify probe was silently dead under the old row-major
+layout.** `compare_stride2_tile_asm` only runs when
+`tile_index == g_asm_compare_cursor`, and the cursor walks `0,1,2,…`. Row-major
+emitted tiles in `0,20,40,…` order, so the gate almost never matched and the
+per-tile pixel verify never actually ran. Column-major emits `0,1,2,…`, so the
+verify now runs every tile. Consequence: `average_vblanks_x10` rose 155→181 on
+`checkpoints.txt` purely because the (DEBUG_PERF-only) verify is now doing real
+work — **this is not a release-build cost** (the probe is `#if DEBUG_PERF`).
+Don't chase that delta as a regression.
+
+### Per-column upload: measured NO-GO on current content (do not build yet)
+
+The point of column-major was to enable per-column DMA (upload only the
+columns the coherence cache repacked, instead of the unconditional 300-tile
+`renderer_prepare_full_base_upload`). Before building the uploader, a
+**ColumnReuseOracle** was added (`renderer_perf_record_column_reuse`, fields
+`columns_changed*` in `RendererPerfSnapshot`) to count, per base-rebuild frame,
+how many of the 20 tile columns actually change. Captured across three routes:
+
+| Route (`tools/routes/`)      | avg cols changed / 20 | avg tiles/rebuild | % of full 300-DMA |
+|------------------------------|-----------------------|-------------------|-------------------|
+| `checkpoints.txt` (movement) | 17.9                  | 268               | 90%               |
+| `slow-turn.txt`              | 17.9                  | 269               | 90%               |
+| `stationary-combat.txt`      | 13.7                  | 205               | 68%               |
+
+Per the reuse decision bands (0–8 cols = 60fps candidate, 9–12 = partial,
+13–20 = stays 30fps), **every route lands in the 13–20 "stays 30fps" band.**
+Even the best case (stationary combat) still uploads 68% of the tiles, before
+the mixed-tilemap commit cost is added. A per-column uploader would add
+marking/commit CPU (same class of cost that sank the 2026-07-19 partial-upload
+attempt above) for a DMA saving too small to remove a whole vblank. **Deferred
+until content changes** (larger view, or a route where the player is genuinely
+stationary for long stretches) push average changed columns under ~10.
+
+Why so few columns are reused even when "stationary": the coherence cache
+invalidates a whole tile column if *any* of its 4 sampled `WallColumnDescriptor`
+fields differ, and combat/animation perturbs `top`/`bottom`/`tex_x` by a pixel
+across most columns. Quantizing presentation (plan §14, `top & ~1`) would
+raise reuse but introduces wall-jitter — measure exact reuse first (the oracle
+is still in place; just capture a new route). The oracle is DEBUG_PERF-only and
+free to leave in.
