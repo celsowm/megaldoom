@@ -106,10 +106,15 @@ static void build_view_bank_tilemaps(void) {
     for (u16 bank = 0; bank < VIEW_BANK_COUNT; bank++) {
         for (u16 y = 0; y < VIEW_TILE_H; y++) {
             for (u16 x = 0; x < VIEW_TILE_W; x++) {
-                const u16 index = (u16)((y * VIEW_TILE_W) + x);
-                s_view_bank_tilemaps[bank][index] = TILE_ATTR_FULL(
+                // The tilemap array stays in screen order (row-major: the VDP
+                // scans screen rows), but each entry points at the COLUMN-MAJOR
+                // VRAM slot where the packer wrote this tile's pixels
+                // (view_tile_index = x*VIEW_TILE_H + y).
+                const u16 screen_index = (u16)((y * VIEW_TILE_W) + x);
+                const u16 vram_tile = view_tile_index(x, y);
+                s_view_bank_tilemaps[bank][screen_index] = TILE_ATTR_FULL(
                     PAL3, FALSE, FALSE, FALSE,
-                    VIEW_TILE_BASE + (bank * VIEW_TILE_COUNT) + index);
+                    VIEW_TILE_BASE + (bank * VIEW_TILE_COUNT) + vram_tile);
             }
         }
     }
@@ -186,7 +191,7 @@ void renderer_prepare_full_base_upload(void) {
 
 void set_view_pair_tile(u16 x, u16 y, u8 left_color, u8 right_color) {
     const u32 row = make_pair_tile_row(left_color, right_color);
-    const u16 map_index = (u16)((y * VIEW_TILE_W) + x);
+    const u16 map_index = view_tile_index(x, y);
 
     for (u16 row_index = 0; row_index < 8; row_index++) {
         g_view_tiles[map_index][row_index] = row;
@@ -198,7 +203,7 @@ void set_view_column_color(u16 column, u16 y, u8 color) {
     const u16 tile_x = (u16)(column >> 3);
     const u16 tile_y = (u16)(y / 8);
     const u16 row_y = (u16)(y & 7);
-    const u16 map_index = (u16)(tile_y * VIEW_TILE_W + tile_x);
+    const u16 map_index = view_tile_index(tile_x, tile_y);
     const u16 shift = (u16)((7 - (column & 7)) * 4);
     u32 row = g_view_tiles[map_index][row_y];
 

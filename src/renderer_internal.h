@@ -12,6 +12,13 @@
 #define VIEW_TILE_W RAY_VIEW_TILE_W
 #define VIEW_TILE_H RAY_VIEW_TILE_H
 #define VIEW_TILE_COUNT (VIEW_TILE_W * VIEW_TILE_H)
+// Column-major view buffer: a screen column's VIEW_TILE_H tiles are contiguous
+// so a changed column uploads as one DMA run. screen (tile_x, tile_y) ->
+// tile_x * VIEW_TILE_H + tile_y. Use this everywhere instead of the old
+// (tile_y * VIEW_TILE_W + tile_x) row-major arithmetic.
+static inline u16 view_tile_index(u16 tile_x, u16 tile_y) {
+    return (u16)((tile_x * VIEW_TILE_H) + tile_y);
+}
 #define VIEW_PIXEL_H (VIEW_TILE_H * 8)
 #define VIEW_TILE_BASE TILE_USER_INDEX
 #define VIEW_BANK_COUNT 2

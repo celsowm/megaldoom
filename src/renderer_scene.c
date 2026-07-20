@@ -383,7 +383,7 @@ static void build_bsp_tilemap(const RayColumn *columns,
             [column_b.shade_level][column_b.texture_id][column_b.tex_x];
 
         for (u16 tile_y = 0; tile_y < VIEW_TILE_H; tile_y++) {
-            const u16 tile_index = (u16)((tile_y * VIEW_TILE_W) + tile_x);
+            const u16 tile_index = view_tile_index(tile_x, tile_y);
             const u16 pixel_y = (u16)(tile_y * 8);
             u32 *tile = target[tile_index];
 
@@ -652,7 +652,7 @@ static void build_bsp_tilemap(const RayColumn *columns,
                 [descriptors[3].shade_level][descriptors[3].texture_id][descriptors[3].tex_x]
         };
         for (u16 tile_y = 0; tile_y < VIEW_TILE_H; tile_y++) {
-            const u16 tile_index = (u16)((tile_y * VIEW_TILE_W) + tile_x);
+            const u16 tile_index = view_tile_index(tile_x, tile_y);
             const u16 pixel_y = (u16)(tile_y * 8);
 
             if (((pixel_y + 7) < descriptors[0].top) &&
@@ -755,7 +755,7 @@ static void draw_door_overlays(const RayColumn *columns, u32 target[][8]) {
 #else
             const u32 value = (u32)REP2[color] << shift;
 #endif
-            u32 *row = &target[((y >> 3) * VIEW_TILE_W) + tile_x][y & 7];
+            u32 *row = &target[view_tile_index(tile_x, (u16)(y >> 3))][y & 7];
             *row = (*row & keep_mask) | value;
         }
     }
@@ -988,7 +988,7 @@ static void draw_projected_billboards(const RayColumn *columns,
                 }
 
                 if (clear_mask != 0) {
-                    const u16 tile_index = (u16)(tile_y * VIEW_TILE_W + tile_x);
+                    const u16 tile_index = view_tile_index(tile_x, tile_y);
                     u32 *dst;
                     renderer_mark_overlay_tile(tile_index);
                     dst = &g_view_tiles[tile_index][row_y];

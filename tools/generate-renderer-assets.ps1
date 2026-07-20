@@ -203,8 +203,15 @@ function New-OverlayOps([string]$Kind, [int]$Color) {
     $values = @{}
 
     function Add-Pixel([int]$X, [int]$Y) {
-        $tile = (($Y -shr 3) * $viewTileW) + ($X -shr 3)
-        $dst = ($tile * 8) + ($Y % 8)
+        # Column-major u32 element offset into the flat g_view_tiles[][8] array.
+        # g_view_tiles is laid out as [tile_x * VIEW_TILE_H + tile_y][row]
+        # (see view_tile_index in renderer_internal.h). Each tile owns 8 u32
+        # rows, so the flat element offset is tile_index*8 + (Y%8), matching
+        # draw_overlay_ops which does (u32*)base + op->dst.
+        $tileX = $X -shr 3
+        $tileY = $Y -shr 3
+        $tileIndex = ($tileX * $viewTileH) + $tileY
+        $dst = ($tileIndex * 8) + ($Y % 8)
         $shift = (7 - ($X % 8)) * 4
         $mask = [uint32]0x0F -shl $shift
         $value = [uint32]$Color -shl $shift
@@ -272,13 +279,15 @@ $worldText = Get-Content -Raw $WorldPath
 
 # View geometry, derived from the HUD header so this generator can never drift
 # from the C layout. FREEDOOM_WEAPON_W/H ARE the viewport pixel dimensions (the
-# weapon overlay canvas == the view), and the tile-grid width (VIEW_TILE_W in
-# renderer_internal.h == RAY_VIEW_TILE_W in raycast.h) is viewPxW/8. Both the
-# weapon ops and the full-view damage overlay linearize a tile as
-# (tileY * viewTileW + tileX), matching g_view_tiles[(tile_y * VIEW_TILE_W) + tile_x].
+# weapon overlay canvas == the view), and the tile-grid dimensions
+# (VIEW_TILE_W/H in renderer_internal.h == RAY_VIEW_TILE_W/H in raycast.h) are
+# viewPxW/8 and viewPxH/8. g_view_tiles is COLUMN-MAJOR:
+# [tile_x * VIEW_TILE_H + tile_y] (see view_tile_index), so the damage/low-health
+# overlay ops now emit that column-major flat index.
 $viewPxW   = Get-DefineValue $hudText "FREEDOOM_WEAPON_W"
 $viewPxH   = Get-DefineValue $hudText "FREEDOOM_WEAPON_H"
 $viewTileW = [int]($viewPxW / 8)
+$viewTileH = [int]($viewPxH / 8)
 $damageColor = Get-DefineValue $worldText "MEGALDOOM_WORLD_COLOR_DAMAGE"
 $warningColor = Get-DefineValue $worldText "MEGALDOOM_WORLD_COLOR_WARNING"
 $idlePixels = Get-ArrayValues $hudText "FREEDOOM_WEAPON_IDLE"
