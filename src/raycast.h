@@ -60,6 +60,10 @@ typedef struct {
 typedef struct {
     RayFlatColor ceiling;
     RayFlatColor floor;
+    // Player's current sector id (computed by bsp_cast_frame). Used by the
+    // sparse framebuffer to pick the resident ceiling atlas tile. Zero-cost at
+    // runtime: set once per cast, read by the renderer.
+    u16 sector;
 } RaySceneColors;
 
 typedef struct {

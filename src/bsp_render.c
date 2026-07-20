@@ -736,6 +736,7 @@ void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColor
     const u8 *visual = FREEDOOM_SECTOR_VISUALS[sector];
     scene_colors->ceiling = (RayFlatColor){visual[0], visual[1], visual[2]};
     scene_colors->floor = (RayFlatColor){visual[3], visual[4], visual[5]};
+    scene_colors->sector = sector;
 
     // Clear occlusion and seed every column with a far/empty default so columns
     // no wall covers still render (as distant, mostly sky/floor).

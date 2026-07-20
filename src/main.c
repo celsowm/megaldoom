@@ -458,7 +458,7 @@ int main(bool hard) {
 #endif
             render_current_view(player_health, renderer_redraw_base_is_dirty(&redraw));
             renderer_redraw_consume(&redraw);
-            renderer_queue_scene_upload();
+            renderer_queue_scene_upload(g_ray_columns, &g_scene_colors);
         }
 
         // Enter vblank first, then push the freshly built frame to VRAM so the

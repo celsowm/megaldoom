@@ -121,114 +121,18 @@ static ViewUploadState g_view_upload;
 // flipped to 1 in a later phase. This function is intentionally not yet wired
 // into the upload path, so it never alters release behavior while the flag is
 // 0.
-__attribute__((unused))
-static void sparse_classify_frame(const u16 wall_mask[VIEW_TILE_W],
-                                  const u16 door_mask[VIEW_TILE_W],
-                                  const u16 overlay_mask[VIEW_TILE_W],
-                                  SparseFrameBuild *build) {
-    // Silence unused-parameter warnings on the flag==0 path where the masks
-    // are not consulted; harmless when the flag is 1 and they are used.
-    (void)wall_mask;
-    (void)door_mask;
-    (void)overlay_mask;
-
-    u16 slot = 0;
-    build->dynamic_tile_count = 0;
-    build->dynamic_run_count = 0;
-    for (u16 x = 0; x < VIEW_TILE_W; x++) {
-        u16 dyn;
+// Forward declarations (Phase 4 sparse classify/build). Definitions live
+// after describe_wall_column (WallColumnDescriptor must be complete there).
+bool g_sparse_tilemap_committed = FALSE;
 #if RENDERER_SPARSE_FB
-        dyn = (u16)(wall_mask[x] | door_mask[x] | overlay_mask[x]);
-#else
-        dyn = 0x7FFFu; // stub: every tile in the column is dynamic (== old full upload)
-#endif
-        build->dynamic_mask[x] = dyn;
-        build->dynamic_rows[x] = dyn;
-        build->mixed_tilemap[x] = x;
-        if (dyn != 0) {
-            SparseTileRun *run = &build->runs[build->dynamic_run_count];
-            run->source_y = x;
-            run->tile_count = VIEW_TILE_H;
-            run->dest_slot = slot;
-            slot = (u16)(slot + VIEW_TILE_H);
-            for (u16 y = 0; y < VIEW_TILE_H; y++) {
-                const u16 tile_index = (u16)(x * VIEW_TILE_H + y);
-                build->slot_allocation[tile_index] = (u16)(run->dest_slot + y);
-            }
-            build->dynamic_tile_count += VIEW_TILE_H;
-            build->dynamic_run_count++;
-        }
-    }
-}
-
-// Phase 2, Task 2: build the mixed-tilemap screen layout from a SparseFrameBuild.
-//
-// The screen tilemap stays in screen order (row-major: y*VIEW_TILE_W + x) like
-// the legacy build_view_bank_tilemaps. For each screen cell:
-//   * pure-ceiling cell  -> the resident ceiling atlas tile for the player's
-//     current sector (STATIC_CEILING_ATLAS_BASE + g_sector_ceiling_tile[sector]);
-//   * pure-floor cell    -> the single ROM-constant floor tile (STATIC_FLOOR_TILE_BASE);
-//   * dynamic cell       -> a compact VRAM slot in the dynamic bank that the
-//     sparse upload fills this frame (VIEW_TILE_BASE + slot_allocation).
-//
-// Classification reuses the EXACT same three branches as build_bsp_tilemap
-// (pixel_y+7 < all tops => ceiling; pixel_y >= all bottoms => floor; else
-// dynamic) so the mixed tilemap's static/dynamic split matches the packer's
-// output with zero pixel drift. With RENDERER_SPARSE_FB == 0 this is dead code
-// that is never called; the legacy full-upload path is untouched.
-//
-// NOTE: `columns` and `scene_colors` are passed to keep the signature honest
-// about what drives the classify; only the descriptors' top/bottom are needed
-// here. `sector` selects the resident ceiling atlas tile.
-#if RENDERER_SPARSE_FB
+static void sparse_classify_frame(const RayColumn *columns,
+                                 const RaySceneColors *scene_colors,
+                                 SparseFrameBuild *build);
 static void sparse_build_tilemap(const RayColumn *columns,
                                  const RaySceneColors *scene_colors,
-                                 u16 sector,
+                                 u16 sector, u16 bank,
                                  u16 *screen_tilemap,
-                                 const SparseFrameBuild *build) {
-    (void)scene_colors;
-    const u8 ceil_tile = g_sector_ceiling_tile[(sector < FREEDOOM_SECTOR_VISUAL_COUNT) ?
-                                                  sector : 0];
-    const u16 ceil_vram = (u16)(STATIC_CEILING_ATLAS_BASE + ceil_tile);
-    const u16 floor_vram = STATIC_FLOOR_TILE_BASE;
-    for (u16 tile_x = 0; tile_x < VIEW_TILE_W; tile_x++) {
-        const u16 base_col = (u16)(tile_x * 8);
-        const WallColumnDescriptor descriptors[4] = {
-            describe_wall_column(&columns[base_col]),
-            describe_wall_column(&columns[base_col + 2]),
-            describe_wall_column(&columns[base_col + 4]),
-            describe_wall_column(&columns[base_col + 6])
-        };
-        for (u16 tile_y = 0; tile_y < VIEW_TILE_H; tile_y++) {
-            const u16 screen_index = (u16)((tile_y * VIEW_TILE_W) + tile_x);
-            const u16 pixel_y = (u16)(tile_y * 8);
-
-            if (((pixel_y + 7) < descriptors[0].top) &&
-                ((pixel_y + 7) < descriptors[1].top) &&
-                ((pixel_y + 7) < descriptors[2].top) &&
-                ((pixel_y + 7) < descriptors[3].top)) {
-                screen_tilemap[screen_index] = TILE_ATTR_FULL(
-                    PAL3, FALSE, FALSE, FALSE, ceil_vram);
-                continue;
-            }
-
-            if ((pixel_y >= descriptors[0].bottom) &&
-                (pixel_y >= descriptors[1].bottom) &&
-                (pixel_y >= descriptors[2].bottom) &&
-                (pixel_y >= descriptors[3].bottom)) {
-                screen_tilemap[screen_index] = TILE_ATTR_FULL(
-                    PAL3, FALSE, FALSE, FALSE, floor_vram);
-                continue;
-            }
-
-            // Dynamic: point at the compact slot the sparse upload fills.
-            const u16 tile_index = (u16)(tile_x * VIEW_TILE_H + tile_y);
-            const u16 slot = build->slot_allocation[tile_index];
-            screen_tilemap[screen_index] = TILE_ATTR_FULL(
-                PAL3, FALSE, FALSE, FALSE, VIEW_TILE_BASE + slot);
-        }
-    }
-}
+                                 const SparseFrameBuild *build);
 #endif
 
 static void build_shade_luts(void) {
@@ -565,6 +469,144 @@ typedef struct {
     u32 tile[8];
     u32 after[2];
 } AsmTileProbe;
+#if RENDERER_SPARSE_FB
+// Phase 4, Task 4: classify the frame from the column descriptors (NOT the
+// packer's mask arrays — the packer is untouched). A tile (x,y) is STATIC
+// (ceiling or floor, served from the resident atlas, zero per-frame DMA) iff
+// its 8px band is entirely above every wall top (pure ceiling) or entirely
+// below every wall bottom (pure floor). Any other band is DYNAMIC (wall/door/
+// overlay — needs per-frame VRAM). This is the exact same three-way split
+// sparse_build_tilemap uses, so dynamic_rows[x] matches the oracle's dyn count
+// and the mixed tilemap's static/dynamic layout. Dead code at flag 0.
+static void sparse_classify_frame(const RayColumn *columns,
+                                  const RaySceneColors *scene_colors,
+                                  SparseFrameBuild *build) {
+    (void)scene_colors;
+    build->dynamic_tile_count = 0;
+    build->dynamic_run_count = 0;
+    for (u16 x = 0; x < VIEW_TILE_W; x++) {
+        const u16 base_col = (u16)(x * 8);
+        const WallColumnDescriptor descriptors[4] = {
+            describe_wall_column(&columns[base_col]),
+            describe_wall_column(&columns[base_col + 2]),
+            describe_wall_column(&columns[base_col + 4]),
+            describe_wall_column(&columns[base_col + 6])
+        };
+        u16 dyn = 0;
+        for (u16 y = 0; y < VIEW_TILE_H; y++) {
+            const u16 pixel_y = (u16)(y * 8);
+            const bool pure_ceiling =
+                ((pixel_y + 7) < descriptors[0].top) &&
+                ((pixel_y + 7) < descriptors[1].top) &&
+                ((pixel_y + 7) < descriptors[2].top) &&
+                ((pixel_y + 7) < descriptors[3].top);
+            const bool pure_floor =
+                (pixel_y >= descriptors[0].bottom) &&
+                (pixel_y >= descriptors[1].bottom) &&
+                (pixel_y >= descriptors[2].bottom) &&
+                (pixel_y >= descriptors[3].bottom);
+            if (!pure_ceiling && !pure_floor) {
+                dyn |= (u16)(1u << y);
+            }
+        }
+        build->dynamic_mask[x] = dyn;
+        build->dynamic_rows[x] = dyn;
+        // Count set bits for the budget gate.
+        u16 bits = dyn;
+        while (bits) {
+            build->dynamic_tile_count++;
+            bits &= (u16)(bits - 1);
+        }
+    }
+}
+#else
+// Flag-0 stub: never called (the sparse path is dead at flag 0), kept so the
+// symbol resolves if anything references it; producing an all-dynamic build
+// would be equivalent to the legacy full upload.
+static void sparse_classify_frame(const RayColumn *columns,
+                                  const RaySceneColors *scene_colors,
+                                  SparseFrameBuild *build) {
+    (void)columns; (void)scene_colors; (void)build;
+}
+#endif
+
+// Phase 4: set by the sparse path (flag 1) when it commits its mixed tilemap
+// straight to the BG_B plane; read by renderer_set_view_vram_bank so the bank
+// swap skips its redundant tilemap re-upload. Defined unconditionally (always
+// linked) because renderer.c references it even at flag 0, where it stays FALSE.
+
+#if RENDERER_SPARSE_FB
+// Phase 4, Task 4: build the mixed-tilemap screen layout from a SparseFrameBuild.
+//
+// The screen tilemap stays in screen order (row-major: y*VIEW_TILE_W + x) like
+// the legacy build_view_bank_tilemaps. For each screen cell:
+//   * pure-ceiling cell  -> the resident ceiling atlas tile for the player's
+//     current sector (STATIC_CEILING_ATLAS_BASE + g_sector_ceiling_tile[sector]);
+//   * pure-floor cell    -> the single ROM-constant floor tile (STATIC_FLOOR_TILE_BASE);
+//   * dynamic cell       -> the dynamic VRAM tile the sparse upload filled this
+//     frame in the INACTIVE bank: VIEW_TILE_BASE + bank*VIEW_TILE_COUNT +
+//     slot_allocation[col_major_index] (slot_allocation holds the column-major
+//     source index the DMA wrote, per the Phase 3 review fix).
+//
+// Classification reuses the EXACT same three branches as build_bsp_tilemap
+// (pixel_y+7 < all tops => ceiling; pixel_y >= all bottoms => floor; else
+// dynamic) so the mixed tilemap's static/dynamic split matches the packer's
+// output with zero pixel drift. With RENDERER_SPARSE_FB == 0 this is dead code
+// that is never called; the legacy full-upload path is untouched.
+static u16 g_sparse_screen_tilemap[VIEW_TILE_W * VIEW_TILE_H];
+
+static void sparse_build_tilemap(const RayColumn *columns,
+                                 const RaySceneColors *scene_colors,
+                                 u16 sector,
+                                 u16 bank,
+                                 u16 *screen_tilemap,
+                                 const SparseFrameBuild *build) {
+    (void)scene_colors;
+    const u8 ceil_tile = g_sector_ceiling_tile[(sector < FREEDOOM_SECTOR_VISUAL_COUNT) ?
+                                                  sector : 0];
+    const u16 ceil_vram = (u16)(STATIC_CEILING_ATLAS_BASE + ceil_tile);
+    const u16 floor_vram = STATIC_FLOOR_TILE_BASE;
+    const u16 dyn_bank_base = (u16)(VIEW_TILE_BASE + (bank * VIEW_TILE_COUNT));
+    for (u16 tile_x = 0; tile_x < VIEW_TILE_W; tile_x++) {
+        const u16 base_col = (u16)(tile_x * 8);
+        const WallColumnDescriptor descriptors[4] = {
+            describe_wall_column(&columns[base_col]),
+            describe_wall_column(&columns[base_col + 2]),
+            describe_wall_column(&columns[base_col + 4]),
+            describe_wall_column(&columns[base_col + 6])
+        };
+        for (u16 tile_y = 0; tile_y < VIEW_TILE_H; tile_y++) {
+            const u16 screen_index = (u16)((tile_y * VIEW_TILE_W) + tile_x);
+            const u16 pixel_y = (u16)(tile_y * 8);
+
+            if (((pixel_y + 7) < descriptors[0].top) &&
+                ((pixel_y + 7) < descriptors[1].top) &&
+                ((pixel_y + 7) < descriptors[2].top) &&
+                ((pixel_y + 7) < descriptors[3].top)) {
+                screen_tilemap[screen_index] = TILE_ATTR_FULL(
+                    PAL3, FALSE, FALSE, FALSE, ceil_vram);
+                continue;
+            }
+
+            if ((pixel_y >= descriptors[0].bottom) &&
+                (pixel_y >= descriptors[1].bottom) &&
+                (pixel_y >= descriptors[2].bottom) &&
+                (pixel_y >= descriptors[3].bottom)) {
+                screen_tilemap[screen_index] = TILE_ATTR_FULL(
+                    PAL3, FALSE, FALSE, FALSE, floor_vram);
+                continue;
+            }
+
+            // Dynamic: point at the inactive bank's VRAM tile the sparse upload
+            // filled (column-major source index == dest, per Phase 3 review fix).
+            const u16 tile_index = (u16)(tile_x * VIEW_TILE_H + tile_y);
+            const u16 slot = build->slot_allocation[tile_index];
+            screen_tilemap[screen_index] = TILE_ATTR_FULL(
+                PAL3, FALSE, FALSE, FALSE, (u16)(dyn_bank_base + slot));
+        }
+    }
+}
+#endif
 
 static AsmTileProbe g_asm_tile_probe;
 static u16 g_asm_compare_cursor;
@@ -1320,35 +1362,44 @@ static bool choose_full_view_upload(u16 bank) {
                   (count_view_bank_dirty_runs(bank) > VIEW_DIRTY_MAX_RUNS));
 }
 
-void renderer_queue_scene_upload(void) {
+void renderer_queue_scene_upload(const RayColumn *columns,
+                                 const RaySceneColors *scene_colors) {
     const bool swap = g_upload_requires_bank_swap;
     const u16 bank = swap ? (u16)(g_view_vram_bank ^ 1) : g_view_vram_bank;
 
 #if RENDERER_SPARSE_FB
-    // Phase 3, Task 3: sparse upload path. Only when a bank swap is pending do
-    // we classify the frame and, if the dynamic tile count fits in one vblank,
-    // DMA just the dynamic runs into the inactive bank and finish immediately.
-    // Otherwise we fall through to the legacy full-base upload below.
+    // Phase 4, Task 4: sparse upload path. Only when a bank swap is pending do
+    // we classify the frame (from the column descriptors — packer untouched),
+    // and if the dynamic tile count fits in one vblank, DMA just the dynamic
+    // runs into the inactive bank, build the mixed tilemap (static atlas tiles
+    // + dynamic bank tiles) and commit it straight to the BG_B plane, then hand
+    // off to the EXISTING deferred pump so the bank swap happens only AFTER the
+    // DMAs land (dbg_wait_dma), exactly like the legacy path. Otherwise we fall
+    // through to the legacy full-base upload below.
     if (swap) {
         static SparseFrameBuild s_build;
-        const u16 wall_mask[VIEW_TILE_W] = {0};
-        const u16 door_mask[VIEW_TILE_W] = {0};
-        const u16 overlay_mask[VIEW_TILE_W] = {0};
-        sparse_classify_frame(wall_mask, door_mask, overlay_mask, &s_build);
+        sparse_classify_frame(columns, scene_colors, &s_build);
         if (s_build.dynamic_tile_count <= SPARSE_ONE_VBLANK_BUDGET) {
             const u16 inactive_bank_base =
                 (u16)(VIEW_TILE_BASE + (bank * VIEW_TILE_COUNT));
             // DMA just the dynamic runs into the inactive bank's column-major
             // tile positions (deferred — they land during the next vblank wait).
             sparse_queue_dynamic_runs(&s_build, inactive_bank_base);
-            // Hand off to the EXISTING deferred pump so the bank swap happens
-            // only AFTER the DMAs land (dbg_wait_dma), exactly like the legacy
-            // path. Mark the upload complete (cursor==COUNT) and non-full: the
-            // pump's next step sees no dirty tiles to send, waits, then
-            // finish_view_upload() swaps the freshly filled inactive bank in.
-            // TODO(flag1): wall_mask/door_mask/overlay_mask are placeholder
-            // zeros; the real masks come from the packer (Phase 4). Flipping the
-            // flag before then uploads zero tiles and shows a blank frame.
+            // Build the mixed tilemap (ceiling atlas / floor / dynamic bank
+            // tiles) and commit it directly to the BG_B plane. The dynamic
+            // tiles are already in the inactive bank's VRAM region; the static
+            // atlas tiles are shared and already resident. This makes the frame
+            // fully consistent in VRAM BEFORE the swap reveals it.
+            sparse_build_tilemap(columns, scene_colors, scene_colors->sector,
+                                 bank, g_sparse_screen_tilemap, &s_build);
+            VDP_setTileMapDataRect(BG_B, g_sparse_screen_tilemap,
+                                   VIEW_TILEMAP_X, VIEW_TILEMAP_Y,
+                                   VIEW_TILE_W, VIEW_TILE_H, VIEW_TILE_W, CPU);
+            g_sparse_tilemap_committed = TRUE;
+            // Hand off to the EXISTING deferred pump so the bank swap (which now
+            // only flips g_view_vram_bank, skipping the redundant tilemap
+            // re-upload because g_sparse_tilemap_committed is set) happens after
+            // the DMAs land. Mark the upload complete (cursor==COUNT), non-full.
             g_upload_requires_bank_swap = FALSE;
             g_view_upload.pending = TRUE;
             g_view_upload.full = FALSE;

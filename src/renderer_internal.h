@@ -107,7 +107,19 @@ extern u16 g_compass_tilemap[COMPASS_W * COMPASS_H];
 // are static (one atlas tile per distinct RayFlatColor ceiling, uploaded once
 // at level init; floor is one ROM-constant tile forever) so they cost ZERO
 // per-frame DMA — see AGENTS.md "Ceiling/floor cost ZERO DMA during motion".
+// Default 0 (legacy full-upload path is the single source of truth). A local
+// flag-1 TEST build is produced with
+//   EXTRA_FLAGS="-DRENDERER_SPARSE_FB=1"
+// so the committed source always defaults to 0 (release never ships sparse
+// until its route metrics pass in Phase 5/6).
+#ifndef RENDERER_SPARSE_FB
 #define RENDERER_SPARSE_FB 0
+#endif
+
+// Phase 4: when the sparse path commits its mixed tilemap straight to the BG_B
+// plane (instead of through s_view_bank_tilemaps), this flag tells the bank
+// swap to skip its redundant tilemap re-upload. Declared in renderer_scene.c.
+extern bool g_sparse_tilemap_committed;
 
 // === Static ceiling/floor atlas (Phase 2, Task 2) ==========================
 // One VRAM tile holds the ROM-constant floor (MEGALDOOM_WORLD_COLOR_FLOOR,

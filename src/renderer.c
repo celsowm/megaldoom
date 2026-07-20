@@ -128,6 +128,17 @@ static void build_view_bank_tilemaps(void) {
 void renderer_set_view_vram_bank(u16 bank) {
     g_view_vram_bank = (u16)(bank & 1);
 
+    // Phase 4: when the sparse path already committed its mixed tilemap straight
+    // to the BG_B plane (g_sparse_tilemap_committed set in renderer_queue_scene_
+    // upload), the plane already shows the correct static-atlas + dynamic-bank
+    // frame. Re-uploading s_view_bank_tilemaps[bank] here would clobber it with
+    // the legacy uniform map, so skip the tilemap write and just leave the bank
+    // select updated. Cleared so the next legacy swap re-uploads normally.
+    if (g_sparse_tilemap_committed) {
+        g_sparse_tilemap_committed = FALSE;
+        return;
+    }
+
     VDP_setTileMapDataRect(BG_B,
                            s_view_bank_tilemaps[g_view_vram_bank],
                            VIEW_TILEMAP_X,
@@ -224,6 +235,13 @@ void renderer_set_bg_pair_tile(u16 x, u16 y, u8 left_color, u8 right_color) {
 
     VDP_setTileMapXY(BG_B, TILE_ATTR_FULL(PAL0, FALSE, FALSE, FALSE, PAIR_TILE_BASE + pair_index), x, y);
 }
+
+#if RENDERER_SPARSE_FB
+// Forward declaration so the call inside renderer_init (below) resolves to this
+// static definition without an implicit non-static prototype (which would clash
+// with the `static` at the definition).
+static void init_static_atlas(void);
+#endif
 
 void renderer_init(void) {
     init_video();

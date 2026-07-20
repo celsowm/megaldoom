@@ -39,7 +39,8 @@ void renderer_render_scene(const RayColumn *columns,
                            bool weapon_flash,
                            bool damage_flash,
                            bool low_health_warning);
-void renderer_queue_scene_upload(void);
+void renderer_queue_scene_upload(const RayColumn *columns,
+                                 const RaySceneColors *scene_colors);
 void renderer_upload_scene_step(void);
 bool renderer_scene_upload_pending(void);
 
