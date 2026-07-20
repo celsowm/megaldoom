@@ -288,6 +288,69 @@ $viewPxW   = Get-DefineValue $hudText "FREEDOOM_WEAPON_W"
 $viewPxH   = Get-DefineValue $hudText "FREEDOOM_WEAPON_H"
 $viewTileW = [int]($viewPxW / 8)
 $viewTileH = [int]($viewPxH / 8)
+
+# === Static ceiling atlas (Phase 2, Task 2) =================================
+# One 8x8 tile per distinct (primary, secondary, secondary_coverage) ceiling
+# key, byte-identical to what build_flat_rows()/write_repeated_flat_tile()
+# produce at RAY_COL_STRIDE == 2 in renderer_scene.c. The renderer picks ONE
+# RayFlatColor ceiling per frame and applies it to the whole viewport, so every
+# full ceiling tile of a given color is identical -> one atlas tile covers all
+# sectors sharing that key. Uploaded ONCE at level init; runtime just repoints
+# cells at the resident atlas tile, so a sector change costs ZERO DMA. (Floor is
+# ROM-constant and lives in its own tile, NOT in this atlas.)
+$BAYER_4X4 = @(
+    @(0, 8, 2, 10),
+    @(12, 4, 14, 6),
+    @(3, 11, 1, 9),
+    @(15, 7, 13, 5)
+)
+
+function New-CeilingTile([int]$primary, [int]$secondary, [int]$coverage) {
+    # Mirror pack_flat_row()/build_flat_rows() exactly: four Bayer rows (y=0..3),
+    # each 8px line packed MSB-first at stride 2, then the four rows repeated
+    # once (tile bands begin at y%4==0, see write_repeated_flat_tile).
+    $four = New-Object System.Collections.Generic.List[uint32]
+    for ($y = 0; $y -lt 4; $y++) {
+        [uint32]$row = 0
+        for ($x = 0; $x -lt 8; $x += 2) {
+            $b0 = $BAYER_4X4[$y -band 3][$x -band 3]
+            $b1 = $BAYER_4X4[$y -band 3][($x + 1) -band 3]
+            $c0 = ($(if ($b0 -lt $coverage) { $secondary } else { $primary })) -band 0x0F
+            $c1 = ($(if ($b1 -lt $coverage) { $secondary } else { $primary })) -band 0x0F
+            [uint32]$pair = ([uint32]($c0 -shl 4)) -bor [uint32]$c1
+            $row = ([uint32]($row -shl 8)) -bor $pair
+        }
+        [void]$four.Add($row)
+    }
+    $rows = New-Object System.Collections.Generic.List[uint32]
+    for ($i = 0; $i -lt 2; $i++) { foreach ($r in $four) { [void]$rows.Add($r) } }
+    return $rows
+}
+
+$sectorVisualCount = Get-DefineValue $worldText "FREEDOOM_SECTOR_VISUAL_COUNT"
+$visMatch = [regex]::Match($worldText, "static const u8 FREEDOOM_SECTOR_VISUALS\[[^\]]*\]\[6\]\s*=\s*\{(?<body>.*?)\};", [Text.RegularExpressions.RegexOptions]::Singleline)
+if (-not $visMatch.Success) { throw "Could not find FREEDOOM_SECTOR_VISUALS in $WorldPath" }
+$visualRows = New-Object System.Collections.Generic.List[object]
+foreach ($entry in [regex]::Matches($visMatch.Groups["body"].Value, "\{([^}]*)\}")) {
+    $nums = New-Object System.Collections.Generic.List[int]
+    foreach ($n in [regex]::Matches($entry.Groups[1].Value, '\b\d+\b')) { [void]$nums.Add([int]$n.Value) }
+    [void]$visualRows.Add($nums)
+}
+# Dedup ceiling keys (primary, secondary, coverage) -> one atlas tile each.
+$ceilingTiles = New-Object System.Collections.Generic.List[object]
+$keyToIndex = @{}
+$sectorCeilingIndex = New-Object System.Collections.Generic.List[int]
+foreach ($v in $visualRows) {
+    $key = "$($v[0]),$($v[1]),$($v[2])"
+    if (-not $keyToIndex.ContainsKey($key)) {
+        $keyToIndex[$key] = $ceilingTiles.Count
+        [void]$ceilingTiles.Add((New-CeilingTile $v[0] $v[1] $v[2]))
+    }
+    [void]$sectorCeilingIndex.Add([int]$keyToIndex[$key])
+}
+$ceilingTileCount = $ceilingTiles.Count
+$sectorCeilingIndexArray = $sectorCeilingIndex.ToArray()
+
 $damageColor = Get-DefineValue $worldText "MEGALDOOM_WORLD_COLOR_DAMAGE"
 $warningColor = Get-DefineValue $worldText "MEGALDOOM_WORLD_COLOR_WARNING"
 $idlePixels = Get-ArrayValues $hudText "FREEDOOM_WEAPON_IDLE"
@@ -357,6 +420,18 @@ for ($i = 0; $i -lt $lowHealthOps.Count; $i++) {
 [void]$lines.Add("};")
 [void]$lines.Add("")
 [void]$lines.Add("static const u16 MEGALDOOM_OVERLAY_OP_COUNT[2] = {$($damageOps.Count), $($lowHealthOps.Count)};")
+[void]$lines.Add("")
+[void]$lines.Add((("#define MEGALDOOM_CEILING_TILE_COUNT {0}" -f $ceilingTileCount)))
+[void]$lines.Add("static const u32 MEGALDOOM_CEILING_TILES[MEGALDOOM_CEILING_TILE_COUNT][8] = {")
+foreach ($tile in $ceilingTiles) {
+    [void]$lines.Add(((Format-U32Row $tile) + ","))
+}
+[void]$lines.Add("};")
+[void]$lines.Add("")
+[void]$lines.Add("#define MEGALDOOM_SECTOR_VISUAL_COUNT $sectorVisualCount")
+[void]$lines.Add("static const u8 MEGALDOOM_SECTOR_CEILING_TILE_INDEX[MEGALDOOM_SECTOR_VISUAL_COUNT] = {")
+[void]$lines.Add(((($sectorCeilingIndexArray | ForEach-Object { $_.ToString() }) -join ", ") + ","))
+[void]$lines.Add("};")
 [void]$lines.Add("")
 [void]$lines.Add("#endif")
 

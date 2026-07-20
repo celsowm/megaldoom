@@ -161,6 +161,76 @@ static void sparse_classify_frame(const u16 wall_mask[VIEW_TILE_W],
     }
 }
 
+// Phase 2, Task 2: build the mixed-tilemap screen layout from a SparseFrameBuild.
+//
+// The screen tilemap stays in screen order (row-major: y*VIEW_TILE_W + x) like
+// the legacy build_view_bank_tilemaps. For each screen cell:
+//   * pure-ceiling cell  -> the resident ceiling atlas tile for the player's
+//     current sector (STATIC_CEILING_ATLAS_BASE + g_sector_ceiling_tile[sector]);
+//   * pure-floor cell    -> the single ROM-constant floor tile (STATIC_FLOOR_TILE_BASE);
+//   * dynamic cell       -> a compact VRAM slot in the dynamic bank that the
+//     sparse upload fills this frame (VIEW_TILE_BASE + slot_allocation).
+//
+// Classification reuses the EXACT same three branches as build_bsp_tilemap
+// (pixel_y+7 < all tops => ceiling; pixel_y >= all bottoms => floor; else
+// dynamic) so the mixed tilemap's static/dynamic split matches the packer's
+// output with zero pixel drift. With RENDERER_SPARSE_FB == 0 this is dead code
+// that is never called; the legacy full-upload path is untouched.
+//
+// NOTE: `columns` and `scene_colors` are passed to keep the signature honest
+// about what drives the classify; only the descriptors' top/bottom are needed
+// here. `sector` selects the resident ceiling atlas tile.
+#if RENDERER_SPARSE_FB
+static void sparse_build_tilemap(const RayColumn *columns,
+                                 const RaySceneColors *scene_colors,
+                                 u16 sector,
+                                 u16 *screen_tilemap,
+                                 const SparseFrameBuild *build) {
+    (void)scene_colors;
+    const u8 ceil_tile = g_sector_ceiling_tile[(sector < FREEDOOM_SECTOR_VISUAL_COUNT) ?
+                                                  sector : 0];
+    const u16 ceil_vram = (u16)(STATIC_CEILING_ATLAS_BASE + ceil_tile);
+    const u16 floor_vram = STATIC_FLOOR_TILE_BASE;
+    for (u16 tile_x = 0; tile_x < VIEW_TILE_W; tile_x++) {
+        const u16 base_col = (u16)(tile_x * 8);
+        const WallColumnDescriptor descriptors[4] = {
+            describe_wall_column(&columns[base_col]),
+            describe_wall_column(&columns[base_col + 2]),
+            describe_wall_column(&columns[base_col + 4]),
+            describe_wall_column(&columns[base_col + 6])
+        };
+        for (u16 tile_y = 0; tile_y < VIEW_TILE_H; tile_y++) {
+            const u16 screen_index = (u16)((tile_y * VIEW_TILE_W) + tile_x);
+            const u16 pixel_y = (u16)(tile_y * 8);
+
+            if (((pixel_y + 7) < descriptors[0].top) &&
+                ((pixel_y + 7) < descriptors[1].top) &&
+                ((pixel_y + 7) < descriptors[2].top) &&
+                ((pixel_y + 7) < descriptors[3].top)) {
+                screen_tilemap[screen_index] = TILE_ATTR_FULL(
+                    PAL3, FALSE, FALSE, FALSE, ceil_vram);
+                continue;
+            }
+
+            if ((pixel_y >= descriptors[0].bottom) &&
+                (pixel_y >= descriptors[1].bottom) &&
+                (pixel_y >= descriptors[2].bottom) &&
+                (pixel_y >= descriptors[3].bottom)) {
+                screen_tilemap[screen_index] = TILE_ATTR_FULL(
+                    PAL3, FALSE, FALSE, FALSE, floor_vram);
+                continue;
+            }
+
+            // Dynamic: point at the compact slot the sparse upload fills.
+            const u16 tile_index = (u16)(tile_x * VIEW_TILE_H + tile_y);
+            const u16 slot = build->slot_allocation[tile_index];
+            screen_tilemap[screen_index] = TILE_ATTR_FULL(
+                PAL3, FALSE, FALSE, FALSE, VIEW_TILE_BASE + slot);
+        }
+    }
+}
+#endif
+
 static void build_shade_luts(void) {
     for (u16 c = 0; c < 16; c++) {
         g_shade_luts[0][c] = (u8)c; // level 0 == identity (WALL_IDENT_MAP)

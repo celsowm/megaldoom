@@ -4,6 +4,7 @@
 #include "renderer.h"
 #include "fixed_math.h"
 #include "generated_hud_assets.h"
+#include "generated_assets.h"
 
 #define RENDERER_VERSION_TEXT "MEGALDOOM REWRITE GATE 73"
 // Tile-grid dimensions alias the BSP view geometry (single source of
@@ -102,6 +103,29 @@ extern u16 g_compass_tilemap[COMPASS_W * COMPASS_H];
 // at level init; floor is one ROM-constant tile forever) so they cost ZERO
 // per-frame DMA — see AGENTS.md "Ceiling/floor cost ZERO DMA during motion".
 #define RENDERER_SPARSE_FB 0
+
+// === Static ceiling/floor atlas (Phase 2, Task 2) ==========================
+// One VRAM tile holds the ROM-constant floor (MEGALDOOM_WORLD_COLOR_FLOOR,
+// uploaded once and never rebaked), and MEGALDOOM_CEILING_TILE_COUNT atlas
+// tiles hold one 8x8 tile per distinct (primary, secondary, secondary_coverage)
+// ceiling key (see MEGALDOOM_CEILING_TILES in generated_renderer_assets.h). The
+// whole atlas is uploaded ONCE at level init; a sector change only repoints a
+// tilemap cell at the already-resident atlas tile, costing ZERO per-frame DMA.
+// The atlas lives immediately below the SGDK system font region so it can never
+// collide with the pair/HUD/weapon tiles above (those grow upward from
+// TILE_USER_INDEX). g_sector_ceiling_tile[sector] maps a sector to its atlas
+// tile index (per-sector selection is runtime-only; the tiles themselves are
+// static). All of this is dead code while RENDERER_SPARSE_FB == 0.
+#define STATIC_FLOOR_TILE_BASE (HUD_VRAM_SAFE_TILE_LIMIT - 1)
+#define STATIC_CEILING_ATLAS_BASE (STATIC_FLOOR_TILE_BASE - MEGALDOOM_CEILING_TILE_COUNT)
+#define STATIC_ATLAS_TILE_COUNT (MEGALDOOM_CEILING_TILE_COUNT + 1)
+#if STATIC_CEILING_ATLAS_BASE < (HUD_NUMBER_TILE_BASE + HUD_NUMBER_TILE_COUNT)
+#error "Static ceiling/floor atlas collides with the HUD number tile region"
+#endif
+
+// Per-frame selection: which resident atlas tile each sector's ceiling maps to.
+// Populated once at level init from MEGALDOOM_SECTOR_CEILING_TILE_INDEX.
+extern u8 g_sector_ceiling_tile[FREEDOOM_SECTOR_VISUAL_COUNT];
 
 // One vertical run of dynamic tiles copied from a source column into a
 // contiguous destination VRAM slot range.

@@ -13,6 +13,11 @@ u32 g_view_bank_dirty_bits[VIEW_BANK_COUNT][VIEW_DIRTY_WORD_COUNT];
 u16 g_view_bank_dirty_count[VIEW_BANK_COUNT];
 u16 g_view_vram_bank;
 u16 g_view_dirty_bank_mask;
+// Per-sector ceiling atlas tile selection (Phase 2, Task 2). Indexed by sector;
+// holds MEGALDOOM_SECTOR_CEILING_TILE_INDEX[sector]. Only consumed when
+// RENDERER_SPARSE_FB == 1; dead code while the flag is 0.
+u8 g_sector_ceiling_tile[FREEDOOM_SECTOR_VISUAL_COUNT];
+
 #if DEBUG_PERF
 // Distinct-tile-modified accounting for the perf overlay. Deduplicated per
 // frame via g_frame_modified_bits; renderer_mark_tile_dirty sets a bit the
@@ -226,8 +231,35 @@ void renderer_init(void) {
     init_hud_tiles();
     init_view_tilemap();
     g_view_dirty_bank_mask = 0;
+#if RENDERER_SPARSE_FB
+    init_static_atlas();
+#endif
     renderer_scene_init();
 }
+
+// Phase 2, Task 2: upload the static ceiling/floor atlas ONCE. The floor is the
+// ROM-constant MEGALDOOM_WORLD_COLOR_FLOOR; the ceilings are one deduplicated
+// 8x8 tile per distinct RayFlatColor key (MEGALDOOM_CEILING_TILES). Neither is
+// ever rebaked, so crossing into a different-ceiling sector costs ZERO DMA.
+// Guarded by RENDERER_SPARSE_FB: with the flag at 0 this is dead code that is
+// never called and does not touch the legacy upload path.
+#if RENDERER_SPARSE_FB
+static void init_static_atlas(void) {
+    // Floor: one constant tile, always tile 0 of the atlas region.
+    const u32 floor_rows[8] = { 0 };
+    for (u16 y = 0; y < 8; y++) {
+        ((u32 *)floor_rows)[y] = (u32)MEGALDOOM_WORLD_COLOR_FLOOR * 0x11111111u;
+    }
+    VDP_loadTileData(floor_rows, STATIC_FLOOR_TILE_BASE, 1, DMA);
+    // Ceiling atlas: one tile per distinct key.
+    VDP_loadTileData((const u32 *)MEGALDOOM_CEILING_TILES,
+                     STATIC_CEILING_ATLAS_BASE, MEGALDOOM_CEILING_TILE_COUNT, DMA);
+    // Populate the per-sector -> atlas-tile selection table.
+    for (u16 s = 0; s < FREEDOOM_SECTOR_VISUAL_COUNT; s++) {
+        g_sector_ceiling_tile[s] = MEGALDOOM_SECTOR_CEILING_TILE_INDEX[s];
+    }
+}
+#endif
 
 u16 renderer_get_menu_tile_base(void) {
     return PAIR_TILE_BASE;
