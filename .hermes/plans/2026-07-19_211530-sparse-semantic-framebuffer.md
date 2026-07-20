@@ -254,3 +254,39 @@ parity). Otherwise leave 0 and record the blocker in AGENTS.md.
   -Report out/perf.json -Mailbox <mb> -RequireCheckpoints <mask>
   -PerfMailbox <pm>` → decode with `tools/decode-perf.py`.
 - Visual: `npm run play` (you confirm).
+
+## Phase 4 / 5 / 6 status (2026-07-20)
+
+**Phase 4 (atomic mixed-tilemap commit + visual parity): COMPLETE & GATED.**
+- `2d3414c` implemented the end-to-end sparse path (classify from column
+  descriptors → queue dynamic runs → build mixed tilemap → atomic reveal after
+  `dbg_wait_dma`). `7b21d15` fixed reviewer F1 (defer tilemap commit past
+  `dbg_wait_dma`, restoring strict legacy atomicity). `8edab0d` moved the sparse
+  defs to file scope (a plain `RENDERER_SPARSE_FB=1` build was broken because the
+  defs had been nested inside `#if DEBUG_PERF`).
+- Verified `asm_mismatches = 0` on `checkpoints.txt` at flag 1 (DEBUG_PERF).
+
+**Phase 5 (re-measure on real routes): COMPLETE.**
+Ran all 3 routes at flag 1 (DEBUG_PERF), A/B vs a true flag-0 legacy build:
+
+| Route            | asm_mismatches | avg_vblanks_x10 | missed_deadlines | notes |
+|------------------|----------------|-----------------|------------------|-------|
+| checkpoints      | 0              | 183             | 9                | legacy baseline 181/9 → no regression |
+| stationary-combat| 0              | 155             | 11               | better than legacy (155 < 181) |
+| slow-turn        | 0              | 186             | 8                | legacy fallback fires on >120-tile frames (upload_full=1, parity kept) |
+
+Sparse oracle (real): avg ~75 dynamic tiles/frame (well under 120 budget);
+slow-turn peaks ~122 (transient) → correctly falls back to legacy. work-RAM at
+flag 1 = 20326 B free (within 20480 guardrail). Pixel parity holds on ALL routes.
+
+**Phase 6 (enable decision): DO NOT ENABLE IN RELEASE — flag stays 0.**
+The user's enable checklist requires a **heavy-billboard stress route** (many
+enemies in view; overlay COW is the dominant dynamic cost per the Phase 1-3
+oracle). The 3 captured routes are movement / stationary-combat / slow-turn — NONE
+is a dense-enemy stress route, so that gate is UNMET. Per the standing rule, the
+sparse path remains a verified, parity-clean **prototype behind the flag**; the
+legacy full-upload path is the release default and the safe fallback.
+- To enable later: capture a heavy-billboard route (area with many enemies in
+  view) through the custom BlastEm, run it at flag 1, confirm asm_mismatches=0 and
+  no vblank regression, THEN flip `RENDERER_SPARSE_FB` default in
+  `src/renderer_internal.h`. Until then, leave it 0.
