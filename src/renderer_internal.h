@@ -91,6 +91,36 @@ extern u16 g_view_vram_bank;
 extern u16 g_view_dirty_bank_mask;
 extern u16 g_compass_tilemap[COMPASS_W * COMPASS_H];
 
+// === Sparse Semantic Framebuffer (Phase 1, Task 1 scaffolding) =============
+// When 0 the legacy full-upload path in renderer.c is the single source of
+// truth and sparse_classify_frame() compiles to a no-op stub. Flip to 1 in a
+// later phase to enable the per-frame semantic classify that builds a
+// SparseFrameBuild (dynamic union mask, run list, slot allocation, mixed
+// tilemap) instead of uploading all VIEW_TILE_COUNT tiles every frame.
+#define RENDERER_SPARSE_FB 0
+
+// One vertical run of dynamic tiles copied from a source column into a
+// contiguous destination VRAM slot range.
+typedef struct {
+    u16 source_y;   // source column index x (0..VIEW_TILE_W-1)
+    u16 tile_count; // number of contiguous dynamic tiles in the run
+    u16 dest_slot;  // destination VRAM slot (column-major index)
+} SparseTileRun;
+
+// Per-frame classification of which view tiles actually changed. The packer
+// emits three per-column 15-bit masks (wall/door/overlay); OR-ing them gives
+// the dynamic mask per column. dynamic_rows[x] is the per-column union of
+// changed tiles; runs[] is the packed run list used by the sparse upload.
+typedef struct {
+    u16 dynamic_mask[VIEW_TILE_W];        // per-column: any dynamic bit set
+    u16 dynamic_rows[VIEW_TILE_W];        // per-column 15-bit union of dynamic tiles
+    u16 dynamic_tile_count;               // total dynamic tiles this frame
+    u16 dynamic_run_count;                // number of runs in runs[]
+    SparseTileRun runs[VIEW_TILE_COUNT];  // max runs = every tile its own run
+    u16 slot_allocation[VIEW_TILE_COUNT]; // destination slot per dynamic tile
+    u16 mixed_tilemap[VIEW_TILE_W];       // mixed tilemap column selection
+} SparseFrameBuild;
+
 #if DEBUG_PERF
 void renderer_draw_perf_overlay(bool frame_complete);
 #endif

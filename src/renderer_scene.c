@@ -111,6 +111,56 @@ typedef struct {
 
 static ViewUploadState g_view_upload;
 
+// Sparse Semantic Framebuffer classify (Phase 1, Task 1 scaffold).
+//
+// Given the per-column wall/door/overlay 15-bit masks emitted by the packer,
+// build a SparseFrameBuild describing exactly which view tiles changed this
+// frame. Under RENDERER_SPARSE_FB==0 we treat every tile as dynamic so the
+// produced build is byte-for-byte equivalent to the legacy full upload; the
+// real mask-OR classify (wall|door|overlay) is enabled only when the flag is
+// flipped to 1 in a later phase. This function is intentionally not yet wired
+// into the upload path, so it never alters release behavior while the flag is
+// 0.
+__attribute__((unused))
+static void sparse_classify_frame(const u16 wall_mask[VIEW_TILE_W],
+                                  const u16 door_mask[VIEW_TILE_W],
+                                  const u16 overlay_mask[VIEW_TILE_W],
+                                  SparseFrameBuild *build) {
+    // Silence unused-parameter warnings on the flag==0 path where the masks
+    // are not consulted; harmless when the flag is 1 and they are used.
+    (void)wall_mask;
+    (void)door_mask;
+    (void)overlay_mask;
+
+    u16 slot = 0;
+    build->dynamic_tile_count = 0;
+    build->dynamic_run_count = 0;
+    for (u16 x = 0; x < VIEW_TILE_W; x++) {
+        u16 dyn;
+#if RENDERER_SPARSE_FB
+        dyn = (u16)(wall_mask[x] | door_mask[x] | overlay_mask[x]);
+#else
+        dyn = 0x7FFFu; // stub: every tile in the column is dynamic (== old full upload)
+#endif
+        build->dynamic_mask[x] = dyn;
+        build->dynamic_rows[x] = dyn;
+        build->mixed_tilemap[x] = x;
+        if (dyn != 0) {
+            SparseTileRun *run = &build->runs[build->dynamic_run_count];
+            run->source_y = x;
+            run->tile_count = VIEW_TILE_H;
+            run->dest_slot = slot;
+            slot = (u16)(slot + VIEW_TILE_H);
+            for (u16 y = 0; y < VIEW_TILE_H; y++) {
+                const u16 tile_index = (u16)(x * VIEW_TILE_H + y);
+                build->slot_allocation[tile_index] = (u16)(run->dest_slot + y);
+            }
+            build->dynamic_tile_count += VIEW_TILE_H;
+            build->dynamic_run_count++;
+        }
+    }
+}
+
 static void build_shade_luts(void) {
     for (u16 c = 0; c < 16; c++) {
         g_shade_luts[0][c] = (u8)c; // level 0 == identity (WALL_IDENT_MAP)
