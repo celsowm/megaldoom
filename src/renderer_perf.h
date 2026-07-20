@@ -59,6 +59,30 @@ typedef struct {
     u16 columns_changed_max;
     u16 columns_rebuild_frames;
     u32 columns_changed_sum;
+    // SparseTileOracle (Phase 3 measurement): of the tiles in changed
+    // columns, how many actually carry wall pixels vs. full ceiling/floor
+    // (which a sparse architecture would reference from a shared static tile,
+    // costing 0 DMA during movement). Aggregated across rebuild frames;
+    // P95 is computed by the offline decoder from *_sum / *_frames.
+    u16 sparse_dyn_wall_last;
+    u16 sparse_ceiling_last;
+    u16 sparse_floor_last;
+    u16 sparse_overlay_last;
+    u16 sparse_dyn_runs_last;
+    u16 sparse_dma_bytes_last;
+    u16 sparse_dyn_wall_max;
+    u16 sparse_ceiling_max;
+    u16 sparse_floor_max;
+    u16 sparse_overlay_max;
+    u16 sparse_dyn_runs_max;
+    u16 sparse_dma_bytes_max;
+    u16 sparse_rebuild_frames;
+    u32 sparse_dyn_wall_sum;
+    u32 sparse_ceiling_sum;
+    u32 sparse_floor_sum;
+    u32 sparse_overlay_sum;
+    u32 sparse_dyn_runs_sum;
+    u32 sparse_dma_bytes_sum;
 } RendererPerfSnapshot;
 
 void renderer_debug_set_cast_subticks(u32 subticks);
@@ -82,6 +106,8 @@ void renderer_perf_record_asm_compare(u16 tile, bool mismatch, bool canary_failu
                                       bool completed_cycle);
 void renderer_perf_record_column_reuse(u16 columns_changed, u16 columns_reused,
                                        u16 hypothetical_tiles_uploaded);
+void renderer_perf_record_sparse(u16 dyn_wall, u16 ceiling, u16 floor,
+                                 u16 overlay, u16 runs, u16 dma_bytes);
 RendererPerfSnapshot renderer_get_perf_snapshot(void);
 #endif
 

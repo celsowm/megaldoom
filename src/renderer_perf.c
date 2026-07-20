@@ -154,6 +154,29 @@ void renderer_perf_record_column_reuse(u16 columns_changed, u16 columns_reused,
     s_perf.columns_rebuild_frames++;
 }
 
+void renderer_perf_record_sparse(u16 dyn_wall, u16 ceiling, u16 floor,
+                                 u16 overlay, u16 runs, u16 dma_bytes) {
+    s_perf.sparse_dyn_wall_last = dyn_wall;
+    s_perf.sparse_ceiling_last = ceiling;
+    s_perf.sparse_floor_last = floor;
+    s_perf.sparse_overlay_last = overlay;
+    s_perf.sparse_dyn_runs_last = runs;
+    s_perf.sparse_dma_bytes_last = dma_bytes;
+    if (dyn_wall > s_perf.sparse_dyn_wall_max) s_perf.sparse_dyn_wall_max = dyn_wall;
+    if (ceiling > s_perf.sparse_ceiling_max) s_perf.sparse_ceiling_max = ceiling;
+    if (floor > s_perf.sparse_floor_max) s_perf.sparse_floor_max = floor;
+    if (overlay > s_perf.sparse_overlay_max) s_perf.sparse_overlay_max = overlay;
+    if (runs > s_perf.sparse_dyn_runs_max) s_perf.sparse_dyn_runs_max = runs;
+    if (dma_bytes > s_perf.sparse_dma_bytes_max) s_perf.sparse_dma_bytes_max = dma_bytes;
+    s_perf.sparse_dyn_wall_sum += dyn_wall;
+    s_perf.sparse_ceiling_sum += ceiling;
+    s_perf.sparse_floor_sum += floor;
+    s_perf.sparse_overlay_sum += overlay;
+    s_perf.sparse_dyn_runs_sum += runs;
+    s_perf.sparse_dma_bytes_sum += dma_bytes;
+    s_perf.sparse_rebuild_frames++;
+}
+
 RendererPerfSnapshot renderer_get_perf_snapshot(void) {
     return s_perf;
 }

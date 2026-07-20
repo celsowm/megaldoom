@@ -137,3 +137,43 @@ across most columns. Quantizing presentation (plan §14, `top & ~1`) would
 raise reuse but introduces wall-jitter — measure exact reuse first (the oracle
 is still in place; just capture a new route). The oracle is DEBUG_PERF-only and
 free to leave in.
+
+## Sparse semantic tile oracle (2026-07-19)
+
+The per-column oracle (above) killed the double-buffer-per-column path, but it
+left the real question open: *of the 206–269 tiles in changed columns, how
+many actually contain wall?* Most of a viewport is ceiling/floor, which a
+sparse architecture would serve from shared static VRAM tiles (0 DMA during
+movement). A second oracle (`renderer_perf_record_sparse`, fields
+`sparse_*` in `RendererPerfSnapshot`) counts, per changed column, wall tiles
+vs. full-ceiling/full-floor tiles vs. overlay (copy-on-write) tiles. Mailbox
+raised to 256 B (`DEBUG_CHECKPOINT_PERF_MAILBOX_BYTES`) to fit the aggregates.
+
+Captured across the three routes (avg / max over gameplay rebuild frames):
+
+| Route | dyn wall | overlay | est DMA bytes | verdict |
+|-------|----------|---------|----------------|---------|
+| `checkpoints.txt` (movement) | 10.5 / 64 | 64.5 / 75 | 3000 / 3320 | GO |
+| `stationary-combat.txt` | 5.3 / 64 | 68.8 / 75 | 2971 / 3000 | GO |
+| `slow-turn.txt` | 13.3 / 64 | 73.6 / 105 | 3381 / 4504 | GO |
+
+Gate (from plan §15, 120 dyn tiles / ~4200 B safe): every route is far
+under. **Only ~5–13% of the changed-column tiles are wall** — the rest is
+ceiling/floor served statically. Overlay (billboard copy-on-write) is now the
+dominant dynamic cost (~65–75 tiles, i.e. ~4–5 columns' worth), not the
+wall. So the sparse semantic framebuffer is the right next architecture; the
+double-buffer-per-column hypothesis was the wrong lever.
+
+Caveat: this oracle counts tiles the **packer** emits. It does NOT yet measure
+the actual sparse *upload* (one DMA run per wall column + the 600-B tilemap
+commit). The 120-tile gate is a DMA-byte estimate (dyn_wall*32 + overlay*32
++ 600); the true budget also pays per-run DMA command overhead, HUD, and other
+VBlank work, so re-measure against the real upload path before declaring 60fps.
+Also: `sparse_overlay_max` already hits 105 (slow-turn) — many-on-screen
+enemies is the next risk to capture, since each is a copy-on-write of a
+static tile.
+
+**Before building the sparse architecture:** the sparse oracle is DEBUG_PERF-
+only and free to leave in. Use it to re-measure after any content change
+(larger view, more enemies). Do NOT re-attempt per-column double-buffer — its
+NO-GO is documented above and the sparse path supersedes it.

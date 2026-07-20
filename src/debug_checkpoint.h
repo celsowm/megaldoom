@@ -29,7 +29,7 @@ void debug_checkpoint_mark(u8 bits);
  * survives the same build unaffected, so routing the copy through this file
  * sidesteps the problem empirically rather than explains it; see
  * tools/resolve-symbol.py for how the runner locates the result. */
-#define DEBUG_CHECKPOINT_PERF_MAILBOX_BYTES 128
+#define DEBUG_CHECKPOINT_PERF_MAILBOX_BYTES 256
 void debug_checkpoint_publish_perf(const void *snapshot, u16 bytes);
 #else
 #define debug_checkpoint_reset()

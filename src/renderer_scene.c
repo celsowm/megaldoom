@@ -610,6 +610,15 @@ static void build_bsp_tilemap(const RayColumn *columns,
     // actually repacks this frame. This is a pure measurement of how much a
     // future per-column uploader could skip; it does not change any output.
     u16 oracle_changed_columns = 0;
+    // SparseTileOracle: among the tiles this frame actually repacks, how many
+    // are wall (dynamic) vs. full ceiling/floor (which a sparse architecture
+    // would serve from a shared static tile, 0 DMA during movement). Pure
+    // measurement; does not change output.
+    u16 sparse_dyn_wall = 0;
+    u16 sparse_ceiling = 0;
+    u16 sparse_floor = 0;
+    u16 sparse_overlay = 0;
+    u16 sparse_runs = 0;
 #endif
     // Each 8px-wide tile column maps to four cast columns (px 0, 2, 4, 6), each
     // replicated 2x -> twice the horizontal detail of the stride-4 packer at the
@@ -671,6 +680,7 @@ static void build_bsp_tilemap(const RayColumn *columns,
 #endif
                 write_repeated_flat_tile(target[tile_index], flat_rows.ceiling);
 #if DEBUG_PERF
+                sparse_ceiling++;
                 if (measure_flat) {
                     renderer_perf_record_deep(RENDERER_PERF_DEEP_PACK_FLAT,
                                               getSubTick() - flat_start, 1);
@@ -690,6 +700,7 @@ static void build_bsp_tilemap(const RayColumn *columns,
 #endif
                 write_repeated_flat_tile(target[tile_index], flat_rows.floor);
 #if DEBUG_PERF
+                sparse_floor++;
                 if (measure_flat) {
                     renderer_perf_record_deep(RENDERER_PERF_DEEP_PACK_FLAT,
                                               getSubTick() - flat_start, 1);
@@ -706,6 +717,7 @@ static void build_bsp_tilemap(const RayColumn *columns,
             write_mixed_stride2_tile(target[tile_index], pixel_y,
                                      descriptors, packed_columns, &flat_rows);
 #if DEBUG_PERF
+            sparse_dyn_wall++;
             if (measure_mixed) {
                 renderer_perf_record_deep(RENDERER_PERF_DEEP_PACK_MIXED,
                                           getSubTick() - mixed_start, 1);
@@ -718,6 +730,22 @@ static void build_bsp_tilemap(const RayColumn *columns,
     s_prev_flat_rows = flat_rows;
     s_coherence_valid = TRUE;
 #if DEBUG_PERF
+    // SparseTileOracle: overlay columns become temporarily-dynamic tiles
+    // (copy-on-write of a static floor/ceiling tile). Their 15 tiles were
+    // already counted in sparse_dyn_wall/ceiling/floor above, so subtract
+    // them there and count them once as overlay to avoid double counting.
+    u16 ov_cols = 0;
+    for (u16 x = 0; x < VIEW_TILE_W; x++) {
+        if (overlay_columns & ((u32)1u << x)) ov_cols++;
+    }
+    const u16 ov_tiles = (u16)(ov_cols * VIEW_TILE_H);
+    sparse_overlay = ov_tiles;
+    if (sparse_dyn_wall > ov_tiles) sparse_dyn_wall -= ov_tiles;
+    else sparse_dyn_wall = 0;
+    sparse_runs = oracle_changed_columns; // ~one wall run per changed column
+    const u16 dma_bytes = (u16)(sparse_dyn_wall * 32u + sparse_overlay * 32u + 600u);
+    renderer_perf_record_sparse(sparse_dyn_wall, sparse_ceiling, sparse_floor,
+                                sparse_overlay, sparse_runs, dma_bytes);
     renderer_perf_record_column_reuse(
         oracle_changed_columns,
         (u16)(VIEW_TILE_W - oracle_changed_columns),
