@@ -128,17 +128,6 @@ static void build_view_bank_tilemaps(void) {
 void renderer_set_view_vram_bank(u16 bank) {
     g_view_vram_bank = (u16)(bank & 1);
 
-    // Phase 4: when the sparse path already committed its mixed tilemap straight
-    // to the BG_B plane (g_sparse_tilemap_committed set in renderer_queue_scene_
-    // upload), the plane already shows the correct static-atlas + dynamic-bank
-    // frame. Re-uploading s_view_bank_tilemaps[bank] here would clobber it with
-    // the legacy uniform map, so skip the tilemap write and just leave the bank
-    // select updated. Cleared so the next legacy swap re-uploads normally.
-    if (g_sparse_tilemap_committed) {
-        g_sparse_tilemap_committed = FALSE;
-        return;
-    }
-
     VDP_setTileMapDataRect(BG_B,
                            s_view_bank_tilemaps[g_view_vram_bank],
                            VIEW_TILEMAP_X,

@@ -1383,23 +1383,21 @@ void renderer_queue_scene_upload(const RayColumn *columns,
             const u16 inactive_bank_base =
                 (u16)(VIEW_TILE_BASE + (bank * VIEW_TILE_COUNT));
             // DMA just the dynamic runs into the inactive bank's column-major
-            // tile positions (deferred — they land during the next vblank wait).
+            // tile positions (deferred — they land during the next vblank wait
+            // in upload_view_tilemap_step's dbg_wait_dma()).
             sparse_queue_dynamic_runs(&s_build, inactive_bank_base);
             // Build the mixed tilemap (ceiling atlas / floor / dynamic bank
-            // tiles) and commit it directly to the BG_B plane. The dynamic
-            // tiles are already in the inactive bank's VRAM region; the static
-            // atlas tiles are shared and already resident. This makes the frame
-            // fully consistent in VRAM BEFORE the swap reveals it.
+            // tiles) into the buffer. The actual plane commit is DEFERRED to
+            // finish_view_upload()'s swap branch, which runs AFTER dbg_wait_dma()
+            // — so the reveal happens only once the dynamic DMAs have landed,
+            // exactly like the legacy path (no sub-frame flash even if this
+            // function is ever called earlier in the active display).
             sparse_build_tilemap(columns, scene_colors, scene_colors->sector,
                                  bank, g_sparse_screen_tilemap, &s_build);
-            VDP_setTileMapDataRect(BG_B, g_sparse_screen_tilemap,
-                                   VIEW_TILEMAP_X, VIEW_TILEMAP_Y,
-                                   VIEW_TILE_W, VIEW_TILE_H, VIEW_TILE_W, CPU);
             g_sparse_tilemap_committed = TRUE;
-            // Hand off to the EXISTING deferred pump so the bank swap (which now
-            // only flips g_view_vram_bank, skipping the redundant tilemap
-            // re-upload because g_sparse_tilemap_committed is set) happens after
-            // the DMAs land. Mark the upload complete (cursor==COUNT), non-full.
+            // Hand off to the EXISTING deferred pump; the swap (in
+            // finish_view_upload, after dbg_wait_dma) commits the mixed tilemap
+            // to the plane and flips the bank. Mark upload complete, non-full.
             g_upload_requires_bank_swap = FALSE;
             g_view_upload.pending = TRUE;
             g_view_upload.full = FALSE;
@@ -1433,7 +1431,23 @@ static void finish_view_upload(void) {
         clear_view_bank_dirty_bits(g_view_upload.bank);
     }
     if (g_view_upload.swap) {
+#if RENDERER_SPARSE_FB
+        if (g_sparse_tilemap_committed) {
+            // DMA has landed (this runs after upload_view_tilemap_step's
+            // dbg_wait_dma). Commit the mixed tilemap to the plane now, then
+            // flip the bank select. This restores the strict legacy invariant:
+            // the reveal happens only AFTER the dynamic tiles are in VRAM.
+            VDP_setTileMapDataRect(BG_B, g_sparse_screen_tilemap,
+                                   VIEW_TILEMAP_X, VIEW_TILEMAP_Y,
+                                   VIEW_TILE_W, VIEW_TILE_H, VIEW_TILE_W, CPU);
+            g_sparse_tilemap_committed = FALSE;
+            g_view_vram_bank = (u16)(g_view_upload.bank & 1);
+        } else {
+            renderer_set_view_vram_bank(g_view_upload.bank);
+        }
+#else
         renderer_set_view_vram_bank(g_view_upload.bank);
+#endif
     }
 }
 
