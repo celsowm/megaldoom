@@ -5,6 +5,7 @@
 #include "fixed_math.h"
 #include "generated_hud_assets.h"
 #include "generated_assets.h"
+#include "generated_renderer_assets.h"
 
 #define RENDERER_VERSION_TEXT "MEGALDOOM REWRITE GATE 73"
 // Tile-grid dimensions alias the BSP view geometry (single source of
@@ -119,8 +120,8 @@ extern u16 g_compass_tilemap[COMPASS_W * COMPASS_H];
 #define STATIC_FLOOR_TILE_BASE (HUD_VRAM_SAFE_TILE_LIMIT - 1)
 #define STATIC_CEILING_ATLAS_BASE (STATIC_FLOOR_TILE_BASE - MEGALDOOM_CEILING_TILE_COUNT)
 #define STATIC_ATLAS_TILE_COUNT (MEGALDOOM_CEILING_TILE_COUNT + 1)
-#if STATIC_CEILING_ATLAS_BASE < (HUD_NUMBER_TILE_BASE + HUD_NUMBER_TILE_COUNT)
-#error "Static ceiling/floor atlas collides with the HUD number tile region"
+#if STATIC_CEILING_ATLAS_BASE < (WEAPON_TILE_BASE + MEGALDOOM_WEAPON_TILE_COUNT)
+#error "Static ceiling/floor atlas collides with the weapon tile region"
 #endif
 
 // Per-frame selection: which resident atlas tile each sector's ceiling maps to.
