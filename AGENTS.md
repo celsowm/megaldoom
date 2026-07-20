@@ -192,6 +192,21 @@ enemies is the next risk to capture, since each is a copy-on-write of a
 static tile. The definitive test is not the oracle but: `average_vblanks_x10`
 near 10, no increase in missed deadlines, no tearing, no visual regression.
 
+**Ceiling/floor cost ZERO DMA during motion — do NOT add sector-transition
+rebake.** The current renderer picks ONE `RayFlatColor` ceiling from the
+player's sector and applies it to the whole viewport; distant sectors add no
+ceiling. The ceiling Bayer pattern repeats every 4px and tiles are 8px-aligned,
+so every full ceiling tile of a given color is byte-identical → one atlas tile
+per distinct `(primary, secondary, secondary_coverage)` key, generated once
+(preferably offline beside `FREEDOOM_SECTOR_VISUALS`) and uploaded once at
+level init, then selected by `g_sector_ceiling_tile[current_sector]` at
+runtime. Floor is ROM-constant → one tile forever. Crossing into a sector with
+a different ceiling costs no DMA — it just points those cells at the already-
+resident atlas tile. So the real per-frame dynamic DMA is **only walls + doors
++ overlay COW**; the 600-B tilemap commit is the only constant. If you find
+yourself writing per-sector ceiling rebake/upload code, you have misunderstood
+this — revisit it before continuing.
+
 **Before building the sparse architecture:** the sparse oracle is DEBUG_PERF-
 only and free to leave in. Do NOT re-attempt per-column double-buffer — its
 NO-GO is documented above and the sparse path supersedes it. Build the sparse

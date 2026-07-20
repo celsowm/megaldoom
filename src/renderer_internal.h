@@ -97,6 +97,10 @@ extern u16 g_compass_tilemap[COMPASS_W * COMPASS_H];
 // later phase to enable the per-frame semantic classify that builds a
 // SparseFrameBuild (dynamic union mask, run list, slot allocation, mixed
 // tilemap) instead of uploading all VIEW_TILE_COUNT tiles every frame.
+// NOTE: the dynamic union is ONLY walls + doors + overlay COW. Ceiling/floor
+// are static (one atlas tile per distinct RayFlatColor ceiling, uploaded once
+// at level init; floor is one ROM-constant tile forever) so they cost ZERO
+// per-frame DMA — see AGENTS.md "Ceiling/floor cost ZERO DMA during motion".
 #define RENDERER_SPARSE_FB 0
 
 // One vertical run of dynamic tiles copied from a source column into a
