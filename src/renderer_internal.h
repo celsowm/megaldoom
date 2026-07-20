@@ -29,6 +29,10 @@ static inline u16 view_tile_index(u16 tile_x, u16 tile_y) {
 #define VIEW_DIRTY_FULL_THRESHOLD 220
 #define VIEW_DIRTY_MAX_RUNS 24
 #define VIEW_DMA_TILES_PER_VBLANK 150
+// Sparse Semantic Framebuffer (Phase 3): max dynamic tiles the sparse uploader
+// will push in a single vblank. Above this the caller falls back to the legacy
+// full-base upload. Dead code while RENDERER_SPARSE_FB == 0.
+#define SPARSE_ONE_VBLANK_BUDGET 120
 #define PAIR_TILE_BASE (VIEW_TILE_BASE + VIEW_DYNAMIC_TILE_COUNT)
 #define PAIR_TILE_COUNT 256
 #define HUD_TILE_BASE (PAIR_TILE_BASE + PAIR_TILE_COUNT)

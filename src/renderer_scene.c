@@ -1239,6 +1239,54 @@ static void load_view_tile_run(u16 vram_base, u16 first, u16 count) {
 #endif
 }
 
+#if RENDERER_SPARSE_FB
+// Phase 3, Task 3: sparse uploader. Reuses the dynamic union already produced by
+// sparse_classify_frame (build->dynamic_rows[x] is a 15-bit per-column mask of
+// dynamic tiles). For each column we walk its bits, and for every maximal run of
+// set bits [first_y, last_y] we DMA that contiguous source range with the
+// existing load_view_tile_run and record it in build->runs[] with a compact
+// sequential slot allocation. No new mask arrays; no reimplemented DMA. Dead
+// code while RENDERER_SPARSE_FB == 0.
+static void sparse_queue_dynamic_runs(const SparseFrameBuild *build,
+                                      u16 inactive_bank_base) {
+    // Cast away const to record the run list / slot allocation into the build.
+    SparseFrameBuild *out = (SparseFrameBuild *)build;
+    u16 slot = 0;
+    out->dynamic_run_count = 0;
+    out->dynamic_tile_count = 0;
+
+    for (u16 x = 0; x < VIEW_TILE_W; x++) {
+        const u16 rows = build->dynamic_rows[x];
+        u16 y = 0;
+        while (y < VIEW_TILE_H) {
+            if ((rows & (u16)(1u << y)) == 0) {
+                y++;
+                continue;
+            }
+            const u16 first_y = y;
+            while ((y < VIEW_TILE_H) && ((rows & (u16)(1u << y)) != 0)) {
+                y++;
+            }
+            const u16 run_len = (u16)(y - first_y);
+            const u16 src_first = (u16)(x * VIEW_TILE_H + first_y);
+
+            load_view_tile_run(inactive_bank_base, src_first, run_len);
+
+            SparseTileRun *run = &out->runs[out->dynamic_run_count];
+            run->source_y = x;
+            run->tile_count = run_len;
+            run->dest_slot = slot;
+            for (u16 k = 0; k < run_len; k++) {
+                out->slot_allocation[src_first + k] = (u16)(slot + k);
+            }
+            slot = (u16)(slot + run_len);
+            out->dynamic_tile_count = (u16)(out->dynamic_tile_count + run_len);
+            out->dynamic_run_count++;
+        }
+    }
+}
+#endif
+
 #if DEBUG_PERF
 static void dbg_wait_dma(void) {
     const u32 t = getSubTick();
@@ -1269,6 +1317,35 @@ static bool choose_full_view_upload(u16 bank) {
 void renderer_queue_scene_upload(void) {
     const bool swap = g_upload_requires_bank_swap;
     const u16 bank = swap ? (u16)(g_view_vram_bank ^ 1) : g_view_vram_bank;
+
+#if RENDERER_SPARSE_FB
+    // Phase 3, Task 3: sparse upload path. Only when a bank swap is pending do
+    // we classify the frame and, if the dynamic tile count fits in one vblank,
+    // DMA just the dynamic runs into the inactive bank and finish immediately.
+    // Otherwise we fall through to the legacy full-base upload below.
+    if (swap) {
+        static SparseFrameBuild s_build;
+        const u16 wall_mask[VIEW_TILE_W] = {0};
+        const u16 door_mask[VIEW_TILE_W] = {0};
+        const u16 overlay_mask[VIEW_TILE_W] = {0};
+        sparse_classify_frame(wall_mask, door_mask, overlay_mask, &s_build);
+        if (s_build.dynamic_tile_count <= SPARSE_ONE_VBLANK_BUDGET) {
+            const u16 inactive_bank_base =
+                (u16)(VIEW_TILE_BASE + (bank * VIEW_TILE_COUNT));
+            g_upload_requires_bank_swap = FALSE;
+            g_view_upload.pending = FALSE;
+            g_view_upload.full = FALSE;
+            g_view_upload.swap = TRUE;
+            g_view_upload.bank = bank;
+            g_view_upload.cursor = 0;
+            sparse_queue_dynamic_runs(&s_build, inactive_bank_base);
+            // Equivalent to finish_view_upload() for this path (full=FALSE,
+            // swap=TRUE): commit the freshly filled inactive bank as active.
+            renderer_set_view_vram_bank(g_view_upload.bank);
+            return;
+        }
+    }
+#endif
 
     g_upload_requires_bank_swap = FALSE;
     g_view_upload.pending = (bool)(g_view_bank_dirty_count[bank] != 0);
