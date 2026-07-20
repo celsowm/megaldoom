@@ -1244,14 +1244,20 @@ static void load_view_tile_run(u16 vram_base, u16 first, u16 count) {
 // sparse_classify_frame (build->dynamic_rows[x] is a 15-bit per-column mask of
 // dynamic tiles). For each column we walk its bits, and for every maximal run of
 // set bits [first_y, last_y] we DMA that contiguous source range with the
-// existing load_view_tile_run and record it in build->runs[] with a compact
-// sequential slot allocation. No new mask arrays; no reimplemented DMA. Dead
-// code while RENDERER_SPARSE_FB == 0.
+// existing load_view_tile_run and record it in build->runs[]. No new mask arrays;
+// no reimplemented DMA. Dead code while RENDERER_SPARSE_FB == 0.
+//
+// IMPORTANT: load_view_tile_run couples source index == destination VRAM index
+// (it writes inactive_bank_base + src_first). So a dynamic tile keeps its
+// column-major VRAM position; we do NOT compact the destination. slot_allocation[]
+// and run->dest_slot therefore record the SAME column-major index the DMA wrote,
+// so sparse_build_tilemap (Phase 4) points each dynamic cell at the right tile.
+// The DMA-byte saving comes from skipping static (ceiling/floor) tiles, not from
+// compression.
 static void sparse_queue_dynamic_runs(const SparseFrameBuild *build,
                                       u16 inactive_bank_base) {
     // Cast away const to record the run list / slot allocation into the build.
     SparseFrameBuild *out = (SparseFrameBuild *)build;
-    u16 slot = 0;
     out->dynamic_run_count = 0;
     out->dynamic_tile_count = 0;
 
@@ -1275,11 +1281,11 @@ static void sparse_queue_dynamic_runs(const SparseFrameBuild *build,
             SparseTileRun *run = &out->runs[out->dynamic_run_count];
             run->source_y = x;
             run->tile_count = run_len;
-            run->dest_slot = slot;
+            // Destination == source column-major position (see note above).
+            run->dest_slot = src_first;
             for (u16 k = 0; k < run_len; k++) {
-                out->slot_allocation[src_first + k] = (u16)(slot + k);
+                out->slot_allocation[src_first + k] = (u16)(src_first + k);
             }
-            slot = (u16)(slot + run_len);
             out->dynamic_tile_count = (u16)(out->dynamic_tile_count + run_len);
             out->dynamic_run_count++;
         }
@@ -1332,16 +1338,23 @@ void renderer_queue_scene_upload(void) {
         if (s_build.dynamic_tile_count <= SPARSE_ONE_VBLANK_BUDGET) {
             const u16 inactive_bank_base =
                 (u16)(VIEW_TILE_BASE + (bank * VIEW_TILE_COUNT));
+            // DMA just the dynamic runs into the inactive bank's column-major
+            // tile positions (deferred — they land during the next vblank wait).
+            sparse_queue_dynamic_runs(&s_build, inactive_bank_base);
+            // Hand off to the EXISTING deferred pump so the bank swap happens
+            // only AFTER the DMAs land (dbg_wait_dma), exactly like the legacy
+            // path. Mark the upload complete (cursor==COUNT) and non-full: the
+            // pump's next step sees no dirty tiles to send, waits, then
+            // finish_view_upload() swaps the freshly filled inactive bank in.
+            // TODO(flag1): wall_mask/door_mask/overlay_mask are placeholder
+            // zeros; the real masks come from the packer (Phase 4). Flipping the
+            // flag before then uploads zero tiles and shows a blank frame.
             g_upload_requires_bank_swap = FALSE;
-            g_view_upload.pending = FALSE;
+            g_view_upload.pending = TRUE;
             g_view_upload.full = FALSE;
             g_view_upload.swap = TRUE;
             g_view_upload.bank = bank;
-            g_view_upload.cursor = 0;
-            sparse_queue_dynamic_runs(&s_build, inactive_bank_base);
-            // Equivalent to finish_view_upload() for this path (full=FALSE,
-            // swap=TRUE): commit the freshly filled inactive bank as active.
-            renderer_set_view_vram_bank(g_view_upload.bank);
+            g_view_upload.cursor = VIEW_TILE_COUNT;
             return;
         }
     }
