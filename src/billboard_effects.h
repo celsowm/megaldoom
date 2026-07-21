@@ -7,7 +7,7 @@ void billboard_effects_reset(void);
 void billboard_effects_spawn_puff(s32 x, s32 y);
 void billboard_effects_spawn_blood(s32 x, s32 y);
 bool billboard_update_effects(void);
-u16 billboard_project_effects(const PlayerState *player,
+u16 billboard_project_effects(const PlayerState *player, s16 cos_a, s16 sin_a,
                               ProjectedBillboard *objects,
                               u16 max_objects);
 

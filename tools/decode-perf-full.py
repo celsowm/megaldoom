@@ -26,6 +26,7 @@ fields=[
     ('sparse_dyn_wall_sum','u32'),('sparse_ceiling_sum','u32'),('sparse_floor_sum','u32'),
     ('sparse_overlay_sum','u32'),('sparse_dyn_runs_sum','u32'),('sparse_dma_bytes_sum','u32'),
     ('cast_lut_max_invz','u16'),('cast_lut_fallback_hits','u16'),
+    ('billboard_lut_max_forward','u16'),('billboard_lut_fallback_hits','u16'),
 ]
 
 off=0; out={}
@@ -58,3 +59,4 @@ print(f"\n  upload: full={out['upload_full']} swap={out['upload_swap']} dirty_ti
 print(f"  overlay: restored={out['overlay_restored_tiles']} touched={out['overlay_touched_tiles']} overlap={out['overlay_overlap_tiles']}")
 print(f"  asm_mismatches={out['asm_mismatches']}")
 print(f"  cast_lut: max_invz={out['cast_lut_max_invz']} fallback_hits={out['cast_lut_fallback_hits']}")
+print(f"  billboard_lut: max_forward={out['billboard_lut_max_forward']} fallback_hits={out['billboard_lut_fallback_hits']}")

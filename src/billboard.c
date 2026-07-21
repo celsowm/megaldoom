@@ -2,6 +2,8 @@
 #include "billboard_effects.h"
 #include "generated_billboard_assets.h"
 #include "generated_billboard_geometry.h"
+#include "billboard_projection_lut.h"
+#include "renderer_perf.h"
 
 // type: visual, effect, HP, radius, visual scale, max depth,
 // collectible, targetable, blocking.
@@ -104,6 +106,25 @@ static s32 bb_divs(s32 numerator, s32 denominator) {
     // Active E1M1 THINGs and the collision-constrained player keep this
     // projection inside the signed-word quotient domain.
     return (s32)divs(numerator, (s16)denominator);
+}
+
+// K/forward via a precomputed table (see billboard_projection_lut.h for the
+// [33,1535] range proof); `numerator` is only used by the fallback path for
+// any forward this call site's proof didn't already cover.
+static u16 bb_lut_divu(const u16 *table, u32 numerator, u16 forward) {
+    u16 result;
+    bool fallback;
+    if (forward >= 1 && forward <= 1535) {
+        result = table[forward - 1];
+        fallback = FALSE;
+    } else {
+        result = divu(numerator, forward);
+        fallback = TRUE;
+    }
+#if DEBUG_PERF
+    renderer_perf_record_billboard_lut(forward, fallback);
+#endif
+    return result;
 }
 
 #define BILLBOARD_SCALE_SHIFT 12
@@ -232,12 +253,13 @@ bool billboard_measure_object(const PlayerState *player, s16 cos_a, s16 sin_a,
     measure->atlas_h = geometry.atlas_h;
 
     if (geometry.uses_wad_origin) {
-        // Two native DIVU.W operations per object produce the Q12 screen scale.
+        // Q12 screen scale via a precomputed table (both axes share the same
+        // K == RAY_PROJ_X<<12 == RAY_PROJ_Y<<12, since RAY_PROJ_X == RAY_PROJ_Y).
         // All patch edges then use MULS.W + shifts, avoiding any extra divisions.
-        const u16 scale_x_q12 = divu((u32)RAY_PROJ_X << BILLBOARD_SCALE_SHIFT,
-                                     (u16)forward);
-        const u16 scale_y_q12 = divu((u32)RAY_PROJ_Y << BILLBOARD_SCALE_SHIFT,
-                                     (u16)forward);
+        const u16 scale_x_q12 = bb_lut_divu(g_billboard_recip_proj_lut,
+            (u32)RAY_PROJ_X << BILLBOARD_SCALE_SHIFT, (u16)forward);
+        const u16 scale_y_q12 = bb_lut_divu(g_billboard_recip_proj_lut,
+            (u32)RAY_PROJ_Y << BILLBOARD_SCALE_SHIFT, (u16)forward);
         const s16 origin_y = (s16)(RAY_VIEW_CENTER_Y +
             billboard_project_q12(RAY_CAMERA_HEIGHT, scale_y_q12));
         const s16 right_extent = billboard_project_world_q12(
@@ -264,10 +286,10 @@ bool billboard_measure_object(const PlayerState *player, s16 cos_a, s16 sin_a,
         }
         measure->projected_height = (s16)(measure->bottom - measure->top + 1);
     } else {
-        measure->half_w = (s16)(divu((u32)BILLBOARD_ENEMY_WORLD_WIDTH * RAY_PROJ_X,
-                                     (u16)forward) / 2);
+        measure->half_w = (s16)(bb_lut_divu(g_billboard_recip_enemy_w_lut,
+            (u32)BILLBOARD_ENEMY_WORLD_WIDTH * RAY_PROJ_X, (u16)forward) / 2);
         if (measure->half_w < 1) measure->half_w = 1;
-        measure->projected_height = (s16)divu(
+        measure->projected_height = (s16)bb_lut_divu(g_billboard_recip_enemy_h_lut,
             (u32)BILLBOARD_ENEMY_WORLD_HEIGHT * RAY_PROJ_Y, (u16)forward);
         if (measure->projected_height < 1) measure->projected_height = 1;
         measure->left = (s16)(measure->center_col - measure->half_w);
@@ -276,7 +298,8 @@ bool billboard_measure_object(const PlayerState *player, s16 cos_a, s16 sin_a,
         // billboards. PLAYER_EYE_HEIGHT is gameplay geometry; using it here
         // placed the enemy baseline above the rendered floor plane.
         measure->bottom = (s16)(RAY_VIEW_CENTER_Y +
-            divu((u32)RAY_CAMERA_HEIGHT * RAY_PROJ_Y, (u16)forward));
+            bb_lut_divu(g_billboard_recip_enemy_bottom_lut,
+                (u32)RAY_CAMERA_HEIGHT * RAY_PROJ_Y, (u16)forward));
         measure->top = (s16)(measure->bottom - measure->projected_height);
     }
     return TRUE;

@@ -339,7 +339,7 @@ u16 billboard_project_scene(const PlayerState *player,
                                                     &objects[count]));
     }
     count = (u16)(count + billboard_project_effects(
-        player, &objects[count], (u16)(max_objects - count)));
+        player, cos_a, sin_a, &objects[count], (u16)(max_objects - count)));
 
     // Effects and world objects share painter order so blood remains on its
     // target while nearer sprites can still occlude it.

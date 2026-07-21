@@ -184,6 +184,15 @@ void renderer_perf_record_cast_lut(u16 invz, bool fallback) {
     }
 }
 
+void renderer_perf_record_billboard_lut(u16 forward, bool fallback) {
+    if (forward > s_perf.billboard_lut_max_forward) {
+        s_perf.billboard_lut_max_forward = forward;
+    }
+    if (fallback && s_perf.billboard_lut_fallback_hits != 0xFFFF) {
+        s_perf.billboard_lut_fallback_hits++;
+    }
+}
+
 RendererPerfSnapshot renderer_get_perf_snapshot(void) {
     return s_perf;
 }

@@ -105,11 +105,9 @@ static s16 project_scaled(s16 value, u16 scale_q12) {
     return (s16)(product >> 12);
 }
 
-u16 billboard_project_effects(const PlayerState *player,
+u16 billboard_project_effects(const PlayerState *player, s16 cos_a, s16 sin_a,
                               ProjectedBillboard *objects,
                               u16 max_objects) {
-    const s16 cos_a = fx_cos(player->angle);
-    const s16 sin_a = fx_sin(player->angle);
     u16 count = 0;
 
     for (u8 i = 0; i < IMPACT_POOL_COUNT && count < max_objects; i++) {

@@ -92,6 +92,10 @@ typedef struct {
     // routes).
     u16 cast_lut_max_invz;
     u16 cast_lut_fallback_hits;
+    // Billboard-measure reciprocal LUT (billboard_projection_lut.h), same
+    // proven-bound pattern as the cast LUT above.
+    u16 billboard_lut_max_forward;
+    u16 billboard_lut_fallback_hits;
 } RendererPerfSnapshot;
 
 void renderer_debug_set_cast_subticks(u32 subticks);
@@ -118,6 +122,7 @@ void renderer_perf_record_column_reuse(u16 columns_changed, u16 columns_reused,
 void renderer_perf_record_sparse(u16 dyn_wall, u16 ceiling, u16 floor,
                                  u16 overlay, u16 runs, u16 dma_bytes);
 void renderer_perf_record_cast_lut(u16 invz, bool fallback);
+void renderer_perf_record_billboard_lut(u16 forward, bool fallback);
 RendererPerfSnapshot renderer_get_perf_snapshot(void);
 #endif
 

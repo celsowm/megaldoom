@@ -119,7 +119,12 @@ def main() -> int:
         raise ValueError("billboard rasterizer still samples the next wall block")
     if "RAY_CAMERA_HEIGHT" not in billboard or "BILLBOARD_SCALE_SHIFT 12" not in billboard:
         raise ValueError("world billboards are not using the shared Q12 render camera")
-    if "divu((u32)RAY_CAMERA_HEIGHT * RAY_PROJ_Y, (u16)forward)" not in billboard:
+    # bb_lut_divu(table, K, forward) replaced the raw divu() call with a
+    # proven-bounded lookup table (see billboard_projection_lut.h), but the
+    # underlying formula -- RAY_CAMERA_HEIGHT * RAY_PROJ_Y / forward -- must
+    # still drive the enemy baseline.
+    if ("bb_lut_divu(g_billboard_recip_enemy_bottom_lut," not in billboard or
+            "(u32)RAY_CAMERA_HEIGHT * RAY_PROJ_Y, (u16)forward)" not in billboard):
         raise ValueError("enemy baseline is no longer anchored to the rendered floor plane")
     if "PLAYER_EYE_HEIGHT * RAY_PROJ_Y" in billboard:
         raise ValueError("enemy projection is using gameplay eye height instead of the render camera")
