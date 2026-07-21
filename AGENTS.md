@@ -26,8 +26,37 @@ that were already tried and measured, so they aren't silently re-attempted.
    2 bytes, bool is 1 byte) — a plain-C decode gets the field offsets wrong.
 
 `tools/routes/checkpoints.txt` ends in sustained movement (no combat/rotation
-segment) — it is the **worst case for temporal-coherence-based optimizations**
-and currently the *only* captured route. `average_vblanks_x10` is a 60-frame
+segment) — it is the **worst case for temporal-coherence-based optimizations**.
+
+`tools/routes/tour-east-combat.txt` (7335 frames, run with `-b 7400`) is the
+first route that actually leaves the start room: through the NE corridor, C-opens
+the group-0 door at x=1536, fights past enemies into the zigzag area, ending at
+(2416, 3081) angle 106 (verify via the `g_player` mailbox). Its scenes are
+richer than the three start-room routes: at release speed (cadence probe,
+2026-07-21) pack averages **5.58 vblanks/rebuild vs 3.0 in the start room** —
+the canned routes understate pack cost by ~2x. Max frame observed: 34 vblanks.
+Chained turn legs drift (turn ramp scales with elapsed_frames, which varies
+with scene cost), so appending legs needs pose re-verification after EVERY leg;
+do not trust dead-reckoned headings more than ~2 legs deep.
+
+## Real release framerate (measured 2026-07-21, cadence probe)
+
+A checkpoint-only build (no -DebugPerf) publishes a `CadenceSnapshot`
+(decode with `tools/decode-cadence.py`) — this is the ground truth, and it is
+very different from what the DEBUG_PERF builds imply:
+
+- **Idle frames hit the 2-vblank (30fps) target.**
+- **Motion/rebuild frames cost ~12-13 vblanks (~5fps)**: cast 4.4-4.6 vb,
+  pack 3.0 (start room) to 5.6 (tour route), projection ~1.25, billboard
+  0.3-0.7, plus the fixed 2-vblank 300-tile upload.
+- Cast's counted workload is tiny (~50 nodes, ~55 box projections, ~30 segs
+  tested, 11-16 drawn per rebuild) — per-unit constant factors dominate.
+- Projection re-measures all ~58 active billboards whenever the camera pose
+  changes (the measure cache keys on exact pose, so it misses 100% in motion).
+
+Consequence: DMA-side levers (sparse FB, partial uploads) can recover at most
+~2 of ~12 vblanks; the frame is CPU-bound in cast+pack. Smoothness work should
+target those two stages or frame-pacing, not upload bytes. `average_vblanks_x10` is a 60-frame
 rolling average (see `renderer_debug_set_total_vblanks` in `renderer_perf.c`),
 not a single-frame snapshot, so it's a reasonably trustworthy signal even
 though it comes from one route.
