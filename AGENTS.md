@@ -133,32 +133,10 @@ stationary for long stretches) push average changed columns under ~10.
 Why so few columns are reused even when "stationary": the coherence cache
 invalidates a whole tile column if *any* of its 4 sampled `WallColumnDescriptor`
 fields differ, and combat/animation perturbs `top`/`bottom`/`tex_x` by a pixel
-across most columns. The oracle is DEBUG_PERF-only and free to leave in.
-
-**`top & ~1` / `tex_x & ~1` quantization: shipped, but the real win was much
-smaller than a naive ceiling estimate (2026-07-21).** A field-diff diagnostic
-(temporary, since removed) confirmed `tex_x` alone differs on 84-94% of
-would-be-cache-hit misses, with top/bottom/tex_x jointly accounting for
-57-94% of misses (the rest differ in texture_id/shade_level/tex_y, which
-quantization can't fix). That looked like a big lever. After actually
-quantizing `describe_textured_column`'s `top` and `tex_x` to even values
-(deriving `bottom` from the quantized `top` so wall thickness stays exact —
-one texel/pixel of visual jitter reduction, not a size distortion) and
-re-measuring: the miss count barely moved (e.g. checkpoints 247→238,
-stationary-combat 176→156). **During actual movement `tex_x`/`top` typically
-change by ≥2 units between frames, not 1**, so masking only the low bit
-rarely collapses two different frames onto the same bucket — the "ceiling"
-number only applies if quantization could eliminate the difference entirely,
-which a 1-bit mask can't do against >1-unit-per-frame motion. Real measured
-effect on `pack_subticks`: checkpoints −1.3%, stationary-combat −7.7% (the
-more genuinely-static route benefits more, as expected), slow-turn showed a
-jump but that route isn't checkpoint-gated the same way and its single-frame
-snapshot capture is known-noisy — treat that number with suspicion, not as a
-confirmed regression. Kept anyway (user-approved trade, zero downside on the
-two reliable routes, `asm_mismatches=0`). If revisiting: a coarser mask
-(`&~3`) might close more of the gap but trades more visible texture
-stepping for an uncertain additional win — re-measure before committing to
-it, the same way this round did.
+across most columns. Quantizing presentation (plan §14, `top & ~1`) would
+raise reuse but introduces wall-jitter — measure exact reuse first (the oracle
+is still in place; just capture a new route). The oracle is DEBUG_PERF-only and
+free to leave in.
 
 ## Sparse semantic tile oracle (2026-07-19)
 
