@@ -95,7 +95,7 @@ static void sync_hud(u32 frame,
 }
 
 static void render_current_view(u16 player_health, bool base_dirty) {
-#if DEBUG_PERF
+#if DEBUG_PERF || CADENCE_STAGE_PROBE
     const u32 cast_start = getSubTick();
 #endif
     if (base_dirty) {
@@ -103,6 +103,11 @@ static void render_current_view(u16 player_health, bool base_dirty) {
     }
 #if DEBUG_PERF
     renderer_debug_set_cast_subticks(base_dirty ? (getSubTick() - cast_start) : 0);
+#elif CADENCE_STAGE_PROBE
+    if (base_dirty) {
+        g_cadence_cast_subticks += getSubTick() - cast_start;
+        g_cadence_rebuild_frames++;
+    }
 #endif
     renderer_render_scene(
         g_ray_columns, &g_player, &g_scene_colors, base_dirty,
@@ -478,6 +483,57 @@ int main(bool hard) {
         // but a frame that spilled past its deadline shows the real cost here).
         // Recorded one iteration ahead of the perf overlay's read.
         renderer_debug_set_total_vblanks((u16)(vtimer - cur_vtimer));
+#elif DEBUG_BLASTEM_CHECKPOINT
+        // Release-cadence probe: DEBUG_PERF's subtick instrumentation slows the
+        // frame so much (per-sample getSubTick calls, the asm-verify probe, the
+        // text overlay) that its vblank counts say nothing about what a release
+        // build runs at. This branch exists only in checkpoint builds WITHOUT
+        // DEBUG_PERF: a handful of adds per iteration plus a 32-byte mailbox
+        // copy, so its cadence is representative of release. Published through
+        // the same g_debug_perf_mailbox (unused by anything else when
+        // DEBUG_PERF is off); decoded by tools/decode-cadence.py.
+        {
+            typedef struct {
+                u16 magic;        // 0xCADE
+                u16 last_vblanks;
+                u16 max_vblanks;
+                u16 missed;       // iterations over TARGET_FRAME_VSYNCS
+                u32 iterations;
+                u32 vblank_sum;
+                u16 hist[8];      // bucket = min(vblanks, 7)
+                // Coarse stage accumulators (CADENCE_STAGE_PROBE, see
+                // debug_checkpoint.h) so stage shares are measurable at
+                // release speed, not just under DEBUG_PERF distortion.
+                u32 cast_subticks;
+                u32 pack_subticks;
+                u32 projection_subticks;
+                u32 billboard_subticks;
+                u32 rebuild_frames;
+                u32 nodes_visited;
+                u32 boxes_projected;
+                u32 segs_tested;
+                u32 segs_drawn;
+            } CadenceSnapshot;
+            static CadenceSnapshot s_cadence;
+            const u16 vb = (u16)(vtimer - cur_vtimer);
+            s_cadence.magic = 0xCADE;
+            s_cadence.last_vblanks = vb;
+            if (vb > s_cadence.max_vblanks) s_cadence.max_vblanks = vb;
+            if (vb > TARGET_FRAME_VSYNCS) s_cadence.missed++;
+            s_cadence.iterations++;
+            s_cadence.vblank_sum += vb;
+            s_cadence.hist[(vb < 7) ? vb : 7]++;
+            s_cadence.cast_subticks = g_cadence_cast_subticks;
+            s_cadence.pack_subticks = g_cadence_pack_subticks;
+            s_cadence.projection_subticks = g_cadence_projection_subticks;
+            s_cadence.billboard_subticks = g_cadence_billboard_subticks;
+            s_cadence.rebuild_frames = g_cadence_rebuild_frames;
+            s_cadence.nodes_visited = g_cadence_nodes_visited;
+            s_cadence.boxes_projected = g_cadence_boxes_projected;
+            s_cadence.segs_tested = g_cadence_segs_tested;
+            s_cadence.segs_drawn = g_cadence_segs_drawn;
+            debug_checkpoint_publish_perf(&s_cadence, sizeof(s_cadence));
+        }
 #endif
         frame++;
         }

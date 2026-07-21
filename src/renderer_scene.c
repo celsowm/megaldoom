@@ -1,6 +1,7 @@
 #include "renderer_pack_internal.h"
 #include "renderer_perf.h"
 #include "player_controller.h"
+#include "debug_checkpoint.h"
 
 void renderer_scene_init(void) {
     pack_stage_reset();
@@ -34,19 +35,23 @@ void renderer_render_scene(const RayColumn *columns,
     u32 stage_start = getSubTick();
     renderer_reset_frame_modified();
     renderer_perf_reset_overlay_tiles();
+#elif CADENCE_STAGE_PROBE
+    u32 stage_start = getSubTick();
 #endif
     ProjectedBillboard objects[BILLBOARD_MAX_PROJECTED_TOTAL];
     const u16 object_count = billboard_project_scene(
         player, columns, objects, BILLBOARD_MAX_PROJECTED_TOTAL);
 #if DEBUG_PERF
     renderer_perf_set_projection_subticks(getSubTick() - stage_start);
+#elif CADENCE_STAGE_PROBE
+    g_cadence_projection_subticks += getSubTick() - stage_start;
 #endif
 
     if (rebuild_base) {
         upload_request_bank_swap();
         renderer_prepare_full_base_upload();
         renderer_overlay_base_rebuilt();
-#if DEBUG_PERF
+#if DEBUG_PERF || CADENCE_STAGE_PROBE
         stage_start = getSubTick();
 #endif
         build_bsp_tilemap(columns, scene_colors, g_view_tiles);
@@ -54,6 +59,8 @@ void renderer_render_scene(const RayColumn *columns,
 #if DEBUG_PERF
         renderer_perf_set_pack_subticks(getSubTick() - stage_start);
         stage_start = getSubTick();
+#elif CADENCE_STAGE_PROBE
+        g_cadence_pack_subticks += getSubTick() - stage_start;
 #endif
     } else {
         g_view_dirty_bank_mask = (u16)(1u << g_view_vram_bank);
@@ -64,13 +71,15 @@ void renderer_render_scene(const RayColumn *columns,
     }
 
     renderer_overlay_begin();
-#if DEBUG_PERF
+#if DEBUG_PERF || CADENCE_STAGE_PROBE
     const u32 bb_start = getSubTick();
 #endif
     draw_projected_billboards(columns, objects, object_count);
 #if DEBUG_PERF
     renderer_perf_set_billboard_subticks(getSubTick() - bb_start);
     const u32 wpn_start = getSubTick();
+#elif CADENCE_STAGE_PROBE
+    g_cadence_billboard_subticks += getSubTick() - bb_start;
 #endif
     draw_weapon_overlay(weapon_flash);
     if (damage_flash) {

@@ -5,6 +5,7 @@
 #include "generated_assets.h"
 #include "renderer_perf.h"
 #include "bsp_inv_depth_lut.h"
+#include "debug_checkpoint.h"
 
 // draw_seg only computes the height/texture fields at columns on a RAY_COL_STRIDE
 // boundary, matching the columns build_bsp_tilemap actually samples. That
@@ -99,6 +100,18 @@ static bool g_bsp_dbg_measure_segment;
         g_bsp_dbg_side_cache_subticks = 0; \
         g_bsp_dbg_box_projection_subticks = 0; \
         g_bsp_dbg_segment_raster_subticks = 0; } while (0)
+#elif CADENCE_STAGE_PROBE
+// Release-speed unit counters: same increment sites as the DEBUG_PERF
+// counters, but accumulated across the whole run (no per-frame reset) and
+// with no subtick timing, so they don't perturb the measured cadence.
+#define BSP_DBG_INC(c) bsp_cadence_inc_##c()
+static inline void bsp_cadence_inc_nodes_visited(void) { g_cadence_nodes_visited++; }
+static inline void bsp_cadence_inc_boxes_projected(void) { g_cadence_boxes_projected++; }
+static inline void bsp_cadence_inc_segments_tested(void) { g_cadence_segs_tested++; }
+static inline void bsp_cadence_inc_segments_drawn(void) { g_cadence_segs_drawn++; }
+static inline void bsp_cadence_inc_boxes_rejected_cheap(void) {}
+static inline void bsp_cadence_inc_near_fallbacks(void) {}
+#define BSP_DBG_RESET() ((void)0)
 #else
 #define BSP_DBG_INC(c) ((void)0)
 #define BSP_DBG_RESET() ((void)0)

@@ -17,6 +17,18 @@ void debug_checkpoint_mark(u8 bits) {
     g_debug_checkpoint_state |= bits;
 }
 
+#if CADENCE_STAGE_PROBE
+u32 g_cadence_cast_subticks;
+u32 g_cadence_pack_subticks;
+u32 g_cadence_projection_subticks;
+u32 g_cadence_billboard_subticks;
+u32 g_cadence_rebuild_frames;
+u32 g_cadence_nodes_visited;
+u32 g_cadence_boxes_projected;
+u32 g_cadence_segs_tested;
+u32 g_cadence_segs_drawn;
+#endif
+
 void debug_checkpoint_publish_perf(const void *snapshot, u16 bytes) {
     const u16 clamped = (bytes > DEBUG_CHECKPOINT_PERF_MAILBOX_BYTES) ?
         DEBUG_CHECKPOINT_PERF_MAILBOX_BYTES : bytes;

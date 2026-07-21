@@ -31,10 +31,39 @@ void debug_checkpoint_mark(u8 bits);
  * tools/resolve-symbol.py for how the runner locates the result. */
 #define DEBUG_CHECKPOINT_PERF_MAILBOX_BYTES 256
 void debug_checkpoint_publish_perf(const void *snapshot, u16 bytes);
+
+/* Release-cadence stage probe: coarse per-stage subtick accumulators for
+ * checkpoint builds WITHOUT DEBUG_PERF. DEBUG_PERF's per-sample getSubTick
+ * hooks distort the frame so badly that its stage shares can't be projected
+ * onto release; these are written at the same top-level stage boundaries but
+ * cost only ~6 getSubTick calls per frame, so the measured cadence stays
+ * representative. Accumulated across the run, published in CadenceSnapshot
+ * (src/main.c), decoded by tools/decode-cadence.py. */
+#ifndef DEBUG_PERF
+#define DEBUG_PERF 0
+#endif
+#if !DEBUG_PERF
+#define CADENCE_STAGE_PROBE 1
+extern u32 g_cadence_cast_subticks;
+extern u32 g_cadence_pack_subticks;
+extern u32 g_cadence_projection_subticks;
+extern u32 g_cadence_billboard_subticks;
+extern u32 g_cadence_rebuild_frames;
+/* Cast-stage unit counters (increments only, no getSubTick): how many BSP
+ * nodes/box projections/segs a release-speed cast actually touches, to
+ * attribute the cast cost between traversal overhead and sample work. */
+extern u32 g_cadence_nodes_visited;
+extern u32 g_cadence_boxes_projected;
+extern u32 g_cadence_segs_tested;
+extern u32 g_cadence_segs_drawn;
+#else
+#define CADENCE_STAGE_PROBE 0
+#endif
 #else
 #define debug_checkpoint_reset()
 #define debug_checkpoint_mark(bits)
 #define debug_checkpoint_publish_perf(snapshot, bytes)
+#define CADENCE_STAGE_PROBE 0
 #endif
 
 #endif
