@@ -83,6 +83,15 @@ typedef struct {
     u32 sparse_overlay_sum;
     u32 sparse_dyn_runs_sum;
     u32 sparse_dma_bytes_sum;
+    // Cast-stage reciprocal-depth LUT (draw_seg's divu(BSP_INV_SCALE, invz)
+    // replaced by a table lookup, see bsp_inv_depth_lut.h). max_invz is the
+    // largest invz value observed at that call site all run, to empirically
+    // corroborate the table's proven 1..1024 range bound; fallback_hits counts
+    // how often the bounds-checked divu fallback actually fired (should be 0
+    // given the proof, but kept live for real gameplay, not just captured
+    // routes).
+    u16 cast_lut_max_invz;
+    u16 cast_lut_fallback_hits;
 } RendererPerfSnapshot;
 
 void renderer_debug_set_cast_subticks(u32 subticks);
@@ -108,6 +117,7 @@ void renderer_perf_record_column_reuse(u16 columns_changed, u16 columns_reused,
                                        u16 hypothetical_tiles_uploaded);
 void renderer_perf_record_sparse(u16 dyn_wall, u16 ceiling, u16 floor,
                                  u16 overlay, u16 runs, u16 dma_bytes);
+void renderer_perf_record_cast_lut(u16 invz, bool fallback);
 RendererPerfSnapshot renderer_get_perf_snapshot(void);
 #endif
 

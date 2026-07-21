@@ -177,6 +177,13 @@ void renderer_perf_record_sparse(u16 dyn_wall, u16 ceiling, u16 floor,
     s_perf.sparse_rebuild_frames++;
 }
 
+void renderer_perf_record_cast_lut(u16 invz, bool fallback) {
+    if (invz > s_perf.cast_lut_max_invz) s_perf.cast_lut_max_invz = invz;
+    if (fallback && s_perf.cast_lut_fallback_hits != 0xFFFF) {
+        s_perf.cast_lut_fallback_hits++;
+    }
+}
+
 RendererPerfSnapshot renderer_get_perf_snapshot(void) {
     return s_perf;
 }

@@ -4,6 +4,7 @@
 #include "fixed_math.h"
 #include "generated_assets.h"
 #include "renderer_perf.h"
+#include "bsp_inv_depth_lut.h"
 
 // draw_seg only computes the height/texture fields at columns on a RAY_COL_STRIDE
 // boundary, matching the columns build_bsp_tilemap actually samples. That
@@ -358,7 +359,24 @@ static void draw_seg(u16 seg_index) {
             continue;
         }
 
-        s32 depth_col = divu(BSP_INV_SCALE, (u16)invz);
+        // BSP_INV_SCALE/invz via a precomputed table: draw_seg's near-plane
+        // clip guarantees 1 <= invz <= 1024 here (see bsp_inv_depth_lut.h's
+        // range proof), so the table covers every value this call site can
+        // ever produce. The divu fallback stays permanently for any future
+        // change that violates that invariant; it is not expected to fire.
+        s32 depth_col;
+        const u16 invz_u16 = (u16)invz;
+        if (invz_u16 <= 1024) {
+            depth_col = g_bsp_inv_depth_lut[invz_u16 - 1];
+#if DEBUG_PERF
+            renderer_perf_record_cast_lut(invz_u16, FALSE);
+#endif
+        } else {
+            depth_col = divu(BSP_INV_SCALE, invz_u16);
+#if DEBUG_PERF
+            renderer_perf_record_cast_lut(invz_u16, TRUE);
+#endif
+        }
         if (depth_col < 1) {
             depth_col = 1;
         }
