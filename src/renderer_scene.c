@@ -303,7 +303,15 @@ static WallColumnDescriptor describe_textured_column(u16 wall_h,
                                                      u8 tex_y_value,
                                                      u8 side_shade,
                                                      u8 flags) {
-    const u16 top = (u16)((VIEW_PIXEL_H - wall_h) / 2);
+    // Quantized to even to raise the pack coherence-cache's reuse rate: a
+    // field-diff diagnostic (2026-07-21) measured tex_x/top/bottom sub-pixel
+    // jitter from continuous player motion as the dominant cause of cache
+    // misses (84-94% of misses involved tex_x alone), starving the cache
+    // documented in AGENTS.md's coherence-cache section. Deriving bottom from
+    // the quantized top keeps wall_h (thickness) exact, so this only shifts
+    // vertical position by at most 1px and horizontal texture sampling by at
+    // most 1 texel -- accepted as a minor, deliberate visual trade-off.
+    const u16 top = (u16)(((VIEW_PIXEL_H - wall_h) / 2) & ~1u);
     const u16 bottom = (u16)(top + wall_h);
     const u8 tid = (u8)((texture_id < FREEDOOM_WALL_TEXTURE_COUNT) ?
                             texture_id : MEGALDOOM_TEX_FALLBACK);
@@ -318,7 +326,7 @@ static WallColumnDescriptor describe_textured_column(u16 wall_h,
     }
     const u8 *shade_map = g_shade_luts[fog_level];
     const u8 *ty_table = MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[wall_h];
-    const u8 tex_x = (u8)(tex_x_value & WALL_TEX_DIM_MASK);
+    const u8 tex_x = (u8)((tex_x_value & WALL_TEX_DIM_MASK) & ~1u);
 
 #if RAY_COL_STRIDE == 4
     return (WallColumnDescriptor){top, bottom, (const u8 *)tex, shade_map, ty_table,
