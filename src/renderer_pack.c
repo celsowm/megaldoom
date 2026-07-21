@@ -154,8 +154,14 @@ void build_bsp_tilemap(const RayColumn *columns,
     }
 }
 #else /* RAY_COL_STRIDE == 2 */
+// 0 = ship the hand-written renderer_hotpath.s mixed-tile packer (measured
+// -39.6% pack_subticks on checkpoints.txt, 2026-07-21); 1 = use the C
+// reference implementation below. The DEBUG_PERF probe byte-verified the asm
+// against the C reference on every tile across all routes (asm_mismatches=0)
+// before the default flipped. Override with
+// EXTRA_FLAGS="-DRENDERER_HOTPATH_C_REFERENCE=1" to fall back / re-verify.
 #ifndef RENDERER_HOTPATH_C_REFERENCE
-#define RENDERER_HOTPATH_C_REFERENCE 1
+#define RENDERER_HOTPATH_C_REFERENCE 0
 #endif
 
 void renderer_write_mixed_stride2_tile_asm(
