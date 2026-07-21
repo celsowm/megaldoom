@@ -290,3 +290,59 @@ legacy full-upload path is the release default and the safe fallback.
   view) through the custom BlastEm, run it at flag 1, confirm asm_mismatches=0 and
   no vblank regression, THEN flip `RENDERER_SPARSE_FB` default in
   `src/renderer_internal.h`. Until then, leave it 0.
+
+## Phase 6 re-audit (2026-07-21) — flag STILL 0, but for different reasons
+
+Revisited the enable gate. Three findings; the "just needs a heavy-billboard
+route" framing above turned out to be the least of the problems.
+
+**(a) The flag-1 build did not link at all.** `EXTRA_FLAGS="-DRENDERER_SPARSE_FB=1"`
+failed with `undefined reference to g_sparse_tilemap_committed`. The `c2f7461`
+refactor (split of `renderer_scene.c` into `renderer_pack.c` / `renderer_sparse.c`
+/ `renderer_upload.c`) moved the variable's three *uses* into `renderer_upload.c`
+but left its definition behind in the deleted region; its sibling
+`g_sparse_screen_tilemap` did make the trip and became file-static. Fixed by
+making it file-static next to that sibling and deleting the dangling `extern`
+from `renderer_internal.h` (all three uses live in one TU, inside
+`#if RENDERER_SPARSE_FB`). Consequence: **every claim about sparse readiness made
+between `c2f7461` and this fix was untested — the prototype was unbuildable.**
+
+**(b) The Phase 5 A/B table above is not a valid comparison.** Re-measured all
+routes on both builds. Runs are deterministic (verified 3x identical), so these
+are exact differences, not noise:
+
+| Route             | legacy avg_x10 | sparse avg_x10 | verdict            |
+|-------------------|----------------|----------------|--------------------|
+| stationary-combat | 125            | 114            | real win (-8.8%)   |
+| checkpoints       | 178            | 181            | slight regression  |
+| cand-heavy (new)  | 273            | 275            | no gain            |
+| slow-turn         | 191            | 127            | INVALID, see below |
+
+- The Phase 5 line "stationary-combat ... better than legacy (155 < 181)" compared
+  stationary-combat@flag1 against **checkpoints**@flag0. 181 was never
+  stationary-combat's baseline; its own legacy number is 125. The win is real but
+  about half the recorded size.
+- **slow-turn cannot be A/B'd at all**: the two builds end at different player
+  angles (150 vs 192), i.e. they rendered different scenes. `player_controller_update`
+  scales the turn rate by `elapsed_frames` (`player_controller.c`), so a renderer
+  change feeds back into the simulation and the route diverges. This is a general
+  hazard for **any** future route A/B, not a slow-turn quirk. Before trusting the
+  next comparison, check that both builds end at the same pose (read `g_player`
+  via `--md-mailbox`), or decouple route playback from render speed.
+
+**(c) The existing 3-route suite is near-degenerate.** All three report *identical*
+sparse maxima (`overlay_max=75`, `dyn_wall_max=64`, `dyn_runs_max=20`): those peaks
+come from level-load frames common to all three, not from anything the routes do.
+All three also end within ~70 units of the player start. A crude ad-hoc walk out of
+the start room reached `overlay_max=255` / `dyn_wall_max=300` — i.e. it blows the
+120-tile budget and falls back to legacy on most frames, which is exactly why it
+shows no gain.
+
+**Parity is not the problem:** `asm_mismatches=0` on all four routes at flag 1,
+including under the 300-tile stress. The fallback path is correct.
+
+**Decision: leave `RENDERER_SPARSE_FB` at 0.** Not because a route is missing, but
+because the measured result is mixed (one stationary win, two small regressions)
+and the budget is exceeded as soon as the player actually moves. Reopening this
+should start from (b) — a trustworthy measurement loop — not from capturing more
+routes with the current one.

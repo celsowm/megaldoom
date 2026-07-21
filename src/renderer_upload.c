@@ -19,6 +19,12 @@ static ViewUploadState g_view_upload;
 // when committing the mixed tilemap to the BG_B plane. Dead storage while
 // RENDERER_SPARSE_FB == 0.
 static u16 g_sparse_screen_tilemap[VIEW_TILE_W * VIEW_TILE_H];
+
+// Set when prepare_view_upload has built a mixed tilemap into the buffer above,
+// so finish_view_upload's swap branch commits that tilemap to the plane instead
+// of doing the legacy bank-select re-upload. Both writers and the reader live in
+// this file, so it is file-static like the buffer it guards.
+static bool g_sparse_tilemap_committed = FALSE;
 #endif
 
 void upload_state_init(void) {

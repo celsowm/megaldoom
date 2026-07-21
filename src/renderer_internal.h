@@ -116,11 +116,6 @@ extern u16 g_compass_tilemap[COMPASS_W * COMPASS_H];
 #define RENDERER_SPARSE_FB 0
 #endif
 
-// Phase 4: when the sparse path commits its mixed tilemap straight to the BG_B
-// plane (instead of through s_view_bank_tilemaps), this flag tells the bank
-// swap to skip its redundant tilemap re-upload. Declared in renderer_scene.c.
-extern bool g_sparse_tilemap_committed;
-
 // === Static ceiling/floor atlas (Phase 2, Task 2) ==========================
 // One VRAM tile holds the ROM-constant floor (MEGALDOOM_WORLD_COLOR_FLOOR,
 // uploaded once and never rebaked), and MEGALDOOM_CEILING_TILE_COUNT atlas
