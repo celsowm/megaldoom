@@ -7,7 +7,14 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parent.parent
-SCENE = ROOT / "src" / "renderer_scene.c"
+# renderer_scene.c was split by SRP into several files; the packer/billboard-
+# draw code these checks look for now lives across that set.
+SCENE_SPLIT_FILES = [
+    "renderer_scene.c", "renderer_pack.c", "renderer_doors.c",
+    "renderer_billboard_draw.c", "renderer_frame_overlay.c",
+    "renderer_compass.c", "renderer_upload.c", "renderer_sparse.c",
+    "renderer_flats.c",
+]
 VIEW_W = 32
 VIEW_H = 24
 STRIDE = 4
@@ -190,7 +197,8 @@ def assert_equal(sprites: list[Sprite], depths: list[int],
 
 
 def main() -> int:
-    scene = SCENE.read_text(encoding="utf-8")
+    scene = "\n".join((ROOT / "src" / name).read_text(encoding="utf-8")
+                      for name in SCENE_SPLIT_FILES)
     required = [
         "tex_x_by_screen_col[RAY_VIEW_COLS]", "u32 clear_mask = 0",
         "u32 value = 0", "renderer_mark_overlay_tile(tile_index)",

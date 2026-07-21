@@ -23,7 +23,14 @@ def main():
     explosion_c = (ROOT / "src/billboard_explosion.c").read_text()
     explosion_h = (ROOT / "src/billboard_explosion.h").read_text()
     projection_c = (ROOT / "src/billboard_projection.c").read_text()
-    renderer_c = (ROOT / "src/renderer_scene.c").read_text()
+    # renderer_scene.c was split by SRP into several files; billboard-draw
+    # code these checks look for now lives across that set.
+    renderer_c = "\n".join((ROOT / "src" / n).read_text() for n in (
+        "renderer_scene.c", "renderer_pack.c", "renderer_doors.c",
+        "renderer_billboard_draw.c", "renderer_frame_overlay.c",
+        "renderer_compass.c", "renderer_upload.c", "renderer_sparse.c",
+        "renderer_flats.c",
+    ))
     main_c = (ROOT / "src/main.c").read_text()
     assets = (ROOT / "src/generated_billboard_assets.h").read_text()
     resources = (ROOT / "res/resources.res").read_text()

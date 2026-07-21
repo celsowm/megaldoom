@@ -69,7 +69,14 @@ def main():
     header = (ROOT / "src/renderer_internal.h").read_text()
     hud_assets = (ROOT / "src/generated_hud_assets.h").read_text()
     raycast = (ROOT / "src/raycast.h").read_text()
-    scene = (ROOT / "src/renderer_scene.c").read_text()
+    # renderer_scene.c was split by SRP into several files; the upload
+    # scheduler code these checks look for now lives across that set.
+    scene = "\n".join((ROOT / "src" / n).read_text() for n in (
+        "renderer_scene.c", "renderer_pack.c", "renderer_doors.c",
+        "renderer_billboard_draw.c", "renderer_frame_overlay.c",
+        "renderer_compass.c", "renderer_upload.c", "renderer_sparse.c",
+        "renderer_flats.c",
+    ))
     overlay = (ROOT / "src/renderer_overlay.c").read_text()
     renderer = (ROOT / "src/renderer.c").read_text()
     perf = (ROOT / "src/renderer_perf.c").read_text()

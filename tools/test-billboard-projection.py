@@ -10,7 +10,14 @@ RAYCAST = ROOT / "src" / "raycast.h"
 BILLBOARD = ROOT / "src" / "billboard.c"
 BILLBOARD_INTERNAL = ROOT / "src" / "billboard_internal.h"
 PROJECTOR = ROOT / "src" / "billboard_projection.c"
-SCENE = ROOT / "src" / "renderer_scene.c"
+# renderer_scene.c was split by SRP into several files; the packer/billboard-
+# draw code these checks look for now lives across that set.
+SCENE_SPLIT_FILES = [
+    "renderer_scene.c", "renderer_pack.c", "renderer_doors.c",
+    "renderer_billboard_draw.c", "renderer_frame_overlay.c",
+    "renderer_compass.c", "renderer_upload.c", "renderer_sparse.c",
+    "renderer_flats.c",
+]
 
 VIEW_W = 160
 CENTER_X = 80
@@ -94,7 +101,8 @@ def main() -> int:
     billboard = BILLBOARD.read_text(encoding="utf-8")
     billboard_internal = BILLBOARD_INTERNAL.read_text(encoding="utf-8")
     projector = PROJECTOR.read_text(encoding="utf-8")
-    scene = SCENE.read_text(encoding="utf-8")
+    scene = "\n".join((ROOT / "src" / name).read_text(encoding="utf-8")
+                      for name in SCENE_SPLIT_FILES)
 
     required = [
         "#define RAY_VIEW_CENTER_X", "#define RAY_VIEW_CENTER_Y",

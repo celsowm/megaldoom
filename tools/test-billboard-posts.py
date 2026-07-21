@@ -6,7 +6,14 @@ import re
 
 ROOT = Path(__file__).resolve().parent.parent
 HEADER = ROOT / "src" / "generated_billboard_assets.h"
-SCENE = ROOT / "src" / "renderer_scene.c"
+# renderer_scene.c was split by SRP into several files; the packer/billboard-
+# draw code these checks look for now lives across that set.
+SCENE_SPLIT_FILES = [
+    "renderer_scene.c", "renderer_pack.c", "renderer_doors.c",
+    "renderer_billboard_draw.c", "renderer_frame_overlay.c",
+    "renderer_compass.c", "renderer_upload.c", "renderer_sparse.c",
+    "renderer_flats.c",
+]
 
 
 def initializer(source: str, marker: str) -> list[int]:
@@ -35,7 +42,8 @@ def macro(source: str, name: str) -> int:
 
 def main() -> None:
     header = HEADER.read_text(encoding="utf-8")
-    scene = SCENE.read_text(encoding="utf-8")
+    scene = "\n".join((ROOT / "src" / name).read_text(encoding="utf-8")
+                      for name in SCENE_SPLIT_FILES)
     width = macro(header, "FREEDOOM_BILLBOARD_WORLD_W")
     height = macro(header, "FREEDOOM_BILLBOARD_WORLD_H")
     texture_count = macro(header, "FREEDOOM_BILLBOARD_WORLD_TEXTURE_COUNT")

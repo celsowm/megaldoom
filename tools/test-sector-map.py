@@ -82,7 +82,14 @@ def main():
     # There is one production renderer: the direct BSP-to-tile packer.  Do not
     # retain a compiled-out reference/strip implementation that can become an
     # accidental fallback in a performance build.
-    renderer_scene = (ROOT / "src/renderer_scene.c").read_text()
+    # renderer_scene.c was split by SRP into several files; the pack-stage
+    # code these checks look for now lives across that set.
+    renderer_scene = "\n".join((ROOT / "src" / n).read_text() for n in (
+        "renderer_scene.c", "renderer_pack.c", "renderer_doors.c",
+        "renderer_billboard_draw.c", "renderer_frame_overlay.c",
+        "renderer_compass.c", "renderer_upload.c", "renderer_sparse.c",
+        "renderer_flats.c",
+    ))
     forbidden_renderer = ("RENDERER_REFERENCE_PACKER", "build_column_strip_reference",
                           "build_raycast_tilemap_reference", "g_reference_view_tiles",
                           "build_raycast_tilemap")
