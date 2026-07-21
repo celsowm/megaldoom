@@ -581,11 +581,15 @@ static u8 s_prev_door_active[VIEW_TILE_W];
 // descriptors is sufficient to prove the packed output is unchanged. (Compared
 // by field rather than memcmp so the struct's padding byte cannot spuriously
 // force a repack.)
+//
+// `texture`, `shade_map`, and `vertical_samples` are omitted: each is a pure
+// function of a field already compared below (describe_textured_column sets
+// texture = FREEDOOM_WALL_TEXTURES[texture_id], shade_map = g_shade_luts[shade_level],
+// vertical_samples = MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[bottom-top]), so equality
+// of texture_id/shade_level/(top,bottom) already implies their equality.
 static inline bool wall_desc_equal(const WallColumnDescriptor *a,
                                    const WallColumnDescriptor *b) {
     return (bool)(a->top == b->top && a->bottom == b->bottom &&
-                  a->texture == b->texture && a->shade_map == b->shade_map &&
-                  a->vertical_samples == b->vertical_samples &&
                   a->tex_x == b->tex_x && a->tex_y == b->tex_y &&
                   a->texture_id == b->texture_id &&
                   a->shade_level == b->shade_level && a->flags == b->flags);
@@ -658,17 +662,20 @@ static void build_bsp_tilemap(const RayColumn *columns,
             describe_wall_column(&columns[base_col + 4]),
             describe_wall_column(&columns[base_col + 6])
         };
-        const bool door_active = column_door_active(columns, base_col);
         // Skip the whole tile column when its packed output cannot have changed:
         // identical descriptors, unchanged flat rows, and no door RMW to redo
         // (neither this frame nor last). g_view_tiles already holds the correct
         // bytes, and the upload ships them, so this only elides redundant packing.
-        if (!flat_changed && !door_active && !s_prev_door_active[tile_x] &&
+        // Ordered cheapest-first so the door-overlay rescan (column_door_active,
+        // which walks 4 RayColumns) only runs once every cheaper check already
+        // passed, instead of unconditionally on every column.
+        if (!flat_changed && !s_prev_door_active[tile_x] &&
             !(overlay_columns & ((u32)1u << tile_x)) &&
             wall_desc_equal(&descriptors[0], &s_prev_desc[tile_x][0]) &&
             wall_desc_equal(&descriptors[1], &s_prev_desc[tile_x][1]) &&
             wall_desc_equal(&descriptors[2], &s_prev_desc[tile_x][2]) &&
-            wall_desc_equal(&descriptors[3], &s_prev_desc[tile_x][3])) {
+            wall_desc_equal(&descriptors[3], &s_prev_desc[tile_x][3]) &&
+            !column_door_active(columns, base_col)) {
             continue;
         }
 #if DEBUG_PERF
@@ -678,7 +685,21 @@ static void build_bsp_tilemap(const RayColumn *columns,
         s_prev_desc[tile_x][1] = descriptors[1];
         s_prev_desc[tile_x][2] = descriptors[2];
         s_prev_desc[tile_x][3] = descriptors[3];
-        s_prev_door_active[tile_x] = (u8)door_active;
+        s_prev_door_active[tile_x] = (u8)column_door_active(columns, base_col);
+
+        // Column-invariant bounds, hoisted out of the 15-tile loop below: a
+        // tile is whole-ceiling iff it lies above every descriptor's top
+        // (pixel_y+7 < min(top)) and whole-floor iff it lies below every
+        // descriptor's bottom (pixel_y >= max(bottom)) — mathematically
+        // identical to the original per-tile 4-way min/max, just computed once.
+        u16 min_top = descriptors[0].top;
+        if (descriptors[1].top < min_top) min_top = descriptors[1].top;
+        if (descriptors[2].top < min_top) min_top = descriptors[2].top;
+        if (descriptors[3].top < min_top) min_top = descriptors[3].top;
+        u16 max_bottom = descriptors[0].bottom;
+        if (descriptors[1].bottom > max_bottom) max_bottom = descriptors[1].bottom;
+        if (descriptors[2].bottom > max_bottom) max_bottom = descriptors[2].bottom;
+        if (descriptors[3].bottom > max_bottom) max_bottom = descriptors[3].bottom;
 
         const u8 *const packed_columns[4] = {
             FREEDOOM_WALL_PACKED_PAIRS[
@@ -698,10 +719,7 @@ static void build_bsp_tilemap(const RayColumn *columns,
             const u16 tile_index = view_tile_index(tile_x, tile_y);
             const u16 pixel_y = (u16)(tile_y * 8);
 
-            if (((pixel_y + 7) < descriptors[0].top) &&
-                ((pixel_y + 7) < descriptors[1].top) &&
-                ((pixel_y + 7) < descriptors[2].top) &&
-                ((pixel_y + 7) < descriptors[3].top)) {
+            if ((pixel_y + 7) < min_top) {
 #if DEBUG_PERF
                 const u32 flat_start = measure_flat ? getSubTick() : 0;
 #endif
@@ -718,10 +736,7 @@ static void build_bsp_tilemap(const RayColumn *columns,
                 continue;
             }
 
-            if ((pixel_y >= descriptors[0].bottom) &&
-                (pixel_y >= descriptors[1].bottom) &&
-                (pixel_y >= descriptors[2].bottom) &&
-                (pixel_y >= descriptors[3].bottom)) {
+            if (pixel_y >= max_bottom) {
 #if DEBUG_PERF
                 const u32 flat_start = measure_flat ? getSubTick() : 0;
 #endif
