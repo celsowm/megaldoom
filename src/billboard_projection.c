@@ -229,6 +229,8 @@ u16 billboard_project_scene(const PlayerState *player,
     u16 selected = 0;
     const u16 budget = (max_objects < BILLBOARD_MAX_PROJECTED_OBJECTS) ?
                            max_objects : BILLBOARD_MAX_PROJECTED_OBJECTS;
+    u16 farthest = 0;
+    bool farthest_valid = FALSE;
 
 #if DEBUG_PERF
     s_debug_culled = 0;
@@ -279,23 +281,34 @@ u16 billboard_project_scene(const PlayerState *player,
             s_order[selected].index = (u8)i;
             s_order[selected].measure = measure;
             selected++;
+            farthest_valid = FALSE;
         } else {
             // Replace only the farthest retained object. At the cutoff, retain
             // the later source entries: that matches the old stable full sort
             // followed by its nearest-object suffix.
-            u16 farthest = 0;
-            for (u16 candidate = 1; candidate < selected; candidate++) {
-                if ((s_order[candidate].measure.forward > s_order[farthest].measure.forward) ||
-                    ((s_order[candidate].measure.forward == s_order[farthest].measure.forward) &&
-                     (s_order[candidate].index < s_order[farthest].index))) {
-                    farthest = candidate;
+            //
+            // The farthest slot only changes when it's actually replaced below,
+            // so cache it across candidates instead of rescanning all `selected`
+            // slots for every overflow candidate: a candidate that isn't nearer
+            // than the cached farthest is rejected in O(1), and the O(budget)
+            // scan only runs again once, lazily, after an actual replacement.
+            if (!farthest_valid) {
+                farthest = 0;
+                for (u16 candidate = 1; candidate < selected; candidate++) {
+                    if ((s_order[candidate].measure.forward > s_order[farthest].measure.forward) ||
+                        ((s_order[candidate].measure.forward == s_order[farthest].measure.forward) &&
+                         (s_order[candidate].index < s_order[farthest].index))) {
+                        farthest = candidate;
+                    }
                 }
+                farthest_valid = TRUE;
             }
             if ((measure.forward < s_order[farthest].measure.forward) ||
                 ((measure.forward == s_order[farthest].measure.forward) &&
                  (i > s_order[farthest].index))) {
                 s_order[farthest].index = (u8)i;
                 s_order[farthest].measure = measure;
+                farthest_valid = FALSE;
             }
         }
     }
