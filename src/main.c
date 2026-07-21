@@ -94,12 +94,28 @@ static void sync_hud(u32 frame,
     g_hud.level_cleared = level_cleared;
 }
 
+// Drains any still-in-flight view upload (background pump disarmed) before
+// code that writes g_view_tiles or queues a new upload. Usually free: the
+// cast outlasts the 2-vblank upload, so the V-INT pump has already landed it.
+static void wait_scene_upload_complete(void) {
+    while (renderer_scene_upload_pending()) {
+        VDP_waitVSync();
+        renderer_upload_scene_step();
+    }
+}
+
 static void render_current_view(u16 player_health, bool base_dirty) {
 #if DEBUG_PERF || CADENCE_STAGE_PROBE
     const u32 cast_start = getSubTick();
 #endif
     if (base_dirty) {
+        // The cast is pure CPU (writes g_ray_columns only), so vblank
+        // interrupts during it may safely DMA the PREVIOUS frame's queued
+        // upload — that is the whole overlap win. Note this steals CPU time
+        // that lands inside the cast timing below on motion frames.
+        renderer_upload_background_arm();
         bsp_cast_frame(&g_player, g_ray_columns, &g_scene_colors);
+        renderer_upload_background_disarm();
     }
 #if DEBUG_PERF
     renderer_debug_set_cast_subticks(base_dirty ? (getSubTick() - cast_start) : 0);
@@ -109,6 +125,9 @@ static void render_current_view(u16 player_health, bool base_dirty) {
         g_cadence_rebuild_frames++;
     }
 #endif
+    // Anything past this point may write g_view_tiles, so the previous
+    // frame's upload must have fully landed.
+    wait_scene_upload_complete();
     renderer_render_scene(
         g_ray_columns, &g_player, &g_scene_colors, base_dirty,
         g_weapon_flash > 0, g_player_damage_flash > 0,
@@ -147,6 +166,9 @@ int main(bool hard) {
     fx_init_tables();
     bsp_init();
     game_audio_init();
+    // Inert until armed around the BSP cast (see render_current_view); the
+    // frontend/menus run with it installed but never armed.
+    SYS_setVIntCallback(renderer_upload_background_pump);
 
     while (TRUE) {
         u32 frame = 0;
@@ -471,6 +493,10 @@ int main(bool hard) {
         // the CPU mid active-display. Then pad to a fixed cadence so each visual
         // frame is shown for the same duration, keeping motion uniform instead of
         // stuttering between 60 and 30fps.
+#if DEBUG_PERF
+        // Keep the legacy serial shape under DEBUG_PERF (background pump is
+        // disabled there) so the perf overlay's per-step upload accounting and
+        // total-vblank attribution stay comparable with historic captures.
         VDP_waitVSync();
         renderer_upload_scene_step();
         while (renderer_scene_upload_pending() ||
@@ -478,6 +504,18 @@ int main(bool hard) {
             VDP_waitVSync();
             renderer_upload_scene_step();
         }
+#else
+        // Do NOT block on upload completion here: a motion frame that already
+        // blew past the cadence target skips this loop entirely and its queued
+        // upload instead rides the vblank interrupts that fire during the NEXT
+        // frame's cast (renderer_upload_background_pump), overlapping the DMA
+        // with CPU work. renderer_upload_wait_complete() in render_current_view
+        // guarantees it has landed before anything writes g_view_tiles again.
+        while ((u16)(vtimer - cur_vtimer) < TARGET_FRAME_VSYNCS) {
+            VDP_waitVSync();
+            renderer_upload_scene_step();
+        }
+#endif
 #if DEBUG_PERF
         // Total VBlanks consumed by this iteration (target = TARGET_FRAME_VSYNCS,
         // but a frame that spilled past its deadline shows the real cost here).

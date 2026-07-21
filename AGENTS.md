@@ -56,7 +56,31 @@ very different from what the DEBUG_PERF builds imply:
 
 Consequence: DMA-side levers (sparse FB, partial uploads) can recover at most
 ~2 of ~12 vblanks; the frame is CPU-bound in cast+pack. Smoothness work should
-target those two stages or frame-pacing, not upload bytes. `average_vblanks_x10` is a 60-frame
+target those two stages or frame-pacing, not upload bytes.
+
+### Background upload pump (shipped 2026-07-21)
+
+Those ~2 upload vblanks are now overlapped instead of spent: a V-INT callback
+(`renderer_upload_background_pump`, armed ONLY around `bsp_cast_frame` in
+`render_current_view`) DMAs the previous frame's queued upload during the
+vblanks that fire inside the next frame's cast, and the pacing loop no longer
+blocks on upload completion (non-DEBUG_PERF builds). The cast is the one safe
+window: it is pure CPU (writes `g_ray_columns` only — no VDP access, no
+`g_view_tiles` writes), so the interrupt can own the VDP without racing the
+main loop. `wait_scene_upload_complete` in main.c drains any remainder before
+anything writes `g_view_tiles` again; `upload_state_invalidate` now drops a
+surviving in-flight upload (pause menu / level reset can interrupt one).
+
+Measured on `checkpoints.txt` (same-pose-verified, cadence probe): motion
+frames 12.05 -> 10.7 vblanks, route average 5.35 -> 4.67 vblanks (+13%
+throughput). Only ~1.3-1.9 of the 2 vblanks come back because ~0.6 vb is real
+DMA bus occupancy (the 68k is halted during the transfer) — that time now
+lands INSIDE the cast subtick numbers, so expect cast to read ~0.5-0.7 vb
+higher on motion frames post-change (4.4 -> ~4.9); it is not a cast
+regression. DEBUG_PERF builds keep the old serial pacing loop and never arm
+the pump (its per-run perf counters would race their main-thread readers), so
+perf-overlay captures stay comparable with history but do NOT show the
+overlap win — use the cadence probe for that. `average_vblanks_x10` is a 60-frame
 rolling average (see `renderer_debug_set_total_vblanks` in `renderer_perf.c`),
 not a single-frame snapshot, so it's a reasonably trustworthy signal even
 though it comes from one route.

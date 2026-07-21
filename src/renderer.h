@@ -44,4 +44,15 @@ void renderer_queue_scene_upload(const RayColumn *columns,
 void renderer_upload_scene_step(void);
 bool renderer_scene_upload_pending(void);
 
+// Background upload pump: install renderer_upload_background_pump as the
+// SGDK V-INT callback, then arm it only around code that touches neither the
+// VDP nor g_view_tiles (the BSP cast). While armed, vblank interrupts DMA the
+// previous frame's queued upload, overlapping it with CPU render work. The
+// caller must drain any still-pending upload (pump disarmed, serial
+// waitVSync + renderer_upload_scene_step) before anything writes g_view_tiles
+// or queues a new upload — the renderer never blocks on vsync itself.
+void renderer_upload_background_pump(void);
+void renderer_upload_background_arm(void);
+void renderer_upload_background_disarm(void);
+
 #endif

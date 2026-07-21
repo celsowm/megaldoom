@@ -4,7 +4,13 @@
 static bool g_upload_requires_bank_swap = FALSE;
 
 typedef struct {
-    bool pending;
+    // pending is the only field shared across contexts: the V-INT background
+    // pump clears it (finish_view_upload) while the main loop polls it in
+    // renderer_upload_wait_complete(), so it must be volatile. The remaining
+    // fields are only ever touched by whichever context currently owns the
+    // upload (main while queueing/serial-stepping, V-INT while armed), never
+    // both at once.
+    volatile bool pending;
     bool full;
     bool swap;
     u16 bank;
@@ -12,6 +18,11 @@ typedef struct {
 } ViewUploadState;
 
 static ViewUploadState g_view_upload;
+
+// Armed only while the main loop runs bsp_cast_frame(), which is pure CPU
+// (no VDP access, no g_view_tiles writes) — the one window where the V-INT
+// callback may safely own the VDP and DMA the previous frame's tiles.
+static volatile bool g_bg_pump_armed = FALSE;
 
 #if RENDERER_SPARSE_FB
 // Mixed-tilemap scratch buffer for the sparse upload path. Only written to via
@@ -34,6 +45,11 @@ void upload_state_init(void) {
 
 void upload_state_invalidate(void) {
     g_upload_requires_bank_swap = FALSE;
+    // Motion frames defer upload completion into the next frame's cast (see
+    // renderer_upload_background_pump), so a pending upload can now survive
+    // into a scene invalidate (pause menu restore, level reset). Invalidate is
+    // always followed by a full base redraw, so drop it mid-flight.
+    g_view_upload.pending = FALSE;
 }
 
 void upload_request_bank_swap(void) {
@@ -258,4 +274,30 @@ void renderer_upload_scene_step(void) {
 #if DEBUG_PERF
     renderer_draw_perf_overlay((bool)(was_pending && !g_view_upload.pending));
 #endif
+}
+
+// === Background (V-INT) upload pump =========================================
+// Hides the ~2-vblank post-render VRAM upload under the NEXT frame's BSP cast
+// instead of spending dedicated pacing vblanks on it. The main loop arms the
+// pump only around bsp_cast_frame() (pure CPU: writes g_ray_columns, never
+// g_view_tiles or the VDP), so the V-INT callback can own the VDP during those
+// vblanks without any main-loop VDP access racing it. Everywhere else the
+// callback is inert. Disabled under DEBUG_PERF: the per-run perf counters
+// recorded inside load_view_tile_run would race their main-thread readers,
+// and the serial path keeps the perf overlay's step accounting intact.
+
+void renderer_upload_background_arm(void) {
+#if !DEBUG_PERF
+    g_bg_pump_armed = TRUE;
+#endif
+}
+
+void renderer_upload_background_disarm(void) {
+    g_bg_pump_armed = FALSE;
+}
+
+void renderer_upload_background_pump(void) {
+    if (!g_bg_pump_armed) return;
+    upload_view_tilemap_step();
+    upload_compass_tilemap();
 }
