@@ -27,7 +27,7 @@ PROJ_Y = 80
 CAMERA_HEIGHT = 64
 SCALE_SHIFT = 12
 WORLD_GEOMETRY_SCALE = 1
-STRIDE = 2
+STRIDE = 4
 
 
 def project_x(side: int, forward: int) -> int:

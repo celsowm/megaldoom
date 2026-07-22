@@ -24,13 +24,13 @@
 // certification share the canonical 16-unit radius.
 #define PLAYER_COLLISION_RADIUS 16
 // Horizontal render granularity: cast/sample one wall column every N pixels and
-// duplicate across the gap. 1 = full 1px detail (heaviest), 2 = 2px (~80 cols),
-// 4 = 4px (~40 cols, original cost). Must divide 8. The shipped quality profile
-// uses stride 2: 80 sampled wall columns across the 160px viewport. Guarded so
-// a prototype build can override it (EXTRA_FLAGS="-DRAY_COL_STRIDE=4") without
-// touching the shipped default.
+// duplicate across the gap. 1 = full 1px detail (heaviest), 2 = 2px (80 cols),
+// 4 = 4px (40 cols). Must divide 8. The shipped profile is stride 4: the user
+// eyeballed the stride-4 preview on 2026-07-22 and judged it no visual
+// downgrade, and it buys ~1.75 vblanks per motion frame (see AGENTS.md).
+// Guarded so a comparison build can override it (EXTRA_FLAGS="-DRAY_COL_STRIDE=2").
 #ifndef RAY_COL_STRIDE
-#define RAY_COL_STRIDE 2
+#define RAY_COL_STRIDE 4
 #endif
 #define RAY_SAMPLE_COLS (RAY_VIEW_COLS / RAY_COL_STRIDE)
 #define PLAYER_HEIGHT 56

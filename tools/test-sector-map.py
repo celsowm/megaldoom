@@ -102,7 +102,7 @@ def main():
     assert "FREEDOOM_WALL_PACKED_PAIRS" in assets
     assert "[2][FREEDOOM_WORLD_SHADE_LEVELS][FREEDOOM_WALL_TEXTURE_COUNT]" in assets
     assert "FREEDOOM_WALL_PACKED_PAIRS[" in renderer_scene
-    assert "column_a.flags & RAY_COLUMN_FLAG_DOOR" in renderer_scene
+    assert "descriptors[0].flags & RAY_COLUMN_FLAG_DOOR" in renderer_scene
     extractor_source = Path(extractor.__file__).read_text()
     assert "for door_style in range(2)" in extractor_source
     assert "level[texel] * 0x11" in extractor_source

@@ -83,78 +83,176 @@ WallColumnDescriptor describe_door_overlay(const RayDoorOverlay *door) {
                                     RAY_COLUMN_FLAG_DOOR);
 }
 
+// Sampled cast columns feeding one 8px-wide tile column (4 at stride 2, 2 at
+// stride 4).
+#define PACK_LANES (8 / RAY_COL_STRIDE)
+
+// Previous base build's per-tile-column packing inputs, for coherence skipping.
+static WallColumnDescriptor s_prev_desc[VIEW_TILE_W][PACK_LANES];
+static PackedFlatRows s_prev_flat_rows;
+static u8 s_prev_door_active[VIEW_TILE_W];
+
+// A tile column's 15 packed tiles are a pure function of its wall descriptors
+// and the shared flat rows, so field-wise equality of those descriptors is
+// sufficient to prove the packed output is unchanged. (Compared by field
+// rather than memcmp so the struct's padding byte cannot spuriously force a
+// repack.)
+//
+// `texture`, `shade_map`, and `vertical_samples` are omitted: each is a pure
+// function of a field already compared below (describe_textured_column sets
+// texture = FREEDOOM_WALL_TEXTURES[texture_id], shade_map = g_shade_luts[shade_level],
+// vertical_samples = MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[bottom-top]), so equality
+// of texture_id/shade_level/(top,bottom) already implies their equality.
+static inline bool wall_desc_equal(const WallColumnDescriptor *a,
+                                   const WallColumnDescriptor *b) {
+    return (bool)(a->top == b->top && a->bottom == b->bottom &&
+                  a->tex_x == b->tex_x && a->tex_y == b->tex_y &&
+                  a->texture_id == b->texture_id &&
+                  a->shade_level == b->shade_level && a->flags == b->flags);
+}
+
+static inline bool flat_rows_equal(const PackedFlatRows *a,
+                                   const PackedFlatRows *b) {
+    for (u16 i = 0; i < 4; i++) {
+        if (a->ceiling[i] != b->ceiling[i] || a->floor[i] != b->floor[i]) {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+// A column carries an active door overlay when any of its sampled columns
+// has a door in front of the wall. draw_door_overlays() (run after packing)
+// read-modify-writes those tiles every frame and only rewrites the door's own
+// pixel span, so a column with a door now, or one last frame, must be repacked:
+// otherwise the wall behind a lifting door would keep stale door pixels in the
+// newly revealed gap. Mirrors the guard in draw_door_overlays().
+static inline bool column_door_active(const RayColumn *columns, u16 base_col) {
+    for (u16 i = 0; i < 8; i += RAY_COL_STRIDE) {
+        const RayColumn *column = &columns[base_col + i];
+        const RayDoorOverlay *door = &column->door;
+        if (door->height != 0 && door->depth < column->depth) return TRUE;
+    }
+    return FALSE;
+}
+
 #if (RAY_COL_STRIDE != 4) && (RAY_COL_STRIDE != 2)
 #error "build_bsp_tilemap only implements the RAY_COL_STRIDE == 4 and == 2 packers"
 #endif
 
 #if RAY_COL_STRIDE == 4
+// Stride-4 mixed tile: two sampled columns per tile, each covering two
+// adjacent byte lanes. Reuses the stride-2 FREEDOOM_WALL_PACKED_PAIRS table —
+// each u8 holds one shaded texel replicated across 2px, so storing it to both
+// bytes of the lane pair replicates it across this stride's 4px. Same
+// run-splitting structure as the stride-2 C reference below; there is no asm
+// hotpath for this stride.
+static __attribute__((noinline)) void write_mixed_stride4_tile(
+    u32 *tile,
+    u16 pixel_y,
+    const WallColumnDescriptor descriptors[2],
+    const u8 *const packed_columns[2],
+    const PackedFlatRows *flat_rows) {
+    u8 *const tile_bytes = (u8 *)tile;
+    const u8 *const ceiling_bytes = (const u8 *)flat_rows->ceiling;
+    const u8 *const floor_bytes = (const u8 *)flat_rows->floor;
+    const u16 end_y = (u16)(pixel_y + 8);
+
+    for (u16 lane = 0; lane < 2; lane++) {
+        const WallColumnDescriptor *const descriptor = &descriptors[lane];
+        const u8 *const packed_column = packed_columns[lane];
+        u8 *dst = &tile_bytes[lane * 2];
+        u16 y = pixel_y;
+        u16 run_end = descriptor->top;
+        if (run_end > end_y) run_end = end_y;
+
+        while (y < run_end) {
+            const u8 flat = ceiling_bytes[((y & 3) << 2) + (lane * 2)];
+            dst[0] = flat;
+            dst[1] = flat;
+            dst += 4;
+            y++;
+        }
+
+        if (y < descriptor->top) y = descriptor->top;
+        run_end = descriptor->bottom;
+        if (run_end > end_y) run_end = end_y;
+        while (y < run_end) {
+            const u8 pair = packed_column[
+                (descriptor->vertical_samples[y - descriptor->top] +
+                 descriptor->tex_y) & WALL_TEX_DIM_MASK];
+            dst[0] = pair;
+            dst[1] = pair;
+            dst += 4;
+            y++;
+        }
+
+        while (y < end_y) {
+            const u8 flat = floor_bytes[((y & 3) << 2) + (lane * 2)];
+            dst[0] = flat;
+            dst[1] = flat;
+            dst += 4;
+            y++;
+        }
+    }
+}
+
+// Same coherence contract as the stride-2 packer below, with two descriptors
+// per tile column (px 0 and 4). No DEBUG_PERF oracles or asm-compare harness
+// at this stride — the release cadence probe is the ground truth here.
 void build_bsp_tilemap(const RayColumn *columns,
-                                   const RaySceneColors *scene_colors,
-                                   u32 target[][8]) {
+                       const RaySceneColors *scene_colors,
+                       u32 target[][8]) {
     const PackedFlatRows flat_rows = build_flat_rows(scene_colors);
-    // Each 8px-wide tile column maps to two cast columns (px 0 and 4), each
-    // replicated 4x. Pre-shade each column's 32 texels once, then pack directly
-    // into each tile row. Whole-tile ceiling/floor bands skip per-row wall
-    // sampling, and the two 120-entry u16 strips are gone: the packer writes
-    // each output u32 exactly once instead of building and re-reading a
-    // full-height temporary (~19 KB of intermediate traffic per base frame).
+    const bool flat_changed = (bool)(!s_coherence_valid ||
+                                     !flat_rows_equal(&flat_rows, &s_prev_flat_rows));
+    const u32 overlay_columns = renderer_overlay_prev_columns();
     for (u16 tile_x = 0; tile_x < VIEW_TILE_W; tile_x++) {
         const u16 base_col = (u16)(tile_x * 8);
-        const WallColumnDescriptor column_a = describe_wall_column(&columns[base_col]);
-        const WallColumnDescriptor column_b = describe_wall_column(&columns[base_col + 4]);
+        const WallColumnDescriptor descriptors[2] = {
+            describe_wall_column(&columns[base_col]),
+            describe_wall_column(&columns[base_col + 4])
+        };
+        if (!flat_changed && !s_prev_door_active[tile_x] &&
+            !(overlay_columns & ((u32)1u << tile_x)) &&
+            wall_desc_equal(&descriptors[0], &s_prev_desc[tile_x][0]) &&
+            wall_desc_equal(&descriptors[1], &s_prev_desc[tile_x][1]) &&
+            !column_door_active(columns, base_col)) {
+            continue;
+        }
+        s_prev_desc[tile_x][0] = descriptors[0];
+        s_prev_desc[tile_x][1] = descriptors[1];
+        s_prev_door_active[tile_x] = (u8)column_door_active(columns, base_col);
 
-        // Reuses the stride-2 packed-pair table: each u8 holds one shaded texel
-        // replicated across 2px, so `pair * 0x0101` replicates it across the
-        // 4px this stride assigns to a sampled column.
-        const u8 *packed_column_a = FREEDOOM_WALL_PACKED_PAIRS[
-            (column_a.flags & RAY_COLUMN_FLAG_DOOR) != 0]
-            [column_a.shade_level][column_a.texture_id][column_a.tex_x];
-        const u8 *packed_column_b = FREEDOOM_WALL_PACKED_PAIRS[
-            (column_b.flags & RAY_COLUMN_FLAG_DOOR) != 0]
-            [column_b.shade_level][column_b.texture_id][column_b.tex_x];
+        u16 min_top = descriptors[0].top;
+        if (descriptors[1].top < min_top) min_top = descriptors[1].top;
+        u16 max_bottom = descriptors[0].bottom;
+        if (descriptors[1].bottom > max_bottom) max_bottom = descriptors[1].bottom;
 
+        const u8 *const packed_columns[2] = {
+            FREEDOOM_WALL_PACKED_PAIRS[
+                (descriptors[0].flags & RAY_COLUMN_FLAG_DOOR) != 0]
+                [descriptors[0].shade_level][descriptors[0].texture_id][descriptors[0].tex_x],
+            FREEDOOM_WALL_PACKED_PAIRS[
+                (descriptors[1].flags & RAY_COLUMN_FLAG_DOOR) != 0]
+                [descriptors[1].shade_level][descriptors[1].texture_id][descriptors[1].tex_x]
+        };
         for (u16 tile_y = 0; tile_y < VIEW_TILE_H; tile_y++) {
             const u16 tile_index = view_tile_index(tile_x, tile_y);
             const u16 pixel_y = (u16)(tile_y * 8);
-            u32 *tile = target[tile_index];
 
-            if ((pixel_y + 7) < column_a.top && (pixel_y + 7) < column_b.top) {
-                // Whole-tile ceiling: this 8px band lies entirely above both walls.
-                write_repeated_flat_tile(tile, flat_rows.ceiling);
-            } else if (pixel_y >= column_a.bottom && pixel_y >= column_b.bottom) {
-                // Whole-tile floor: this 8px band lies entirely below both walls.
-                write_repeated_flat_tile(tile, flat_rows.floor);
+            if ((pixel_y + 7) < min_top) {
+                write_repeated_flat_tile(target[tile_index], flat_rows.ceiling);
+            } else if (pixel_y >= max_bottom) {
+                write_repeated_flat_tile(target[tile_index], flat_rows.floor);
             } else {
-                // Mixed band: resolve each of the 8 rows directly from the two
-                // pre-shaded columns. Output is byte-identical to the old
-                // two sampled columns (each row packs the left/right samples).
-                for (u16 row = 0; row < 8; row++) {
-                    const u16 py = (u16)(pixel_y + row);
-                    u16 val_a;
-                    if (py < column_a.top) {
-                        val_a = (u16)(flat_rows.ceiling[py & 3] >> 16);
-                    } else if (py >= column_a.bottom) {
-                        val_a = (u16)(flat_rows.floor[py & 3] >> 16);
-                    } else {
-                        val_a = (u16)((u16)packed_column_a[
-                            (column_a.vertical_samples[py - column_a.top] +
-                             column_a.tex_y) & WALL_TEX_DIM_MASK] * 0x0101u);
-                    }
-                    u16 val_b;
-                    if (py < column_b.top) {
-                        val_b = (u16)flat_rows.ceiling[py & 3];
-                    } else if (py >= column_b.bottom) {
-                        val_b = (u16)flat_rows.floor[py & 3];
-                    } else {
-                        val_b = (u16)((u16)packed_column_b[
-                            (column_b.vertical_samples[py - column_b.top] +
-                             column_b.tex_y) & WALL_TEX_DIM_MASK] * 0x0101u);
-                    }
-                    tile[row] = ((u32)val_a << 16) | val_b;
-                }
+                write_mixed_stride4_tile(target[tile_index], pixel_y,
+                                         descriptors, packed_columns, &flat_rows);
             }
         }
     }
+    s_prev_flat_rows = flat_rows;
+    s_coherence_valid = TRUE;
 }
 #else /* RAY_COL_STRIDE == 2 */
 // 0 = ship the hand-written renderer_hotpath.s mixed-tile packer (measured
@@ -280,55 +378,6 @@ static __attribute__((noinline)) void write_mixed_stride2_tile_reference(
 #else
 #define write_mixed_stride2_tile renderer_write_mixed_stride2_tile_asm
 #endif
-
-// Previous base build's per-tile-column packing inputs, for coherence skipping.
-static WallColumnDescriptor s_prev_desc[VIEW_TILE_W][4];
-static PackedFlatRows s_prev_flat_rows;
-static u8 s_prev_door_active[VIEW_TILE_W];
-
-// A tile column's 15 packed tiles are a pure function of its four wall
-// descriptors and the shared flat rows, so field-wise equality of those
-// descriptors is sufficient to prove the packed output is unchanged. (Compared
-// by field rather than memcmp so the struct's padding byte cannot spuriously
-// force a repack.)
-//
-// `texture`, `shade_map`, and `vertical_samples` are omitted: each is a pure
-// function of a field already compared below (describe_textured_column sets
-// texture = FREEDOOM_WALL_TEXTURES[texture_id], shade_map = g_shade_luts[shade_level],
-// vertical_samples = MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[bottom-top]), so equality
-// of texture_id/shade_level/(top,bottom) already implies their equality.
-static inline bool wall_desc_equal(const WallColumnDescriptor *a,
-                                   const WallColumnDescriptor *b) {
-    return (bool)(a->top == b->top && a->bottom == b->bottom &&
-                  a->tex_x == b->tex_x && a->tex_y == b->tex_y &&
-                  a->texture_id == b->texture_id &&
-                  a->shade_level == b->shade_level && a->flags == b->flags);
-}
-
-static inline bool flat_rows_equal(const PackedFlatRows *a,
-                                   const PackedFlatRows *b) {
-    for (u16 i = 0; i < 4; i++) {
-        if (a->ceiling[i] != b->ceiling[i] || a->floor[i] != b->floor[i]) {
-            return FALSE;
-        }
-    }
-    return TRUE;
-}
-
-// A column carries an active door overlay when any of its four sampled columns
-// has a door in front of the wall. draw_door_overlays() (run after packing)
-// read-modify-writes those tiles every frame and only rewrites the door's own
-// pixel span, so a column with a door now, or one last frame, must be repacked:
-// otherwise the wall behind a lifting door would keep stale door pixels in the
-// newly revealed gap. Mirrors the guard in draw_door_overlays().
-static inline bool column_door_active(const RayColumn *columns, u16 base_col) {
-    for (u16 i = 0; i < 8; i += 2) {
-        const RayColumn *column = &columns[base_col + i];
-        const RayDoorOverlay *door = &column->door;
-        if (door->height != 0 && door->depth < column->depth) return TRUE;
-    }
-    return FALSE;
-}
 
 void build_bsp_tilemap(const RayColumn *columns,
                                   const RaySceneColors *scene_colors,
