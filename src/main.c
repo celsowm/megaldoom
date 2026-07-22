@@ -551,6 +551,9 @@ int main(bool hard) {
                 u32 boxes_projected;
                 u32 segs_tested;
                 u32 segs_drawn;
+                u32 drawseg_subticks;
+                u32 sample_subticks;
+                u32 samples;
             } CadenceSnapshot;
             static CadenceSnapshot s_cadence;
             const u16 vb = (u16)(vtimer - cur_vtimer);
@@ -570,6 +573,9 @@ int main(bool hard) {
             s_cadence.boxes_projected = g_cadence_boxes_projected;
             s_cadence.segs_tested = g_cadence_segs_tested;
             s_cadence.segs_drawn = g_cadence_segs_drawn;
+            s_cadence.drawseg_subticks = g_cadence_drawseg_subticks;
+            s_cadence.sample_subticks = g_cadence_sample_subticks;
+            s_cadence.samples = g_cadence_samples;
             debug_checkpoint_publish_perf(&s_cadence, sizeof(s_cadence));
         }
 #endif

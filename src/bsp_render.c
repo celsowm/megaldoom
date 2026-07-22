@@ -163,6 +163,13 @@ static s32 native_mul_long_unsigned(s32 left, u16 right) {
 // compiler-emitted signed 32-bit division helper while preserving the exact
 // integer result. Keep a general fallback for unusual map coordinates.
 static u16 reciprocal_depth(s32 depth) {
+    // Callers clip depth to >= BSP_NEAR (16) first, and the shared inverse
+    // table is exact truncating BSP_INV_SCALE/(i+1) (see bsp_inv_depth_lut.h),
+    // so table hits are byte-identical to the DIVU they replace. Walls farther
+    // than 1024 units keep the native divide.
+    if (depth <= 1024) {
+        return g_bsp_inv_depth_lut[depth - 1];
+    }
     return divu(BSP_INV_SCALE, (u16)depth);
 }
 
@@ -359,11 +366,18 @@ static void draw_seg(u16 seg_index) {
     }
 
     bool drew_any = FALSE;
+#if CADENCE_STAGE_PROBE && CADENCE_DRAWSEG_SPLIT
+    const u32 sample_loop_start = getSubTick();
+#endif
     u16 sample = find_next_open(first_sample);
     while (sample <= last_sample) {
         const s32 x = (s32)sample * RAY_COL_STRIDE;
+        // x - xL fits u16: x <= 159 and xL >= -(s16 quotient + margin), so the
+        // difference is in [0, ~33008]. inv_span <= 65536/2 fits u16 (the
+        // span == 1 case never reaches the multiply). One MULU.W therefore
+        // produces the exact same product as the 32x16 helper it replaces.
         const s32 sfix = (span == 1) ? 0 :
-            (native_mul_long_unsigned(x - xL, (u16)inv_span) >> FX_SHIFT);
+            (s32)(native_mulu_word((u16)(x - xL), (u16)inv_span) >> FX_SHIFT);
         RayColumn *col = &g_columns[x];
 
         const s32 invz = invzL + (render_mul(invzR - invzL, sfix) >> FX_SHIFT);
@@ -406,7 +420,11 @@ static void draw_seg(u16 seg_index) {
             height = RAY_VIEW_ROWS;
         }
 
-        const s32 scaled_u = native_mul_long_unsigned(u_col, u_scale_q12) >> 12;
+        // u_col is a DIVS.W quotient (fits s16 by the same map-bounds contract
+        // perspective_divide relies on) and is non-negative: uz interpolates
+        // between two non-negative endpoint products, so a single MULU.W is
+        // exact. Max product 32767 * 65535 still fits u32/s32.
+        const s32 scaled_u = (s32)(native_mulu_word((u16)u_col, u_scale_q12) >> 12);
         if (moving_door) {
             RayDoorOverlay *door = &col->door;
             if (door->height != 0 && depth_col >= door->depth) {
@@ -431,9 +449,15 @@ static void draw_seg(u16 seg_index) {
             mark_sample_solid(sample);
         }
         drew_any = TRUE;
+#if CADENCE_STAGE_PROBE
+        g_cadence_samples++;
+#endif
         sample = moving_door ? find_next_open((u16)(sample + 1)) :
                                find_next_open(sample);
     }
+#if CADENCE_STAGE_PROBE && CADENCE_DRAWSEG_SPLIT
+    g_cadence_sample_subticks += getSubTick() - sample_loop_start;
+#endif
     if (drew_any) {
         BSP_DBG_INC(segments_drawn);
     }
@@ -748,6 +772,8 @@ static void bsp_visit_leaf(u16 subsector_id, void *context) {
     for (u16 i = 0; i < ss->seg_count; i++) {
 #if DEBUG_PERF
         const u32 raster_start = g_bsp_dbg_measure_segment ? getSubTick() : 0;
+#elif CADENCE_STAGE_PROBE && CADENCE_DRAWSEG_SPLIT
+        const u32 raster_start = getSubTick();
 #endif
         draw_seg((u16)(ss->first_seg + i));
 #if DEBUG_PERF
@@ -756,6 +782,8 @@ static void bsp_visit_leaf(u16 subsector_id, void *context) {
             g_bsp_dbg_segment_raster_subticks += elapsed;
             renderer_perf_record_deep(RENDERER_PERF_DEEP_BSP_SEGMENT, elapsed, 1);
         }
+#elif CADENCE_STAGE_PROBE && CADENCE_DRAWSEG_SPLIT
+        g_cadence_drawseg_subticks += getSubTick() - raster_start;
 #endif
     }
 }

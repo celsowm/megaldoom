@@ -56,6 +56,19 @@ extern u32 g_cadence_nodes_visited;
 extern u32 g_cadence_boxes_projected;
 extern u32 g_cadence_segs_tested;
 extern u32 g_cadence_segs_drawn;
+/* draw_seg split: total time inside draw_seg calls, time inside its
+ * per-sample fill loop, and samples actually written. The two timers cost
+ * ~4 getSubTick calls per tested seg (~130/frame ~= +0.3 vb inside
+ * cast_subticks on motion frames), so they are OFF by default to keep the
+ * headline cadence numbers comparable across sessions — opt in with
+ * EXTRA_FLAGS="... -DCADENCE_DRAWSEG_SPLIT=1". The samples counter is a bare
+ * increment and stays always on. */
+#ifndef CADENCE_DRAWSEG_SPLIT
+#define CADENCE_DRAWSEG_SPLIT 0
+#endif
+extern u32 g_cadence_drawseg_subticks;
+extern u32 g_cadence_sample_subticks;
+extern u32 g_cadence_samples;
 #else
 #define CADENCE_STAGE_PROBE 0
 #endif

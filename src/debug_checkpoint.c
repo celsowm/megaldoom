@@ -27,6 +27,9 @@ u32 g_cadence_nodes_visited;
 u32 g_cadence_boxes_projected;
 u32 g_cadence_segs_tested;
 u32 g_cadence_segs_drawn;
+u32 g_cadence_drawseg_subticks;
+u32 g_cadence_sample_subticks;
+u32 g_cadence_samples;
 #endif
 
 void debug_checkpoint_publish_perf(const void *snapshot, u16 bytes) {

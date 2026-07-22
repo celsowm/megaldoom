@@ -101,6 +101,31 @@ per box (extrema equality + "new cheap-reject implies old cheap-reject") over
 all 604160 boxes. Result: cast -295 subticks/rebuild (~-5%), motion frames
 10.7 -> 10.45 vb, zero traversal-counter drift.
 
+### draw_seg release-speed split + strength reductions (2026-07-22)
+
+The cadence probe grew a draw_seg split (build with
+`-DCADENCE_DRAWSEG_SPLIT=1` on top of the checkpoint flags — OFF by default
+because its getSubTick brackets add ~0.3 vb inside cast_subticks; the
+per-sample counter `samples drawn` is free and always on). Measured at
+release speed on checkpoints: **the per-sample fill loop is the MAJORITY of
+draw_seg — ~1840 subticks/rebuild (~20 subticks x 80 samples) vs ~1180
+fixed (~37/seg x 32 segs)**. The old "cast cost is per-unit constants, NOT
+the sample loop" note came from DEBUG_PERF-distorted data and is wrong at
+release speed.
+
+Shipped byte-identical strength reductions (proof comments at each site):
+sfix and scaled_u each collapse the 32x16 helper to a single MULU.W (their
+operands provably fit u16), and reciprocal_depth reuses the existing
+g_bsp_inv_depth_lut for depth <= 1024 (the table IS divu(16384, d)).
+Cast 5927 -> 5755 subticks/rebuild; motion frames 10.45 -> ~10.26 vb.
+
+What remains per sample (~18 subticks): the uz 32x16 interpolation, the
+DIVS.W for u_col, the invz interpolation, height mul, RayColumn writes, and
+find_next_open. Going lower means arithmetic-CHANGING work (forward
+differencing / affine texture spans / LUT-multiply u_col) — all of it drifts
+texels by +-1 and breaks byte-identity with the C reference, so it needs the
+same eyeball + differential-model treatment the packer got, not a quick win.
+
 ### Billboard projection spatial pre-cull: tried and rejected (2026-07-21)
 
 A Chebyshev distance pre-cull (2 x BILLBOARD_MAX_DEPTH radius, two subtracts

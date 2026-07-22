@@ -22,12 +22,13 @@ def main() -> int:
     blob = bytes.fromhex(report["perfMailbox"])
     # u16 magic/last/max/missed, u32 iterations/vblank_sum, u16 hist[8],
     # u32 cast/pack/projection/billboard subtick sums, u32 rebuild_frames
-    fields = struct.unpack(">4H2I8H9I", blob[: 8 + 8 + 16 + 36])
+    fields = struct.unpack(">4H2I8H12I", blob[: 8 + 8 + 16 + 48])
     magic, last, vmax, missed = fields[:4]
     iterations, vblank_sum = fields[4:6]
     hist = fields[6:14]
     cast_sum, pack_sum, proj_sum, bb_sum, rebuilds = fields[14:19]
     nodes, boxes, segs_tested, segs_drawn = fields[19:23]
+    drawseg_sum, sample_sum, samples = fields[23:26]
     if magic != 0xCADE:
         print(f"bad magic 0x{magic:04X} (expected 0xCADE) - wrong build type? "
               "DEBUG_PERF builds publish RendererPerfSnapshot instead.")
@@ -52,8 +53,15 @@ def main() -> int:
         for name, total in (("nodes visited", nodes),
                             ("boxes projected", boxes),
                             ("segs tested", segs_tested),
-                            ("segs drawn", segs_drawn)):
+                            ("segs drawn", segs_drawn),
+                            ("samples drawn", samples)):
             print(f"  {name:<15} avg = {total / rebuilds:7.1f} /rebuild")
+        print(f"  drawseg total    = {drawseg_sum / rebuilds:7.0f} subticks/rebuild "
+              f"({drawseg_sum / rebuilds / 1280.0:.2f} vblanks; "
+              f"{drawseg_sum / segs_tested if segs_tested else 0:.1f}/seg tested)")
+        print(f"  sample loop      = {sample_sum / rebuilds:7.0f} subticks/rebuild "
+              f"({sample_sum / samples if samples else 0:.1f}/sample; "
+              f"fixed = {(drawseg_sum - sample_sum) / segs_tested if segs_tested else 0:.1f}/seg)")
     return 0
 
 
