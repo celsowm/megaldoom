@@ -456,18 +456,6 @@ static bool project_box_range(const BspBox *box, s16 *left, s16 *right) {
         return TRUE;
     }
 
-    s32 depths[4];
-    s32 laterals[4];
-    s32 min_depth = 0x7FFFFFFF;
-    s32 max_depth = -0x7FFFFFFF;
-    s32 min_lateral = 0x7FFFFFFF;
-    s32 max_lateral = -0x7FFFFFFF;
-    // Track the division-free half-plane extrema in the same pass that computes
-    // depth/lateral, so surviving boxes reuse these arrays for the projections
-    // below without a second transform pass.
-    s32 max_left_plane = -0x7FFFFFFF;
-    s32 min_right_plane = 0x7FFFFFFF;
-
     // Transform the min/min corner once, then add transformed X/Y extents.
     // Keeping the Q8 dot products unshifted until each corner is assembled is
     // algebraically identical to four independent transforms (including signed
@@ -483,38 +471,37 @@ static bool project_box_range(const BspBox *box, s16 *left, s16 *right) {
     const s32 depth_dy_q8 = render_mul(span_y, g_fwy);
     const s32 lateral_dy_q8 = render_mul(span_y, g_ry);
 
-    depths[0] = depth_q8 >> FX_SHIFT;
-    laterals[0] = lateral_q8 >> FX_SHIFT;
-    depths[1] = (depth_q8 + depth_dx_q8) >> FX_SHIFT;
-    laterals[1] = (lateral_q8 + lateral_dx_q8) >> FX_SHIFT;
-    depths[2] = (depth_q8 + depth_dx_q8 + depth_dy_q8) >> FX_SHIFT;
-    laterals[2] = (lateral_q8 + lateral_dx_q8 + lateral_dy_q8) >> FX_SHIFT;
-    depths[3] = (depth_q8 + depth_dy_q8) >> FX_SHIFT;
-    laterals[3] = (lateral_q8 + lateral_dy_q8) >> FX_SHIFT;
-
-    for (u16 i = 0; i < 4; i++) {
-        const s32 depth = depths[i];
-        const s32 lateral = laterals[i];
-        if (depth < min_depth) min_depth = depth;
-        if (depth > max_depth) max_depth = depth;
-        if (lateral < min_lateral) min_lateral = lateral;
-        if (lateral > max_lateral) max_lateral = lateral;
-
-        const s32 projected_lateral = render_mul(RAY_PROJ_X, lateral);
-        const s32 left_plane = projected_lateral + render_mul(LEFT_REJECT_SCALE, depth);
-        const s32 right_plane = projected_lateral - render_mul(RIGHT_REJECT_SCALE, depth);
-        if (left_plane > max_left_plane) max_left_plane = left_plane;
-        if (right_plane < min_right_plane) min_right_plane = right_plane;
-    }
+    // Corner extrema without assembling the four corners: every corner is the
+    // base Q8 dot product plus an independent subset of {dx, dy} extent terms,
+    // and >> FX_SHIFT is monotonic, so min/max over the four corners equals the
+    // min/max Q8 combination shifted once. These are EXACTLY the extrema the
+    // old 4-corner loop computed (floor of the min is the min of the floors).
+    const s32 ddx_neg = (depth_dx_q8 < 0) ? depth_dx_q8 : 0;
+    const s32 ddx_pos = depth_dx_q8 - ddx_neg;
+    const s32 ddy_neg = (depth_dy_q8 < 0) ? depth_dy_q8 : 0;
+    const s32 ddy_pos = depth_dy_q8 - ddy_neg;
+    const s32 max_depth = (depth_q8 + ddx_pos + ddy_pos) >> FX_SHIFT;
 
     if (max_depth < BSP_NEAR) {
         return FALSE;
     }
 
+    const s32 min_depth = (depth_q8 + ddx_neg + ddy_neg) >> FX_SHIFT;
+
     // Clip a near-plane-crossing box polygon instead of expanding it to the
     // whole view. The old fallback was safe but caused large adjacent BSP
     // subtrees to be visited when walking through doorways.
     if (min_depth < BSP_NEAR) {
+        s32 depths[4];
+        s32 laterals[4];
+        depths[0] = depth_q8 >> FX_SHIFT;
+        laterals[0] = lateral_q8 >> FX_SHIFT;
+        depths[1] = (depth_q8 + depth_dx_q8) >> FX_SHIFT;
+        laterals[1] = (lateral_q8 + lateral_dx_q8) >> FX_SHIFT;
+        depths[2] = (depth_q8 + depth_dx_q8 + depth_dy_q8) >> FX_SHIFT;
+        laterals[2] = (lateral_q8 + lateral_dx_q8 + lateral_dy_q8) >> FX_SHIFT;
+        depths[3] = (depth_q8 + depth_dy_q8) >> FX_SHIFT;
+        laterals[3] = (lateral_q8 + lateral_dy_q8) >> FX_SHIFT;
         BSP_DBG_INC(near_fallbacks);
         s32 min_screen = 0x7FFFFFFF;
         s32 max_screen = -0x7FFFFFFF;
@@ -555,15 +542,55 @@ static bool project_box_range(const BspBox *box, s16 *left, s16 *right) {
 
     // All four corners are in front of the near plane (depth > 0), so the
     // half-plane signs are valid. Reject boxes proven completely outside the
-    // expanded viewport without paying for the four perspective divisions below.
+    // expanded viewport without paying for the two perspective divisions below.
+    //
+    // The planes are evaluated axis-decomposed on the SHIFTED base/extent
+    // values instead of per assembled corner. A corner's shifted value differs
+    // from the decomposed floor sum by at most +2 (one +1 per addition folded
+    // under the floor), so padding the decomposed extremum by
+    // 2 * (RAY_PROJ_X + scale) bounds the old per-corner extremum from the
+    // safe side: this test only ever rejects boxes the old exact test also
+    // rejected (the hairline band falls through to the division path below,
+    // which still culls or clips them exactly).
+    const s32 d0 = depth_q8 >> FX_SHIFT;
+    const s32 l0 = lateral_q8 >> FX_SHIFT;
+    const s32 sdx = depth_dx_q8 >> FX_SHIFT;
+    const s32 slx = lateral_dx_q8 >> FX_SHIFT;
+    const s32 sdy = depth_dy_q8 >> FX_SHIFT;
+    const s32 sly = lateral_dy_q8 >> FX_SHIFT;
+    const s32 proj_lx = render_mul(RAY_PROJ_X, slx);
+    const s32 proj_ly = render_mul(RAY_PROJ_X, sly);
+
+    const s32 left_base = render_mul(RAY_PROJ_X, l0) + render_mul(LEFT_REJECT_SCALE, d0);
+    const s32 left_dx = proj_lx + render_mul(LEFT_REJECT_SCALE, sdx);
+    const s32 left_dy = proj_ly + render_mul(LEFT_REJECT_SCALE, sdy);
+    s32 max_left_plane = left_base + (2 * (RAY_PROJ_X + LEFT_REJECT_SCALE));
+    if (left_dx > 0) max_left_plane += left_dx;
+    if (left_dy > 0) max_left_plane += left_dy;
     if (max_left_plane <= 0) {
         BSP_DBG_INC(boxes_rejected_cheap);
         return FALSE;
     }
+
+    const s32 right_base = render_mul(RAY_PROJ_X, l0) - render_mul(RIGHT_REJECT_SCALE, d0);
+    const s32 right_dx = proj_lx - render_mul(RIGHT_REJECT_SCALE, sdx);
+    const s32 right_dy = proj_ly - render_mul(RIGHT_REJECT_SCALE, sdy);
+    s32 min_right_plane = right_base - (2 * RIGHT_REJECT_SCALE);
+    if (right_dx < 0) min_right_plane += right_dx;
+    if (right_dy < 0) min_right_plane += right_dy;
     if (min_right_plane >= 0) {
         BSP_DBG_INC(boxes_rejected_cheap);
         return FALSE;
     }
+
+    // Lateral extrema via the same exact monotonic-shift decomposition as the
+    // depth extrema above.
+    const s32 ldx_neg = (lateral_dx_q8 < 0) ? lateral_dx_q8 : 0;
+    const s32 ldx_pos = lateral_dx_q8 - ldx_neg;
+    const s32 ldy_neg = (lateral_dy_q8 < 0) ? lateral_dy_q8 : 0;
+    const s32 ldy_pos = lateral_dy_q8 - ldy_neg;
+    const s32 min_lateral = (lateral_q8 + ldx_neg + ldy_neg) >> FX_SHIFT;
+    const s32 max_lateral = (lateral_q8 + ldx_pos + ldy_pos) >> FX_SHIFT;
 
     BSP_DBG_INC(boxes_projected);
     // Bound the four projected ratios by the enclosing lateral/depth rectangle.
