@@ -126,6 +126,30 @@ differencing / affine texture spans / LUT-multiply u_col) — all of it drifts
 texels by +-1 and breaks byte-identity with the C reference, so it needs the
 same eyeball + differential-model treatment the packer got, not a quick win.
 
+### RAY_COL_STRIDE 4 prototype: measured, awaiting user eyeball (2026-07-22)
+
+`RAY_COL_STRIDE` is now `#ifndef`-guarded in raycast.h, so
+`EXTRA_FLAGS="-DRAY_COL_STRIDE=4"` builds a 40-column prototype without
+touching the shipped stride-2 default (guardrails and the wall-quality
+assertion still see `#define RAY_COL_STRIDE 2`). The stride-4 packer branch
+in renderer_pack.c had bit-rotted against a generated array that no longer
+exists (`FREEDOOM_WALL_PACKED_COLUMNS`); it now reuses the stride-2
+`FREEDOOM_WALL_PACKED_PAIRS` table (`pair * 0x0101` spreads each 2px byte to
+4px). Note the stride-4 packer is the old C implementation: no coherence
+cache, no asm hotpath — its pack numbers have headroom if stride 4 ever
+ships.
+
+Same-pose A/B on checkpoints (x/angle equal, y off by 12 units — cadence
+drift): per-rebuild stage sum 11614 -> 9621 subticks (9.07 -> 7.51 vb, about
+-1.75 vb/motion frame with logic): cast 5755 -> 4781, pack 3761 -> 2839,
+samples 80 -> 40. This fresh baseline also directly confirms the previously
+extrapolated 5755-subtick cast figure. The tour-east-combat A/B DIVERGED
+(different end poses — frame-timed inputs + changed cadence = different
+trajectory), so its numbers are not comparable; only checkpoints is a valid
+A/B. Screenshots confirm correct rendering (perspective/shading/textures
+fine, columns visibly 4px chunky). Whether the resolution loss is acceptable
+is the user's call — do not flip the default without their sign-off.
+
 ### Billboard projection spatial pre-cull: tried and rejected (2026-07-21)
 
 A Chebyshev distance pre-cull (2 x BILLBOARD_MAX_DEPTH radius, two subtracts

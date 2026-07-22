@@ -26,8 +26,12 @@
 // Horizontal render granularity: cast/sample one wall column every N pixels and
 // duplicate across the gap. 1 = full 1px detail (heaviest), 2 = 2px (~80 cols),
 // 4 = 4px (~40 cols, original cost). Must divide 8. The shipped quality profile
-// uses stride 2: 80 sampled wall columns across the 160px viewport.
+// uses stride 2: 80 sampled wall columns across the 160px viewport. Guarded so
+// a prototype build can override it (EXTRA_FLAGS="-DRAY_COL_STRIDE=4") without
+// touching the shipped default.
+#ifndef RAY_COL_STRIDE
 #define RAY_COL_STRIDE 2
+#endif
 #define RAY_SAMPLE_COLS (RAY_VIEW_COLS / RAY_COL_STRIDE)
 #define PLAYER_HEIGHT 56
 #define PLAYER_EYE_HEIGHT 41

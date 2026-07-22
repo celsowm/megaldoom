@@ -103,10 +103,13 @@ void build_bsp_tilemap(const RayColumn *columns,
         const WallColumnDescriptor column_a = describe_wall_column(&columns[base_col]);
         const WallColumnDescriptor column_b = describe_wall_column(&columns[base_col + 4]);
 
-        const u16 *packed_column_a = FREEDOOM_WALL_PACKED_COLUMNS[
+        // Reuses the stride-2 packed-pair table: each u8 holds one shaded texel
+        // replicated across 2px, so `pair * 0x0101` replicates it across the
+        // 4px this stride assigns to a sampled column.
+        const u8 *packed_column_a = FREEDOOM_WALL_PACKED_PAIRS[
             (column_a.flags & RAY_COLUMN_FLAG_DOOR) != 0]
             [column_a.shade_level][column_a.texture_id][column_a.tex_x];
-        const u16 *packed_column_b = FREEDOOM_WALL_PACKED_COLUMNS[
+        const u8 *packed_column_b = FREEDOOM_WALL_PACKED_PAIRS[
             (column_b.flags & RAY_COLUMN_FLAG_DOOR) != 0]
             [column_b.shade_level][column_b.texture_id][column_b.tex_x];
 
@@ -133,9 +136,9 @@ void build_bsp_tilemap(const RayColumn *columns,
                     } else if (py >= column_a.bottom) {
                         val_a = (u16)(flat_rows.floor[py & 3] >> 16);
                     } else {
-                        val_a = packed_column_a[
+                        val_a = (u16)((u16)packed_column_a[
                             (column_a.vertical_samples[py - column_a.top] +
-                             column_a.tex_y) & WALL_TEX_DIM_MASK];
+                             column_a.tex_y) & WALL_TEX_DIM_MASK] * 0x0101u);
                     }
                     u16 val_b;
                     if (py < column_b.top) {
@@ -143,9 +146,9 @@ void build_bsp_tilemap(const RayColumn *columns,
                     } else if (py >= column_b.bottom) {
                         val_b = (u16)flat_rows.floor[py & 3];
                     } else {
-                        val_b = packed_column_b[
+                        val_b = (u16)((u16)packed_column_b[
                             (column_b.vertical_samples[py - column_b.top] +
-                             column_b.tex_y) & WALL_TEX_DIM_MASK];
+                             column_b.tex_y) & WALL_TEX_DIM_MASK] * 0x0101u);
                     }
                     tile[row] = ((u32)val_a << 16) | val_b;
                 }
