@@ -80,7 +80,37 @@ higher on motion frames post-change (4.4 -> ~4.9); it is not a cast
 regression. DEBUG_PERF builds keep the old serial pacing loop and never arm
 the pump (its per-run perf counters would race their main-thread readers), so
 perf-overlay captures stay comparable with history but do NOT show the
-overlap win — use the cadence probe for that. `average_vblanks_x10` is a 60-frame
+overlap win — use the cadence probe for that.
+
+### Cast internals split + box projection rewrite (2026-07-21)
+
+DEBUG_PERF's deep-phase slots (`deep_subticks` in the RendererPerfSnapshot —
+decode-perf-full.py parses but does not print them; snapshot must land
+mid-motion or the BSP slots read stale idle zeros) split the cast roughly
+50/50: **draw_seg ~95 subticks x ~31 calls, project_box_range ~40 subticks x
+~64 calls, side-cache negligible** (shares only — the getSubTick bracket pair
+inflates per-unit values). Traversal overhead outside those two is nil.
+
+`project_box_range` was then rewritten (commit after 2d2e64b): corner extrema
+via the exact monotonic-shift axis decomposition (floor of the min IS the min
+of the floors because each corner is base + an independent subset of the two
+Q8 extent terms), cheap half-plane reject axis-decomposed in the shifted
+domain with a +-2-per-corner floor slack, corners assembled only in the rare
+near-clip branch. `tools/test-bsp-render-math.py` now proves both properties
+per box (extrema equality + "new cheap-reject implies old cheap-reject") over
+all 604160 boxes. Result: cast -295 subticks/rebuild (~-5%), motion frames
+10.7 -> 10.45 vb, zero traversal-counter drift.
+
+### Billboard projection spatial pre-cull: tried and rejected (2026-07-21)
+
+A Chebyshev distance pre-cull (2 x BILLBOARD_MAX_DEPTH radius, two subtracts
++ compares before billboard_measure_cached) measured **slower** on the
+same-pose checkpoints route: projection 1598 -> 1685 subticks/rebuild. E1M1's
+active objects cluster inside the radius near the routes, so it culled almost
+nothing while adding per-object overhead — the depth-reject path inside
+billboard_measure_object it tried to bypass was never the cost. Projection's
+~1600 subticks are the genuinely-near objects being fully re-measured; do not
+re-attempt distance pre-culls without a route where objects are provably far. `average_vblanks_x10` is a 60-frame
 rolling average (see `renderer_debug_set_total_vblanks` in `renderer_perf.c`),
 not a single-frame snapshot, so it's a reasonably trustworthy signal even
 though it comes from one route.
