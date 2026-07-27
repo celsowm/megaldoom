@@ -10,6 +10,7 @@ RAYCAST = ROOT / "src" / "raycast.h"
 BILLBOARD = ROOT / "src" / "billboard.c"
 BILLBOARD_INTERNAL = ROOT / "src" / "billboard_internal.h"
 PROJECTOR = ROOT / "src" / "billboard_projection.c"
+BILLBOARD_LUT = ROOT / "src" / "billboard_projection_lut.h"
 # renderer_scene.c was split by SRP into several files; the packer/billboard-
 # draw code these checks look for now lives across that set.
 SCENE_SPLIT_FILES = [
@@ -65,6 +66,14 @@ def project_patch(forward: int, center: int, width: int, height: int,
     bottom = origin_y + projected_q12(
         (height - top_offset) * geometry_scale, sx) - 1
     return left, max(left, right), top, max(top, bottom), origin_y
+
+
+def extract_lut(source: str, array_name: str) -> list[int]:
+    match = re.search(
+        re.escape(array_name) + r"\[1535\]\s*=\s*\{([^}]*)\}", source, re.DOTALL)
+    if match is None:
+        raise ValueError(f"{array_name} not found in {BILLBOARD_LUT}")
+    return [int(tok) for tok in match.group(1).replace(",", " ").split()]
 
 
 def transform_component(basis: int, delta: int) -> tuple[int, str]:
@@ -151,9 +160,32 @@ def main() -> int:
         raise ValueError("billboard rasterizer is not sampling the generated atlas crop")
     if "BILLBOARD_ENEMY_WORLD_WIDTH" not in billboard or "uses_wad_origin = FALSE" not in billboard:
         raise ValueError("enemy legacy geometry is no longer isolated")
-    if "#define BILLBOARD_ENEMY_WORLD_WIDTH 24" not in billboard_internal or \
-            "#define BILLBOARD_ENEMY_WORLD_HEIGHT 48" not in billboard_internal:
-        raise ValueError("enemy geometry no longer uses its native atlas/world aspect")
+    if "#define BILLBOARD_ENEMY_WORLD_WIDTH 54" not in billboard_internal or \
+            "#define BILLBOARD_ENEMY_WORLD_HEIGHT 108" not in billboard_internal:
+        raise ValueError("enemy geometry no longer uses its 2.25x-enlarged world size")
+    if "#define BILLBOARD_ENEMY_ATLAS_WIDTH 24" not in billboard_internal or \
+            "#define BILLBOARD_ENEMY_ATLAS_HEIGHT 48" not in billboard_internal:
+        raise ValueError("enemy atlas art dimensions changed unexpectedly")
+    if "#define BILLBOARD_BARREL_VISUAL_SCALE 3" not in billboard_internal:
+        raise ValueError("barrels are not rendered at the required 3x scale")
+
+    # bb_lut_divu() (see comment above) always takes the in-range table branch
+    # in production, so the numerator passed at each call site is dead code
+    # there -- the table's baked K must match BILLBOARD_ENEMY_WORLD_WIDTH/HEIGHT
+    # or projected enemy size silently uses the old value. Byte-verify every
+    # entry against the exact truncating-division formula (matches divu()).
+    lut_source = BILLBOARD_LUT.read_text(encoding="utf-8")
+    enemy_w = 54
+    enemy_h = 108
+    for array_name, k in (
+            ("g_billboard_recip_enemy_w_lut", enemy_w * PROJ_X),
+            ("g_billboard_recip_enemy_h_lut", enemy_h * PROJ_Y)):
+        table = extract_lut(lut_source, array_name)
+        if len(table) != 1535:
+            raise ValueError(f"{array_name} does not have exactly 1535 entries")
+        expected = [k // (i + 1) for i in range(1535)]
+        if table != expected:
+            raise ValueError(f"{array_name} entries do not match K={k} / (index+1)")
     if ("billboard_mul_basis_delta" not in billboard or
             "muls.w %1,%0" not in billboard or
             "return billboard_muls_word(basis, (s16)delta);" not in billboard):
@@ -260,6 +292,12 @@ def main() -> int:
     if not ((blue_key[1] - blue_key[0]) >= 3 * (native_key[1] - native_key[0]) - 2 and
             (blue_key[3] - blue_key[2]) >= 3 * (native_key[3] - native_key[2]) - 2):
         raise ValueError("pickup projected extent is not 3x native geometry")
+
+    native_barrel = project_patch(192, CENTER_X, 23, 32, 10, 28)
+    scaled_barrel = project_patch(192, CENTER_X, 23, 32, 10, 28, 3)
+    if not ((scaled_barrel[1] - scaled_barrel[0]) >= 3 * (native_barrel[1] - native_barrel[0]) - 2 and
+            (scaled_barrel[3] - scaled_barrel[2]) >= 3 * (native_barrel[3] - native_barrel[2]) - 2):
+        raise ValueError("barrel projected extent is not 3x native geometry")
 
     # Precise projected bounds, rather than a symmetric half-width, drive edge
     # clipping and span occlusion.

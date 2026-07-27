@@ -22,7 +22,7 @@ static const BillboardType BILLBOARD_TYPES[BILLBOARD_TYPE_COUNT] = {
     {BILLBOARD_VISUAL_CANDELABRA,  BILLBOARD_EFFECT_NONE,   1, BILLBOARD_PROP_RADIUS, 1, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
     {BILLBOARD_VISUAL_COLUMN,      BILLBOARD_EFFECT_NONE,   1, 16, 1, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
     {BILLBOARD_VISUAL_ELEC,        BILLBOARD_EFFECT_NONE,   1, 16, 1, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
-    {BILLBOARD_VISUAL_BARREL,      BILLBOARD_EFFECT_NONE,   1, 20, 1, BILLBOARD_MAX_DEPTH, FALSE, TRUE,  TRUE},
+    {BILLBOARD_VISUAL_BARREL,      BILLBOARD_EFFECT_NONE,   1, 20, BILLBOARD_BARREL_VISUAL_SCALE, BILLBOARD_MAX_DEPTH, FALSE, TRUE,  TRUE},
     {BILLBOARD_VISUAL_TREE,        BILLBOARD_EFFECT_NONE,   1, 48, 1, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
     {BILLBOARD_VISUAL_DUMMY,       BILLBOARD_EFFECT_NONE,   3, 24, 1, BILLBOARD_MAX_DEPTH, FALSE, TRUE,  FALSE},
 };
@@ -128,13 +128,13 @@ static u16 bb_lut_divu(const u16 *table, u32 numerator, u16 forward) {
 }
 
 #define BILLBOARD_SCALE_SHIFT 12
-// BSP walls use a 256-unit visual height while Doom's authored wall/sprite
-// baseline is 128 units. Double WAD patch geometry so props retain their native
-// proportions without appearing half-sized against the rendered architecture.
-// BSP walls use a 256-unit visual height while Doom's authored wall/sprite
-// baseline is 128 units, so patch geometry is first doubled (native 2x match).
-// A further 1.5x growth makes barrels and pickups read larger on screen
-// without touching enemies or walls. Effective scale is 2 * 1.5 = 3.
+// WAD patch geometry is projected in native Doom map units
+// (BILLBOARD_WORLD_GEOMETRY_SCALE == 1, matching RAY_WORLD_WALL_HEIGHT's
+// 128-unit wall baseline) and then enlarged per type via
+// BillboardType.visual_scale: pickups and barrels read too small on screen at
+// native size, so both use a 3x visual_scale (BILLBOARD_PICKUP_VISUAL_SCALE /
+// BILLBOARD_BARREL_VISUAL_SCALE); decor props stay at 1x. See
+// billboard_internal.h.
 static s32 billboard_muls_word(s16 left, s16 right) {
     s32 result = left;
     __asm__ volatile (

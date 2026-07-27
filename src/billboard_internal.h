@@ -40,10 +40,16 @@
 #define BILLBOARD_TYPE_DUMMY 15
 #define BILLBOARD_TYPE_COUNT 16
 #define BILLBOARD_PROP_RADIUS 16
-// Enemy atlas pixels use native Doom world units. With the shared 80px focal
-// length a 24x48 actor keeps its authored proportion against a 128-unit wall.
-#define BILLBOARD_ENEMY_WORLD_WIDTH 24
-#define BILLBOARD_ENEMY_WORLD_HEIGHT 48
+// Enemy atlas pixels use native Doom world units, enlarged 2.25x on-screen
+// (2026-07-27: 24x48 native read too small in play, then a same-day 3x pass
+// [72x144] read too tall -- settled 25% down from that, at 2.25x). The atlas
+// art itself stays 24x48 (ROM texel source); only the projected world size
+// grows, so the same pixels are stretched over a bigger screen box, same as
+// the pickup 3x path below. g_billboard_recip_enemy_w_lut/_h_lut in
+// billboard_projection_lut.h bake these values as K = WIDTH/HEIGHT * RAY_PROJ_X/Y
+// -- changing WORLD_WIDTH/HEIGHT again means regenerating those tables too.
+#define BILLBOARD_ENEMY_WORLD_WIDTH 54
+#define BILLBOARD_ENEMY_WORLD_HEIGHT 108
 #define BILLBOARD_ENEMY_ATLAS_WIDTH 24
 #define BILLBOARD_ENEMY_ATLAS_HEIGHT 48
 // WAD patch geometry and BSP vertices share native Doom map units. Individual
@@ -51,6 +57,11 @@
 // collision, collection radii and world coordinates remain native.
 #define BILLBOARD_WORLD_GEOMETRY_SCALE 1
 #define BILLBOARD_PICKUP_VISUAL_SCALE 3
+// 2026-07-27: barrels read too small at native scale in play; matched to the
+// pickup 3x factor. Collision radius (BILLBOARD_TYPES' `radius` field, 20u)
+// and explosion AoE (BARREL_EXPLOSION_RADIUS below) are separate fields and
+// are deliberately NOT scaled by this constant.
+#define BILLBOARD_BARREL_VISUAL_SCALE 3
 
 #define DUMMY_MOVE_STEP (FX_ONE / 8)
 #define DUMMY_MOVE_INTERVAL 5
