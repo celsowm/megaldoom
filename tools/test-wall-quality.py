@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic quality contracts for the 64x64, stride-4 wall pipeline."""
+"""Deterministic quality contracts for the 64x64, stride-2 wall pipeline."""
 import importlib.util
 import re
 import subprocess
@@ -128,7 +128,7 @@ def main():
 
     assert extractor.WALL_TEX_DIM == 64
     assert re.search(r"#define WALL_TEX_DIM 64\b", raycast)
-    assert re.search(r"#define RAY_COL_STRIDE 4\b", raycast)
+    assert re.search(r"#define RAY_COL_STRIDE 2\b", raycast)
     assert "FREEDOOM_WALL_PACKED_PAIRS" in assets
     assert "FREEDOOM_WALL_PACKED_PAIRS[" in renderer
     assert "DOOR_FRAME_TEXELS (WALL_TEX_DIM / 16)" in renderer
@@ -192,7 +192,7 @@ def main():
         assert generated_map.read_bytes() == MAP_PATH.read_bytes()
         assert generated_assets.read_bytes() == ASSETS_PATH.read_bytes()
 
-    print("ok    walls: 64x64, stride 4/40 columns, Doom-faithful deterministic PAL3")
+    print("ok    walls: 64x64, stride 2/80 columns, Doom-faithful deterministic PAL3")
 
 
 if __name__ == "__main__":

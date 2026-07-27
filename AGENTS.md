@@ -126,31 +126,52 @@ differencing / affine texture spans / LUT-multiply u_col) — all of it drifts
 texels by +-1 and breaks byte-identity with the C reference, so it needs the
 same eyeball + differential-model treatment the packer got, not a quick win.
 
-### RAY_COL_STRIDE 4 SHIPPED as the default (2026-07-22)
+### RAY_COL_STRIDE 4 shipped, then REVERTED to 2 (2026-07-22 -> 2026-07-27)
 
-The user eyeballed the stride-4 preview ROM and judged it "no visual
-downgrade", so the default flipped to 4 (raycast.h keeps the `#ifndef` guard;
-`EXTRA_FLAGS="-DRAY_COL_STRIDE=2"` rebuilds the old look for comparison).
-History: the stride-4 packer branch had bit-rotted against a generated array
-that no longer exists (`FREEDOOM_WALL_PACKED_COLUMNS`); it was rewritten to
-reuse the stride-2 `FREEDOOM_WALL_PACKED_PAIRS` table (each 2px pair byte
-stored to two adjacent byte lanes = 4px) and the tile-column coherence cache
-+ door/overlay repack contract was hoisted out of the stride-2 branch and
-shared (PACK_LANES = 8/RAY_COL_STRIDE). The asm mixed-tile hotpath and the
-DEBUG_PERF pack oracles remain stride-2-only; at stride 4 the release
-cadence probe is the ground truth.
+**The default is stride 2 and must stay there absent a new user decision.**
+Stride 4 shipped in a959edd on a preview-ROM eyeball ("no visual downgrade")
+and the user rejected it five days later after playing it: the walls are "muito
+pixelizado". This was a *taste* verdict, not a bug — do not treat the revert as
+a defect fixed and do not re-flip the default as a perf win. `raycast.h` keeps
+the `#ifndef` guard, so `EXTRA_FLAGS="-DRAY_COL_STRIDE=4"` still rebuilds the
+fast profile for measurement.
 
-Same-pose A/B on checkpoints, stride 2 -> 4: per-rebuild stage sum 11614 ->
-9321 subticks (9.07 -> 7.28 vb, ~-1.8 vb/motion frame): cast 5755 -> 4777,
-pack 3761 -> 2478 (coherence cache recovered 361 of the prototype's 2839),
-samples 80 -> 40. Idle stays 30fps. The tour-east-combat A/B DIVERGED
-(frame-timed inputs + changed cadence = different trajectory), so only
-checkpoints is a valid A/B. Correctness: the coherence-cache port was
-verified by byte-comparing route captures against the cache-less prototype —
-scene pixels identical on all 12 frames. Stride-sensitive guardrail models
-(test-bsp-render-math, test-billboard-projection, test-wall-quality,
-test-sector-map) were updated to stride 4 and re-proved (604160-box
-differential test passes at the stride-4 reject constants).
+Lesson worth more than the numbers: **a static preview screenshot does not
+qualify a stride change.** Nothing in the pipeline interpolates horizontally
+between sampled columns — `write_mixed_stride4_tile` stores each
+FREEDOOM_WALL_PACKED_PAIRS byte (already one texel doubled) to two adjacent
+byte lanes, flats use `REP4[c] = c*0x1111`, doors mask a 16-bit lane — so
+RAY_COL_STRIDE *is* the wall's horizontal resolution: 40 columns over 160px at
+stride 4. That reads as acceptable in a still and as chunky once the camera
+moves. Any future stride/quality flip needs the user judging it in motion.
+
+The A/B numbers stay on record because they make stride 4 a known, costed
+option. Same-pose A/B on checkpoints, stride 2 -> 4: per-rebuild stage sum
+11614 -> 9321 subticks (9.07 -> 7.28 vb, ~-1.8 vb/motion frame): cast 5755 ->
+4777, pack 3761 -> 2478 (coherence cache recovered 361 of the prototype's
+2839), samples 80 -> 40. Idle stays 30fps either way. The tour-east-combat A/B
+DIVERGED (frame-timed inputs + changed cadence = different trajectory), so only
+checkpoints is a valid A/B. The stride-4 correctness work also stands: the
+coherence-cache port was byte-verified against the cache-less prototype (scene
+pixels identical on all 12 route frames).
+
+Post-revert cadence probe on checkpoints (stride 2, 2026-07-27, 18 iterations):
+avg 10.17 vblanks/frame (5.9fps), max 13, 17/18 rebuild frames missed the
+2-vblank budget; idle still hits hist[2] (30fps). This matches the pre-a959edd
+"Real release framerate" baseline above (~12-13 vb) rather than the stride-4
+~8.6vb figure — treat 10.17 vb as the current motion-frame ground truth.
+
+Shared plumbing kept from that work: the tile-column coherence cache and the
+door/overlay repack contract now live outside the stride branches
+(PACK_LANES = 8/RAY_COL_STRIDE), and the stride-4 packer reuses the stride-2
+FREEDOOM_WALL_PACKED_PAIRS table (the older `FREEDOOM_WALL_PACKED_COLUMNS` it
+had bit-rotted against no longer exists). The asm mixed-tile hotpath and the
+DEBUG_PERF pack oracles are stride-2-only, so the shipped profile is once again
+the one with a byte-compare oracle behind it. Stride-sensitive guardrail models
+(test-bsp-render-math, test-billboard-projection, test-wall-quality) are back at
+stride 2; test-sector-map's assert tracks the `descriptors[0]` refactor, which
+is shared by both branches and stays. `test-billboard-raster.py`'s `STRIDE = 4`
+is an unrelated miniature model (VIEW_W = 32), not this constant.
 
 ### Billboard projection spatial pre-cull: tried and rejected (2026-07-21)
 
