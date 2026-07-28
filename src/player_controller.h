@@ -23,6 +23,18 @@
 #define PLAYER_CONTROL_TOGGLE_AUTOMAP 0x0020
 
 void player_controller_reset(void);
-u16 player_controller_update(PlayerState *player, u16 elapsed_frames);
+u16 player_controller_update(PlayerState *player, u16 elapsed_frames, u16 latched_pressed);
+
+// Called from the V-Int callback while poll is active: refreshes the pad and
+// ORs any newly-pressed bits into a latch, so a tap shorter than one main-loop
+// iteration is never dropped and input is never more than one vblank stale.
+void player_controller_vint_poll(void);
+// Gate the ISR poll. Deactivate before code that does its own JOY_update
+// (e.g. the pause menu) to avoid racing it; reactivating reseeds the edge
+// baseline from the current cached pad state (not zero) so a button already
+// held does not phantom-fire, and clears any stale latch.
+void player_controller_set_poll_active(bool active);
+// Atomically read and clear the latch. Call once per main-loop iteration.
+u16 player_controller_consume_latched(void);
 
 #endif

@@ -101,6 +101,14 @@ static void sync_hud(u32 frame,
 // Drains any still-in-flight view upload (background pump disarmed) before
 // code that writes g_view_tiles or queues a new upload. Usually free: the
 // cast outlasts the 2-vblank upload, so the V-INT pump has already landed it.
+// V-Int callback: the DMA pump runs first (vblank-time-critical, self-gated
+// on g_bg_pump_armed), then the gameplay pad poll (self-gated on the active
+// flag, inert during frontend/menus). See player_controller_vint_poll.
+static void main_vint_callback(void) {
+    renderer_upload_background_pump();
+    player_controller_vint_poll();
+}
+
 static void wait_scene_upload_complete(void) {
     while (renderer_scene_upload_pending()) {
         VDP_waitVSync();
@@ -172,7 +180,7 @@ int main(bool hard) {
     game_audio_init();
     // Inert until armed around the BSP cast (see render_current_view); the
     // frontend/menus run with it installed but never armed.
-    SYS_setVIntCallback(renderer_upload_background_pump);
+    SYS_setVIntCallback(main_vint_callback);
 
     while (TRUE) {
         u32 frame = 0;
@@ -198,6 +206,11 @@ int main(bool hard) {
         JOY_update();
         previous_system_joy = JOY_readJoypad(JOY_1);
         prev_vtimer = vtimer;
+        // From here on, the V-Int callback is the sole JOY_update caller: it
+        // samples every vblank instead of once per (possibly ~11-vblank) main
+        // loop iteration, and latches taps that would otherwise land and
+        // release between two iterations.
+        player_controller_set_poll_active(TRUE);
         debug_checkpoint_mark(DEBUG_CHECKPOINT_GAMEPLAY);
 
 #if DEBUG_PERF
@@ -217,6 +230,7 @@ int main(bool hard) {
         u32 cur_vtimer;
         u16 elapsed_vblanks;
         u16 elapsed_frames;
+        u16 latched_pressed;
 #if DEBUG_PERF
         const u32 gameplay_start = getSubTick();
 #endif
@@ -226,12 +240,18 @@ int main(bool hard) {
         billboard_debug_reset_stats();
 #endif
 
-        JOY_update();
+        // The ISR poll (armed above) is the sole JOY_update caller now; just
+        // read its cached state and drain whatever it latched since the last
+        // iteration.
+        latched_pressed = player_controller_consume_latched();
         system_joy = JOY_readJoypad(JOY_1);
-        system_pressed = (u16)(system_joy & ~previous_system_joy);
+        system_pressed = (u16)((system_joy & ~previous_system_joy) | (latched_pressed & BUTTON_START));
         previous_system_joy = system_joy;
 
         if ((system_pressed & BUTTON_START) != 0) {
+            // The pause menu drives its own JOY_update loops; stop the ISR
+            // poll so the two never race the same pad read.
+            player_controller_set_poll_active(FALSE);
             const FrontendPauseAction pause_action =
                 frontend_run_pause(renderer_get_menu_tile_base());
             if (pause_action == FRONTEND_PAUSE_QUIT_TO_TITLE) {
@@ -249,6 +269,10 @@ int main(bool hard) {
             JOY_update();
             previous_system_joy = JOY_readJoypad(JOY_1);
             prev_vtimer = vtimer;
+            // Reseeds the ISR edge baseline from the pad state just read above,
+            // so a button still held from before/during the menu does not
+            // phantom-fire, and clears any latch accrued while polling was off.
+            player_controller_set_poll_active(TRUE);
             continue;
         }
 
@@ -293,7 +317,7 @@ int main(bool hard) {
         }
 
         if (!level_cleared) {
-            control = player_controller_update(&g_player, elapsed_frames);
+            control = player_controller_update(&g_player, elapsed_frames, latched_pressed);
 #if DEBUG_BLASTEM_CHECKPOINT
             {
                 const s32 dx = g_player.x - g_checkpoint_prev_x;

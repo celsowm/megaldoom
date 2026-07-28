@@ -30,6 +30,9 @@
 
 static u16 s_previous_joy = 0;
 static bool s_three_button_map_chord_active = FALSE;
+static volatile u16 s_latched_pressed = 0;
+static u16 s_poll_prev = 0;
+static volatile bool s_poll_active = FALSE;
 static s32 s_momentum_x = 0;
 static s32 s_momentum_y = 0;
 static s32 s_position_remainder_x = 0;
@@ -119,7 +122,31 @@ void player_controller_reset(void) {
     s_turn_dir = 0;
 }
 
-u16 player_controller_update(PlayerState *player, u16 elapsed_frames) {
+void player_controller_vint_poll(void) {
+    if (!s_poll_active) return;
+    JOY_update();
+    const u16 now = JOY_readJoypad(JOY_1);
+    s_latched_pressed |= (u16)(now & (u16)~s_poll_prev);
+    s_poll_prev = now;
+}
+
+void player_controller_set_poll_active(bool active) {
+    if (active) {
+        s_poll_prev = JOY_readJoypad(JOY_1);
+        s_latched_pressed = 0;
+    }
+    s_poll_active = active;
+}
+
+u16 player_controller_consume_latched(void) {
+    SYS_disableInts();
+    const u16 latched = s_latched_pressed;
+    s_latched_pressed = 0;
+    SYS_enableInts();
+    return latched;
+}
+
+u16 player_controller_update(PlayerState *player, u16 elapsed_frames, u16 latched_pressed) {
     const u16 joy = JOY_readJoypad(JOY_1);
     const bool six_button_pad = (JOY_getJoypadType(JOY_1) == JOY_TYPE_PAD6);
     const bool three_button_map_chord =
@@ -200,10 +227,15 @@ u16 player_controller_update(PlayerState *player, u16 elapsed_frames) {
     } else {
         s_three_button_map_chord_active = FALSE;
 
-        if (((joy & BUTTON_C) != 0) && ((s_previous_joy & BUTTON_C) == 0) && !strafing) {
+        // Cached-pad edge OR the ISR latch: a tap that starts and ends between
+        // main-loop iterations still fires, since the latch caught its rising
+        // edge even though this iteration's cached joy reads no button held.
+        if ((((joy & BUTTON_C) != 0) && ((s_previous_joy & BUTTON_C) == 0) && !strafing) ||
+            (((latched_pressed & BUTTON_C) != 0) && !strafing)) {
             result |= PLAYER_CONTROL_USE;
         }
-        if (((joy & BUTTON_B) != 0) && ((s_previous_joy & BUTTON_B) == 0)) {
+        if ((((joy & BUTTON_B) != 0) && ((s_previous_joy & BUTTON_B) == 0)) ||
+            ((latched_pressed & BUTTON_B) != 0)) {
             result |= PLAYER_CONTROL_FIRE;
         }
     }
