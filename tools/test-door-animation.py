@@ -20,7 +20,7 @@ MAIN = (ROOT / "src/main.c").read_text()
 GENERATED = (ROOT / "src/generated_e1m1_map.c").read_text()
 
 LIFT_MAX = 256
-STEP_PER_VBLANK = 8
+STEP_PER_VBLANK = 16
 
 
 def advance(lift, target_open, elapsed_vblanks):
@@ -47,31 +47,34 @@ def main():
     assert "g_door_lift[seg->door_group]" in MAP
     assert "g_door_target_open[door_group] = !g_door_target_open[door_group]" in MAP
     assert "g_door_lift[i] == BSP_DOOR_LIFT_MAX" in MAP
-    assert "bsp_update_doors(elapsed_frames)" in MAIN
+    # Doors must be credited with real elapsed time, not the [1,4]-clamped
+    # movement delta that starved them at low framerates.
+    assert "bsp_update_doors(elapsed_vblanks)" in MAIN
+    assert "bsp_update_doors(elapsed_frames)" not in MAIN
     assert "renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE)" in MAIN
 
-    # Exactly 32 vblanks, monotonic in both directions, and reversible without
+    # Exactly 16 vblanks, monotonic in both directions, and reversible without
     # snapping to an endpoint.
     lift = 0
     opening = []
-    for _ in range(32):
+    for _ in range(16):
         lift = advance(lift, True, 1)
         opening.append(lift)
-    assert opening == list(range(8, 257, 8))
+    assert opening == list(range(16, 257, 16))
     assert all(value < LIFT_MAX for value in opening[:-1])
     assert opening[-1] == LIFT_MAX
 
     lift = advance(0, True, 10)
-    assert lift == 80
+    assert lift == 160
     lift = advance(lift, False, 3)
-    assert lift == 56
+    assert lift == 112
     lift = advance(lift, True, 2)
-    assert lift == 72
+    assert lift == 144
     closing = []
-    for _ in range(32):
+    for _ in range(16):
         lift = advance(LIFT_MAX if not closing else closing[-1], False, 1)
         closing.append(lift)
-    assert closing == list(range(248, -1, -8))
+    assert closing == list(range(240, -1, -16))
     assert closing[0] < LIFT_MAX  # closing blocks on its first update
     assert closing[-1] == 0
 
@@ -131,7 +134,7 @@ def main():
     assert "was_open != (g_door_lift[i] == BSP_DOOR_LIFT_MAX)" in MAP
     assert MAP.count("g_visibility_revision++") == 2  # reset + endpoint transition
 
-    print("ok    doors: framed 32-vblank lift, reversible groups, vertical occlusion")
+    print("ok    doors: framed 16-vblank lift, reversible groups, vertical occlusion")
 
 
 if __name__ == "__main__":

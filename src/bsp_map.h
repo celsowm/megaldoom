@@ -177,7 +177,7 @@ bool bsp_seg_is_open(u16 seg_index);
 // segs return 0. All faces in one physical door group share the same value.
 u16 bsp_seg_door_lift(u16 seg_index);
 
-// Advance every moving door by elapsed_vblanks. A complete trip takes 32
+// Advance every moving door by elapsed_vblanks. A complete trip takes 16
 // vblanks. Returns TRUE while any lift changed so the caller can rebuild the
 // world view even when the player is stationary.
 bool bsp_update_doors(u16 elapsed_vblanks);

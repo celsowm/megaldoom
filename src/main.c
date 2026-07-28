@@ -211,6 +211,7 @@ int main(bool hard) {
         // Real vblanks elapsed since last iteration. Keep it clamped for future diagnostics,
         // but now it IS fed to the turn controller so rotation stays time-correct.
         u32 cur_vtimer;
+        u16 elapsed_vblanks;
         u16 elapsed_frames;
 #if DEBUG_PERF
         const u32 gameplay_start = getSubTick();
@@ -248,16 +249,18 @@ int main(bool hard) {
         }
 
         cur_vtimer = vtimer;
-        elapsed_frames = (u16)(cur_vtimer - prev_vtimer);
+        // Doors (and other wall-clock timers) get the raw vblank delta; the
+        // clamped copy below only feeds the movement/turn controller, whose
+        // ramp was tuned for a [1,4] step.
+        elapsed_vblanks = (u16)(cur_vtimer - prev_vtimer);
         prev_vtimer = cur_vtimer;
-        if (elapsed_frames < 1) {
-            elapsed_frames = 1;
-        } else if (elapsed_frames > 4) {
-            elapsed_frames = 4;
+        if (elapsed_vblanks < 1) {
+            elapsed_vblanks = 1;
         }
+        elapsed_frames = (elapsed_vblanks > 4) ? 4 : elapsed_vblanks;
         // elapsed_frames is fed to player_controller_update below so turning is time-correct.
 
-        if (bsp_update_doors(elapsed_frames)) {
+        if (bsp_update_doors(elapsed_vblanks)) {
             renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE);
         }
 

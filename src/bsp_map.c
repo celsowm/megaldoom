@@ -38,10 +38,11 @@ static u16 bsp_ratio_q8(u32 numerator, u32 denominator) {
 
 // Runtime state is stored once per physical door. Every BSP face generated for
 // that door points at the same group, so collision/rendering can never disagree.
-// Lift is Q8: 0 is closed, 256 is fully raised. Eight units per vblank makes a
-// full trip take 32 vblanks (~0.53 s on NTSC hardware).
+// Lift is Q8: 0 is closed, 256 is fully raised. Sixteen units per vblank makes
+// a full trip take 16 vblanks (~0.27 s on NTSC hardware) — blazing-door speed,
+// because the seg only becomes passable at the fully-open endpoint.
 #define BSP_DOOR_LIFT_MAX 256u
-#define BSP_DOOR_LIFT_PER_VBLANK 8u
+#define BSP_DOOR_LIFT_PER_VBLANK 16u
 static u16 g_door_lift[BSP_MAX_DOORS];
 static bool g_door_target_open[BSP_MAX_DOORS];
 static u16 g_query_seen_generation[BSP_MAX_SEGS];
