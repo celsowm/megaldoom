@@ -39,6 +39,11 @@ void renderer_render_scene(const RayColumn *columns,
                            bool weapon_flash,
                            bool damage_flash,
                            bool low_health_warning);
+// Draw the fire-pose weapon overlay right now, over the previous displayed
+// frame. Called from the fire handler so muzzle feedback does not wait for the
+// ~10-vblank cast+upload; the per-variant cache makes the scene-path redraw of
+// the same variant a no-op.
+void renderer_draw_weapon_flash(void);
 void renderer_queue_scene_upload(const RayColumn *columns,
                                  const RaySceneColors *scene_colors);
 void renderer_upload_scene_step(void);

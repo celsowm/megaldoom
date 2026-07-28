@@ -24,6 +24,10 @@ void draw_weapon_overlay(bool flash) {
     g_last_weapon_variant = variant;
 }
 
+void renderer_draw_weapon_flash(void) {
+    draw_weapon_overlay(TRUE);
+}
+
 void draw_overlay_ops(const MegalDoomOverlayRowOp *ops, u16 count) {
     u32 *base = &g_view_tiles[0][0];
 

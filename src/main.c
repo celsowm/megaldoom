@@ -370,6 +370,7 @@ int main(bool hard) {
                 shot_cooldown = SHOT_COOLDOWN_VBLANKS;
                 player_ammo--;
                 g_weapon_flash = WEAPON_FLASH_VBLANKS;
+                renderer_draw_weapon_flash();
                 renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_WEAPON);
 
                 // Pistol gunshot on PCM channel 2 (channel 1 is reserved for
