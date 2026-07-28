@@ -16,6 +16,16 @@ def timer_redraws(duration):
     return redraws
 
 
+def timer_redraws_vblank(duration, per_iter):
+    """Vblank-credited timer: saturating subtract per iteration, clear once."""
+    value = duration
+    redraws = [True]
+    while value:
+        value = value - per_iter if value > per_iter else 0
+        redraws.append(value == 0)
+    return redraws
+
+
 def effect_redraws(frame_count, hold):
     frame = 0
     timer = hold
@@ -49,12 +59,17 @@ def main():
     overlay_c = (ROOT / "src/renderer_overlay.c").read_text()
     redraw_c = (ROOT / "src/renderer_redraw.c").read_text()
 
-    # Flash duration is unchanged; only activation and final clear redraw.
-    weapon_frames = int(re.search(r"#define WEAPON_FLASH_FRAMES (\d+)", main_c).group(1))
+    # Weapon flash counts real vblanks (framerate-independent); damage flash
+    # stays iteration-based. Both redraw only on activation and final clear.
+    weapon_vblanks = int(re.search(
+        r"#define WEAPON_FLASH_VBLANKS (\d+)", main_c).group(1))
     damage_frames = int(re.search(
         r"#define PLAYER_DAMAGE_FLASH_FRAMES (\d+)", main_c).group(1)
     )
-    assert timer_redraws(weapon_frames) == [True, False, True]
+    # Idle cadence (2 vblanks/iteration) holds the flash ~3 iterations; a slow
+    # motion frame (~11 vblanks) still displays it for one full frame.
+    assert timer_redraws_vblank(weapon_vblanks, 2) == [True, False, False, True]
+    assert timer_redraws_vblank(weapon_vblanks, 11) == [True, True]
     assert timer_redraws(damage_frames) == [True] + [False] * 5 + [True]
     assert "if (g_weapon_flash == 0)" in main_c
     assert "if (g_player_damage_flash == 0)" in main_c

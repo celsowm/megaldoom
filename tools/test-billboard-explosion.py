@@ -120,7 +120,7 @@ def main():
     assert "BILLBOARD_VISUAL_PUFF" in renderer_c
     assert "BILLBOARD_VISUAL_BLOOD" in renderer_c
     assert "billboard_update_effects()" in main_c
-    assert "#define SHOT_COOLDOWN_FRAMES 6" in main_c
+    assert "#define SHOT_COOLDOWN_VBLANKS 12" in main_c
 
     # Explosion PCM is built into ROM and triggered once per returned event.
     assert 'WAV sfx_barexp       "sound/dsbarexp.wav"  XGM2' in resources

@@ -13,8 +13,12 @@
 #include "renderer_redraw.h"
 #include "resources.h"
 
-#define SHOT_COOLDOWN_FRAMES 6
-#define WEAPON_FLASH_FRAMES 2
+// Shot timers count real vblanks (not loop iterations) so the gun feel does not
+// stretch when a motion frame takes ~11 vblanks: 12 vblanks ~= 0.2 s between
+// shots at any framerate. The flash is set after its decrement runs, so the
+// firing iteration always renders it and it survives >= 1 displayed frame.
+#define SHOT_COOLDOWN_VBLANKS 12
+#define WEAPON_FLASH_VBLANKS 6
 #define PLAYER_DAMAGE_FLASH_FRAMES 6
 #define PLAYER_INVULN_FRAMES 24
 #define PLAYER_HIT_PUSH_STEP (FX_ONE / 4)
@@ -265,10 +269,12 @@ int main(bool hard) {
         }
 
         if (shot_cooldown > 0) {
-            shot_cooldown--;
+            shot_cooldown = (shot_cooldown > elapsed_vblanks)
+                ? (u16)(shot_cooldown - elapsed_vblanks) : 0;
         }
         if (g_weapon_flash > 0) {
-            g_weapon_flash--;
+            g_weapon_flash = (g_weapon_flash > elapsed_vblanks)
+                ? (u16)(g_weapon_flash - elapsed_vblanks) : 0;
             if (g_weapon_flash == 0) {
                 renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_WEAPON);
             }
@@ -361,9 +367,9 @@ int main(bool hard) {
                 fire_result = billboard_fire_center(
                     &g_player, g_ray_columns[RAY_VIEW_COLS / 2].depth);
                 shot = fire_result.status;
-                shot_cooldown = SHOT_COOLDOWN_FRAMES;
+                shot_cooldown = SHOT_COOLDOWN_VBLANKS;
                 player_ammo--;
-                g_weapon_flash = WEAPON_FLASH_FRAMES;
+                g_weapon_flash = WEAPON_FLASH_VBLANKS;
                 renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_WEAPON);
 
                 // Pistol gunshot on PCM channel 2 (channel 1 is reserved for
