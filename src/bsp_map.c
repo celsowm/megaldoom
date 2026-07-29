@@ -137,6 +137,33 @@ u16 bsp_find_subsector(s32 x, s32 y) {
     return BSP_CHILD_INDEX(child);
 }
 
+u16 bsp_find_subsector_with_margin(s32 x, s32 y, s32 radius, bool *contained) {
+    u16 child = bsp_root_node;
+    bool stays_in_leaf = TRUE;
+
+    if (radius < 0) radius = 0;
+    while (!BSP_CHILD_IS_SUBSECTOR(child)) {
+        const BspNode *node = &bsp_nodes[child];
+        const s32 dx = x - node->px;
+        const s32 dy = y - node->py;
+        const s32 cross = bsp_muls_word(dx, node->dy) - bsp_muls_word(dy, node->dx);
+        const s32 abs_cross = (cross < 0) ? -cross : cross;
+        const s32 abs_node_dx = (node->dx < 0) ? -(s32)node->dx : node->dx;
+        const s32 abs_node_dy = (node->dy < 0) ? -(s32)node->dy : node->dy;
+
+        // Distance to this partition is |cross| / hypot(dx,dy). L1 is never
+        // smaller than hypot, so |cross| > radius * L1 proves the whole disk
+        // remains on this side. Any ambiguous boundary is conservatively kept.
+        if (abs_cross <= radius * (abs_node_dx + abs_node_dy)) {
+            stays_in_leaf = FALSE;
+        }
+        child = (cross >= 0) ? node->front : node->back;
+    }
+
+    if (contained != NULL) *contained = stays_in_leaf;
+    return BSP_CHILD_INDEX(child);
+}
+
 // Squared distance from point (px, py) to the finite segment of seg s.
 static s32 seg_point_dist2(const BspSeg *s, s32 px, s32 py) {
     const BspVertex *a = &bsp_vertices[s->v1];

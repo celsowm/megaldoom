@@ -187,6 +187,29 @@ rolling average (see `renderer_debug_set_total_vblanks` in `renderer_perf.c`),
 not a single-frame snapshot, so it's a reasonably trustworthy signal even
 though it comes from one route.
 
+### Visible-subsector billboard cull: conservative prototype, no-go (2026-07-29)
+
+The tempting point-owner oracle was real: on normal-skill `checkpoints.txt`,
+the cast visited 22.2 subsectors/rebuild and only 7.0 of the 58 active
+billboards belonged to a visited leaf. It is **not** safe to cull from that
+fact alone: a sprite near a BSP partition can project across into a visible
+leaf even when its anchor point belongs to one skipped by solid coverage.
+
+`BILLBOARD_VISIBLE_SUBSECTOR_CULL=1` is therefore a default-OFF prototype.
+Before it skips an object, `bsp_find_subsector_with_margin` proves that a
+96-world-unit disk (the largest 3x source-patch horizontal extent is 93) stays
+on the same side of every root-to-leaf BSP partition. `test-bsp-render-math.py`
+proves the L1 normal bound is conservative. The correct fallback is always the
+old full active-list projection.
+
+That proof is too conservative for E1M1: both `checkpoints.txt` and
+`tour-east-combat.txt` measured only **1.0 footprint-safe, safe-to-skip object
+per rebuild**. Keep the flag OFF; the extra bitset/cache/traversal cannot repay
+one avoided billboard measurement. Do not re-enable or tune the radius as a
+perf win. A future retry needs a different, rigorously validated multi-leaf
+membership model plus same-pose visual differential captures, not point-owner
+culling.
+
 Frame time is quantized to whole vblanks via `VDP_waitVSync` — a CPU-side
 saving only matters if it's large enough to remove a whole vblank from the
 sampled window. Small percentage wins in one stage's subticks routinely show

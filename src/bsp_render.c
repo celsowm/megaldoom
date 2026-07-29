@@ -72,18 +72,19 @@ static s32 g_node_cache_px;
 static s32 g_node_cache_py;
 static bool g_node_cache_valid;
 
-#if DEBUG_PERF
 // Temporary BSP instrumentation: counts how the new division-free frustum
 // precheck interacts with traversal. Nodes visited, boxes rejected cheaply
 // (by the half-plane test, avoiding 4 divisions), boxes that survived to the
 // 4-division projection path, and near-plane fallbacks (expanded to whole
 // view). Reset each frame in bsp_cast_frame; read by the DEBUG_PERF overlay.
+#if DEBUG_PERF
 static u16 g_bsp_dbg_nodes_visited;
 static u16 g_bsp_dbg_boxes_rejected_cheap;
 static u16 g_bsp_dbg_boxes_projected;
 static u16 g_bsp_dbg_near_fallbacks;
 static u16 g_bsp_dbg_segments_tested;
 static u16 g_bsp_dbg_segments_drawn;
+static u16 g_bsp_dbg_visible_subsectors;
 static u32 g_bsp_dbg_side_cache_subticks;
 static u32 g_bsp_dbg_box_projection_subticks;
 static u32 g_bsp_dbg_segment_raster_subticks;
@@ -97,6 +98,7 @@ static bool g_bsp_dbg_measure_segment;
         g_bsp_dbg_near_fallbacks = 0; \
         g_bsp_dbg_segments_tested = 0; \
         g_bsp_dbg_segments_drawn = 0; \
+        g_bsp_dbg_visible_subsectors = 0; \
         g_bsp_dbg_side_cache_subticks = 0; \
         g_bsp_dbg_box_projection_subticks = 0; \
         g_bsp_dbg_segment_raster_subticks = 0; } while (0)
@@ -115,6 +117,10 @@ static inline void bsp_cadence_inc_near_fallbacks(void) {}
 #else
 #define BSP_DBG_INC(c) ((void)0)
 #define BSP_DBG_RESET() ((void)0)
+#endif
+
+#if DEBUG_PERF || BILLBOARD_VISIBLE_SUBSECTOR_CULL
+static u8 g_visible_subsector_bits[(BSP_MAX_SUBSECTORS + 7) / 8];
 #endif
 
 static void render_node(u16 child);
@@ -769,6 +775,21 @@ void bsp_traverse_front_to_back(const PlayerState *player,
 static void bsp_visit_leaf(u16 subsector_id, void *context) {
     const BspSubsector *ss = &bsp_subsectors[subsector_id];
     (void)context;
+#if DEBUG_PERF || BILLBOARD_VISIBLE_SUBSECTOR_CULL
+    // The default build keeps this as an oracle. The optional cull consumes it
+    // only after proving the billboard's whole horizontal footprint remains in
+    // this leaf; boundary sprites retain the old full-list behavior.
+    if (subsector_id < BSP_MAX_SUBSECTORS) {
+        const u16 byte = subsector_id >> 3;
+        const u8 bit = (u8)(1u << (subsector_id & 7));
+        if ((g_visible_subsector_bits[byte] & bit) == 0) {
+            g_visible_subsector_bits[byte] |= bit;
+#if DEBUG_PERF
+            g_bsp_dbg_visible_subsectors++;
+#endif
+        }
+    }
+#endif
     for (u16 i = 0; i < ss->seg_count; i++) {
 #if DEBUG_PERF
         const u32 raster_start = g_bsp_dbg_measure_segment ? getSubTick() : 0;
@@ -816,6 +837,12 @@ void bsp_init(void) {
 void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColors *scene_colors) {
     g_columns = columns;
 
+#if DEBUG_PERF || BILLBOARD_VISIBLE_SUBSECTOR_CULL
+    for (u16 i = 0; i < (BSP_MAX_SUBSECTORS + 7) / 8; i++) {
+        g_visible_subsector_bits[i] = 0;
+    }
+#endif
+
     const u16 subsector = bsp_find_subsector(player->x, player->y);
     u16 sector = (subsector < bsp_subsector_count) ? bsp_subsector_sector[subsector] : 0;
     if (sector >= FREEDOOM_SECTOR_VISUAL_COUNT) sector = 0;
@@ -854,6 +881,14 @@ void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColor
                                bsp_all_closed, NULL);
 }
 
+#if DEBUG_PERF || BILLBOARD_VISIBLE_SUBSECTOR_CULL
+bool bsp_subsector_was_visited(u16 subsector_id) {
+    if (subsector_id >= BSP_MAX_SUBSECTORS) return FALSE;
+    return (bool)(g_visible_subsector_bits[subsector_id >> 3] &
+                  (u8)(1u << (subsector_id & 7)));
+}
+#endif
+
 #if DEBUG_PERF
 // These accessors are consumed only by the optional perf overlay in main.c.
 // Keep them visible across SGDK's LTO link even though this translation unit
@@ -865,6 +900,9 @@ BSP_DEBUG_EXPORT u16 bsp_get_debug_boxes_projected(void) { return g_bsp_dbg_boxe
 BSP_DEBUG_EXPORT u16 bsp_get_debug_near_fallbacks(void) { return g_bsp_dbg_near_fallbacks; }
 BSP_DEBUG_EXPORT u16 bsp_get_debug_segments_tested(void) { return g_bsp_dbg_segments_tested; }
 BSP_DEBUG_EXPORT u16 bsp_get_debug_segments_drawn(void) { return g_bsp_dbg_segments_drawn; }
+BSP_DEBUG_EXPORT u16 bsp_get_debug_visible_subsector_count(void) {
+    return g_bsp_dbg_visible_subsectors;
+}
 BSP_DEBUG_EXPORT u32 bsp_get_debug_side_cache_subticks(void) { return g_bsp_dbg_side_cache_subticks; }
 BSP_DEBUG_EXPORT u32 bsp_get_debug_box_projection_subticks(void) { return g_bsp_dbg_box_projection_subticks; }
 BSP_DEBUG_EXPORT u32 bsp_get_debug_segment_raster_subticks(void) { return g_bsp_dbg_segment_raster_subticks; }

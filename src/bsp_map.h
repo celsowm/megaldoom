@@ -117,6 +117,11 @@ typedef struct {
 // while making the RAM cost explicit and guarded.
 #define BSP_MAX_VERTICES 512
 
+// DEBUG_PERF's visible-subsector oracle keeps one bit for every leaf touched
+// by the front-to-back cast. E1M1 has 237 leaves; retain a little map-growth
+// headroom just as the vertex/node limits above do.
+#define BSP_MAX_SUBSECTORS 256
+
 extern const BspVertex bsp_vertices[];
 extern const BspSeg bsp_segs[];
 extern const BspSubsector bsp_subsectors[];
@@ -188,6 +193,12 @@ u16 bsp_get_visibility_revision(void);
 
 // Locate the authored Doom subsector containing a world-space point.
 u16 bsp_find_subsector(s32 x, s32 y);
+
+// Locate the leaf as above and report whether a radius around the point stays
+// on the same side of every BSP partition on its root-to-leaf path. The proof
+// uses a conservative L1 bound on each partition normal, so FALSE merely
+// declines an optimization; TRUE means the whole footprint owns that leaf.
+u16 bsp_find_subsector_with_margin(s32 x, s32 y, s32 radius, bool *contained);
 
 // Collision: is a circle of the given radius at world (x, y) touching a solid
 // (closed) wall segment? Used by player and enemy movement.

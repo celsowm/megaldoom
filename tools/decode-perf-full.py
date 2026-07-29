@@ -27,6 +27,16 @@ fields=[
     ('sparse_overlay_sum','u32'),('sparse_dyn_runs_sum','u32'),('sparse_dma_bytes_sum','u32'),
     ('cast_lut_max_invz','u16'),('cast_lut_fallback_hits','u16'),
     ('billboard_lut_max_forward','u16'),('billboard_lut_fallback_hits','u16'),
+    ('visible_subsectors_last','u16'),('visible_subsector_objects_last','u16'),
+    ('visible_subsectors_max','u16'),('visible_subsector_objects_max','u16'),
+    ('visible_subsector_frames','u16'),('visible_subsectors_sum','u32'),
+    ('visible_subsector_objects_sum','u32'),
+    ('visible_subsector_safe_objects_last','u16'),
+    ('visible_subsector_cullable_objects_last','u16'),
+    ('visible_subsector_safe_objects_max','u16'),
+    ('visible_subsector_cullable_objects_max','u16'),
+    ('visible_subsector_safe_objects_sum','u32'),
+    ('visible_subsector_cullable_objects_sum','u32'),
 ]
 
 off=0; out={}
@@ -60,3 +70,18 @@ print(f"  overlay: restored={out['overlay_restored_tiles']} touched={out['overla
 print(f"  asm_mismatches={out['asm_mismatches']}")
 print(f"  cast_lut: max_invz={out['cast_lut_max_invz']} fallback_hits={out['cast_lut_fallback_hits']}")
 print(f"  billboard_lut: max_forward={out['billboard_lut_max_forward']} fallback_hits={out['billboard_lut_fallback_hits']}")
+oracle_frames = out['visible_subsector_frames']
+if oracle_frames:
+    print("  visible-subsector oracle: "
+          f"leaves={out['visible_subsectors_sum'] / oracle_frames:.1f} avg / "
+          f"{out['visible_subsectors_max']} max; "
+          f"point-owned objects={out['visible_subsector_objects_sum'] / oracle_frames:.1f} avg / "
+          f"{out['visible_subsector_objects_max']} max")
+    print(f"    footprint-safe={out['visible_subsector_safe_objects_sum'] / oracle_frames:.1f} avg / "
+          f"{out['visible_subsector_safe_objects_max']} max; "
+          f"safe-to-skip={out['visible_subsector_cullable_objects_sum'] / oracle_frames:.1f} avg / "
+          f"{out['visible_subsector_cullable_objects_max']} max")
+    print(f"    last: {out['visible_subsectors_last']} leaves, "
+          f"{out['visible_subsector_objects_last']} point-owned, "
+          f"{out['visible_subsector_safe_objects_last']} footprint-safe, "
+          f"{out['visible_subsector_cullable_objects_last']} safe-to-skip")

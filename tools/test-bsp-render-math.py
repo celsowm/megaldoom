@@ -6,6 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 GENERATED = (ROOT / "src/generated_e1m1_map.c").read_text()
 RENDERER = (ROOT / "src/bsp_render.c").read_text()
+BSP_MAP = (ROOT / "src/bsp_map.c").read_text()
 
 FX_SHIFT = 8
 FX_ONE = 1 << FX_SHIFT
@@ -78,6 +79,11 @@ def render_mul(left, right, safe):
     if safe and -32768 <= left <= 32767 and -32768 <= right <= 32767:
         return left * right
     return left * right
+
+
+def disk_stays_on_partition_side(cross, node_dx, node_dy, radius):
+    """The runtime's L1 proof for a radius not crossing a BSP splitter."""
+    return abs(cross) > radius * (abs(node_dx) + abs(node_dy))
 
 
 def transform_box_reference(box, camera, basis):
@@ -308,6 +314,19 @@ def main():
     # The shifted-domain cheap reject must carry its floor-slack margins.
     assert "2 * (RAY_PROJ_X + LEFT_REJECT_SCALE)" in RENDERER
     assert "2 * RIGHT_REJECT_SCALE" in RENDERER
+    # A visible-subsector cull may only skip a sprite when its full horizontal
+    # footprint cannot cross any partition on the way to its leaf. The runtime
+    # uses the cheap L1 upper bound on the splitter norm; prove every accepted
+    # sample is also outside the exact Euclidean-radius strip.
+    for px, py in vertices + cameras[:-1]:
+        for node in nodes:
+            nx, ny, ndx, ndy = node[:4]
+            cross = (px - nx) * ndy - (py - ny) * ndx
+            for radius in (0, 1, 24, 96):
+                if disk_stays_on_partition_side(cross, ndx, ndy, radius):
+                    assert cross * cross > radius * radius * (ndx * ndx + ndy * ndy)
+    assert "bsp_find_subsector_with_margin" in BSP_MAP
+    assert "radius * (abs_node_dx + abs_node_dy)" in BSP_MAP
     print(f"ok    BSP native math: {box_checks} boxes, {segment_checks} seg spans")
 
 

@@ -96,6 +96,22 @@ typedef struct {
     // proven-bound pattern as the cast LUT above.
     u16 billboard_lut_max_forward;
     u16 billboard_lut_fallback_hits;
+    // Visible-subsector oracle: a point-owned object is counted when the BSP
+    // cast visited its current subsector. This is diagnostic only; it does not
+    // alter billboard projection or rasterization.
+    u16 visible_subsectors_last;
+    u16 visible_subsector_objects_last;
+    u16 visible_subsectors_max;
+    u16 visible_subsector_objects_max;
+    u16 visible_subsector_frames;
+    u32 visible_subsectors_sum;
+    u32 visible_subsector_objects_sum;
+    u16 visible_subsector_safe_objects_last;
+    u16 visible_subsector_cullable_objects_last;
+    u16 visible_subsector_safe_objects_max;
+    u16 visible_subsector_cullable_objects_max;
+    u32 visible_subsector_safe_objects_sum;
+    u32 visible_subsector_cullable_objects_sum;
 } RendererPerfSnapshot;
 
 void renderer_debug_set_cast_subticks(u32 subticks);
@@ -123,6 +139,10 @@ void renderer_perf_record_sparse(u16 dyn_wall, u16 ceiling, u16 floor,
                                  u16 overlay, u16 runs, u16 dma_bytes);
 void renderer_perf_record_cast_lut(u16 invz, bool fallback);
 void renderer_perf_record_billboard_lut(u16 forward, bool fallback);
+void renderer_perf_record_visible_subsectors(u16 visible_subsectors,
+                                             u16 visible_subsector_objects,
+                                             u16 safe_objects,
+                                             u16 cullable_objects);
 RendererPerfSnapshot renderer_get_perf_snapshot(void);
 #endif
 

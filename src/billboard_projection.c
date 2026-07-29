@@ -1,5 +1,7 @@
 #include "billboard_internal.h"
 #include "billboard_effects.h"
+#include "bsp_render.h"
+#include "renderer_perf.h"
 
 typedef struct {
     u8 index;
@@ -73,6 +75,40 @@ typedef struct {
 // and rejected measurements. Wall-span occlusion and nearest-object selection
 // still run every redraw against the current column buffer.
 static BillboardMeasureCache s_measure_cache[BILLBOARD_OBJECT_COUNT];
+#if DEBUG_PERF || BILLBOARD_VISIBLE_SUBSECTOR_CULL
+typedef struct {
+    s32 object_x;
+    s32 object_y;
+    u16 subsector_id;
+    bool contained;
+    bool valid;
+} BillboardSubsectorCache;
+
+// The lookup is cached by object position so the oracle itself does not turn
+// every redraw into active_count BSP searches. It deliberately keys on the
+// point anchor only: measuring conservative sprite/leaf overlap is a separate
+// correctness problem for any eventual culling implementation.
+static BillboardSubsectorCache s_subsector_cache[BILLBOARD_OBJECT_COUNT];
+#if DEBUG_PERF
+static u16 s_debug_visible_subsector_objects;
+static u16 s_debug_safe_subsector_objects;
+static u16 s_debug_cullable_subsector_objects;
+#endif
+
+static void billboard_subsector_visibility(u16 index, const BillboardObject *object,
+                                           bool *visited, bool *contained) {
+    BillboardSubsectorCache *cache = &s_subsector_cache[index];
+    if (!cache->valid || cache->object_x != object->x || cache->object_y != object->y) {
+        cache->object_x = object->x;
+        cache->object_y = object->y;
+        cache->subsector_id = bsp_find_subsector_with_margin(
+            object->x, object->y, BILLBOARD_SUBSECTOR_CULL_RADIUS, &cache->contained);
+        cache->valid = TRUE;
+    }
+    *visited = bsp_subsector_was_visited(cache->subsector_id);
+    *contained = cache->contained;
+}
+#endif
 static s32 s_cache_player_x;
 static s32 s_cache_player_y;
 static u16 s_cache_player_angle;
@@ -239,6 +275,9 @@ u16 billboard_project_scene(const PlayerState *player,
     s_debug_projected = 0;
     s_debug_cache_hits = 0;
     s_debug_cache_misses = 0;
+    s_debug_visible_subsector_objects = 0;
+    s_debug_safe_subsector_objects = 0;
+    s_debug_cullable_subsector_objects = 0;
 #endif
 
     // Compute the view basis once and share it across every object instead of
@@ -257,7 +296,26 @@ u16 billboard_project_scene(const PlayerState *player,
     const u16 active_count = billboard_registry_active_count();
     for (u16 slot = 0; slot < active_count; slot++) {
         const u16 i = active_indices[slot];
+        const BillboardObject *object = &g_billboards[i];
         BillboardMeasure measure;
+
+#if DEBUG_PERF || BILLBOARD_VISIBLE_SUBSECTOR_CULL
+        bool subsector_visited;
+        bool subsector_contained;
+        billboard_subsector_visibility(i, object, &subsector_visited, &subsector_contained);
+#if DEBUG_PERF
+        if (subsector_visited) {
+            s_debug_visible_subsector_objects++;
+        }
+        if (subsector_contained) s_debug_safe_subsector_objects++;
+        if (subsector_contained && !subsector_visited) {
+            s_debug_cullable_subsector_objects++;
+        }
+#endif
+#if BILLBOARD_VISIBLE_SUBSECTOR_CULL
+        if (subsector_contained && !subsector_visited) continue;
+#endif
+#endif
 
         if (!billboard_measure_cached(i, player, cos_a, sin_a, &measure)) {
             continue;
@@ -354,6 +412,10 @@ u16 billboard_project_scene(const PlayerState *player,
     }
 #if DEBUG_PERF
     s_debug_projected = count;
+    renderer_perf_record_visible_subsectors(bsp_get_debug_visible_subsector_count(),
+                                            s_debug_visible_subsector_objects,
+                                            s_debug_safe_subsector_objects,
+                                            s_debug_cullable_subsector_objects);
 #endif
 
     return count;

@@ -193,6 +193,33 @@ void renderer_perf_record_billboard_lut(u16 forward, bool fallback) {
     }
 }
 
+void renderer_perf_record_visible_subsectors(u16 visible_subsectors,
+                                             u16 visible_subsector_objects,
+                                             u16 safe_objects,
+                                             u16 cullable_objects) {
+    s_perf.visible_subsectors_last = visible_subsectors;
+    s_perf.visible_subsector_objects_last = visible_subsector_objects;
+    if (visible_subsectors > s_perf.visible_subsectors_max) {
+        s_perf.visible_subsectors_max = visible_subsectors;
+    }
+    if (visible_subsector_objects > s_perf.visible_subsector_objects_max) {
+        s_perf.visible_subsector_objects_max = visible_subsector_objects;
+    }
+    s_perf.visible_subsectors_sum += visible_subsectors;
+    s_perf.visible_subsector_objects_sum += visible_subsector_objects;
+    s_perf.visible_subsector_safe_objects_last = safe_objects;
+    s_perf.visible_subsector_cullable_objects_last = cullable_objects;
+    if (safe_objects > s_perf.visible_subsector_safe_objects_max) {
+        s_perf.visible_subsector_safe_objects_max = safe_objects;
+    }
+    if (cullable_objects > s_perf.visible_subsector_cullable_objects_max) {
+        s_perf.visible_subsector_cullable_objects_max = cullable_objects;
+    }
+    s_perf.visible_subsector_safe_objects_sum += safe_objects;
+    s_perf.visible_subsector_cullable_objects_sum += cullable_objects;
+    s_perf.visible_subsector_frames++;
+}
+
 RendererPerfSnapshot renderer_get_perf_snapshot(void) {
     return s_perf;
 }

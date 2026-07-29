@@ -13,6 +13,10 @@
 #define BILLBOARD_OBJECT_COUNT 112
 #define BILLBOARD_COLLECT_RADIUS (FX_ONE / 2)
 #define BILLBOARD_COLLECT_RADIUS_SQ (BILLBOARD_COLLECT_RADIUS * BILLBOARD_COLLECT_RADIUS)
+// Conservative horizontal radius for the visible-subsector prototype. The
+// largest authored billboard extent is barrel explosion BEXPE (31 world units
+// right of its origin) at visual_scale 3 = 93; 96 covers every source patch.
+#define BILLBOARD_SUBSECTOR_CULL_RADIUS 96
 // Point-blank barrel detonation fallback. billboard_measure_object rejects
 // anything within BILLBOARD_MIN_DEPTH of the camera forward axis, but a barrel
 // you are pressed against must still be shootable in Doom fashion: the Euclidean

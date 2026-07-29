@@ -3,12 +3,26 @@
 
 #include "raycast.h" // PlayerState, RayColumn, RAY_VIEW_COLS
 
+// A prototype-only billboard broad phase. The default retains the exact
+// full-active-list projection path; captures must explicitly opt into 1.
+#ifndef BILLBOARD_VISIBLE_SUBSECTOR_CULL
+#define BILLBOARD_VISIBLE_SUBSECTOR_CULL 0
+#endif
+
 // Lean flat-BSP frame filler. It writes columns[RAY_VIEW_COLS] with the wall
 // height, depth, texture coordinate, texture ID and shade consumed by the
 // single downstream tile packer (renderer_scene.c) and billboard occlusion.
 void bsp_init(void);
 void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColors *scene_colors);
 void bsp_invalidate_node_cache(void);
+
+#if DEBUG_PERF || BILLBOARD_VISIBLE_SUBSECTOR_CULL
+// A leaf reached by the current front-to-back cast has not been rejected by
+// its projected box or by solid coverage. The prototype uses this only after
+// bsp_find_subsector_with_margin proves a sprite's full horizontal footprint
+// cannot cross into a different leaf.
+bool bsp_subsector_was_visited(u16 subsector_id);
+#endif
 
 #if DEBUG_PERF
 // Temporary BSP traversal instrumentation for the DEBUG_PERF overlay.
@@ -18,6 +32,7 @@ u16 bsp_get_debug_boxes_projected(void);
 u16 bsp_get_debug_near_fallbacks(void);
 u16 bsp_get_debug_segments_tested(void);
 u16 bsp_get_debug_segments_drawn(void);
+u16 bsp_get_debug_visible_subsector_count(void);
 u32 bsp_get_debug_side_cache_subticks(void);
 u32 bsp_get_debug_box_projection_subticks(void);
 u32 bsp_get_debug_segment_raster_subticks(void);
