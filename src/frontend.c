@@ -9,9 +9,9 @@
 #define PANEL_X 8
 #define PANEL_Y 7
 #define MAIN_CURSOR_X 9
-/* The skull art is 24px tall; anchor it one tile above the menu label so its
- * visible head lines up with the selected entry instead of the gap below it. */
-#define MAIN_CURSOR_Y 10
+/* The skull art is 24px tall; its visible head must sit beside the selected
+ * label, rather than one tile above it. */
+#define MAIN_CURSOR_Y 12
 #define MAIN_CURSOR_STEP 4
 
 static void clear_plane_cpu(VDPPlane plane) {
@@ -102,6 +102,14 @@ static const Image *options_panel(u16 selected) {
     return &frontend_options_1_1_2;
 }
 
+static const Image *skill_panel(u16 selected) {
+    if (selected == DOOM_SKILL_IM_TOO_YOUNG_TO_DIE) return &frontend_skill_0;
+    if (selected == DOOM_SKILL_HEY_NOT_TOO_ROUGH) return &frontend_skill_1;
+    if (selected == DOOM_SKILL_HURT_ME_PLENTY) return &frontend_skill_2;
+    if (selected == DOOM_SKILL_ULTRA_VIOLENCE) return &frontend_skill_3;
+    return &frontend_skill_4;
+}
+
 static const Image *pause_panel(u16 selected) {
     if (selected == 0) return &frontend_pause_0;
     if (selected == 1) return &frontend_pause_1;
@@ -143,6 +151,35 @@ static void run_options(u16 tile_base) {
     wait_for_release(MENU_INPUT);
 }
 
+static bool run_skill_menu(u16 tile_base, DoomSkill *skill) {
+    u16 selected = DOOM_SKILL_HURT_ME_PLENTY;
+    u16 previous;
+
+    draw_panel(skill_panel(selected), tile_base);
+    wait_for_release(MENU_INPUT);
+    previous = JOY_readJoypad(JOY_1);
+    while (TRUE) {
+        const u16 pressed = read_pressed(&previous);
+        bool redraw = FALSE;
+        if ((pressed & BUTTON_UP) != 0) {
+            selected = (u16)((selected + 4) % 5);
+            redraw = TRUE;
+        }
+        if ((pressed & BUTTON_DOWN) != 0) {
+            selected = (u16)((selected + 1) % 5);
+            redraw = TRUE;
+        }
+        if ((pressed & MENU_BACK) != 0) return FALSE;
+        if ((pressed & MENU_ACCEPT) != 0) {
+            *skill = (DoomSkill)selected;
+            wait_for_release(MENU_INPUT);
+            return TRUE;
+        }
+        if (redraw) draw_panel(skill_panel(selected), tile_base);
+        VDP_waitVSync();
+    }
+}
+
 static bool run_quit_confirmation(u16 tile_base) {
     u16 selected = 1;
     u16 previous;
@@ -162,7 +199,7 @@ static bool run_quit_confirmation(u16 tile_base) {
     }
 }
 
-static bool run_main_menu(u16 menu_base, u16 overlay_base) {
+static bool run_main_menu(u16 menu_base, u16 overlay_base, DoomSkill *skill) {
     u16 selected = 0;
     u16 previous;
     u32 ticks = 0;
@@ -200,8 +237,26 @@ static bool run_main_menu(u16 menu_base, u16 overlay_base) {
         }
         if ((pressed & MENU_BACK) != 0) return FALSE;
         if ((pressed & MENU_ACCEPT) != 0) {
-            if (selected == 0) return TRUE;
-            if (selected == 1) {
+            if (selected == 0) {
+                if (run_skill_menu((u16)(overlay_base + frontend_skull1.tileset->numTile), skill)) {
+                    return TRUE;
+                }
+                clear_plane_cpu(BG_A);
+                clear_plane_cpu(BG_B);
+                game_audio_suspend_for_video();
+                VDP_waitVSync();
+                VDP_setEnable(FALSE);
+                VDP_drawImageEx(BG_A, &frontend_main_menu,
+                                TILE_ATTR_FULL(PAL0, FALSE, FALSE, FALSE, menu_base),
+                                0, 0, TRUE, TRUE);
+                load_main_cursor_tiles(overlay_base);
+                draw_main_cursor(overlay_base, selected, FALSE);
+                VDP_setEnable(TRUE);
+                game_audio_resume_after_video();
+                wait_for_release(MENU_INPUT);
+                previous = JOY_readJoypad(JOY_1);
+            }
+            else if (selected == 1) {
                 clear_plane_cpu(BG_A);
                 clear_plane_cpu(BG_B);
                 run_options((u16)(overlay_base + frontend_skull1.tileset->numTile));
@@ -230,7 +285,7 @@ static bool run_main_menu(u16 menu_base, u16 overlay_base) {
     }
 }
 
-FrontendAction frontend_run(void) {
+DoomSkill frontend_run(void) {
     while (TRUE) {
         u16 previous;
         u32 ticks = 0;
@@ -267,7 +322,10 @@ FrontendAction frontend_run(void) {
         }
         clear_plane_cpu(BG_A);
         clear_plane_cpu(BG_B);
-        if (run_main_menu(menu_base, overlay_base)) return FRONTEND_NEW_GAME;
+        {
+            DoomSkill skill = DOOM_SKILL_HURT_ME_PLENTY;
+            if (run_main_menu(menu_base, overlay_base, &skill)) return skill;
+        }
     }
 }
 

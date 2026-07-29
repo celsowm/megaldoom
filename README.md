@@ -57,8 +57,11 @@ reference-renderer fallback in the product.
 - Start during gameplay: pause / resume through the pause menu
 - Options: toggle music and sound effects for the current boot session
 
-`NEW GAME` starts E1M1 directly with the existing medium-skill population. Save/load,
-episode selection and alternate difficulty rules are intentionally not exposed yet.
+`NEW GAME` opens the five classic Doom skill choices. Their source-faithful E1M1
+THING populations map to easy (the first two choices), normal (`HURT ME PLENTY`)
+and hard (the last two choices); Nightmare-specific respawn and speed rules are
+not part of this prototype. Save/load and episode selection are intentionally not
+exposed yet.
 
 ### Gameplay
 

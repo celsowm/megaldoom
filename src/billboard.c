@@ -46,8 +46,16 @@ static u16 g_debug_visibility_cache_hits;
 static u16 g_debug_visibility_cache_misses;
 #endif
 
+#define DOOM_THING_SKILL_EASY 0x0001u
 #define DOOM_THING_SKILL_MEDIUM 0x0002u
+#define DOOM_THING_SKILL_HARD 0x0004u
 #define DOOM_THING_NOT_SINGLE_PLAYER 0x0010u
+
+static u16 doom_skill_thing_mask(DoomSkill skill) {
+    if (skill <= DOOM_SKILL_HEY_NOT_TOO_ROUGH) return DOOM_THING_SKILL_EASY;
+    if (skill == DOOM_SKILL_HURT_ME_PLENTY) return DOOM_THING_SKILL_MEDIUM;
+    return DOOM_THING_SKILL_HARD;
+}
 
 static u8 map_thing_type(u16 doom_type, u8 *visual) {
     switch (doom_type) {
@@ -305,8 +313,9 @@ bool billboard_measure_object(const PlayerState *player, s16 cos_a, s16 sin_a,
     return TRUE;
 }
 
-void billboard_init(u16 phase_index) {
+void billboard_init(u16 phase_index, DoomSkill skill) {
     u16 count = 0;
+    const u16 thing_skill_mask = doom_skill_thing_mask(skill);
     (void)phase_index;
     billboard_registry_reset();
     billboard_effects_reset();
@@ -315,9 +324,9 @@ void billboard_init(u16 phase_index) {
         const u16 flags = bsp_things[i].flags;
         u8 visual = 0;
 
-        // Runtime policy: Doom medium skill, single-player. The generated map
-        // remains source-faithful and keeps every THING for future skill/menu work.
-        if ((flags & DOOM_THING_SKILL_MEDIUM) == 0 ||
+        // The generated map retains the original Doom skill bits. Five menu
+        // choices map to Doom's three easy/normal/hard THING populations.
+        if ((flags & thing_skill_mask) == 0 ||
             (flags & DOOM_THING_NOT_SINGLE_PLAYER) != 0) {
             continue;
         }

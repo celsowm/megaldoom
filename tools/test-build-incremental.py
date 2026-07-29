@@ -63,7 +63,7 @@ with tempfile.TemporaryDirectory(prefix="megaldoom-build-test-") as folder:
         frontend.generate = real_generate
     assert frontend.complete_outputs(output)
     assert (output / frontend.MANIFEST_NAME).is_file()
-    assert len(frontend.EXPECTED_OUTPUTS) == 30
+    assert len(frontend.EXPECTED_OUTPUTS) == 35
 
     mtimes = {name: (output / name).stat().st_mtime_ns for name in frontend.EXPECTED_OUTPUTS}
     cached = run_generator(source, output)

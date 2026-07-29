@@ -41,6 +41,8 @@ for music in range(2):
     for sfx in range(2):
         for selected in range(3):
             expected[f"options_{music}_{sfx}_{selected}.png"] = (320, 224)
+for selected in range(5):
+    expected[f"skill_{selected}.png"] = (320, 224)
 for selected in range(2):
     expected[f"confirm_{selected}.png"] = (320, 224)
 palettes = []
@@ -69,7 +71,7 @@ assert 16 + unique_tiles(ASSETS / "main_menu.png") + max(
 pair_base = 16 + (20 * 15 * 2)
 pause_tiles = max(
     unique_tiles(path)
-    for pattern in ("pause_*.png", "options_*_*_*.png", "confirm_*.png")
+    for pattern in ("pause_*.png", "options_*_*_*.png", "skill_*.png", "confirm_*.png")
     for path in ASSETS.glob(pattern)
 )
 pause_end = pair_base + pause_tiles
@@ -77,10 +79,15 @@ assert pause_end < 1440, "pause overlay exceeds the reloadable VRAM region"
 
 for token in (
     "frontend_run", "frontend_run_pause", "frontend_prompt", "FRONTEND_PAUSE_QUIT_TO_TITLE",
-    "game_audio_toggle_music", "game_audio_toggle_sfx", "wait_for_release",
+    "run_skill_menu", "DOOM_SKILL_HURT_ME_PLENTY", "(selected + 4) % 5",
+    "game_audio_toggle_music", "game_audio_toggle_sfx", "wait_for_release", "MAIN_CURSOR_Y 12",
 ):
     assert token in FRONTEND
-for token in ("M_DOOM", "M_NGAME", "M_OPTION", "M_QUITG", "M_OPTTTL", "M_SKULL1", "M_SKULL2", "PRESS START"):
+for token in (
+    "M_DOOM", "M_NGAME", "M_OPTION", "M_QUITG", "M_OPTTTL", "M_SKILL", "M_JKILL",
+    "M_ROUGH", "M_HURT", "M_ULTRA", "M_NMARE", "M_SKULL1", "M_SKULL2", "PRESS START",
+    "centered_doom_text",
+):
     assert token in (ROOT / "tools/generate-frontend-assets.py").read_text()
 assert "(selected + 2) % 3" in FRONTEND and "(selected + 1) % 3" in FRONTEND
 assert "system_joy & ~previous_system_joy" in MAIN
@@ -94,7 +101,8 @@ assert "s_current_music = music" in AUDIO and "XGM2_stop();" in AUDIO
 assert "game_audio_suspend_for_video" in FRONTEND and "game_audio_resume_after_video" in FRONTEND
 assert "return PAIR_TILE_BASE;" in RENDERER
 assert "init_pair_tiles();" in RENDERER and "init_hud_tiles();" in RENDERER
-assert "DOOM_THING_SKILL_MEDIUM" in BILLBOARD
+for token in ("DOOM_THING_SKILL_EASY", "DOOM_THING_SKILL_MEDIUM", "DOOM_THING_SKILL_HARD", "doom_skill_thing_mask"):
+    assert token in BILLBOARD
 assert re.search(r"frontend_run\(\);\s*game_audio_stop_music\(\);\s*renderer_init\(\);", MAIN)
 
 print("ok    frontend: title/menu flow, shared palette, pause VRAM and audio gates")

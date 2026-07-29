@@ -24,6 +24,11 @@ IMAGE frontend_options_1_0_2  "frontend/options_1_0_2.png" NONE ALL
 IMAGE frontend_options_1_1_0  "frontend/options_1_1_0.png" NONE ALL
 IMAGE frontend_options_1_1_1  "frontend/options_1_1_1.png" NONE ALL
 IMAGE frontend_options_1_1_2  "frontend/options_1_1_2.png" NONE ALL
+IMAGE frontend_skill_0        "frontend/skill_0.png" NONE ALL
+IMAGE frontend_skill_1        "frontend/skill_1.png" NONE ALL
+IMAGE frontend_skill_2        "frontend/skill_2.png" NONE ALL
+IMAGE frontend_skill_3        "frontend/skill_3.png" NONE ALL
+IMAGE frontend_skill_4        "frontend/skill_4.png" NONE ALL
 IMAGE frontend_pause_0        "frontend/pause_0.png" NONE ALL
 IMAGE frontend_pause_1        "frontend/pause_1.png" NONE ALL
 IMAGE frontend_pause_2        "frontend/pause_2.png" NONE ALL

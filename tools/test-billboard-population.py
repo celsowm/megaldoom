@@ -1,4 +1,4 @@
-"""Validate the source-faithful E1M1 THINGS and runtime skill policy counts."""
+"""Validate the source-faithful E1M1 THINGS and each runtime skill population."""
 
 from pathlib import Path
 import re
@@ -15,8 +15,13 @@ CURATED_TYPES = {
 }
 ENEMY_TYPES = {9, 3001, 3004}
 BARREL_TYPES = {2035}
-MEDIUM_FLAG = 0x0002
+SKILL_FLAGS = {
+    "easy": 0x0001,
+    "normal": 0x0002,
+    "hard": 0x0004,
+}
 NOT_SINGLE_PLAYER_FLAG = 0x0010
+MAX_RUNTIME_OBJECTS = 112
 
 
 def main() -> int:
@@ -36,35 +41,50 @@ def main() -> int:
         )
     ]
     curated = [thing for thing in things if thing[2] in CURATED_TYPES]
-    runtime = [
-        thing for thing in curated
-        if (thing[4] & MEDIUM_FLAG) and not (thing[4] & NOT_SINGLE_PLAYER_FLAG)
-    ]
+    if len(curated) != 87:
+        raise ValueError(f"unexpected curated E1M1 THING count: {len(curated)}")
+    populations = {
+        name: [
+            thing for thing in curated
+            if (thing[4] & flag) and not (thing[4] & NOT_SINGLE_PLAYER_FLAG)
+        ]
+        for name, flag in SKILL_FLAGS.items()
+    }
     mapped_types = {
         int(value)
         for value in re.findall(r"case\s+(\d+)\s*:", runtime_text)
     }
-    eligible_types = {thing[2] for thing in runtime}
+    eligible_types = {thing[2] for runtime in populations.values() for thing in runtime}
     missing_mappings = sorted(eligible_types - mapped_types)
     if missing_mappings:
         raise ValueError(
             "eligible E1M1 THING types have no map_thing_type mapping: "
             + ", ".join(map(str, missing_mappings))
         )
-    enemies = sum(thing[2] in ENEMY_TYPES for thing in runtime)
-    barrels = sum(thing[2] in BARREL_TYPES for thing in runtime)
-    items = len(runtime) - enemies - barrels
-
-    actual = (len(curated), len(runtime), enemies, items, barrels)
-    expected = (87, 58, 6, 46, 6)
+    actual = {
+        name: (
+            len(runtime),
+            sum(thing[2] in ENEMY_TYPES for thing in runtime),
+            sum(thing[2] not in ENEMY_TYPES | BARREL_TYPES for thing in runtime),
+            sum(thing[2] in BARREL_TYPES for thing in runtime),
+        )
+        for name, runtime in populations.items()
+    }
+    expected = {
+        "easy": (56, 4, 46, 6),
+        "normal": (58, 6, 46, 6),
+        "hard": (82, 29, 47, 6),
+    }
     if actual != expected:
         raise ValueError(
-            "unexpected billboard population "
-            f"curated/runtime/enemies/items/barrels={actual}, expected={expected}"
+            "unexpected billboard skill populations "
+            f"actual={actual}, expected={expected}"
         )
+    if any(len(runtime) > MAX_RUNTIME_OBJECTS for runtime in populations.values()):
+        raise ValueError("a skill population exceeds BILLBOARD_OBJECT_COUNT")
 
-    print("ok    billboard population: 87 useful, 58 medium single-player "
-          "(6 enemies, 46 items, 6 barrels, 0 decor)")
+    print("ok    billboard populations: easy 56, normal 58, hard 82 "
+          "single-player objects (all fit the 112-object pool)")
     return 0
 
 

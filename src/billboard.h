@@ -2,6 +2,7 @@
 #define MEGALDOOM_BILLBOARD_H
 
 #include <genesis.h>
+#include "doom_skill.h"
 #include "raycast.h"
 
 #define BILLBOARD_MAX_PROJECTED_OBJECTS 12
@@ -104,7 +105,7 @@ typedef struct {
     s16 push_y;
 } BillboardEnemyUpdate;
 
-void billboard_init(u16 phase_index);
+void billboard_init(u16 phase_index, DoomSkill skill);
 BillboardPickupResult billboard_collect_near(s32 x, s32 y);
 u16 billboard_get_collected_count(void);
 BillboardPickupCounts billboard_get_pickup_counts(void);

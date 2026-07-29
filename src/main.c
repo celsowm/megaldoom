@@ -146,11 +146,11 @@ static void render_current_view(u16 player_health, bool base_dirty) {
         (bool)(player_health <= 20));
 }
 
-static void reset_level(u16 phase_index, bool *level_cleared, u16 *shot_cooldown,
+static void reset_level(u16 phase_index, DoomSkill skill, bool *level_cleared, u16 *shot_cooldown,
                         u16 *player_health, u16 *player_armor, u16 *player_ammo,
                         u8 *player_keys, u32 *frame) {
     bsp_map_reset(phase_index);
-    billboard_init(phase_index);
+    billboard_init(phase_index, skill);
     player_init(&g_player, phase_index);
     player_controller_reset();
     g_weapon_flash = 0;
@@ -194,14 +194,15 @@ int main(bool hard) {
         u16 shot_cooldown = 0;
         u16 previous_system_joy;
         u32 prev_vtimer;
+        DoomSkill skill;
 
-        frontend_run();
+        skill = frontend_run();
         game_audio_stop_music();
         renderer_init();
         renderer_redraw_init(&redraw);
         game_audio_play_music(test_music);
 
-        reset_level(phase_index, &level_cleared, &shot_cooldown, &player_health,
+        reset_level(phase_index, skill, &level_cleared, &shot_cooldown, &player_health,
                     &player_armor, &player_ammo, &player_keys, &frame);
         JOY_update();
         previous_system_joy = JOY_readJoypad(JOY_1);
@@ -331,7 +332,7 @@ int main(bool hard) {
 #endif
         } else if ((system_pressed & BUTTON_A) != 0) {
             phase_index = (u16)((phase_index + 1) & 1);
-            reset_level(phase_index, &level_cleared, &shot_cooldown, &player_health,
+            reset_level(phase_index, skill, &level_cleared, &shot_cooldown, &player_health,
                         &player_armor, &player_ammo, &player_keys, &frame);
             renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE);
         }
@@ -432,7 +433,7 @@ int main(bool hard) {
                     player_armor = (u16)(player_armor - armor_absorb);
                     if (player_health <= damage) {
                         game_audio_play_sfx(sfx_player_death, sizeof(sfx_player_death), SOUND_PCM_CH2);
-                        reset_level(phase_index, &level_cleared, &shot_cooldown,
+                        reset_level(phase_index, skill, &level_cleared, &shot_cooldown,
                                     &player_health, &player_armor, &player_ammo,
                                     &player_keys, &frame);
                         renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE);
@@ -468,7 +469,7 @@ int main(bool hard) {
                 player_armor = (u16)(player_armor - armor_absorb);
                 if (player_health <= damage) {
                     game_audio_play_sfx(sfx_player_death, sizeof(sfx_player_death), SOUND_PCM_CH2);
-                    reset_level(phase_index, &level_cleared, &shot_cooldown,
+                    reset_level(phase_index, skill, &level_cleared, &shot_cooldown,
                                 &player_health, &player_armor, &player_ammo,
                                 &player_keys, &frame);
                     renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE);

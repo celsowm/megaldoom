@@ -20,10 +20,18 @@ MANIFEST_VERSION = 1
 
 PATCHES = (
     "TITLEPIC", "M_DOOM", "M_NGAME", "M_OPTION", "M_QUITG",
-    "M_OPTTTL", "M_SKULL1", "M_SKULL2",
+    "M_OPTTTL", "M_SKILL", "M_JKILL", "M_ROUGH", "M_HURT", "M_ULTRA", "M_NMARE",
+    "M_SKULL1", "M_SKULL2",
 )
 PROMPT = "PRESS START"
-GLYPHS = tuple(sorted({f"STCFN{ord(character):03d}" for character in PROMPT if character != " "}))
+DOOM_FONT_TEXT = (PROMPT, "MUSIC ON", "MUSIC OFF", "SFX ON", "SFX OFF", "BACK")
+GLYPHS = tuple(sorted({
+    f"STCFN{ord(character):03d}"
+    for text in DOOM_FONT_TEXT
+    for character in text
+    if character != " "
+}))
+SKILL_PATCHES = ("M_JKILL", "M_ROUGH", "M_HURT", "M_ULTRA", "M_NMARE")
 
 
 def expected_outputs() -> tuple[str, ...]:
@@ -36,6 +44,7 @@ def expected_outputs() -> tuple[str, ...]:
         f"options_{music}_{sfx}_{selected}.png"
         for music in range(2) for sfx in range(2) for selected in range(3)
     )
+    names.extend(f"skill_{selected}.png" for selected in range(5))
     names.extend(f"pause_{selected}.png" for selected in range(3))
     names.extend(f"confirm_{selected}.png" for selected in range(2))
     return tuple(names)
@@ -206,6 +215,11 @@ def centered_text(image: Image.Image, text: str, y: int) -> None:
               font=font, fill=(255, 255, 255, 255))
 
 
+def centered_doom_text(image: Image.Image, text: str, y: int, source: Path = SOURCE) -> None:
+    patch = doom_text(text, source)
+    image.alpha_composite(patch, ((image.width - patch.width) // 2, y))
+
+
 def doom_text(text: str, source: Path = SOURCE) -> Image.Image:
     glyphs: list[Image.Image | None] = []
     width = 0
@@ -235,6 +249,18 @@ def panel_with_skull(images: dict[str, Image.Image], selected: int, frame: int) 
 def submenu_panel(images: dict[str, Image.Image], selected: int) -> Image.Image:
     panel = Image.new("RGBA", (192, 112), (0, 0, 0, 255))
     panel.alpha_composite(images["M_SKULL1"], (24, 39 + selected * 24))
+    return panel
+
+
+def skill_panel(images: dict[str, Image.Image], selected: int) -> Image.Image:
+    panel = Image.new("RGBA", (320, 224), (0, 0, 0, 255))
+    title = images["M_SKILL"]
+    panel.alpha_composite(title, ((320 - title.width) // 2, 32))
+    for index, name in enumerate(SKILL_PATCHES):
+        patch = images[name]
+        panel.alpha_composite(patch, ((320 - patch.width) // 2, 64 + index * 24))
+    skull = images["M_SKULL1"]
+    panel.alpha_composite(skull, (8, 60 + selected * 24))
     return panel
 
 
@@ -298,10 +324,13 @@ def generate(source: Path, output: Path) -> None:
                 panel = submenu_panel(images, selected)
                 patch = images["M_OPTTTL"]
                 panel.alpha_composite(patch, ((192 - patch.width) // 2, 0))
-                centered_text(panel, f"MUSIC {'ON' if music else 'OFF'}", 40)
-                centered_text(panel, f"SFX   {'ON' if sfx else 'OFF'}", 64)
-                centered_text(panel, "BACK", 88)
+                centered_doom_text(panel, f"MUSIC {'ON' if music else 'OFF'}", 40, source)
+                centered_doom_text(panel, f"SFX {'ON' if sfx else 'OFF'}", 64, source)
+                centered_doom_text(panel, "BACK", 88, source)
                 assets[f"options_{music}_{sfx}_{selected}.png"] = (screen_overlay(panel), True)
+
+    for selected in range(5):
+        assets[f"skill_{selected}.png"] = (skill_panel(images, selected), False)
 
     for selected in range(3):
         panel = submenu_panel(images, selected)
