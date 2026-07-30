@@ -270,7 +270,6 @@ void renderer_upload_scene_step(void) {
     const bool was_pending = g_view_upload.pending;
 #endif
     upload_view_tilemap_step();
-    upload_compass_tilemap();
 #if DEBUG_PERF
     renderer_draw_perf_overlay((bool)(was_pending && !g_view_upload.pending));
 #endif
@@ -299,5 +298,4 @@ void renderer_upload_background_disarm(void) {
 void renderer_upload_background_pump(void) {
     if (!g_bg_pump_armed) return;
     upload_view_tilemap_step();
-    upload_compass_tilemap();
 }

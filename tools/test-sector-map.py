@@ -87,7 +87,7 @@ def main():
     renderer_scene = "\n".join((ROOT / "src" / n).read_text() for n in (
         "renderer_scene.c", "renderer_pack.c", "renderer_doors.c",
         "renderer_billboard_draw.c", "renderer_frame_overlay.c",
-        "renderer_compass.c", "renderer_upload.c", "renderer_sparse.c",
+        "renderer_upload.c", "renderer_sparse.c",
         "renderer_flats.c",
     ))
     forbidden_renderer = ("RENDERER_REFERENCE_PACKER", "build_column_strip_reference",

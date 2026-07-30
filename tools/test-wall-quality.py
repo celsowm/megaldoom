@@ -121,7 +121,7 @@ def main():
     renderer = "\n".join((ROOT / "src" / n).read_text() for n in (
         "renderer_scene.c", "renderer_pack.c", "renderer_doors.c",
         "renderer_billboard_draw.c", "renderer_frame_overlay.c",
-        "renderer_compass.c", "renderer_upload.c", "renderer_sparse.c",
+        "renderer_upload.c", "renderer_sparse.c",
         "renderer_flats.c",
     ))
     assets = ASSETS_PATH.read_text()

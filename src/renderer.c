@@ -7,8 +7,11 @@
 #error "Weapon tiles overlap the SGDK font VRAM region"
 #endif
 
+#if (BACKDROP_TILE_BASE + MEGALDOOM_BACKDROP_TILE_COUNT) > HUD_VRAM_SAFE_TILE_LIMIT
+#error "Backdrop tiles overlap the SGDK font VRAM region"
+#endif
+
 u32 g_view_tiles[VIEW_TILE_COUNT][8];
-u16 g_compass_tilemap[COMPASS_W * COMPASS_H];
 u32 g_view_bank_dirty_bits[VIEW_BANK_COUNT][VIEW_DIRTY_WORD_COUNT];
 u16 g_view_bank_dirty_count[VIEW_BANK_COUNT];
 u16 g_view_vram_bank;
@@ -105,6 +108,16 @@ static void init_hud_tiles(void) {
     VDP_loadTileData((const u32 *)FREEDOOM_FACE_TILES, FACE_TILE_BASE, FREEDOOM_FACE_TILE_COUNT, DMA);
     VDP_loadTileData((const u32 *)MEGALDOOM_WEAPON_TILES, WEAPON_TILE_BASE,
                      MEGALDOOM_WEAPON_TILE_COUNT, DMA);
+}
+
+// Tiled rock backdrop: uploaded once and never rebaked (renderer_draw_backdrop
+// in renderer_hud.c only repoints tilemap cells at these already-resident
+// tiles). Outside the VRAM region the pause frontend borrows (PAIR_TILE_BASE,
+// see renderer_get_menu_tile_base below), so it does not need reloading in
+// renderer_restore_after_menu.
+static void init_backdrop_tiles(void) {
+    VDP_loadTileData((const u32 *)MEGALDOOM_BACKDROP_TILES, BACKDROP_TILE_BASE,
+                     MEGALDOOM_BACKDROP_TILE_COUNT, DMA);
 }
 
 static void build_view_bank_tilemaps(void) {
@@ -236,6 +249,7 @@ void renderer_init(void) {
     init_video();
     init_pair_tiles();
     init_hud_tiles();
+    init_backdrop_tiles();
     init_view_tilemap();
     g_view_dirty_bank_mask = 0;
 #if RENDERER_SPARSE_FB

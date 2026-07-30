@@ -2,7 +2,7 @@
 #define MEGALDOOM_RENDERER_PACK_INTERNAL_H
 
 // Private cross-file contract for the renderer_scene.c split. Only the
-// renderer_{flats,pack,doors,billboard_draw,frame_overlay,compass,upload,
+// renderer_{flats,pack,doors,billboard_draw,frame_overlay,upload,
 // sparse,scene}.c translation units include this header - it is not part of
 // the renderer's public API (renderer.h / renderer_internal.h).
 #include "renderer_internal.h"
@@ -82,11 +82,6 @@ void draw_projected_billboards(const RayColumn *columns,
 void draw_weapon_overlay(bool flash);
 void draw_overlay_ops(const MegalDoomOverlayRowOp *ops, u16 count);
 void frame_overlay_reset(void);
-
-// Compass HUD widget (renderer_compass.c).
-void build_compass_tilemap(u16 angle);
-void upload_compass_tilemap(void);
-void compass_reset(void);
 
 // VRAM DMA upload scheduling (renderer_upload.c).
 void clear_all_view_banks_dirty(void);

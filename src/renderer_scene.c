@@ -5,7 +5,6 @@
 
 void renderer_scene_init(void) {
     pack_stage_reset();
-    compass_reset();
     frame_overlay_reset();
     upload_state_init();
     renderer_overlay_reset();
@@ -13,7 +12,6 @@ void renderer_scene_init(void) {
 }
 
 void renderer_invalidate_scene(void) {
-    compass_reset();
     frame_overlay_reset();
     upload_state_invalidate();
     pack_stage_reset();
@@ -87,7 +85,6 @@ void renderer_render_scene(const RayColumn *columns,
     } else if (low_health_warning) {
         draw_overlay_ops(MEGALDOOM_LOW_HEALTH_OVERLAY_OPS, MEGALDOOM_OVERLAY_OP_COUNT[1]);
     }
-    build_compass_tilemap(player->angle);
     renderer_overlay_finish();
 #if DEBUG_PERF
     renderer_perf_set_weapon_subticks(getSubTick() - wpn_start);
