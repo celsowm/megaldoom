@@ -432,10 +432,50 @@ segs = 4.4 samples per seg.** Doom's affine texture spans pay because it had
 16-pixel runs; here a K=4 sub-span barely has an interior, so ~2 of every 4.4
 samples still need the exact chain. Ceiling for piecewise-affine perspective is
 therefore ~0.3–0.5 vb of a 12.9 vb frame (2–4%) — and frame time quantizes to
-whole vblanks, so it would very likely measure as **zero**. Traversal + box
-projection is 2.2× the entire sample loop and is the honest target; note
-`project_box_range` is already down to 8 multiplies with extrema computed
-without assembling corners, so it is not low-hanging.
+whole vblanks, so it would very likely measure as **zero**.
+
+### Traversal split: no hot spot in there either (2026-07-30)
+
+The 55% block above was then instrumented from the inside with
+`-DCADENCE_TRAVERSE_SPLIT=1` (`project_box_range`, both occlusion queries, and
+path counters; see `debug_checkpoint.h`). Same pose-proof route, one rebuild.
+Timers cost ~5–10 subticks per bracket, so the absolute figures are inflated;
+the ranges below are after subtracting that, and the split is an *attribution*,
+not a release absolute. Clean cast on this route is 6235 subticks.
+
+| inside traversal (~3640 subticks) | subticks | share |
+|---|---|---|
+| `project_box_range` | 1500–1860 | 41–51% |
+| `g_range_closed` (solid-range query) | 0–330 | 0–9% |
+| `g_all_closed` | ~0 | ~0% |
+| recursion + leaf visits + seg loop | ~1450–2140 | 40–59% |
+
+**The near-plane polygon branch is NOT the explanation — that hypothesis was
+wrong.** Of 70 `project_box_range` calls per rebuild: **81% take the fast 2-DIVS
+path**, 6% the expensive up-to-8-DIVS near-plane path, 11% early-out before any
+divide, 1% cheap half-plane reject. Note `boxes_projected` (61) counts only calls
+reaching a projection, so `box_calls` (70) is the true count. The occlusion
+queries are effectively free — their measured time is almost entirely probe
+overhead — so the successor-set/bitmask design is not a cost worth revisiting.
+
+What is left is **diffuse**: ~26 subticks (~2600 cycles) per fast-path box for
+6 `MULS.W` + 2 `DIVS.W` + compares, against ~1000–1200 cycles of expected
+arithmetic, plus a comparable amount of plain call/recursion overhead spread
+across 59 node visits, 70 boxed-child calls and ~22 leaf visits. The most
+plausible remaining lever is that `project_box_range` computes everything in
+`s32` while the map-bounds contract proves signed words suffice — every s32 op is
+two word ops on a 68000. Optimistic ceiling ~0.5 vb, and it needs the same
+differential-model treatment as the rest.
+
+**Bottom line: the frame has no concentrated hot spot.** At 12.92 vb: pack 3.59,
+cast 4.81 (box projection ~1.2, traversal overhead ~1.4, draw_seg setup ~1.0,
+sample loop ~1.2), billboard raster 1.71, projection 1.39, misc/upload/logic
+~1.41. Nothing exceeds 28% and every block already has an optimization pass
+behind it. Summing every remaining live lever optimistically gives ~2 vb — 4.6
+to 5.4 fps, imperceptible. **Reaching 20 fps needs 4.3×, which is not available
+incrementally.** Further gains have to come from structural fidelity dials
+(`RAY_COL_STRIDE`, view size, sprite count/size), all of which are user taste
+calls, not perf decisions.
 
 ## Sparse semantic tile oracle (2026-07-19)
 

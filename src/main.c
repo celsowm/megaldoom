@@ -589,6 +589,15 @@ int main(bool hard) {
                 u32 drawseg_subticks;
                 u32 sample_subticks;
                 u32 samples;
+                // Traversal attribution for the cast time outside draw_seg.
+                u32 box_calls;
+                u32 box_near_path;
+                u32 box_cheap_reject;
+                u32 box_early_out;
+                u32 box_subticks;
+                u32 range_closed_calls;
+                u32 range_closed_subticks;
+                u32 all_closed_subticks;
             } CadenceSnapshot;
             static CadenceSnapshot s_cadence;
             const u16 vb = (u16)(vtimer - cur_vtimer);
@@ -611,6 +620,14 @@ int main(bool hard) {
             s_cadence.drawseg_subticks = g_cadence_drawseg_subticks;
             s_cadence.sample_subticks = g_cadence_sample_subticks;
             s_cadence.samples = g_cadence_samples;
+            s_cadence.box_calls = g_cadence_box_calls;
+            s_cadence.box_near_path = g_cadence_box_near_path;
+            s_cadence.box_cheap_reject = g_cadence_box_cheap_reject;
+            s_cadence.box_early_out = g_cadence_box_early_out;
+            s_cadence.box_subticks = g_cadence_box_subticks;
+            s_cadence.range_closed_calls = g_cadence_range_closed_calls;
+            s_cadence.range_closed_subticks = g_cadence_range_closed_subticks;
+            s_cadence.all_closed_subticks = g_cadence_all_closed_subticks;
             debug_checkpoint_publish_perf(&s_cadence, sizeof(s_cadence));
         }
 #endif

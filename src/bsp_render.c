@@ -111,8 +111,11 @@ static inline void bsp_cadence_inc_nodes_visited(void) { g_cadence_nodes_visited
 static inline void bsp_cadence_inc_boxes_projected(void) { g_cadence_boxes_projected++; }
 static inline void bsp_cadence_inc_segments_tested(void) { g_cadence_segs_tested++; }
 static inline void bsp_cadence_inc_segments_drawn(void) { g_cadence_segs_drawn++; }
-static inline void bsp_cadence_inc_boxes_rejected_cheap(void) {}
-static inline void bsp_cadence_inc_near_fallbacks(void) {}
+// Traversal attribution (see debug_checkpoint.h): the near-plane polygon branch
+// pays up to 8 DIVS.W per box against the fast path's 2, so its share of
+// box_calls is what explains project_box_range's cost.
+static inline void bsp_cadence_inc_boxes_rejected_cheap(void) { g_cadence_box_cheap_reject++; }
+static inline void bsp_cadence_inc_near_fallbacks(void) { g_cadence_box_near_path++; }
 #define BSP_DBG_RESET() ((void)0)
 #else
 #define BSP_DBG_INC(c) ((void)0)
@@ -473,7 +476,13 @@ static void draw_seg(u16 seg_index) {
 // screen range. Any near-plane ambiguity expands to the whole view; only boxes
 // proven completely behind the camera or outside the expanded viewport are cut.
 static bool project_box_range(const BspBox *box, s16 *left, s16 *right) {
+#if CADENCE_STAGE_PROBE
+    g_cadence_box_calls++;
+#endif
     if ((box->min_x > box->max_x) || (box->min_y > box->max_y)) {
+#if CADENCE_STAGE_PROBE
+        g_cadence_box_early_out++;
+#endif
         *left = 0;
         *right = RAY_VIEW_COLS - 1;
         return TRUE;
@@ -481,6 +490,9 @@ static bool project_box_range(const BspBox *box, s16 *left, s16 *right) {
 
     if ((g_px >= box->min_x) && (g_px <= box->max_x) &&
         (g_py >= box->min_y) && (g_py <= box->max_y)) {
+#if CADENCE_STAGE_PROBE
+        g_cadence_box_early_out++;
+#endif
         *left = 0;
         *right = RAY_VIEW_COLS - 1;
         return TRUE;
@@ -513,6 +525,9 @@ static bool project_box_range(const BspBox *box, s16 *left, s16 *right) {
     const s32 max_depth = (depth_q8 + ddx_pos + ddy_pos) >> FX_SHIFT;
 
     if (max_depth < BSP_NEAR) {
+#if CADENCE_STAGE_PROBE
+        g_cadence_box_early_out++;
+#endif
         return FALSE;
     }
 
@@ -657,7 +672,13 @@ static void render_boxed_child(u16 child, const BspBox *box) {
     const u32 projection_start = g_bsp_dbg_measure_box ? getSubTick() : 0;
 #endif
 
+#if CADENCE_TRAVERSE_SPLIT
+    const u32 box_start = getSubTick();
+#endif
     const bool projected = project_box_range(box, &left, &right);
+#if CADENCE_TRAVERSE_SPLIT
+    g_cadence_box_subticks += getSubTick() - box_start;
+#endif
 #if DEBUG_PERF
     if (g_bsp_dbg_measure_box) {
         const u32 elapsed = getSubTick() - projection_start;
@@ -679,15 +700,36 @@ static void render_boxed_child(u16 child, const BspBox *box) {
     // column in the child's conservative range is already filled front-to-back,
     // no geometry in that child can change the frame. Test the range one word at
     // a time; rotation can make many child boxes cover most of the view.
+#if CADENCE_STAGE_PROBE
+    g_cadence_range_closed_calls++;
+#endif
+#if CADENCE_TRAVERSE_SPLIT
+    const u32 range_start = getSubTick();
+    const bool closed = g_range_closed(left_sample, right_sample, g_traverse_context);
+    g_cadence_range_closed_subticks += getSubTick() - range_start;
+    if (!closed) {
+        render_node(child);
+    }
+#else
     if (!g_range_closed(left_sample, right_sample, g_traverse_context)) {
         render_node(child);
     }
+#endif
 }
 
 static void render_node(u16 child) {
+#if CADENCE_TRAVERSE_SPLIT
+    const u32 all_start = getSubTick();
+    const bool all_closed = g_all_closed(g_traverse_context);
+    g_cadence_all_closed_subticks += getSubTick() - all_start;
+    if (all_closed) {
+        return; // whole view already filled front-to-back
+    }
+#else
     if (g_all_closed(g_traverse_context)) {
         return; // whole view already filled front-to-back
     }
+#endif
 
     BSP_DBG_INC(nodes_visited);
     if (BSP_CHILD_IS_SUBSECTOR(child)) {

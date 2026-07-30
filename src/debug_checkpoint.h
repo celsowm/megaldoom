@@ -69,6 +69,33 @@ extern u32 g_cadence_segs_drawn;
 extern u32 g_cadence_drawseg_subticks;
 extern u32 g_cadence_sample_subticks;
 extern u32 g_cadence_samples;
+/* Traversal split: the cast time OUTSIDE draw_seg is the single largest block in
+ * a motion frame (55% of cast, measured 2026-07-30) and was never attributed.
+ * These break it into project_box_range, the two occlusion queries
+ * (g_range_closed / g_all_closed) and the remainder (recursion + leaf visits).
+ *
+ * The path counters are bare increments and stay always on. Note
+ * g_cadence_boxes_projected above only counts boxes that reach a projection, so
+ * box_calls is the larger true call count and box_calls - boxes_projected is the
+ * number rejected before any divide. box_near_path counts the expensive
+ * near-plane polygon branch (up to 8 DIVS.W per box) versus the 2-DIVS fast
+ * path — the ratio is what explains the block's cost.
+ *
+ * The three timers cost ~2 getSubTick calls per box and per occlusion query
+ * (~400/frame), so they are OFF by default like the draw_seg split — opt in with
+ * EXTRA_FLAGS="... -DCADENCE_TRAVERSE_SPLIT=1" and read the numbers as an
+ * attribution of the block, not as release-absolute. */
+#ifndef CADENCE_TRAVERSE_SPLIT
+#define CADENCE_TRAVERSE_SPLIT 0
+#endif
+extern u32 g_cadence_box_calls;
+extern u32 g_cadence_box_near_path;
+extern u32 g_cadence_box_cheap_reject;
+extern u32 g_cadence_box_early_out;
+extern u32 g_cadence_box_subticks;
+extern u32 g_cadence_range_closed_calls;
+extern u32 g_cadence_range_closed_subticks;
+extern u32 g_cadence_all_closed_subticks;
 #else
 #define CADENCE_STAGE_PROBE 0
 #endif
