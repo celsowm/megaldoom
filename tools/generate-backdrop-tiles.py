@@ -3,12 +3,20 @@
 viewport (see AGENTS.md's viewport presentation pass, 2026-07-30).
 
 Source: res/originaldoom/flats/FLOOR7_2.png, the Doom 1 border flat (64x64).
-Box-downsampled to 32x32 (4x4 tiles of 8x8 px) so the seamless-tiling edge
-correspondence of the original 64x64 flat survives the resize, then quantized
-to PAL0 -- the palette already resident for the bezel/HUD panel (see
-src/renderer.c's load_game_palettes(), PAL_setColor(0..15)). PAL0 already
-contains an olive/rock ramp (indices 2-8, 10, 14, 15), so no palette change is
-needed and the backdrop shares VRAM-free palette slots with nothing else.
+PAL0 (the bezel/HUD palette, src/renderer.c's load_game_palettes()) has
+exactly ONE genuinely green swatch (index 15, 0x4C6028) among its 16 entries
+-- it was built for UI panels, not a photographic rock texture. A per-pixel
+nearest-RGB-distance quantization of the flat therefore almost never picks
+index 15 (most of the flat's blended tones are numerically closer to the
+neutral greys/browns at indices 3/14), producing a muddy grey-brown result
+that doesn't read as green at all. See AGENTS.md for the before/after.
+
+Fix: follow the SAME convention this renderer already uses for every floor
+and ceiling (src/renderer_flats.c, FREEDOOM_SECTOR_VISUALS) -- reduce the flat
+to a few deliberate tones by luminance threshold, not full-palette nearest
+match, so the chosen colours (not RGB-distance accidents) decide the look.
+The flat's own blotch SHAPE survives (from its luminance, blurred to remove
+dither noise); the COLOUR is picked to guarantee index 15 dominates.
 
 Usage: python tools/generate-backdrop-tiles.py
 Writes the MEGALDOOM_BACKDROP_TILE_DIM / MEGALDOOM_BACKDROP_TILES block into
@@ -18,7 +26,7 @@ BEGIN/END markers below.
 import re
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageFilter
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_PNG = ROOT / "res/originaldoom/flats/FLOOR7_2.png"
@@ -26,6 +34,7 @@ OUTPUT_HEADER = ROOT / "src/generated_renderer_assets.h"
 
 TILE_DIM = 4          # 4x4 tiles = 32x32 px
 TILE_PX = TILE_DIM * 8  # 32
+BLUR_RADIUS = 1.5    # removes FLOOR7_2's fine per-pixel dither before thresholding
 
 # PAL0, must stay byte-identical to src/renderer.c's load_game_palettes()
 # PAL_setColor(0..15) calls.
@@ -37,47 +46,58 @@ PAL0 = [
 ]
 PAL0_RGB = [((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF) for c in PAL0]
 
+# Three-tone luminance threshold: bright blotches -> green (15, the moss
+# highlight), midtones -> dark olive-brown (14), darkest crevices -> near-
+# black (2). Thresholds are luminance-histogram percentiles of the blurred,
+# downsampled flat, so they adapt to whatever source image is used.
+PRIMARY_INDEX = 15    # bright blotches (moss highlight)
+SECONDARY_INDEX = 14  # midtones (dark olive-brown)
+DEEP_INDEX = 2         # darkest crevices (near-black)
+DEEP_PERCENTILE = 0.30
+PRIMARY_PERCENTILE = 0.70
+
 BEGIN_MARKER = "// BEGIN generate-backdrop-tiles.py output"
 END_MARKER = "// END generate-backdrop-tiles.py output"
 
 
-def nearest_pal0_index(rgb):
-    r, g, b = rgb
-    best_index, best_dist = 0, None
-    for index, (pr, pg, pb) in enumerate(PAL0_RGB):
-        dist = (r - pr) ** 2 + (g - pg) ** 2 + (b - pb) ** 2
-        if best_dist is None or dist < best_dist:
-            best_dist, best_index = dist, index
-    return best_index
-
-
-def box_downsample(image, dst_w, dst_h):
+def box_downsample_luminance(image, dst_w, dst_h):
     src_w, src_h = image.size
     assert src_w % dst_w == 0 and src_h % dst_h == 0, (
         "expects an integer downsample factor")
     fx, fy = src_w // dst_w, src_h // dst_h
     px = image.load()
-    out = [[None] * dst_w for _ in range(dst_h)]
+    out = [[0] * dst_w for _ in range(dst_h)]
     for y in range(dst_h):
         for x in range(dst_w):
-            rs = gs = bs = 0
+            total = 0
             for sy in range(y * fy, y * fy + fy):
                 for sx in range(x * fx, x * fx + fx):
-                    r, g, b = px[sx, sy][:3]
-                    rs += r
-                    gs += g
-                    bs += b
-            n = fx * fy
-            out[y][x] = (rs // n, gs // n, bs // n)
+                    total += px[sx, sy]
+            out[y][x] = total // (fx * fy)
     return out
 
 
 def main() -> int:
-    image = Image.open(SOURCE_PNG).convert("RGB")
+    image = Image.open(SOURCE_PNG).convert("L")
     assert image.size == (64, 64), image.size
-    downsampled = box_downsample(image, TILE_PX, TILE_PX)
-    indices = [[nearest_pal0_index(downsampled[y][x]) for x in range(TILE_PX)]
-               for y in range(TILE_PX)]
+    image = image.filter(ImageFilter.GaussianBlur(BLUR_RADIUS))
+    luminance = box_downsample_luminance(image, TILE_PX, TILE_PX)
+
+    flat_values = sorted(v for row in luminance for v in row)
+    n = len(flat_values)
+    deep_threshold = flat_values[int(n * DEEP_PERCENTILE)]
+    primary_threshold = flat_values[int(n * PRIMARY_PERCENTILE)]
+
+    indices = [[None] * TILE_PX for _ in range(TILE_PX)]
+    for y in range(TILE_PX):
+        for x in range(TILE_PX):
+            v = luminance[y][x]
+            if v <= deep_threshold:
+                indices[y][x] = DEEP_INDEX
+            elif v >= primary_threshold:
+                indices[y][x] = PRIMARY_INDEX
+            else:
+                indices[y][x] = SECONDARY_INDEX
 
     tiles = []
     for tile_y in range(TILE_DIM):
