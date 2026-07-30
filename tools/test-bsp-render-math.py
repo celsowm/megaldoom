@@ -50,7 +50,9 @@ def sin_quarter(angle):
     x2 = (x * x) >> FX_SHIFT
     x3 = (x2 * x) >> FX_SHIFT
     x5 = (x3 * x2) >> FX_SHIFT
-    return ((402 * x) - (41 * x3) + (5 * x5)) >> FX_SHIFT
+    # Must stay bit-identical to sin_quarter_q8 in src/fixed_math.c, including
+    # the 1.1839 basis gain baked into the coefficients (see fixed_math.h).
+    return ((479 * x) - (196 * x3) + (24 * x5)) >> FX_SHIFT
 
 
 def fsin(angle):
