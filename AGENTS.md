@@ -58,6 +58,48 @@ Consequence: DMA-side levers (sparse FB, partial uploads) can recover at most
 ~2 of ~12 vblanks; the frame is CPU-bound in cast+pack. Smoothness work should
 target those two stages or frame-pacing, not upload bytes.
 
+### `fx_sin`/`fx_cos` carry a deliberate 1.1839 gain (fixed 2026-07-30)
+
+`sin_quarter_q8`'s 3rd/5th Taylor coefficients were 41 and 5 — each exactly a
+quarter of correct (165, 20) — so the table was a near-linear ramp peaking at 361
+instead of `FX_ONE`. The view basis is `(cos, sin)` with `right =
+perp(forward)`, so a magnitude error scales `depth` and `lateral` together:
+screen-x stayed exact (the scale cancels in `PROJ*lateral/depth`) but wall and
+sprite height go as `1/|basis|`. `|basis|/FX_ONE` swung **1.0645..1.4102** with
+heading, so **every wall and sprite pulsed 32.5% with a 90° period as the player
+turned** — a wall 256 units dead ahead measured 28px facing an axis and 37px
+facing diagonally — and frame cost breathed with it. `tools/test-bsp-render-math.py`
+reproduced the same buggy polynomial, which is why the differential model agreed
+with the ROM and never caught it.
+
+**Normalizing to unit amplitude was measured and rejected.** It shrinks
+view-space depth ~17%, rendering the world ~20% larger, which costs **2.7× in
+sprite rasterization**: checkpoints 11.79 → 15.50 vb/frame (5.1 → 3.9 fps), of
+which +2.84 of the +3.71 vb is billboard raster alone. The wall pipeline barely
+moved. So the coefficients now carry a 1.1839 gain — the old table's *mean*
+magnitude — giving the same average rendered size and movement speed as before
+while removing the heading-dependent variation (magnitude ratio 1.3248 → 1.0192,
+heading error −3.03..+4.43° → −0.19..+1.60°).
+
+Consequences to know before touching trig or scale:
+- `fx_sin`/`fx_cos` return `1.1839*sin`, **not** `sin`; `|basis|` is ~303.
+  The gain cancels in any *ratio* of two basis projections, but not where a
+  projection is an absolute length: height, view-space depth, `FOG_SHIFT`
+  banding, and movement thrust all carry it.
+- `tools/test-world-scale.py` models thrust as `command*THRUST_SCALE`, i.e. an
+  exactly-unit basis, so real movement runs ~18% above its certified
+  `walk=283.6u/s`. That gap predates the gain; do not "fix" it by normalizing
+  the table without re-measuring the sprite cost above.
+- E1M1 starts at angle **192, exactly axis-aligned**, where the old table sat at
+  its 1.4102 maximum and rendered everything at its smallest and cheapest. So
+  the new table renders ~19% *larger* than before at axis-aligned headings and
+  ~16% smaller at diagonals; a start-room route will show it as a small
+  regression that is a wash averaged over headings. Same-pose A/B on
+  stationary-combat: cast 6090 → 6070, pack 4225 → 4615.
+- Both baked reciprocal LUTs stay valid — `bsp_inv_depth_lut.h` guards on
+  `depth >= BSP_NEAR` and `billboard_projection_lut.h` on the `forward` value
+  itself, neither on world distance.
+
 ### Background upload pump (shipped 2026-07-21)
 
 Those ~2 upload vblanks are now overlapped instead of spent: a V-INT callback
@@ -311,10 +353,84 @@ stationary for long stretches) push average changed columns under ~10.
 Why so few columns are reused even when "stationary": the coherence cache
 invalidates a whole tile column if *any* of its 4 sampled `WallColumnDescriptor`
 fields differ, and combat/animation perturbs `top`/`bottom`/`tex_x` by a pixel
-across most columns. Quantizing presentation (plan §14, `top & ~1`) would
-raise reuse but introduces wall-jitter — measure exact reuse first (the oracle
-is still in place; just capture a new route). The oracle is DEBUG_PERF-only and
-free to leave in.
+across most columns. The oracle is DEBUG_PERF-only and free to leave in.
+
+### Descriptor quantization for cache reuse: STRUCTURALLY DEAD (do not retry)
+
+`top & ~1` / `tex_x & ~1` in `describe_textured_column` shipped as `e29d6aa`
+(2026-07-21) and was reverted 2 minutes later by `08e1357`. A field-diff
+diagnostic measured `tex_x` as differing on 84–94% of would-be cache hits and
+top/bottom/tex_x jointly on 57–94%, which looked like a big lever. The measured
+win was `pack_subticks` **−1.3%** on checkpoints and −7.7% on
+stationary-combat — far below the ceiling, and the user reported it introduced a
+**wobble on the walls**.
+
+**Why the ceiling estimate lied, quantified (2026-07-30).** Derive the actual
+per-rendered-frame pose delta from `player_controller.c`: `elapsed_frames =
+min(elapsed_vblanks, 4)` (`main.c:289`) feeds the Doom tic accumulator, which at
+that clamp runs **~2.33 movement tics per rendered frame**; steady-state
+momentum `thrust*8*32/3` gives ~11.8 world units/tic walking and ~23.5 running.
+So between two consecutive rendered frames the player translates **27 (walk) to
+55 (run) world units and turns up to 16 angle units = 22.5°**. At ~5 fps
+consecutive frames are nearly uncorrelated views: a wall at depth 300 moves
+`top` by ~6 px and `tex_x` by many texels. **The quantum needed to collapse a
+frame-to-frame diff is ~8 px / ~8 texels** — which is the stride-4 "muito
+pixelizado" rejection rotated into the vertical axis.
+
+`& ~1` was therefore off by an order of magnitude, not a factor of two. Widening
+the mask, adding a ±N dead-band, or putting hysteresis in `wall_desc_equal` all
+fail identically. So does quantizing the render pose for whole-frame or
+whole-layer reuse — same arithmetic, plus freezing the wall layer while sprites
+keep moving desynchronizes sprite scale/occlusion from the walls behind them.
+**Temporal coherence does not exist at this frame rate, and using temporal
+coherence to raise the frame rate is circular.** Do not re-attempt.
+
+### The wobble taxonomy (why that attempt looked bad, and what may not)
+
+Two artifact classes get conflated. Keep them apart when judging any fidelity
+trade:
+
+1. **Spatial incoherence** — wobble / swim / ragged silhouette. Each output
+   sample is quantized *independently*, so adjacent columns of one wall land in
+   different buckets: a straight top edge becomes a staircase whose steps move
+   independently frame to frame, and a smoothly sliding texture gets per-column
+   lag. This is what `top & ~1` / `tex_x & ~1` produced — they quantized the
+   *outputs* of a smooth interpolant, per column, in screen space.
+2. **Bounded monotone error** — a sub-texel offset. The interpolant's *inputs* or
+   its perspective-correction *schedule* are coarsened, but every column of a
+   wall is still an exact monotone ramp, so the wall keeps its shape. Doom itself
+   shipped this.
+
+**Rule: quantize the interpolant, never its per-column outputs.** Anything
+decided per screen column produces class 1. Anything decided per seg-span, with
+monotone interpolation inside, produces class 2.
+
+### Where cast time actually goes (same-pose, 2026-07-30)
+
+Measured with `-DCADENCE_DRAWSEG_SPLIT=1` on `stationary-combat.txt`, which is
+**pose-proof**: its input script has no UP and no LEFT/RIGHT, so the camera
+cannot move and the route reports `rebuild frames = 1` — one wall rebuild at the
+exact start pose. Traversal counters (`nodes visited / boxes projected / segs
+tested / segs drawn`) being identical across builds is the proof the pose
+matched. This is the A/B route to use for any change that alters frame cost;
+"only checkpoints is a valid A/B" applies to routes that *move*.
+
+| part of cast | subticks/rebuild | share | per unit |
+|---|---|---|---|
+| node traversal + `project_box_range` | **3640** | **55%** | 59 nodes, 61 boxes |
+| `draw_seg` setup (cull/clip/project/reciprocals) | 1340 | 20% | 31.2 / seg tested |
+| `draw_seg` sample loop | 1675 | 25% | **20.9 / sample** |
+| total (probe-inflated; 6163 without it) | 6655 | | |
+
+The decisive number for span-based optimizations: **80 samples across 18 drawn
+segs = 4.4 samples per seg.** Doom's affine texture spans pay because it had
+16-pixel runs; here a K=4 sub-span barely has an interior, so ~2 of every 4.4
+samples still need the exact chain. Ceiling for piecewise-affine perspective is
+therefore ~0.3–0.5 vb of a 12.9 vb frame (2–4%) — and frame time quantizes to
+whole vblanks, so it would very likely measure as **zero**. Traversal + box
+projection is 2.2× the entire sample loop and is the honest target; note
+`project_box_range` is already down to 8 multiplies with extrema computed
+without assembling corners, so it is not low-hanging.
 
 ## Sparse semantic tile oracle (2026-07-19)
 
