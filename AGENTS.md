@@ -81,6 +81,11 @@ magnitude — giving the same average rendered size and movement speed as before
 while removing the heading-dependent variation (magnitude ratio 1.3248 → 1.0192,
 heading error −3.03..+4.43° → −0.19..+1.60°).
 
+**The gain is user-approved in motion** (2026-07-30, playing the release ROM:
+"no visual problems"), which per the stride-4 lesson below is the only judgement
+that qualifies a fidelity change. Treat the non-unit amplitude as intended, not
+as a leftover bug.
+
 Consequences to know before touching trig or scale:
 - `fx_sin`/`fx_cos` return `1.1839*sin`, **not** `sin`; `|basis|` is ~303.
   The gain cancels in any *ratio* of two basis projections, but not where a
