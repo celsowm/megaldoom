@@ -3,14 +3,21 @@
 #include "renderer_perf.h"
 #include "generated_assets.h"
 
-// Distance fog: walls are darkened in discrete steps the farther they are. Level
-// 0 is identity; each higher level applies the luminance-derived mapping emitted
-// alongside PAL3, so no hand-authored palette indices can shift a hue to blue.
-// N/S ("shade") walls add one extra level.
+// Wall shading, off by default (see WALL_SHADE_MODE below). When on: walls are
+// darkened in discrete steps the farther they are. Level 0 is identity; each
+// higher level applies the luminance-derived mapping emitted alongside PAL3, so
+// no hand-authored palette indices can shift a hue to blue. N/S ("shade") walls
+// add one extra level.
 #define SHADE_LEVELS 4
 // depth (world units) >> FOG_SHIFT picks the base fog level. Tuned so mid-room
 // walls sit around level 1-2 and distant walls saturate at the darkest level.
 #define FOG_SHIFT 9
+// 2 = distance fog + N/S side shading (Doom-like), 1 = side shading only,
+// 0 = flat, every wall at full brightness. Costs nothing either way: the shade
+// is baked into FREEDOOM_WALL_PACKED_PAIRS and picked once per column.
+#ifndef WALL_SHADE_MODE
+#define WALL_SHADE_MODE 0
+#endif
 static u8 g_shade_luts[SHADE_LEVELS][16];
 
 static void build_shade_luts(void) {
@@ -54,10 +61,19 @@ static WallColumnDescriptor describe_textured_column(u16 wall_h,
     // level grows with depth, and N/S ("shade") walls add one extra darkening step.
     // g_shade_luts[0] is the identity, so near front walls are unshaded; every level
     // maps 0 -> 0, preserving transparency, and the inner loop stays branch-free.
+#if WALL_SHADE_MODE == 2
     u16 fog_level = (u16)(depth >> FOG_SHIFT) + (side_shade ? 1u : 0u);
     if (fog_level > (SHADE_LEVELS - 1)) {
         fog_level = SHADE_LEVELS - 1;
     }
+#elif WALL_SHADE_MODE == 1
+    (void)depth;
+    const u16 fog_level = side_shade ? 1u : 0u;
+#else
+    (void)depth;
+    (void)side_shade;
+    const u16 fog_level = 0u;
+#endif
     const u8 *shade_map = g_shade_luts[fog_level];
     const u8 *ty_table = MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[wall_h];
     const u8 tex_x = (u8)(tex_x_value & WALL_TEX_DIM_MASK);
