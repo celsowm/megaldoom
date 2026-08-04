@@ -292,41 +292,67 @@ typedef struct {
 } AsmTileProbe;
 
 static AsmTileProbe g_asm_tile_probe;
+static AsmTileProbe g_c_tile_probe;
 static u16 g_asm_compare_cursor;
+
+static void write_mixed_stride2_tile_reference(
+    u32 *tile, u16 pixel_y,
+    const WallColumnDescriptor descriptors[4],
+    const u8 *const packed_columns[4],
+    const PackedFlatRows *flat_rows);
+
+static void probe_arm(AsmTileProbe *probe) {
+    probe->before[0] = ASM_PROBE_CANARY_A;
+    probe->before[1] = ASM_PROBE_CANARY_B;
+    probe->after[0] = ASM_PROBE_CANARY_B;
+    probe->after[1] = ASM_PROBE_CANARY_A;
+    for (u16 row = 0; row < 8; row++) probe->tile[row] = 0xA5A5A5A5u;
+}
+
+static bool probe_canary_broken(const AsmTileProbe *probe) {
+    return (bool)(probe->before[0] != ASM_PROBE_CANARY_A ||
+                  probe->before[1] != ASM_PROBE_CANARY_B ||
+                  probe->after[0] != ASM_PROBE_CANARY_B ||
+                  probe->after[1] != ASM_PROBE_CANARY_A);
+}
 
 // Check one framebuffer tile per rebuilt frame. A ten-second 30fps route
 // therefore covers all 300 tiles without paying for a second full framebuffer
-// every frame. Assembly writes only to the guarded scratch tile; C remains the
-// displayed result even after a perfect comparison.
+// every frame. Both implementations write only into guarded scratch tiles; the
+// displayed framebuffer is untouched either way.
+//
+// IMPORTANT: this runs BOTH implementations here rather than comparing against
+// the framebuffer tile the packer already produced. It used to take the latter
+// as the C side, which silently stopped being a differential the moment
+// RENDERER_HOTPATH_C_REFERENCE defaulted to 0 and write_mixed_stride2_tile
+// became the asm itself -- from then on it compared asm against asm and could
+// not report a mismatch no matter what the asm did. Keep both sides computed
+// locally so which implementation ships cannot disarm the check.
 static void compare_stride2_tile_asm(u16 tile_index,
                                     bool mixed,
-                                    const u32 c_tile[8],
                                     u16 pixel_y,
                                     const WallColumnDescriptor descriptors[4],
                                     const u8 *const packed_columns[4],
                                     const PackedFlatRows *flat_rows) {
     bool mismatch = FALSE;
-    bool canary_failure = FALSE;
+    bool canary_failure;
     bool completed_cycle;
 
     if (tile_index != g_asm_compare_cursor) return;
-    g_asm_tile_probe.before[0] = ASM_PROBE_CANARY_A;
-    g_asm_tile_probe.before[1] = ASM_PROBE_CANARY_B;
-    g_asm_tile_probe.after[0] = ASM_PROBE_CANARY_B;
-    g_asm_tile_probe.after[1] = ASM_PROBE_CANARY_A;
+    probe_arm(&g_asm_tile_probe);
+    probe_arm(&g_c_tile_probe);
 
     if (mixed) {
-        for (u16 row = 0; row < 8; row++) g_asm_tile_probe.tile[row] = 0xA5A5A5A5u;
         renderer_write_mixed_stride2_tile_asm(g_asm_tile_probe.tile, pixel_y,
                                               descriptors, packed_columns, flat_rows);
+        write_mixed_stride2_tile_reference(g_c_tile_probe.tile, pixel_y,
+                                           descriptors, packed_columns, flat_rows);
         for (u16 row = 0; row < 8; row++) {
-            if (g_asm_tile_probe.tile[row] != c_tile[row]) mismatch = TRUE;
+            if (g_asm_tile_probe.tile[row] != g_c_tile_probe.tile[row]) mismatch = TRUE;
         }
     }
-    canary_failure = (bool)(g_asm_tile_probe.before[0] != ASM_PROBE_CANARY_A ||
-                            g_asm_tile_probe.before[1] != ASM_PROBE_CANARY_B ||
-                            g_asm_tile_probe.after[0] != ASM_PROBE_CANARY_B ||
-                            g_asm_tile_probe.after[1] != ASM_PROBE_CANARY_A);
+    canary_failure = (bool)(probe_canary_broken(&g_asm_tile_probe) ||
+                            probe_canary_broken(&g_c_tile_probe));
     completed_cycle = (bool)(g_asm_compare_cursor == (VIEW_TILE_COUNT - 1));
     renderer_perf_record_asm_compare(tile_index, mismatch, canary_failure,
                                      completed_cycle);
@@ -340,7 +366,7 @@ static void compare_stride2_tile_asm(u16 tile_index,
 // the four bytes of that u32, so write each lane directly. Splitting each lane
 // into ceiling/wall/floor runs removes the four per-row branches and all of the
 // long shifts from the hottest packing path.
-#if RENDERER_HOTPATH_C_REFERENCE
+#if DEBUG_PERF || RENDERER_HOTPATH_C_REFERENCE
 static __attribute__((noinline)) void write_mixed_stride2_tile_reference(
     u32 *tile,
     u16 pixel_y,
@@ -384,6 +410,13 @@ static __attribute__((noinline)) void write_mixed_stride2_tile_reference(
         }
     }
 }
+#endif
+
+// Which implementation actually fills the framebuffer. Kept separate from the
+// guard above on purpose: a DEBUG_PERF build compiles the reference in so the
+// harness can run it, but must still ship the asm, or the probe would be
+// measuring and comparing the C path against itself.
+#if RENDERER_HOTPATH_C_REFERENCE
 #define write_mixed_stride2_tile write_mixed_stride2_tile_reference
 #else
 #define write_mixed_stride2_tile renderer_write_mixed_stride2_tile_asm
@@ -517,7 +550,7 @@ void build_bsp_tilemap(const RayColumn *columns,
                     renderer_perf_record_deep(RENDERER_PERF_DEEP_PACK_FLAT,
                                               getSubTick() - flat_start, 1);
                 }
-                compare_stride2_tile_asm(tile_index, FALSE, target[tile_index],
+                compare_stride2_tile_asm(tile_index, FALSE,
                                          pixel_y, descriptors, packed_columns, &flat_rows);
 #endif
                 continue;
@@ -537,7 +570,7 @@ void build_bsp_tilemap(const RayColumn *columns,
                     renderer_perf_record_deep(RENDERER_PERF_DEEP_PACK_FLAT,
                                               getSubTick() - flat_start, 1);
                 }
-                compare_stride2_tile_asm(tile_index, FALSE, target[tile_index],
+                compare_stride2_tile_asm(tile_index, FALSE,
                                          pixel_y, descriptors, packed_columns, &flat_rows);
 #endif
                 continue;
@@ -557,7 +590,7 @@ void build_bsp_tilemap(const RayColumn *columns,
                 renderer_perf_record_deep(RENDERER_PERF_DEEP_PACK_MIXED,
                                           getSubTick() - mixed_start, 1);
             }
-            compare_stride2_tile_asm(tile_index, TRUE, target[tile_index],
+            compare_stride2_tile_asm(tile_index, TRUE,
                                      pixel_y, descriptors, packed_columns, &flat_rows);
 #endif
         }

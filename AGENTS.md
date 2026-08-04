@@ -732,11 +732,28 @@ post: ~104 -> ~72 cycles per byte.
 `stationary-combat` is the clean one: identical column and tile counts on both
 sides, so -10.4% is pure per-tile speedup. Costs no RAM and ~30 bytes of ROM.
 
-**Verification is free here — use it.** `compare_stride2_tile_asm` (DEBUG_PERF)
-already byte-compares the asm tile against `write_mixed_stride2_tile_reference`
-on a rotating tile cursor. Across the five routes: **34200 tiles checked,
-`asm_mismatches=0`, `asm_canary_failures=0`, 114 complete 300-tile cycles.**
-Never touch this file without reading those three numbers back.
+**The asm/C harness was silently disarmed for months — read this before
+trusting it (found 2026-08-04).** `compare_stride2_tile_asm` (DEBUG_PERF) used
+to take the *framebuffer tile the packer had just written* as its C side. That
+was a real differential only while `RENDERER_HOTPATH_C_REFERENCE` defaulted to
+1. The moment the default flipped to 0 and `write_mixed_stride2_tile` became
+`renderer_write_mixed_stride2_tile_asm`, the harness began comparing **asm
+against asm** and could not report a mismatch no matter what the assembly did.
+Every `asm_mismatches=0` recorded in this file between those two events is
+worthless, including the ones cited for the DBRA and hoisting commits.
+
+It now runs *both* implementations locally into two canary-guarded scratch
+tiles, so which one ships cannot disarm the check, and `write_mixed_stride2_tile_reference`
+compiles in whenever `DEBUG_PERF` is set (kept deliberately separate from the
+macro that selects the shipped implementation).
+
+**A check that has never been observed to fail is not known to work.** This one
+was proven by negative control: changing `andi.w #63,d5` to `#62` in the wall
+post produced **3034 mismatches on `tour-east-combat` and 272 on `slow-turn`**,
+where the old harness reported 0 for the identical fault. After reverting:
+**22950 tiles checked, `asm_mismatches=0`, `asm_canary_failures=0`, 76 complete
+300-tile cycles.** Never touch this file without reading those numbers back —
+and if a change to the harness itself is involved, re-run the negative control.
 
 **Deferred (NOT rejected on size): dropping `andi.w #63,d5` from the wall post**
 by duplicating each packed column to 128 entries so `vertical_samples[i] +
@@ -791,8 +808,9 @@ per-tile comparison):
 | `checkpoints` | 4139 | **3876** (-6.4%) | 18.3 -> 17.2 |
 | `slow-turn` | 3845 | **3621** (-5.8%) | 16.0 -> 15.1 |
 
-Byte-exact: 27863 tiles checked across six routes, `asm_mismatches=0`,
-`asm_canary_failures=0`, 92 complete cycles. Zero ROM, zero RAM.
+Zero ROM, zero RAM. (The `asm_mismatches=0` originally reported here proved
+nothing — see the harness note below. It was re-verified properly afterwards:
+22950 tiles, 0 mismatches, 76 complete cycles.)
 
 **The useful result is the ratio, not the 6%.** Inner-loop cycles were cut
 ~24% and `pack` moved 6%, so **the three post loops are only about a quarter of
