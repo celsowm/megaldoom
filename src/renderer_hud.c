@@ -188,38 +188,7 @@ static u16 s_last_health = 0xFFFF;
 static u16 s_last_frags = 0xFFFF;
 static u16 s_last_armor = 0xFFFF;
 
-// Viewport window bounds, in tiles, derived from the view tilemap placement.
-#define VIEW_TX0 VIEW_TILEMAP_X
-#define VIEW_TY0 VIEW_TILEMAP_Y
-#define VIEW_TX1 (VIEW_TILEMAP_X + VIEW_TILE_W - 1)
-#define VIEW_TY1 (VIEW_TILEMAP_Y + VIEW_TILE_H - 1)
-
-// Tiled rock backdrop (PAL0, MEGALDOOM_BACKDROP_TILES, see renderer_internal.h's
-// VRAM chain) fills the margins around the 3D window so the small viewport reads
-// as intentional instead of floating in empty space. Static: painted once per
-// level reset onto BG_B, never touched per frame. Skips the live view window
-// (its tilemap was uploaded once at init) and the HUD panel columns
-// (draw_hud_backdrop paints those).
-static void renderer_draw_backdrop(void) {
-    for (u16 y = 0; y < HUD_PANEL_Y; y++) {
-        for (u16 x = 0; x < SCREEN_TILE_W; x++) {
-            if ((x >= VIEW_TX0) && (x <= VIEW_TX1) && (y >= VIEW_TY0) && (y <= VIEW_TY1)) {
-                continue;
-            }
-            // 4x4-tile pattern (MEGALDOOM_BACKDROP_TILE_DIM) repeats seamlessly
-            // across the margins; (x,y) are absolute screen tile coords, so the
-            // pattern is anchored to the screen, not the view window.
-            const u16 pattern = (u16)(((y & (MEGALDOOM_BACKDROP_TILE_DIM - 1)) * MEGALDOOM_BACKDROP_TILE_DIM) +
-                                      (x & (MEGALDOOM_BACKDROP_TILE_DIM - 1)));
-            VDP_setTileMapXY(BG_B,
-                             TILE_ATTR_FULL(PAL0, FALSE, FALSE, FALSE, BACKDROP_TILE_BASE + pattern),
-                             x, y);
-        }
-    }
-}
-
 void renderer_draw_static_screen(void) {
-    renderer_draw_backdrop();
     draw_hud_backdrop();
     draw_hud_number_tilemap();
     s_last_face_frame = 0xFFFF;

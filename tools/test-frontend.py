@@ -100,7 +100,9 @@ assert "if (!s_music_enabled) XGM2_pause" in AUDIO
 assert "s_current_music = music" in AUDIO and "XGM2_stop();" in AUDIO
 assert "game_audio_suspend_for_video" in FRONTEND and "game_audio_resume_after_video" in FRONTEND
 assert "return PAIR_TILE_BASE;" in RENDERER
-assert "init_pair_tiles();" in RENDERER and "init_hud_tiles();" in RENDERER
+assert "init_pair_tiles" not in RENDERER
+assert "init_backdrop_tiles" not in RENDERER
+assert "init_hud_tiles();" in RENDERER
 for token in ("DOOM_THING_SKILL_EASY", "DOOM_THING_SKILL_MEDIUM", "DOOM_THING_SKILL_HARD", "doom_skill_thing_mask"):
     assert token in BILLBOARD
 assert re.search(r"frontend_run\(\);\s*game_audio_stop_music\(\);\s*renderer_init\(\);", MAIN)

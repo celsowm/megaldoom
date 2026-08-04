@@ -7,10 +7,6 @@
 #error "Weapon tiles overlap the SGDK font VRAM region"
 #endif
 
-#if (BACKDROP_TILE_BASE + MEGALDOOM_BACKDROP_TILE_COUNT) > HUD_VRAM_SAFE_TILE_LIMIT
-#error "Backdrop tiles overlap the SGDK font VRAM region"
-#endif
-
 u32 g_view_tiles[VIEW_TILE_COUNT][8];
 u32 g_view_bank_dirty_bits[VIEW_BANK_COUNT][VIEW_DIRTY_WORD_COUNT];
 u16 g_view_bank_dirty_count[VIEW_BANK_COUNT];
@@ -40,15 +36,8 @@ static void load_game_palettes(void) {
     PAL_setColor(4, RGB24_TO_VDPCOLOR(0x585048));
     PAL_setColor(5, RGB24_TO_VDPCOLOR(0x888078));
     PAL_setColor(6, RGB24_TO_VDPCOLOR(0xB4ACA0));
-    PAL_setColor(7, RGB24_TO_VDPCOLOR(0xE8E0D0));
+    PAL_setColor(7, RGB24_TO_VDPCOLOR(0x404020));
     PAL_setColor(8, RGB24_TO_VDPCOLOR(0x301E10));
-    PAL_setColor(9, RGB24_TO_VDPCOLOR(0x4878A8));
-    PAL_setColor(10, RGB24_TO_VDPCOLOR(0x78502C));
-    PAL_setColor(11, RGB24_TO_VDPCOLOR(0xD8B048));
-    PAL_setColor(12, RGB24_TO_VDPCOLOR(0x982818));
-    PAL_setColor(13, RGB24_TO_VDPCOLOR(0xA86838));
-    PAL_setColor(14, RGB24_TO_VDPCOLOR(0x484038));
-    PAL_setColor(15, RGB24_TO_VDPCOLOR(0x4C6028));
 
     // Palette line 1: native Doom STTNUM/STTPRCNT shading for the transparent
     // BG_A status-number compositor.
@@ -91,16 +80,10 @@ static u32 make_pair_tile_row(u8 left_color, u8 right_color) {
     for (u16 x = 0; x < 4; x++) {
         row = (row << 4) | left_color;
     }
-
     for (u16 x = 0; x < 4; x++) {
         row = (row << 4) | right_color;
     }
-
     return row;
-}
-
-static void init_pair_tiles(void) {
-    VDP_loadTileData((const u32 *)MEGALDOOM_PAIR_TILES, PAIR_TILE_BASE, PAIR_TILE_COUNT, DMA);
 }
 
 static void init_hud_tiles(void) {
@@ -108,16 +91,6 @@ static void init_hud_tiles(void) {
     VDP_loadTileData((const u32 *)FREEDOOM_FACE_TILES, FACE_TILE_BASE, FREEDOOM_FACE_TILE_COUNT, DMA);
     VDP_loadTileData((const u32 *)MEGALDOOM_WEAPON_TILES, WEAPON_TILE_BASE,
                      MEGALDOOM_WEAPON_TILE_COUNT, DMA);
-}
-
-// Tiled rock backdrop: uploaded once and never rebaked (renderer_draw_backdrop
-// in renderer_hud.c only repoints tilemap cells at these already-resident
-// tiles). Outside the VRAM region the pause frontend borrows (PAIR_TILE_BASE,
-// see renderer_get_menu_tile_base below), so it does not need reloading in
-// renderer_restore_after_menu.
-static void init_backdrop_tiles(void) {
-    VDP_loadTileData((const u32 *)MEGALDOOM_BACKDROP_TILES, BACKDROP_TILE_BASE,
-                     MEGALDOOM_BACKDROP_TILE_COUNT, DMA);
 }
 
 static void build_view_bank_tilemaps(void) {
@@ -232,12 +205,6 @@ void set_view_column_color(u16 column, u16 y, u8 color) {
     g_view_tiles[map_index][row_y] = row;
 }
 
-void renderer_set_bg_pair_tile(u16 x, u16 y, u8 left_color, u8 right_color) {
-    const u16 pair_index = (u16)(((left_color & 0x0F) << 4) | (right_color & 0x0F));
-
-    VDP_setTileMapXY(BG_B, TILE_ATTR_FULL(PAL0, FALSE, FALSE, FALSE, PAIR_TILE_BASE + pair_index), x, y);
-}
-
 #if RENDERER_SPARSE_FB
 // Forward declaration so the call inside renderer_init (below) resolves to this
 // static definition without an implicit non-static prototype (which would clash
@@ -247,9 +214,7 @@ static void init_static_atlas(void);
 
 void renderer_init(void) {
     init_video();
-    init_pair_tiles();
     init_hud_tiles();
-    init_backdrop_tiles();
     init_view_tilemap();
     g_view_dirty_bank_mask = 0;
 #if RENDERER_SPARSE_FB
@@ -292,7 +257,6 @@ void renderer_restore_after_menu(void) {
     // can have overwritten, then rebuild BG_A and force a fresh scene cast.
     VDP_waitVSync();
     load_game_palettes();
-    init_pair_tiles();
     init_hud_tiles();
     VDP_clearPlane(BG_A, TRUE);
     renderer_invalidate_scene();
@@ -312,4 +276,3 @@ u16 renderer_get_frame_modified_count(void) {
 }
 
 #endif
-

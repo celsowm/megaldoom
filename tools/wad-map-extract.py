@@ -263,6 +263,9 @@ def nearest_palette_index(rgb, palette, allowed=None):
     return world_palette.nearest_index(rgb, palette, allowed)
 
 
+WEAPON_SPRITE_NAMES = ("PISGA0", "PISGB0", "PISFA0")
+
+
 def build_world_palette(texture_names, texture_usage, sectors):
     histogram = Counter()
     for name in texture_names:
@@ -271,11 +274,14 @@ def build_world_palette(texture_names, texture_usage, sectors):
 
     # PAL3 is shared by the 3D scene, weapon and every runtime billboard. Feed
     # every consumed source into the same deterministic histogram so improving
-    # walls cannot silently recolor actors or effects.
+    # walls cannot silently recolor actors or effects. The weapon sprites are
+    # on screen for 100% of gameplay (unlike any single wall texture or actor),
+    # so they get a much heavier weight than the rest of WORLD_SPRITE_INPUTS.
     for name in WORLD_SPRITE_INPUTS:
         relative = os.path.join("sprites", name + ".png")
+        weight = 48 if name in WEAPON_SPRITE_NAMES else 4
         add_image_histogram(histogram, os.path.join(ASSET_ROOT, relative),
-                            (32, 32), 4)
+                            (32, 32), weight)
 
     flat_usage = Counter()
     for sector in sectors:
@@ -394,6 +400,14 @@ def emit_world_assets(path, texture_usage, sectors):
         )
         converted.append(convert_texture(source, palette))
 
+    # The floor is a single ROM-constant color for the whole level (see
+    # renderer_flats.c). Excluding that index from the ceiling search
+    # guarantees a ceiling can never quantize to the exact same solid color as
+    # the floor beneath it -- previously 65/85 E1M1 sectors did exactly that,
+    # rendering as one flat gray from top to bottom with no visible seam.
+    ceiling_allowed = [index for index in range(1, WORLD_COLOR_DAMAGE)
+                       if index != fixed_floor_index]
+
     sector_visuals = []
     for sector in sectors:
         colors = []
@@ -406,11 +420,10 @@ def emit_world_assets(path, texture_usage, sectors):
             if name != "F_SKY1":
                 average = tuple(channel * sector["light"] // 255 for channel in average)
             first, second, coverage = world_palette.best_mix(
-                average, palette, True, range(1, WORLD_COLOR_DAMAGE))
+                average, palette, True, ceiling_allowed)
             # Damage and warning are runtime effects, not flat materials.
             if first >= WORLD_COLOR_DAMAGE or second >= WORLD_COLOR_DAMAGE:
-                allowed = range(1, WORLD_COLOR_DAMAGE)
-                first = nearest_palette_index(average, palette, allowed)
+                first = nearest_palette_index(average, palette, ceiling_allowed)
                 second = first
                 coverage = 0
             colors.extend((first, second, coverage))
