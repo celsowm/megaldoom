@@ -1,23 +1,32 @@
     .text
     .align  2
-    .globl  renderer_write_mixed_stride2_tile_asm
+    .globl  renderer_write_mixed_stride2_span_asm
 
 /*
- * void renderer_write_mixed_stride2_tile_asm(
- *     u32 *tile, u16 pixel_y,
+ * void renderer_write_mixed_stride2_span_asm(
+ *     u32 *tiles, u16 pixel_y, u16 row_count,
  *     const WallColumnDescriptor descriptors[4],
  *     const u8 *const packed_columns[4],
  *     const PackedFlatRows *flat_rows);
  *
- * GCC's m68k ABI gives the u16 argument a four-byte stack slot and right-aligns
+ * GCC's m68k ABI gives each u16 argument a four-byte stack slot and right-aligns
  * the word within it. After saving d2-d7/a2-a6 (44 bytes), pointers are at
- * sp+48,56,60,64 and pixel_y is the word at sp+54.
+ * sp+60,64,68 and the two words are at sp+54 and sp+58.
  * WallColumnDescriptor is 22 bytes: top=0, bottom=2, vertical_samples=12,
  * tex_y=17. PackedFlatRows has ceiling at 0 and floor at 16.
  *
- * One mixed tile is four byte lanes. Each lane is emitted as at most three
- * monotonic posts (ceiling, wall, floor), so the inner loops contain no
- * per-pixel material branch and no 32-bit shift/or composition.
+ * `tiles` is the first tile of a run of consecutive tiles in one tile column,
+ * and row_count spans all of them. That works because the view tilemap is
+ * column-major (view_tile_index = tile_x * VIEW_TILE_H + tile_y), so a column's
+ * tiles are contiguous, and within that block screen row y of lane L sits at
+ * byte (y>>3)*32 + (y&7)*4 + L, which is identically 4*y + L. The tile boundary
+ * is invisible to a stride-4 byte walk, so a whole column is one call: each
+ * lane emits three posts total instead of three per 8-row tile, and the
+ * movem/call overhead is paid once instead of once per tile.
+ *
+ * Each lane is emitted as at most three monotonic posts (ceiling, wall, floor),
+ * so the inner loops contain no per-pixel material branch and no 32-bit
+ * shift/or composition.
  *
  * Each post's length is computed once and the loop closed with DBRA. The
  * original form re-tested both the post bound and end_y every pixel
@@ -47,22 +56,22 @@
  * stage's dominant cost (~42 subticks each over a flat tile, and a rotation
  * doubles their count: 149/rebuild spinning vs 75 translating).
  */
-renderer_write_mixed_stride2_tile_asm:
+renderer_write_mixed_stride2_span_asm:
     movem.l d2-d7/a2-a6,-(sp)
-    movea.l 48(sp),a0              /* tile base */
+    movea.l 48(sp),a0              /* first tile of the run */
     move.w  54(sp),d7              /* first screen y (right-aligned u16) */
-    movea.l 56(sp),a1              /* descriptor */
-    movea.l 60(sp),a2              /* packed-column pointer table */
-    movea.l 64(sp),a3              /* flat rows */
+    move.w  58(sp),d1              /* row count */
+    movea.l 60(sp),a1              /* descriptor */
+    movea.l 64(sp),a2              /* packed-column pointer table */
+    movea.l 68(sp),a3              /* flat rows */
+    add.w   d7,d1                  /* end_y; loop-invariant across all lanes */
     moveq   #0,d6                  /* byte lane 0..3 */
 
 .Lmixed_lane:
     movea.l (a2)+,a5               /* preshaded wall pairs */
     movea.l a0,a6
-    adda.w  d6,a6                  /* tile byte for this lane */
+    adda.w  d6,a6                  /* first byte for this lane */
     move.w  d7,d0                  /* y */
-    move.w  d7,d1
-    addq.w  #8,d1                  /* end_y */
     move.w  (a1),d3                /* top */
     move.w  2(a1),d4               /* bottom */
 

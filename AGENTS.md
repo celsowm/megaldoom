@@ -860,11 +860,44 @@ row `y` of lane `L` sits at byte `(y>>3)*32 + (y&7)*4 + L`, which is identically
 `4*y + L`. **The tile boundary is invisible to a stride-4 byte walk** — one pass
 over 120 rows per lane, three posts total instead of three posts per tile.
 
-Before attempting it, note the constraint that makes it real work:
-`compare_stride2_tile_asm` (the harness that has caught every asm bug here) is
-built around one `tile_index` and one 8-row tile. A per-column entry point needs
-that harness reworked to compare a whole column, and it must be reworked
-*first*, not after.
+### Done: one asm call per column (2026-08-04)
+
+Harness first, as required above. `renderer_write_mixed_stride2_tile_asm` became
+`renderer_write_mixed_stride2_span_asm`, taking a `row_count` instead of
+assuming 8. **The assembly barely changed** — it was already written in terms of
+`y` and `end_y`, so the only per-tile assumption in the whole routine was
+`addq.w #8,d1`. That became `move.w 58(sp),d1 / add.w d7,d1`, hoisted out of the
+lane loop since end_y is now loop-invariant.
+
+The C side slices the column once instead of re-deciding per tile. The three
+classes are contiguous runs: whole-ceiling is exactly `tile_y < min_top / 8`,
+whole-floor exactly `tile_y >= (max_bottom + 7) / 8`, and `min_top <=
+max_bottom` always holds (every top <= its own bottom), so the mixed run between
+them never inverts. One `write_mixed_stride2_span` call covers it.
+
+Pose-stable routes, identical mixed/flat tile counts on both sides:
+
+| route | pack before | after | subticks/tile |
+|---|---|---|---|
+| `checkpoints` | 3876 | **3021** (-22.1%) | 17.2 -> 13.4 |
+| `stationary-combat` | 3425 | **2748** (-19.8%) | 15.9 -> 12.8 |
+
+**~20% off pack**, on top of the ~6% from hoisting. Costs nothing: `.text` went
+*down* 512 bytes (1387690 -> 1387178), work RAM unchanged at 23336 free.
+
+Ignore `tour-east-combat`'s headline here (12.25 -> 4.08 avg vblanks, 71 -> 214
+iterations). The route is not pose-fixed, so a faster build walks somewhere else
+entirely and rasterizes a different scene — its mixed-tile count went *up*
+165 -> 202. The usual hazard; only the two pose-stable routes above are evidence.
+
+**The harness now checks the property that matters.**
+`compare_stride2_column_asm` runs the asm as one span and builds the C side tile
+by tile from `write_mixed_stride2_tile_reference`, so it verifies both that asm
+agrees with C *and* that one N*8-row call equals N separate 8-row writes. Both
+negative controls were run: `andi.w #63` -> `#62` gives 3034 mismatches, and
+truncating the span to one tile gives 757 of 760 columns (the 3 clean ones have
+0 or 1 mixed tile). Clean run: **1672 columns checked, 0 mismatches, 0 canary
+failures, 83 complete 20-column cycles.**
 
 ## Sparse semantic tile oracle (2026-07-19)
 

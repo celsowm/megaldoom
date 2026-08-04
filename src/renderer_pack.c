@@ -275,9 +275,10 @@ void build_bsp_tilemap(const RayColumn *columns,
 #define RENDERER_HOTPATH_C_REFERENCE 0
 #endif
 
-void renderer_write_mixed_stride2_tile_asm(
-    u32 *tile,
+void renderer_write_mixed_stride2_span_asm(
+    u32 *tiles,
     u16 pixel_y,
+    u16 row_count,
     const WallColumnDescriptor descriptors[4],
     const u8 *const packed_columns[4],
     const PackedFlatRows *flat_rows);
@@ -287,12 +288,12 @@ void renderer_write_mixed_stride2_tile_asm(
 #define ASM_PROBE_CANARY_B 0xC001D00Du
 typedef struct {
     u32 before[2];
-    u32 tile[8];
+    u32 tiles[VIEW_TILE_H][8];
     u32 after[2];
-} AsmTileProbe;
+} AsmColumnProbe;
 
-static AsmTileProbe g_asm_tile_probe;
-static AsmTileProbe g_c_tile_probe;
+static AsmColumnProbe g_asm_col_probe;
+static AsmColumnProbe g_c_col_probe;
 static u16 g_asm_compare_cursor;
 
 static void write_mixed_stride2_tile_reference(
@@ -301,63 +302,81 @@ static void write_mixed_stride2_tile_reference(
     const u8 *const packed_columns[4],
     const PackedFlatRows *flat_rows);
 
-static void probe_arm(AsmTileProbe *probe) {
+static void probe_arm(AsmColumnProbe *probe) {
     probe->before[0] = ASM_PROBE_CANARY_A;
     probe->before[1] = ASM_PROBE_CANARY_B;
     probe->after[0] = ASM_PROBE_CANARY_B;
     probe->after[1] = ASM_PROBE_CANARY_A;
-    for (u16 row = 0; row < 8; row++) probe->tile[row] = 0xA5A5A5A5u;
+    for (u16 t = 0; t < VIEW_TILE_H; t++) {
+        for (u16 row = 0; row < 8; row++) probe->tiles[t][row] = 0xA5A5A5A5u;
+    }
 }
 
-static bool probe_canary_broken(const AsmTileProbe *probe) {
+static bool probe_canary_broken(const AsmColumnProbe *probe) {
     return (bool)(probe->before[0] != ASM_PROBE_CANARY_A ||
                   probe->before[1] != ASM_PROBE_CANARY_B ||
                   probe->after[0] != ASM_PROBE_CANARY_B ||
                   probe->after[1] != ASM_PROBE_CANARY_A);
 }
 
-// Check one framebuffer tile per rebuilt frame. A ten-second 30fps route
-// therefore covers all 300 tiles without paying for a second full framebuffer
-// every frame. Both implementations write only into guarded scratch tiles; the
-// displayed framebuffer is untouched either way.
+// Check one tile column per rebuilt frame; a route covers all 20 without paying
+// for a second framebuffer every frame. Both implementations write only into
+// guarded scratch blocks, so the displayed framebuffer is untouched either way.
 //
-// IMPORTANT: this runs BOTH implementations here rather than comparing against
-// the framebuffer tile the packer already produced. It used to take the latter
-// as the C side, which silently stopped being a differential the moment
-// RENDERER_HOTPATH_C_REFERENCE defaulted to 0 and write_mixed_stride2_tile
-// became the asm itself -- from then on it compared asm against asm and could
-// not report a mismatch no matter what the asm did. Keep both sides computed
-// locally so which implementation ships cannot disarm the check.
-static void compare_stride2_tile_asm(u16 tile_index,
-                                    bool mixed,
-                                    u16 pixel_y,
-                                    const WallColumnDescriptor descriptors[4],
-                                    const u8 *const packed_columns[4],
-                                    const PackedFlatRows *flat_rows) {
+// Two properties are checked at once, and the second is the whole reason the
+// harness moved from a tile to a column:
+//   1. the asm agrees with the C reference, and
+//   2. ONE asm call spanning N*8 rows equals N separate 8-row tile writes --
+//      i.e. that the stride-4 walk really is blind to the tile boundary.
+// The asm side runs as a single span; the C side is built tile by tile from the
+// per-tile reference, which is exactly the concatenation the span must equal.
+//
+// It also runs BOTH implementations locally rather than comparing against the
+// framebuffer the packer already produced. Taking the latter as the C side
+// silently stopped being a differential the moment RENDERER_HOTPATH_C_REFERENCE
+// defaulted to 0 and the shipped writer became the asm itself: from then on it
+// compared asm against asm and could not report a mismatch whatever the asm
+// did. Keep both sides computed here so which implementation ships cannot
+// disarm the check.
+static void compare_stride2_column_asm(u16 tile_x,
+                                       u16 first_tile_y,
+                                       u16 mixed_tiles,
+                                       const WallColumnDescriptor descriptors[4],
+                                       const u8 *const packed_columns[4],
+                                       const PackedFlatRows *flat_rows) {
     bool mismatch = FALSE;
     bool canary_failure;
     bool completed_cycle;
 
-    if (tile_index != g_asm_compare_cursor) return;
-    probe_arm(&g_asm_tile_probe);
-    probe_arm(&g_c_tile_probe);
+    if (tile_x != g_asm_compare_cursor) return;
+    probe_arm(&g_asm_col_probe);
+    probe_arm(&g_c_col_probe);
 
-    if (mixed) {
-        renderer_write_mixed_stride2_tile_asm(g_asm_tile_probe.tile, pixel_y,
-                                              descriptors, packed_columns, flat_rows);
-        write_mixed_stride2_tile_reference(g_c_tile_probe.tile, pixel_y,
-                                           descriptors, packed_columns, flat_rows);
-        for (u16 row = 0; row < 8; row++) {
-            if (g_asm_tile_probe.tile[row] != g_c_tile_probe.tile[row]) mismatch = TRUE;
+    if (mixed_tiles != 0) {
+        const u16 first_pixel_y = (u16)(first_tile_y * 8);
+        renderer_write_mixed_stride2_span_asm(
+            &g_asm_col_probe.tiles[0][0], first_pixel_y,
+            (u16)(mixed_tiles * 8), descriptors, packed_columns, flat_rows);
+        for (u16 t = 0; t < mixed_tiles; t++) {
+            write_mixed_stride2_tile_reference(
+                g_c_col_probe.tiles[t], (u16)(first_pixel_y + (t * 8)),
+                descriptors, packed_columns, flat_rows);
+        }
+        for (u16 t = 0; t < mixed_tiles; t++) {
+            for (u16 row = 0; row < 8; row++) {
+                if (g_asm_col_probe.tiles[t][row] != g_c_col_probe.tiles[t][row]) {
+                    mismatch = TRUE;
+                }
+            }
         }
     }
-    canary_failure = (bool)(probe_canary_broken(&g_asm_tile_probe) ||
-                            probe_canary_broken(&g_c_tile_probe));
-    completed_cycle = (bool)(g_asm_compare_cursor == (VIEW_TILE_COUNT - 1));
-    renderer_perf_record_asm_compare(tile_index, mismatch, canary_failure,
+    canary_failure = (bool)(probe_canary_broken(&g_asm_col_probe) ||
+                            probe_canary_broken(&g_c_col_probe));
+    completed_cycle = (bool)(g_asm_compare_cursor == (VIEW_TILE_W - 1));
+    renderer_perf_record_asm_compare(tile_x, mismatch, canary_failure,
                                      completed_cycle);
     g_asm_compare_cursor++;
-    if (g_asm_compare_cursor == VIEW_TILE_COUNT) g_asm_compare_cursor = 0;
+    if (g_asm_compare_cursor == VIEW_TILE_W) g_asm_compare_cursor = 0;
 }
 #endif
 
@@ -410,6 +429,22 @@ static __attribute__((noinline)) void write_mixed_stride2_tile_reference(
         }
     }
 }
+
+// The C fallback for a whole run of tiles is literally the per-tile reference
+// applied tile by tile -- that is the definition the asm span has to match.
+static void write_mixed_stride2_span_reference(
+    u32 *tiles,
+    u16 pixel_y,
+    u16 row_count,
+    const WallColumnDescriptor descriptors[4],
+    const u8 *const packed_columns[4],
+    const PackedFlatRows *flat_rows) {
+    for (u16 t = 0; t < (u16)(row_count / 8); t++) {
+        write_mixed_stride2_tile_reference(&tiles[t * 8],
+                                           (u16)(pixel_y + (t * 8)),
+                                           descriptors, packed_columns, flat_rows);
+    }
+}
 #endif
 
 // Which implementation actually fills the framebuffer. Kept separate from the
@@ -417,9 +452,9 @@ static __attribute__((noinline)) void write_mixed_stride2_tile_reference(
 // harness can run it, but must still ship the asm, or the probe would be
 // measuring and comparing the C path against itself.
 #if RENDERER_HOTPATH_C_REFERENCE
-#define write_mixed_stride2_tile write_mixed_stride2_tile_reference
+#define write_mixed_stride2_span write_mixed_stride2_span_reference
 #else
-#define write_mixed_stride2_tile renderer_write_mixed_stride2_tile_asm
+#define write_mixed_stride2_span renderer_write_mixed_stride2_span_asm
 #endif
 
 void build_bsp_tilemap(const RayColumn *columns,
@@ -532,68 +567,79 @@ void build_bsp_tilemap(const RayColumn *columns,
 #if CADENCE_PACK_SPLIT
         const u32 tiles_start = getSubTick();
 #endif
-        for (u16 tile_y = 0; tile_y < VIEW_TILE_H; tile_y++) {
-            const u16 tile_index = view_tile_index(tile_x, tile_y);
-            const u16 pixel_y = (u16)(tile_y * 8);
+        // The three tile classes form contiguous runs, so they are sliced once
+        // instead of re-deciding per tile. A tile is whole-ceiling iff
+        // 8*tile_y + 7 < min_top, which is exactly tile_y < min_top / 8; it is
+        // whole-floor iff 8*tile_y >= max_bottom, exactly
+        // tile_y >= (max_bottom + 7) / 8. min_top <= max_bottom always (every
+        // top <= its own bottom), so the mixed run in between never inverts.
+        const u16 ceiling_tiles = (u16)(min_top / 8);
+        u16 first_floor_tile = (u16)((max_bottom + 7) / 8);
+        if (first_floor_tile > VIEW_TILE_H) first_floor_tile = VIEW_TILE_H;
+        const u16 mixed_tiles = (u16)(first_floor_tile - ceiling_tiles);
 
-            if ((pixel_y + 7) < min_top) {
+        for (u16 tile_y = 0; tile_y < ceiling_tiles; tile_y++) {
 #if DEBUG_PERF
-                const u32 flat_start = measure_flat ? getSubTick() : 0;
+            const u32 flat_start = measure_flat ? getSubTick() : 0;
 #endif
-                write_repeated_flat_tile(target[tile_index], flat_rows.ceiling);
+            write_repeated_flat_tile(target[view_tile_index(tile_x, tile_y)],
+                                     flat_rows.ceiling);
 #if CADENCE_STAGE_PROBE
-                g_cadence_pack_flat_tiles++;
+            g_cadence_pack_flat_tiles++;
 #endif
 #if DEBUG_PERF
-                sparse_ceiling++;
-                if (measure_flat) {
-                    renderer_perf_record_deep(RENDERER_PERF_DEEP_PACK_FLAT,
-                                              getSubTick() - flat_start, 1);
-                }
-                compare_stride2_tile_asm(tile_index, FALSE,
-                                         pixel_y, descriptors, packed_columns, &flat_rows);
-#endif
-                continue;
+            sparse_ceiling++;
+            if (measure_flat) {
+                renderer_perf_record_deep(RENDERER_PERF_DEEP_PACK_FLAT,
+                                          getSubTick() - flat_start, 1);
             }
+#endif
+        }
 
-            if (pixel_y >= max_bottom) {
-#if DEBUG_PERF
-                const u32 flat_start = measure_flat ? getSubTick() : 0;
-#endif
-                write_repeated_flat_tile(target[tile_index], flat_rows.floor);
-#if CADENCE_STAGE_PROBE
-                g_cadence_pack_flat_tiles++;
-#endif
-#if DEBUG_PERF
-                sparse_floor++;
-                if (measure_flat) {
-                    renderer_perf_record_deep(RENDERER_PERF_DEEP_PACK_FLAT,
-                                              getSubTick() - flat_start, 1);
-                }
-                compare_stride2_tile_asm(tile_index, FALSE,
-                                         pixel_y, descriptors, packed_columns, &flat_rows);
-#endif
-                continue;
-            }
-
+        // One call for the whole wall run: see renderer_hotpath.s on why a
+        // column's tiles are contiguous and row y of lane L lands at 4*y + L,
+        // which makes the tile boundary invisible to the stride-4 walk.
+        if (mixed_tiles != 0) {
 #if DEBUG_PERF
             const u32 mixed_start = measure_mixed ? getSubTick() : 0;
 #endif
-            write_mixed_stride2_tile(target[tile_index], pixel_y,
+            write_mixed_stride2_span(target[view_tile_index(tile_x, ceiling_tiles)],
+                                     (u16)(ceiling_tiles * 8),
+                                     (u16)(mixed_tiles * 8),
                                      descriptors, packed_columns, &flat_rows);
 #if CADENCE_STAGE_PROBE
-            g_cadence_pack_mixed_tiles++;
+            g_cadence_pack_mixed_tiles += mixed_tiles;
 #endif
 #if DEBUG_PERF
-            sparse_dyn_wall++;
+            sparse_dyn_wall = (u16)(sparse_dyn_wall + mixed_tiles);
             if (measure_mixed) {
                 renderer_perf_record_deep(RENDERER_PERF_DEEP_PACK_MIXED,
-                                          getSubTick() - mixed_start, 1);
+                                          getSubTick() - mixed_start, mixed_tiles);
             }
-            compare_stride2_tile_asm(tile_index, TRUE,
-                                     pixel_y, descriptors, packed_columns, &flat_rows);
 #endif
         }
+
+        for (u16 tile_y = first_floor_tile; tile_y < VIEW_TILE_H; tile_y++) {
+#if DEBUG_PERF
+            const u32 flat_start = measure_flat ? getSubTick() : 0;
+#endif
+            write_repeated_flat_tile(target[view_tile_index(tile_x, tile_y)],
+                                     flat_rows.floor);
+#if CADENCE_STAGE_PROBE
+            g_cadence_pack_flat_tiles++;
+#endif
+#if DEBUG_PERF
+            sparse_floor++;
+            if (measure_flat) {
+                renderer_perf_record_deep(RENDERER_PERF_DEEP_PACK_FLAT,
+                                          getSubTick() - flat_start, 1);
+            }
+#endif
+        }
+#if DEBUG_PERF
+        compare_stride2_column_asm(tile_x, ceiling_tiles, mixed_tiles,
+                                   descriptors, packed_columns, &flat_rows);
+#endif
 #if CADENCE_PACK_SPLIT
         g_cadence_pack_tiles_subticks += getSubTick() - tiles_start;
 #endif
