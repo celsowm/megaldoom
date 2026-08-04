@@ -38,6 +38,14 @@ u32 g_cadence_box_subticks;
 u32 g_cadence_range_closed_calls;
 u32 g_cadence_range_closed_subticks;
 u32 g_cadence_all_closed_subticks;
+u32 g_cadence_scene_frames;
+u32 g_cadence_bb_objects;
+u32 g_cadence_bb_rows;
+u32 g_cadence_bb_bytes;
+u32 g_cadence_bb_opaque;
+u32 g_cadence_bb_commits;
+u32 g_cadence_bb_marks;
+u32 g_cadence_bb_mismatch;
 #endif
 
 void debug_checkpoint_publish_perf(const void *snapshot, u16 bytes) {

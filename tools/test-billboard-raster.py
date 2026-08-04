@@ -117,7 +117,9 @@ def draw_reference(sprites: list[Sprite], depths: list[int],
 
 def draw_packed(sprites: list[Sprite], depths: list[int],
                 doors: dict[int, Door]) -> tuple[list[list[int]], set[int]]:
-    """Optimized row-first renderer: one mask/value RMW per affected tile row."""
+    """Retired row-first renderer (pre-2026-08-03): accumulates a 32-bit tile
+    word with variable shifts, one RMW per affected tile row. Kept as a second
+    independent model of the same contract."""
     rows = pack_pixels(initial_pixels())
     dirty: set[int] = set()
     for sprite in sprites:
@@ -173,6 +175,80 @@ def draw_packed(sprites: list[Sprite], depths: list[int],
     return unpack_rows(rows), dirty
 
 
+def draw_bytewise(sprites: list[Sprite], depths: list[int],
+                  doors: dict[int, Door]) -> tuple[list[list[int]], set[int]]:
+    """Shipping renderer: one byte (two screen pixels) of a packed tile row at a
+    time, with out-of-range columns pre-marked in the screen->texel map so the
+    inner loop needs no bounds test. Mirrors raster_sprite_row in
+    src/renderer_billboard_draw.c."""
+    rows = pack_pixels(initial_pixels())
+    dirty: set[int] = set()
+    for sprite in sprites:
+        width = sprite.right - sprite.left + 1
+        height = sprite.bottom - sprite.top + 1
+        if width <= 0 or height <= 0:
+            continue
+        x0 = max(sprite.left, 0)
+        x1 = min(sprite.right, VIEW_W - 1)
+        y0 = max(sprite.top, 0)
+        y1 = min(sprite.bottom, VIEW_H - 1)
+        if x0 > x1 or y0 > y1:
+            continue
+
+        x_step = (sprite.atlas_w << 8) // width
+        x_acc = (sprite.atlas_x << 8) + (x0 - sprite.left) * x_step
+        atlas_x_last = sprite.atlas_x + sprite.atlas_w - 1
+        # SKIP is the C code's 0xFF sentinel.
+        tex_x_by_col: dict[int, int | None] = {}
+        for x in range(x0, x1 + 1):
+            tex_x = min(x_acc >> 8, atlas_x_last)
+            x_acc += x_step
+            wall_col = x & ~(STRIDE - 1)
+            tex_x_by_col[x] = tex_x if sprite.depth < depths[wall_col] else None
+        if x0 & 1:
+            tex_x_by_col[x0 - 1] = None
+        if (x1 & 1) == 0:
+            tex_x_by_col[x1 + 1] = None
+
+        first_byte = x0 >> 1
+        last_byte = x1 >> 1
+        y_step = (sprite.atlas_h << 16) // height
+        y_acc = (sprite.atlas_y << 16) + (y0 - sprite.top) * y_step
+        atlas_y_last = sprite.atlas_y + sprite.atlas_h - 1
+        for y in range(y0, y1 + 1):
+            tex_y = min(y_acc >> 16, atlas_y_last)
+            y_acc += y_step
+            for b in range(first_byte, last_byte + 1):
+                mask = 0
+                value = 0
+                for half in (0, 1):
+                    x = b * 2 + half
+                    tex_x = tex_x_by_col.get(x)
+                    if tex_x is None:
+                        continue
+                    source = sprite.texture[
+                        tex_y * sprite.texture_w + tex_x] & 0xF
+                    texel = sprite.lut[source]
+                    if texel:
+                        mask |= 0xF0 >> (half * 4)
+                        value |= texel << (4 - half * 4)
+                if not mask:
+                    continue
+                wall_col = (b * 2) & ~(STRIDE - 1)
+                if door_blocks(doors, wall_col, sprite.depth, y):
+                    continue
+                tile_x = b // 4
+                tile_index = (y // 8) * TILE_W + tile_x
+                row_y = y & 7
+                lane = b & 3
+                shift = (3 - lane) * 8
+                dirty.add(tile_index)
+                rows[tile_index][row_y] = (
+                    (rows[tile_index][row_y] & ~(mask << shift)) |
+                    (value << shift))
+    return unpack_rows(rows), dirty
+
+
 def make_sprite(rng: random.Random, left: int, right: int, top: int,
                 bottom: int, depth: int, atlas_w: int, atlas_h: int) -> Sprite:
     texture_w = atlas_w + 3
@@ -194,19 +270,36 @@ def assert_equal(sprites: list[Sprite], depths: list[int],
         raise ValueError(f"packed raster pixels diverged for {label}")
     if reference_dirty != packed_dirty:
         raise ValueError(f"dirty tile accounting diverged for {label}")
+    byte_pixels, byte_dirty = draw_bytewise(sprites, depths, doors)
+    if reference_pixels != byte_pixels:
+        bad = [(y, x, reference_pixels[y][x], byte_pixels[y][x])
+               for y in range(VIEW_H) for x in range(VIEW_W)
+               if reference_pixels[y][x] != byte_pixels[y][x]]
+        raise ValueError(
+            f"bytewise raster pixels diverged for {label}: "
+            f"{len(bad)} px, first (y,x,ref,got)={bad[0]}")
+    if reference_dirty != byte_dirty:
+        raise ValueError(
+            f"bytewise dirty tile accounting diverged for {label}: "
+            f"only-ref={sorted(reference_dirty - byte_dirty)} "
+            f"only-byte={sorted(byte_dirty - reference_dirty)}")
 
 
 def main() -> int:
     scene = "\n".join((ROOT / "src" / name).read_text(encoding="utf-8")
                       for name in SCENE_SPLIT_FILES)
     required = [
-        "tex_x_by_screen_col[RAY_VIEW_COLS]", "u32 clear_mask = 0",
-        "u32 value = 0", "renderer_mark_overlay_tile(tile_index)",
-        "*dst = (*dst & ~clear_mask) | value",
+        "tex_x_by_screen_col[RAY_VIEW_COLS]", "raster_sprite_row",
+        "renderer_mark_overlay_tile(tile_index)",
+        "*dst = (u8)((*dst & (u8)~mask) | value)",
         "door_overlay_blocks_pixel", "columns[wall_col].depth",
+        # view_tile_index is column-major, so stepping one tile column is
+        # += VIEW_TILE_H, not ++. Getting this wrong wrote into an unrelated
+        # tile and is exactly what the on-target differential harness caught.
+        "tile_index + VIEW_TILE_H",
     ]
     if any(token not in scene for token in required):
-        raise ValueError("row-first packed billboard renderer contract changed")
+        raise ValueError("byte-wise packed billboard renderer contract changed")
 
     rng = random.Random(0x32D00F)
     depths = [0x7FFF] * VIEW_W
@@ -247,7 +340,8 @@ def main() -> int:
         sprites.sort(key=lambda item: item.depth, reverse=True)
         assert_equal(sprites, case_depths, case_doors, f"fuzz case {case}")
 
-    print("ok    packed row raster matches pixel reference across clipping, depth, doors, and painter order")
+    print("ok    byte-wise and row-first rasters both match the pixel reference "
+          "across clipping, depth, doors, and painter order")
     return 0
 
 

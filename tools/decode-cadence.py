@@ -22,7 +22,7 @@ def main() -> int:
     blob = bytes.fromhex(report["perfMailbox"])
     # u16 magic/last/max/missed, u32 iterations/vblank_sum, u16 hist[8],
     # u32 cast/pack/projection/billboard subtick sums, u32 rebuild_frames
-    fields = struct.unpack(">4H2I8H20I", blob[: 8 + 8 + 16 + 80])
+    fields = struct.unpack(">4H2I8H28I", blob[: 8 + 8 + 16 + 112])
     magic, last, vmax, missed = fields[:4]
     iterations, vblank_sum = fields[4:6]
     hist = fields[6:14]
@@ -31,6 +31,9 @@ def main() -> int:
     drawseg_sum, sample_sum, samples = fields[23:26]
     (box_calls, box_near, box_cheap, box_early, box_sum,
      range_calls, range_sum, all_closed_sum) = fields[26:34]
+    scene_frames = fields[34]
+    (bb_objects, bb_rows, bb_bytes, bb_opaque, bb_commits,
+     bb_marks, bb_mismatch) = fields[35:42]
     if magic != 0xCADE:
         print(f"bad magic 0x{magic:04X} (expected 0xCADE) - wrong build type? "
               "DEBUG_PERF builds publish RendererPerfSnapshot instead.")
@@ -47,11 +50,20 @@ def main() -> int:
     # Subticks: 76800/s; a 60Hz vblank is 1280 subticks.
     print(f"  rebuild frames   = {rebuilds}")
     if rebuilds:
-        for name, total in (("cast", cast_sum), ("pack", pack_sum),
-                            ("projection", proj_sum), ("billboard", bb_sum)):
+        # cast and pack run only on base-rebuild frames; projection and
+        # billboard run on every scene frame. Dividing all four by rebuilds
+        # inflated the latter two by iterations/rebuilds.
+        for name, total in (("cast", cast_sum), ("pack", pack_sum)):
             per = total / rebuilds
             print(f"  {name:<10} avg   = {per:7.0f} subticks/rebuild "
                   f"({per / 1280.0:.2f} vblanks)")
+    if scene_frames:
+        print(f"  scene frames     = {scene_frames}")
+        for name, total in (("projection", proj_sum), ("billboard", bb_sum)):
+            per = total / scene_frames
+            print(f"  {name:<10} avg   = {per:7.0f} subticks/scene-frame "
+                  f"({per / 1280.0:.2f} vblanks)")
+    if rebuilds:
         for name, total in (("nodes visited", nodes),
                             ("boxes projected", boxes),
                             ("segs tested", segs_tested),
@@ -86,6 +98,22 @@ def main() -> int:
             rest = traversal - box_sum - range_sum - all_closed_sum
             print(f"  traversal rest    = {rest / rebuilds:7.0f} subticks/rebuild "
                   f"({rest / rebuilds / 1280.0:.2f} vb; recursion + leaf visits)")
+        # Billboard raster units. bb_pixels is the inner-loop trip count; the
+        # opaque share is how much of that walk actually writes a texel.
+        div = scene_frames or rebuilds
+        print(f"  bb objects drawn = {bb_objects / div:7.1f} /scene-frame")
+        for name, total in (("bb sprite rows", bb_rows), ("bb packed bytes", bb_bytes),
+                            ("bb opaque texels", bb_opaque),
+                            ("bb byte commits", bb_commits), ("bb overlay marks", bb_marks)):
+            print(f"  {name:<17} = {total / div:8.1f} /scene-frame")
+        if bb_bytes:
+            pixels = bb_bytes * 2
+            print(f"  bb opaque share  = {100.0 * bb_opaque / pixels:.1f}% of pixel slots")
+            print(f"  bb subticks/px   = {bb_sum / pixels:.2f}"
+                  f"   ({bb_sum / bb_objects if bb_objects else 0:.0f}/object)")
+        print(f"  bb VERIFY mismatch = {bb_mismatch}"
+              f"{'  <-- RASTER DIVERGED' if bb_mismatch else ''}")
+
     return 0
 
 

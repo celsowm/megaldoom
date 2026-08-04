@@ -100,6 +100,28 @@ extern u32 g_cadence_range_closed_subticks;
  * variable and its CadenceSnapshot field stay so the mailbox layout and
  * tools/decode-cadence.py do not shift; it always reads 0. */
 extern u32 g_cadence_all_closed_subticks;
+/* Frames on which renderer_render_scene ran. The projection and billboard
+ * stages execute on EVERY frame, not only on the base-rebuild frames the cast
+ * and pack stages are gated on, so dividing their subtick sums by
+ * rebuild_frames (as tools/decode-cadence.py did until 2026-08-03) overstates
+ * them by iterations/rebuilds -- a factor of ~6 on a route with many idle
+ * frames. This is their correct divisor. */
+extern u32 g_cadence_scene_frames;
+/* Billboard raster attribution: how many objects reach the raster, how many
+ * sprite rows and packed bytes the loops walk (one byte = two screen pixels),
+ * how many of those pixel slots are actually opaque, and how many byte
+ * read-modify-writes and overlay tile marks result. Bare increments (no
+ * getSubTick), so always on. */
+extern u32 g_cadence_bb_objects;
+extern u32 g_cadence_bb_rows;
+extern u32 g_cadence_bb_bytes;
+extern u32 g_cadence_bb_opaque;
+extern u32 g_cadence_bb_commits;
+extern u32 g_cadence_bb_marks;
+/* Non-zero only in a -DBILLBOARD_RASTER_VERIFY=1 build: packed tile rows where
+ * the byte-wise rasterizer and the retained reference implementation disagree.
+ * Must read 0 on every route. */
+extern u32 g_cadence_bb_mismatch;
 #else
 #define CADENCE_STAGE_PROBE 0
 #endif

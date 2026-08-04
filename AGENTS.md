@@ -48,7 +48,11 @@ very different from what the DEBUG_PERF builds imply:
 - **Idle frames hit the 2-vblank (30fps) target.**
 - **Motion/rebuild frames cost ~12-13 vblanks (~5fps)**: cast 4.4-4.6 vb,
   pack 3.0 (start room) to 5.6 (tour route), projection ~1.25, billboard
-  0.3-0.7, plus the fixed 2-vblank 300-tile upload.
+  0.3-0.7, plus the fixed 2-vblank 300-tile upload. **The billboard and
+  projection figures here are wrong** — see the 2026-08-03 billboard-raster
+  section: they were divided by rebuild_frames rather than scene_frames, and
+  billboard actually ran 1.6-3.3 vb before that section's rewrite took it to
+  1.0-2.0.
 - Cast's counted workload is tiny (~50 nodes, ~55 box projections, ~30 segs
   tested, 11-16 drawn per rebuild) — per-unit constant factors dominate.
 - Projection re-measures all ~58 active billboards whenever the camera pose
@@ -534,6 +538,101 @@ change. It is a genuine **~1.2 KB work-RAM** win and removes a word load/compare
 per node, but the speed effect is ~5 subticks — under measurement noise — and
 the cache has subtle invalidation semantics. Take it if work RAM ever gets
 tight (it is at 23596 B free against a 20480 B guardrail), not as a perf lever.
+
+## Billboard raster: the barrel-in-view framerate swing (2026-08-03)
+
+Reported from play: spinning 180 degrees near a barrel makes the framerate dip
+and recover in step with the barrel entering and leaving view. It reproduces
+headlessly — barrels sit 350-440 world units from the E1M1 player start
+(`bsp_things` 864,3328 / 1312,3264 / 1152,2912 vs start 1056,3616) and render at
+`visual_scale 3`, so a near barrel is a very large sprite.
+
+**First: the stage numbers above were being divided by the wrong thing.** `cast`
+and `pack` run only on base-rebuild frames, but `projection` and `billboard` run
+on *every* frame, and `tools/decode-cadence.py` divided all four by
+`rebuild_frames`. On a route with many idle frames that overstated the last two
+by `iterations / rebuilds` — about 6x on `stationary-combat.txt`. There is now a
+`scene_frames` counter (incremented in `renderer_render_scene`) and the decoder
+uses it for those two stages. Any billboard/projection figure quoted in this
+file from before 2026-08-03 is inflated; the "billboard 0.3-0.7 vb" line in the
+release-framerate section was wrong for that reason *and* because it predated
+the current sprite population.
+
+Corrected, `draw_projected_billboards` was **1.6-3.3 vblanks per scene frame** —
+on `stationary-combat.txt` (3.28 vb) it cost more than the whole pack stage
+(3.05 vb) and nearly as much as the cast. That is the swing the report describes.
+
+**Root cause, from the generated asm (not from timers).** The function was one
+~170-line scope with ~25 live values; GCC gave up and spilled almost all of them
+(`lea (-240,%sp),%sp`, ~14 stack slots reloaded *per pixel*). On top of that,
+every opaque texel built its nibble with `(u32)texel << shift` for a shift that
+reaches 28, and a variable `LSL.L` on the 68000 costs `8 + 2n` — up to 64 cycles,
+twice per texel. Measured cost was ~5.4 subticks (~545 cycles) per pixel slot for
+a loop body of maybe a dozen useful instructions.
+
+**Fix: rasterize a byte at a time instead of accumulating a 32-bit tile word.**
+A packed tile row is a u32 of 8 nibbles with pixel `col` at bit
+`(7 - (col & 7)) * 4`, so on this big-endian target byte `(col & 7) >> 1` of that
+word *is* two adjacent screen pixels, even column in the high nibble. Nibble
+placement becomes a constant `<< 4` or nothing, the whole `tile_x` / pair / pixel
+loop nest collapses to one loop over bytes, and the live set fits the register
+file. Two supporting changes: the at most two columns a whole-byte span adds
+beyond `[x0, x1]` are pre-marked with the existing `0xFF` skip sentinel, which
+removes the per-pixel bounds test entirely; and `pickup_post_contains` now takes
+the already-selected offsets row, hoisting a 2D row multiply out of the pixel loop.
+
+Result (subticks per scene frame, all routes):
+
+| route | before | after |
+|---|---|---|
+| `stationary-combat` | 4202 (3.28 vb) | 2523 (1.97 vb) |
+| `slow-turn` | 3886 (3.04 vb) | 2275 (1.78 vb) |
+| `checkpoints` | 2462 (1.92 vb) | 1312 (1.02 vb) |
+| `barrel-spin` | 2068 (1.62 vb) | 1298 (1.01 vb) |
+
+**-40% to -47%**, ~4.0 -> ~2.3 subticks per pixel slot. ROM/RAM unchanged, all 21
+guardrail tests pass. `tools/routes/barrel-spin.txt` (hold left from frame 300,
+run with `-b 960`) is the route that reproduces the reported scenario.
+
+### The bug this shipped with, and how it was caught
+
+`view_tile_index` is **column-major** — `tile_x * VIEW_TILE_H + tile_y`, so a
+changed column uploads as one DMA run. Walking to the next tile column is
+therefore `tile_index += VIEW_TILE_H` (and `+= VIEW_TILE_H * 32` bytes), *not*
+`++`. The first version used `++` and wrote into an unrelated tile. It rendered
+plausibly and would not have been caught by eye.
+
+**A Python model of the new algorithm passed `tools/test-billboard-raster.py`
+at both strides.** That test models the algorithm, so it proves the *design* and
+cannot see a C pointer-arithmetic bug. What caught it was an on-target
+differential harness: `-DBILLBOARD_RASTER_VERIFY=1` keeps the old rasterizer
+compiled in and runs both, **object by object**, comparing packed output. Two
+details made it usable:
+
+- A full `VIEW_TILE_COUNT` shadow buffer is 9600 B and left 13494 B of work RAM
+  free — under the ~13.7 KB where SGDK panics at boot with "not enough memory to
+  reset VDP". Verifying **one rotating tile row** (640 B) is still an exact
+  comparison; the reference just drops commits outside the band, and 15 bands
+  cycle in 15 frames.
+- Comparing per frame only says the final buffers differ, and every later object
+  then draws over a base the two paths already disagree about. Comparing per
+  object localises it immediately.
+
+0 mismatches on all five routes (including 169 scene frames of
+`tour-east-combat`) is the correctness claim. `test-billboard-raster.py` now
+carries the byte-wise model as the shipping contract and pins
+`tile_index + VIEW_TILE_H` as a required token so the column-major step cannot
+regress silently.
+
+**Still on the table.** At ~2.3 subticks (~230 cycles) per pixel slot the loop is
+close to what this algorithm costs on a 68000, but two per-byte tests survive
+that are loop-invariant per object: the `post_offsets == NULL` check (twice) and
+`has_door_overlay`. Specialising the loop would cost source duplication for maybe
+4-8%. The larger remaining number in the spin scenario is not billboard at all —
+`pack` measures **6.4 vb/rebuild on `barrel-spin` vs 3.0-3.7 on the other start-room
+routes**, because a rotation invalidates every tile column's coherence entry at
+once. That is the next thing to look at for turning smoothness, and it is
+unrelated to sprites.
 
 ## Sparse semantic tile oracle (2026-07-19)
 

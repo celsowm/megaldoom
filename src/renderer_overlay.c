@@ -1,5 +1,6 @@
 #include "renderer_internal.h"
 #include "renderer_perf.h"
+#include "debug_checkpoint.h"
 
 static u32 s_previous_bits[VIEW_DIRTY_WORD_COUNT];
 static u32 s_current_bits[VIEW_DIRTY_WORD_COUNT];
@@ -91,6 +92,9 @@ void renderer_mark_overlay_tile(u16 tile_index) {
     s_cur_overlay_columns |= (u32)1u << (tile_index % VIEW_TILE_W);
 
     if ((s_current_bits[word] & mask) != 0) return;
+#if CADENCE_STAGE_PROBE
+    g_cadence_bb_marks++;
+#endif
 #if DEBUG_PERF
     renderer_perf_record_overlay_touch((bool)((s_previous_bits[word] & mask) != 0));
 #endif

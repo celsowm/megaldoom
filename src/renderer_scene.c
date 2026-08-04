@@ -36,6 +36,9 @@ void renderer_render_scene(const RayColumn *columns,
 #elif CADENCE_STAGE_PROBE
     u32 stage_start = getSubTick();
 #endif
+#if CADENCE_STAGE_PROBE
+    g_cadence_scene_frames++;
+#endif
     ProjectedBillboard objects[BILLBOARD_MAX_PROJECTED_TOTAL];
     const u16 object_count = billboard_project_scene(
         player, columns, objects, BILLBOARD_MAX_PROJECTED_TOTAL);

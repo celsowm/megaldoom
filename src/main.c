@@ -598,6 +598,15 @@ int main(bool hard) {
                 u32 range_closed_calls;
                 u32 range_closed_subticks;
                 u32 all_closed_subticks;
+                u32 scene_frames;
+                // Billboard raster attribution (see debug_checkpoint.h).
+                u32 bb_objects;
+                u32 bb_rows;
+                u32 bb_bytes;
+                u32 bb_opaque;
+                u32 bb_commits;
+                u32 bb_marks;
+                u32 bb_mismatch;
             } CadenceSnapshot;
             static CadenceSnapshot s_cadence;
             const u16 vb = (u16)(vtimer - cur_vtimer);
@@ -628,6 +637,14 @@ int main(bool hard) {
             s_cadence.range_closed_calls = g_cadence_range_closed_calls;
             s_cadence.range_closed_subticks = g_cadence_range_closed_subticks;
             s_cadence.all_closed_subticks = g_cadence_all_closed_subticks;
+            s_cadence.scene_frames = g_cadence_scene_frames;
+            s_cadence.bb_objects = g_cadence_bb_objects;
+            s_cadence.bb_rows = g_cadence_bb_rows;
+            s_cadence.bb_bytes = g_cadence_bb_bytes;
+            s_cadence.bb_opaque = g_cadence_bb_opaque;
+            s_cadence.bb_commits = g_cadence_bb_commits;
+            s_cadence.bb_marks = g_cadence_bb_marks;
+            s_cadence.bb_mismatch = g_cadence_bb_mismatch;
             debug_checkpoint_publish_perf(&s_cadence, sizeof(s_cadence));
         }
 #endif
