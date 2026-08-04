@@ -122,6 +122,12 @@ extern u32 g_cadence_bb_marks;
  * the byte-wise rasterizer and the retained reference implementation disagree.
  * Must read 0 on every route. */
 extern u32 g_cadence_bb_mismatch;
+/* Pack-stage unit counters: tile columns the coherence cache actually repacked,
+ * and how those columns' 15 tiles split between whole ceiling/floor tiles (one
+ * movem.l pair) and mixed wall tiles (the expensive path). Bare increments. */
+extern u32 g_cadence_pack_columns;
+extern u32 g_cadence_pack_flat_tiles;
+extern u32 g_cadence_pack_mixed_tiles;
 /* Worst single scene frame, not the run average: sprite raster cost scales with
  * on-screen area, so a point-blank sprite is many times the mean and the mean
  * hides it. */

@@ -609,6 +609,9 @@ int main(bool hard) {
                 u32 bb_mismatch;
                 u32 bb_setup_subticks;
                 u32 bb_rows_subticks;
+                u32 pack_columns;
+                u32 pack_flat_tiles;
+                u32 pack_mixed_tiles;
                 u32 bb_max_bytes;
                 u32 bb_max_subticks;
             } CadenceSnapshot;
@@ -651,6 +654,9 @@ int main(bool hard) {
             s_cadence.bb_mismatch = g_cadence_bb_mismatch;
             s_cadence.bb_setup_subticks = g_cadence_bb_setup_subticks;
             s_cadence.bb_rows_subticks = g_cadence_bb_rows_subticks;
+            s_cadence.pack_columns = g_cadence_pack_columns;
+            s_cadence.pack_flat_tiles = g_cadence_pack_flat_tiles;
+            s_cadence.pack_mixed_tiles = g_cadence_pack_mixed_tiles;
             s_cadence.bb_max_bytes = g_cadence_bb_max_bytes;
             s_cadence.bb_max_subticks = g_cadence_bb_max_subticks;
             debug_checkpoint_publish_perf(&s_cadence, sizeof(s_cadence));

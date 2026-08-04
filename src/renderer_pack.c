@@ -1,4 +1,5 @@
 #include "renderer_pack_internal.h"
+#include "debug_checkpoint.h"
 #include "renderer_perf.h"
 #include "generated_assets.h"
 
@@ -243,11 +244,20 @@ void build_bsp_tilemap(const RayColumn *columns,
 
             if ((pixel_y + 7) < min_top) {
                 write_repeated_flat_tile(target[tile_index], flat_rows.ceiling);
+#if CADENCE_STAGE_PROBE
+                g_cadence_pack_flat_tiles++;
+#endif
             } else if (pixel_y >= max_bottom) {
                 write_repeated_flat_tile(target[tile_index], flat_rows.floor);
+#if CADENCE_STAGE_PROBE
+                g_cadence_pack_flat_tiles++;
+#endif
             } else {
                 write_mixed_stride4_tile(target[tile_index], pixel_y,
                                          descriptors, packed_columns, &flat_rows);
+#if CADENCE_STAGE_PROBE
+                g_cadence_pack_mixed_tiles++;
+#endif
             }
         }
     }
@@ -440,6 +450,9 @@ void build_bsp_tilemap(const RayColumn *columns,
 #if DEBUG_PERF
         oracle_changed_columns++;
 #endif
+#if CADENCE_STAGE_PROBE
+        g_cadence_pack_columns++;
+#endif
         s_prev_desc[tile_x][0] = descriptors[0];
         s_prev_desc[tile_x][1] = descriptors[1];
         s_prev_desc[tile_x][2] = descriptors[2];
@@ -483,6 +496,9 @@ void build_bsp_tilemap(const RayColumn *columns,
                 const u32 flat_start = measure_flat ? getSubTick() : 0;
 #endif
                 write_repeated_flat_tile(target[tile_index], flat_rows.ceiling);
+#if CADENCE_STAGE_PROBE
+                g_cadence_pack_flat_tiles++;
+#endif
 #if DEBUG_PERF
                 sparse_ceiling++;
                 if (measure_flat) {
@@ -500,6 +516,9 @@ void build_bsp_tilemap(const RayColumn *columns,
                 const u32 flat_start = measure_flat ? getSubTick() : 0;
 #endif
                 write_repeated_flat_tile(target[tile_index], flat_rows.floor);
+#if CADENCE_STAGE_PROBE
+                g_cadence_pack_flat_tiles++;
+#endif
 #if DEBUG_PERF
                 sparse_floor++;
                 if (measure_flat) {
@@ -517,6 +536,9 @@ void build_bsp_tilemap(const RayColumn *columns,
 #endif
             write_mixed_stride2_tile(target[tile_index], pixel_y,
                                      descriptors, packed_columns, &flat_rows);
+#if CADENCE_STAGE_PROBE
+            g_cadence_pack_mixed_tiles++;
+#endif
 #if DEBUG_PERF
             sparse_dyn_wall++;
             if (measure_mixed) {

@@ -631,9 +631,9 @@ that are loop-invariant per object: the `post_offsets == NULL` check (twice) and
 `has_door_overlay`. Specialising the loop would cost source duplication for maybe
 4-8%. The larger remaining number in the spin scenario is not billboard at all —
 `pack` measures **6.4 vb/rebuild on `barrel-spin` vs 3.0-3.7 on the other start-room
-routes**, because a rotation invalidates every tile column's coherence entry at
-once. That is the next thing to look at for turning smoothness, and it is
-unrelated to sprites.
+routes**. That was the next thing looked at for turning smoothness — see the pack
+section below; the cause turned out to be the mixed-tile count doubling, not the
+coherence cache, and the hotpath is now ~11-13% faster.
 
 ### Point-blank sprites: the tail, not the mean (2026-08-04)
 
@@ -691,6 +691,59 @@ counts, identical `avg vblanks`), which is what makes their neutrality claim saf
 
 Verified byte-exact with `-DBILLBOARD_RASTER_VERIFY=1`: 0 mismatches across all
 six routes, both paths.
+
+## Pack stage: DBRA posts in the mixed-tile hotpath (2026-08-04)
+
+Rotation makes `pack` roughly double: **6.5 vb/rebuild spinning
+(`barrel-spin`) vs 3.0-3.8 standing or translating**. New release-cadence
+counters (`pack columns`, `pack tiles`, always on) say why, and it is *not*
+mainly the coherence cache:
+
+| route | pack | columns repacked | mixed tiles | flat tiles |
+|---|---|---|---|---|
+| `barrel-spin` | 8336 | 19.8 / 20 | **149.1** | 147.1 |
+| `checkpoints` | 4866 | 16.4 | 75.1 | 170.3 |
+| `stationary-combat` | 4065 | 14.3 | 58.2 | 156.8 |
+| `barrel-pointblank` | 5657 | 19.4 | 90.5 | 200.1 |
+| `tour-east-combat` | 7002 | 15.8 | 121.9 | 115.0 |
+
+Coherence does collapse in a spin (19.8/20 columns repacked vs 14.3 standing),
+but the real driver is that **a spin near walls doubles the mixed (wall) tile
+count**, and a mixed tile costs ~42 subticks more than a flat one. Fitting
+`columns`/`mixed`/`flat` together is rank-deficient — `columns * 15 == mixed +
+flat` — so only the two tile coefficients are identifiable; don't try to solve
+for a per-column term.
+
+**Fix, in `src/renderer_hotpath.s`.** Each lane emits at most three monotonic
+posts (ceiling, wall, floor). The loops re-tested both the post bound and `end_y`
+every pixel — `cmp/bcc/cmp/bcs`, 26 cycles, where the post length is already
+known and `DBRA` costs 10. The wall post additionally re-read `tex_y` from the
+descriptor every pixel (`add.b 17(a1),d5`, 12 cycles); it now lives in `d4`,
+which is free because `bottom` is dead once the post length is computed. Wall
+post: ~104 -> ~72 cycles per byte.
+
+| route | pack before | after | mixed tiles before/after |
+|---|---|---|---|
+| `stationary-combat` | 4065 | **3642** (-10.4%) | 58.2 / 58.2 (identical) |
+| `barrel-spin` | 8336 | **7233** (-13.2%) | 149.1 / 154.5 (*more* work) |
+| `barrel-pointblank` | 5657 | **4946** (-12.6%) | 90.5 / 89.6 |
+| `checkpoints` | 4866 | **4325** (-11.1%) | 75.1 / 75.6 |
+
+`stationary-combat` is the clean one: identical column and tile counts on both
+sides, so -10.4% is pure per-tile speedup. Costs no RAM and ~30 bytes of ROM.
+
+**Verification is free here — use it.** `compare_stride2_tile_asm` (DEBUG_PERF)
+already byte-compares the asm tile against `write_mixed_stride2_tile_reference`
+on a rotating tile cursor. Across the five routes: **34200 tiles checked,
+`asm_mismatches=0`, `asm_canary_failures=0`, 114 complete 300-tile cycles.**
+Never touch this file without reading those three numbers back.
+
+**Evaluated and rejected: dropping `andi.w #63,d5` from the wall post** by
+duplicating each packed column to 128 entries so `vertical_samples[i] + tex_y`
+(max 126) needs no wrap. It saves 8 of ~72 cycles, but
+`FREEDOOM_WALL_PACKED_PAIRS` is `[2][4][23][64][64]` = **736 KB**; doubling the
+last dimension adds another 736 KB to a 1408 KB cartridge that already uses
+1387 KB. Not affordable.
 
 ## Sparse semantic tile oracle (2026-07-19)
 

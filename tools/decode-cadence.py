@@ -22,7 +22,7 @@ def main() -> int:
     blob = bytes.fromhex(report["perfMailbox"])
     # u16 magic/last/max/missed, u32 iterations/vblank_sum, u16 hist[8],
     # u32 cast/pack/projection/billboard subtick sums, u32 rebuild_frames
-    fields = struct.unpack(">4H2I8H32I", blob[: 8 + 8 + 16 + 128])
+    fields = struct.unpack(">4H2I8H35I", blob[: 8 + 8 + 16 + 140])
     magic, last, vmax, missed = fields[:4]
     iterations, vblank_sum = fields[4:6]
     hist = fields[6:14]
@@ -34,7 +34,9 @@ def main() -> int:
     scene_frames = fields[34]
     (bb_objects, bb_rows, bb_bytes, bb_opaque, bb_commits,
      bb_marks, bb_mismatch) = fields[35:42]
-    bb_setup_sum, bb_rows_sum, bb_max_bytes, bb_max_subticks = fields[42:46]
+    bb_setup_sum, bb_rows_sum = fields[42:44]
+    pack_columns, pack_flat, pack_mixed = fields[44:47]
+    bb_max_bytes, bb_max_subticks = fields[47:49]
     if magic != 0xCADE:
         print(f"bad magic 0x{magic:04X} (expected 0xCADE) - wrong build type? "
               "DEBUG_PERF builds publish RendererPerfSnapshot instead.")
@@ -112,6 +114,12 @@ def main() -> int:
             print(f"  bb opaque share  = {100.0 * bb_opaque / pixels:.1f}% of pixel slots")
             print(f"  bb subticks/px   = {bb_sum / pixels:.2f}"
                   f"   ({bb_sum / bb_objects if bb_objects else 0:.0f}/object)")
+        if pack_columns:
+            print(f"  pack columns     = {pack_columns / rebuilds:7.1f} /rebuild "
+                  f"(of {20}; coherence skipped {20 - pack_columns / rebuilds:.1f})")
+            print(f"  pack tiles       = {pack_mixed / rebuilds:7.1f} mixed + "
+                  f"{pack_flat / rebuilds:.1f} flat  "
+                  f"({pack_sum / (pack_mixed + pack_flat) if (pack_mixed + pack_flat) else 0:.1f} subticks/tile)")
         if bb_setup_sum or bb_rows_sum:
             print(f"  bb setup/object  = {bb_setup_sum / div:7.0f} subticks/scene-frame"
                   f"  ({bb_setup_sum / bb_objects if bb_objects else 0:.0f}/object)")
