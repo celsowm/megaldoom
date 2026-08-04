@@ -1,7 +1,17 @@
 param(
     [string]$HudHeader = "src\generated_hud_assets.h",
     [string]$WorldHeader = "src\generated_assets.h",
-    [string]$OutputHeader = "src\generated_renderer_assets.h"
+    [string]$OutputHeader = "src\generated_renderer_assets.h",
+    # Texture rows walked across a wall's on-screen height. The runtime masks
+    # tex_y with WALL_TEX_DIM_MASK (63), so this is the vertical repeat count
+    # times 64: 32 shows half the texture stretched over the wall, 64 shows it
+    # exactly once, 128 twice. Doom tiles by world height -- E1M1's computer
+    # corridor is 128 units tall against COMPUTE2's 56, so it shows ~2.3
+    # copies, which is where its dense horizontal banding comes from.
+    # 64 is the default: one full texture per wall. 128 matches Doom's density
+    # more closely but makes distant walls shimmer, which is the artefact the
+    # stride-4 experiment was reverted over.
+    [int]$WallTexRowsPerWall = 64
 )
 
 $ErrorActionPreference = "Stop"
@@ -71,7 +81,7 @@ function New-WallSamplingRows {
     for ($height = 1; $height -le 120; $height++) {
         $row = New-Object System.Collections.Generic.List[int]
         for ($relY = 0; $relY -lt 120; $relY++) {
-            [void]$row.Add(([int][Math]::Floor(($relY * 32) / $height) -band 0xFF))
+            [void]$row.Add(([int][Math]::Floor(($relY * $WallTexRowsPerWall) / $height) -band 0xFF))
         }
         [void]$lines.Add(((Format-ByteRow @($row)) + ","))
     }
