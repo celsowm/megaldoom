@@ -763,6 +763,48 @@ bulk assets read once. A table sampled inside the per-pixel wall loop must never
 live behind the window — you would be paying a bank check or swap per lookup. Use
 the plain sub-4 MB space for anything the renderer touches at pixel rate.
 
+### Hoisting the post loops, and what it proved about pack (2026-08-04)
+
+Going after the same loops without spending any ROM. Per-byte fat that was
+sitting in plain sight:
+
+- Destinations were `0(a6)`. A zero displacement is not free — `d16(An)` costs
+  4 cycles more than `(An)` on every byte written. GAS does not fold it.
+- The wall post read the DDA as `0(a4,d0.w)` and kept `d0` in step with an
+  `addq.w`: 18 cycles where `(a4)+` is 8. `d0` was never read inside the loop,
+  and its post-loop value is just `min(bottom, end_y)`, which the length
+  computation already had.
+- The wall post's `moveq #0,d5` is loop-invariant, which is not obvious:
+  `andi.w #63,d5` leaves bits 6-15 clear, `move.b` writes only bits 0-7, and
+  `add.b` discards its carry, so d5's high byte is still zero next iteration.
+- The flat posts recomputed `((y&3)<<2)+lane` per pixel (move/andi/lsl/add =
+  26 cycles) to index a 16-byte table with period 4. The lane term folds into
+  the base pointer once and the index steps `+4 mod 16`.
+
+Wall byte 74 -> 56 cycles, flat byte 70 -> 48. On the three routes that stayed
+pose-stable (identical mixed/flat tile counts on both sides, so this is a pure
+per-tile comparison):
+
+| route | pack before | after | subticks/tile |
+|---|---|---|---|
+| `stationary-combat` | 3642 | **3425** (-6.0%) | 16.9 -> 15.9 |
+| `checkpoints` | 4139 | **3876** (-6.4%) | 18.3 -> 17.2 |
+| `slow-turn` | 3845 | **3621** (-5.8%) | 16.0 -> 15.1 |
+
+Byte-exact: 27863 tiles checked across six routes, `asm_mismatches=0`,
+`asm_canary_failures=0`, 92 complete cycles. Zero ROM, zero RAM.
+
+**The useful result is the ratio, not the 6%.** Inner-loop cycles were cut
+~24% and `pack` moved 6%, so **the three post loops are only about a quarter of
+the pack stage** — the other ~75% is C-side per-tile and per-column work
+(descriptor construction, the coherence compare, tile classification, run
+splitting). Two consequences:
+
+1. This closes the `andi.w #63` / +736 KB idea for good. At a quarter of pack it
+   would now buy ~1% of pack. Do not revisit it.
+2. Further pack work belongs in `renderer_pack.c`, not `renderer_hotpath.s`.
+   Attribute the per-tile overhead before writing any more assembly.
+
 ## Sparse semantic tile oracle (2026-07-19)
 
 The per-column oracle (above) killed the double-buffer-per-column path, but it

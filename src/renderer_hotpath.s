@@ -20,13 +20,32 @@
  * per-pixel material branch and no 32-bit shift/or composition.
  *
  * Each post's length is computed once and the loop closed with DBRA. The
- * previous form re-tested both the post bound and end_y every pixel
+ * original form re-tested both the post bound and end_y every pixel
  * (cmp/bcc/cmp/bcs = 26 cycles) where DBRA costs 10; the wall post additionally
  * re-read tex_y from the descriptor every pixel, which is now held in d4 (the
- * `bottom` it replaces is dead once the post length is known). Wall post
- * measured ~104 -> ~72 cycles per byte. Mixed tiles are the pack stage's
- * dominant cost (~42 subticks each over a flat tile, and a rotation doubles
- * their count: 149/rebuild spinning vs 75 translating).
+ * `bottom` it replaces is dead once the post length is known). 104 -> 74
+ * cycles per wall byte.
+ *
+ * Everything a post can hoist out of its body is then hoisted, because the pack
+ * stage is ~50% of a moving frame and these three loops are nearly all of it:
+ *
+ *   - Destinations are (a6), not 0(a6). The zero displacement is not free --
+ *     d16(An) costs 4 cycles more than (An) on every single byte written.
+ *   - The wall post walks the DDA with (a4)+ instead of 0(a4,d0.w) plus an
+ *     addq.w to keep d0 in step: 8 cycles against 18. d0 is not needed inside
+ *     the loop at all, and its post-loop value is just min(bottom, end_y),
+ *     which the length computation already produced.
+ *   - The wall post's `moveq #0,d5` is loop-invariant, which is not obvious:
+ *     `andi.w #63,d5` leaves bits 6-15 clear, `move.b` writes only bits 0-7,
+ *     and `add.b` discards its carry, so d5's high byte is still zero at the
+ *     top of the next iteration. One moveq per post, not per pixel.
+ *   - The flat posts recomputed ((y&3)<<2)+lane every pixel (move/andi/lsl/add
+ *     = 26 cycles) to index a 16-byte table whose period is 4. The lane term
+ *     folds into the base pointer once, and the index just steps +4 mod 16.
+ *
+ * Wall byte 74 -> 56 cycles, flat byte 70 -> 48. Mixed tiles are the pack
+ * stage's dominant cost (~42 subticks each over a flat tile, and a rotation
+ * doubles their count: 149/rebuild spinning vs 75 translating).
  */
 renderer_write_mixed_stride2_tile_asm:
     movem.l d2-d7/a2-a6,-(sp)
@@ -57,14 +76,17 @@ renderer_write_mixed_stride2_tile_asm:
     sub.w   d0,d2                  /* ceiling post length */
     subq.w  #1,d2
     move.w  d2,d5                  /* DBRA counter */
-.Lceiling_loop:
-    move.w  d0,d2
+    lea     0(a3,d6.w),a4          /* ceiling row bytes for this lane */
+    move.w  d0,d2                  /* flat index = (y & 3) * 4 */
     andi.w  #3,d2
     lsl.w   #2,d2
-    add.w   d6,d2
-    move.b  0(a3,d2.w),0(a6)
-    addq.l  #4,a6
+    add.w   d5,d0                  /* y advances past the whole post */
     addq.w  #1,d0
+.Lceiling_loop:
+    move.b  0(a4,d2.w),(a6)
+    addq.l  #4,a6
+    addq.w  #4,d2
+    andi.w  #15,d2                 /* the flat pattern repeats every 4 rows */
     dbra    d5,.Lceiling_loop
 
 .Lwall_setup:
@@ -76,20 +98,21 @@ renderer_write_mixed_stride2_tile_asm:
     cmp.w   d2,d0
     bcc.s   .Lfloor_setup
     movea.l 12(a1),a4              /* vertical sample DDA */
-    sub.w   d0,d2                  /* wall post length */
-    subq.w  #1,d2
-    sub.w   d3,d0                  /* d0 = y - top: the DDA index */
+    move.w  d0,d5
+    sub.w   d3,d5                  /* y - top: where this tile enters the DDA */
+    adda.w  d5,a4
     move.b  17(a1),d4              /* texture vertical offset; bottom is dead */
+    sub.w   d0,d2                  /* wall post length */
+    add.w   d2,d0                  /* y after the post, for the floor setup */
+    subq.w  #1,d2                  /* DBRA counter */
+    moveq   #0,d5                  /* high byte stays clear across iterations */
 .Lwall_loop:
-    moveq   #0,d5
-    move.b  0(a4,d0.w),d5
+    move.b  (a4)+,d5
     add.b   d4,d5
     andi.w  #63,d5
-    move.b  0(a5,d5.w),0(a6)
+    move.b  0(a5,d5.w),(a6)
     addq.l  #4,a6
-    addq.w  #1,d0
     dbra    d2,.Lwall_loop
-    add.w   d3,d0                  /* back to an absolute y for the floor post */
 
 .Lfloor_setup:
     cmp.w   d1,d0
@@ -97,14 +120,15 @@ renderer_write_mixed_stride2_tile_asm:
     move.w  d1,d5                  /* floor post length */
     sub.w   d0,d5
     subq.w  #1,d5
-.Lfloor_loop:
-    move.w  d0,d2
+    lea     16(a3,d6.w),a4         /* floor row bytes for this lane */
+    move.w  d0,d2                  /* flat index = (y & 3) * 4 */
     andi.w  #3,d2
     lsl.w   #2,d2
-    add.w   d6,d2
-    move.b  16(a3,d2.w),0(a6)
+.Lfloor_loop:
+    move.b  0(a4,d2.w),(a6)
     addq.l  #4,a6
-    addq.w  #1,d0
+    addq.w  #4,d2
+    andi.w  #15,d2
     dbra    d5,.Lfloor_loop
 
 .Lnext_lane:
