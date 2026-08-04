@@ -334,8 +334,27 @@ def build_shade_lut(palette, levels=4):
     return result
 
 
+# Every texture is stored as a square WALL_TEX_DIM grid, so a source wider than
+# this loses horizontal detail with nothing gained: COMPUTE2 (256x56) was being
+# squashed 4:1 across while its 56 rows were stretched to 64, which turned a
+# panel of small readouts into horizontal mush. Capping the sampled width at
+# 2*WALL_TEX_DIM keeps the squash at 2:1 -- what every 128-wide texture already
+# gets and what STARTAN3 et al look fine at -- at the cost of the material
+# repeating over half the world distance. Only sources wider than the cap are
+# touched; in E1M1 that is COMPUTE2 and the 256x128 fallback.
+WALL_TEX_MAX_SOURCE_WIDTH = 2 * WALL_TEX_DIM
+
+
+def sampled_texture_width(width):
+    """Source width actually sampled into the WALL_TEX_DIM grid."""
+    return min(width, WALL_TEX_MAX_SOURCE_WIDTH)
+
+
 def convert_texture(path, palette):
     with Image.open(path) as image:
+        sampled = sampled_texture_width(image.width)
+        if sampled != image.width:
+            image = image.crop((0, 0, sampled, image.height))
         resized = image.convert("RGB").resize((WALL_TEX_DIM, WALL_TEX_DIM), Image.Resampling.BOX)
         material_name = os.path.splitext(os.path.basename(path))[0].upper()
         if material_name.startswith(("GRAY", "METAL", "STONE")):
@@ -393,6 +412,10 @@ def emit_world_assets(path, texture_usage, sectors):
         source = texture_path(name)
         with Image.open(source) as image:
             width, height = image.size
+        # The stored grid only ever holds sampled_texture_width() columns, so the
+        # world repeat must be derived from that, not from the source width, or
+        # the material would be stretched instead of repeated.
+        width = sampled_texture_width(width)
         texture_meta[name] = dict(
             width=width,
             height=height,
