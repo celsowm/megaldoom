@@ -1,6 +1,5 @@
 #include "bsp_render.h"
 #include "bsp_map.h"
-#include "bsp_traverse.h"
 #include "fixed_math.h"
 #include "generated_assets.h"
 #include "renderer_perf.h"
@@ -53,10 +52,21 @@ static s16 g_vertex_lateral[BSP_MAX_VERTICES];
 static u8 g_vertex_generation[BSP_MAX_VERTICES];
 static u8 g_cast_generation;
 static RayColumn *g_columns;
-static BspTraverseLeafFn g_visit_leaf;
-static BspTraverseRangeClosedFn g_range_closed;
-static BspTraverseAllClosedFn g_all_closed;
-static void *g_traverse_context;
+
+// Far/empty default for a sampled column that no wall claimed this frame.
+// g_ray_columns persists across frames, so an unclaimed column would otherwise
+// show last frame's wall; this is what the old unconditional pre-seed provided
+// for all 80 samples. See seed_unclaimed_columns for why it is now applied only
+// to the complement of the solid set.
+static void seed_column_default(RayColumn *col) {
+    col->height = 1;
+    col->depth = 0x7FFF;
+    col->tex_x = 0;
+    col->tex_y = 0;
+    col->texture_id = MEGALDOOM_TEX_FALLBACK;
+    col->shade = 0;
+    col->flags = 0;
+}
 
 // --- Near/far order cache (Patch 3.2) ---------------------------------------
 // The front/back traversal order at each BSP node depends only on the player's
@@ -127,6 +137,13 @@ static u8 g_visible_subsector_bits[(BSP_MAX_SUBSECTORS + 7) / 8];
 #endif
 
 static void render_node(u16 child);
+static void bsp_visit_leaf(u16 subsector_id);
+
+// The whole view is filled front-to-back: nothing farther can change the frame.
+// Cheap enough (one word compare) to gate the box projection on.
+static inline bool bsp_view_fully_closed(void) {
+    return (bool)(g_solid_count >= BSP_SAMPLE_COLS);
+}
 
 // All E1M1 vertices, node deltas and collision-constrained camera coordinates
 // fit signed words (the generated map spans only 4576x2816 units). Keeping this
@@ -668,6 +685,18 @@ static bool project_box_range(const BspBox *box, s16 *left, s16 *right) {
 static void render_boxed_child(u16 child, const BspBox *box) {
     s16 left;
     s16 right;
+
+    // Gate the expensive projection on full coverage. This test used to live at
+    // the top of render_node, where it was dead: render_node is only reached
+    // from here after solid_sample_range_filled() returned FALSE, which proves
+    // some sample is still open, which proves g_solid_count < BSP_SAMPLE_COLS.
+    // Here it does real work — once the view closes, every sibling still
+    // pending on the recursion stack used to pay a full project_box_range plus
+    // a range query before being rejected.
+    if (bsp_view_fully_closed()) {
+        return;
+    }
+
 #if DEBUG_PERF
     const u32 projection_start = g_bsp_dbg_measure_box ? getSubTick() : 0;
 #endif
@@ -705,35 +734,23 @@ static void render_boxed_child(u16 child, const BspBox *box) {
 #endif
 #if CADENCE_TRAVERSE_SPLIT
     const u32 range_start = getSubTick();
-    const bool closed = g_range_closed(left_sample, right_sample, g_traverse_context);
+    const bool closed = solid_sample_range_filled(left_sample, right_sample);
     g_cadence_range_closed_subticks += getSubTick() - range_start;
     if (!closed) {
         render_node(child);
     }
 #else
-    if (!g_range_closed(left_sample, right_sample, g_traverse_context)) {
+    if (!solid_sample_range_filled(left_sample, right_sample)) {
         render_node(child);
     }
 #endif
 }
 
 static void render_node(u16 child) {
-#if CADENCE_TRAVERSE_SPLIT
-    const u32 all_start = getSubTick();
-    const bool all_closed = g_all_closed(g_traverse_context);
-    g_cadence_all_closed_subticks += getSubTick() - all_start;
-    if (all_closed) {
-        return; // whole view already filled front-to-back
-    }
-#else
-    if (g_all_closed(g_traverse_context)) {
-        return; // whole view already filled front-to-back
-    }
-#endif
-
+    // No full-coverage test here — see render_boxed_child, which owns it now.
     BSP_DBG_INC(nodes_visited);
     if (BSP_CHILD_IS_SUBSECTOR(child)) {
-        g_visit_leaf(BSP_CHILD_INDEX(child), g_traverse_context);
+        bsp_visit_leaf(BSP_CHILD_INDEX(child));
         return;
     }
 
@@ -768,11 +785,14 @@ static void render_node(u16 child) {
     }
 }
 
-void bsp_traverse_front_to_back(const PlayerState *player,
-                                BspTraverseLeafFn visit_leaf,
-                                BspTraverseRangeClosedFn range_closed,
-                                BspTraverseAllClosedFn all_closed,
-                                void *context) {
+// Conservative front-to-back BSP walk. Children are visited near side first,
+// boxes outside the FOV are rejected, and the solid-sample occlusion buffer
+// prunes ranges. This used to take leaf/range-closed/all-closed callbacks
+// through a bsp_traverse.h vtable, but it only ever had one caller passing one
+// fixed set, and GCC would not devirtualize through the recursion: every node,
+// box and leaf paid a memory-indirect jsr plus argument pushes. The callbacks
+// are now called directly.
+static void bsp_traverse_front_to_back(const PlayerState *player) {
     BSP_DBG_RESET();
     g_fwx = fx_cos(player->angle);
     g_fwy = fx_sin(player->angle);
@@ -780,10 +800,6 @@ void bsp_traverse_front_to_back(const PlayerState *player,
     g_ry = g_fwx;
     g_px = player->x;
     g_py = player->y;
-    g_visit_leaf = visit_leaf;
-    g_range_closed = range_closed;
-    g_all_closed = all_closed;
-    g_traverse_context = context;
 
 #if DEBUG_PERF
     {
@@ -814,9 +830,8 @@ void bsp_traverse_front_to_back(const PlayerState *player,
     render_node(bsp_root_node);
 }
 
-static void bsp_visit_leaf(u16 subsector_id, void *context) {
+static void bsp_visit_leaf(u16 subsector_id) {
     const BspSubsector *ss = &bsp_subsectors[subsector_id];
-    (void)context;
 #if DEBUG_PERF || BILLBOARD_VISIBLE_SUBSECTOR_CULL
     // The default build keeps this as an oracle. The optional cull consumes it
     // only after proving the billboard's whole horizontal footprint remains in
@@ -851,16 +866,6 @@ static void bsp_visit_leaf(u16 subsector_id, void *context) {
     }
 }
 
-static bool bsp_range_closed(u16 left_sample, u16 right_sample, void *context) {
-    (void)context;
-    return solid_sample_range_filled(left_sample, right_sample);
-}
-
-static bool bsp_all_closed(void *context) {
-    (void)context;
-    return g_solid_count >= BSP_SAMPLE_COLS;
-}
-
 void bsp_invalidate_node_cache(void) {
     g_node_cache_valid = FALSE;
 }
@@ -874,6 +879,43 @@ void bsp_init(void) {
     for (u16 i = 0; i < BSP_MAX_NODES; i++) g_node_side_generation[i] = 0;
     g_cast_generation = 0;
     for (u16 i = 0; i < BSP_MAX_VERTICES; i++) g_vertex_generation[i] = 0;
+}
+
+// Apply the far/empty default to exactly the samples no wall claimed.
+//
+// draw_seg's non-door branch writes all seven wall fields and calls
+// mark_sample_solid together, and nothing else writes them, so "sample is
+// solid" is equivalent to "this frame wrote its wall fields". Seeding all 80
+// samples up front therefore stored 14 fields per sample -- ~264 cycles each,
+// ~21k cycles per rebuild -- to have almost every one of them overwritten
+// moments later. A temporary probe counted the unclaimed columns across all
+// four routes (checkpoints, slow-turn, stationary-combat and the 197-rebuild
+// tour-east-combat): zero, every frame. E1M1 is fully enclosed, so walls always
+// claim all 80 samples and this loop's body never runs; it stays as the correct
+// fallback for a view that does not close (open sky, a map with a void), where
+// the alternative is a column showing last frame's wall. The word-at-a-time
+// scan costs three compares when the view is fully covered.
+static void seed_unclaimed_columns(RayColumn *columns) {
+    for (u16 word = 0; word < BSP_SOLID_WORD_COUNT; word++) {
+        const u16 base = (u16)(word << 5);
+        const u16 count = ((u16)(BSP_SAMPLE_COLS - base) < 32u) ?
+                              (u16)(BSP_SAMPLE_COLS - base) : 32u;
+        u32 open = ~g_solid_words[word];
+
+        // The final word runs past BSP_SAMPLE_COLS; those bits are never set,
+        // so mask them off rather than treating them as unclaimed samples.
+        if (count < 32) {
+            open &= ((u32)1u << count) - 1u;
+        }
+        if (open == 0) {
+            continue;
+        }
+        for (u16 bit = 0; bit < count; bit++) {
+            if (open & ((u32)1u << bit)) {
+                seed_column_default(&columns[(u16)((base + bit) * RAY_COL_STRIDE)]);
+            }
+        }
+    }
 }
 
 void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColors *scene_colors) {
@@ -899,28 +941,20 @@ void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColor
     for (u16 i = 0; i < BSP_SOLID_WORD_COUNT; i++) {
         g_solid_words[i] = 0;
     }
+    // Only door.height needs clearing up front: it is the sentinel every door
+    // consumer short-circuits on (draw_seg here, draw_door_overlays and
+    // column_door_active in the pack stage), and draw_seg writes the whole
+    // RayDoorOverlay whenever it writes height, so the other six door fields are
+    // never read while height is 0. The wall fields are deferred to
+    // seed_unclaimed_columns below.
     for (u16 sample = 0; sample < BSP_SAMPLE_COLS; sample++) {
-        const u16 c = (u16)(sample * RAY_COL_STRIDE);
         g_next_open[sample] = (u8)sample;
-        columns[c].height = 1;
-        columns[c].depth = 0x7FFF;
-        columns[c].tex_x = 0;
-        columns[c].tex_y = 0;
-        columns[c].texture_id = MEGALDOOM_TEX_FALLBACK;
-        columns[c].shade = 0;
-        columns[c].flags = 0;
-        columns[c].door.height = 0;
-        columns[c].door.depth = 0x7FFF;
-        columns[c].door.lift = 0;
-        columns[c].door.tex_x = 0;
-        columns[c].door.tex_y = 0;
-        columns[c].door.texture_id = MEGALDOOM_TEX_FALLBACK;
-        columns[c].door.shade = 0;
+        columns[(u16)(sample * RAY_COL_STRIDE)].door.height = 0;
     }
     g_next_open[BSP_SAMPLE_COLS] = BSP_SAMPLE_COLS;
 
-    bsp_traverse_front_to_back(player, bsp_visit_leaf, bsp_range_closed,
-                               bsp_all_closed, NULL);
+    bsp_traverse_front_to_back(player);
+    seed_unclaimed_columns(columns);
 }
 
 #if DEBUG_PERF || BILLBOARD_VISIBLE_SUBSECTOR_CULL

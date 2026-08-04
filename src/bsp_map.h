@@ -62,6 +62,13 @@ typedef struct {
     s16 max_y;
 } BspBox;
 
+// Rounded up to 32 bytes on purpose. The natural layout is 28, and every node
+// visit then indexes bsp_nodes with a MULU.W #28 (~70 cycles) plus a shift/add
+// chain for the same index; at 32 the whole address calculation collapses to
+// one LSL.L #5. The 4 bytes/node cost ROM (bsp_nodes is const), not the 64KB
+// work RAM: 236 E1M1 nodes => 944 bytes of a 1.4MB cartridge. Expressed as an
+// alignment rather than a pad member so the generated map files keep their
+// positional initializers without tripping -Wmissing-field-initializers.
 typedef struct {
     s16 px;
     s16 py;
@@ -71,7 +78,7 @@ typedef struct {
     BspBox back_box;
     u16 front; // child encoding (see BSP_CHILD_* below)
     u16 back;
-} BspNode;
+} __attribute__((aligned(32))) BspNode;
 
 // A raw Doom THING converted to engine coordinates. Runtime billboard spawning
 // owns the curated type mapping; keeping raw type/flags here lets the generated

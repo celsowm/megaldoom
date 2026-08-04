@@ -95,6 +95,10 @@ extern u32 g_cadence_box_early_out;
 extern u32 g_cadence_box_subticks;
 extern u32 g_cadence_range_closed_calls;
 extern u32 g_cadence_range_closed_subticks;
+/* Retired: the full-coverage test is now an inline word compare at the top of
+ * render_boxed_child, far too cheap to bracket with two getSubTick calls. The
+ * variable and its CadenceSnapshot field stay so the mailbox layout and
+ * tools/decode-cadence.py do not shift; it always reads 0. */
 extern u32 g_cadence_all_closed_subticks;
 #else
 #define CADENCE_STAGE_PROBE 0

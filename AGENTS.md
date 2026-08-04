@@ -477,6 +477,64 @@ incrementally.** Further gains have to come from structural fidelity dials
 (`RAY_COL_STRIDE`, view size, sprite count/size), all of which are user taste
 calls, not perf decisions.
 
+### Cast: four structural wins the subtick split could not see (2026-08-03)
+
+The "no concentrated hot spot" conclusion above stands, but it was reached from
+timers alone. Reading the **generated m68k** (`gcc -O3 -fno-web -fno-gcse
+-fomit-frame-pointer -S` on `bsp_render.c`; the release build adds only `-flto`,
+which changes none of this) found four wastes that no subtick bucket could
+attribute, worth **cast 6463 -> 5635 subticks/rebuild (-12.8%, ~-0.65 vb)**
+together. Same-pose proof on `stationary-combat.txt`: `nodes visited 54.5 / segs
+tested 41.2 / segs drawn 16.3 / samples 80.0` identical before and after.
+
+1. **The full-coverage test was in the one place it can never fire.**
+   `render_node` opened with `g_all_closed()`, but its only non-root caller is
+   `render_boxed_child` *after* `solid_sample_range_filled` returned FALSE —
+   which proves a sample is open, which proves `g_solid_count <
+   BSP_SAMPLE_COLS`. Dead on ~70 of 71 calls. Moved to the top of
+   `render_boxed_child`, where it now skips a full `project_box_range` for every
+   sibling still pending on the stack once the view closes: `box_calls` 64.5 ->
+   59.5 per rebuild.
+2. **The `bsp_traverse.h` callback vtable had exactly one caller passing one
+   fixed set** and GCC would not devirtualize through the recursion — every
+   node, box and leaf paid `move.l g_range_closed,%a0 / jsr (%a0)` plus argument
+   pushes, ~155 indirect calls per rebuild, for callees as small as
+   `cmp.w #79,g_solid_count`. Header deleted, callees called directly. This was
+   the largest of the four.
+3. **The per-frame column seed was ~100% dead stores.** `bsp_cast_frame` wrote
+   all 14 `RayColumn` fields for all 80 samples (~264 cycles each, ~21k
+   cycles/rebuild) and `draw_seg` overwrote nearly all of them. A temporary
+   probe counted unclaimed columns across all four routes including the
+   197-rebuild `tour-east-combat`: **zero, every frame** — E1M1 is enclosed, so
+   walls always claim all 80. Now only `door.height` (the sentinel every door
+   consumer short-circuits on) is cleared up front; the wall fields are applied
+   post-traversal to the complement of `g_solid_words`, which is normally empty.
+   `seed_unclaimed_columns` stays as the correct fallback for a view that does
+   not close; do not delete it as "unreachable".
+4. **`sizeof(BspNode)` was 28**, so every node visit emitted `MULU.W #28`
+   (~70 cycles) plus a separate shift/add chain for the same index. Now
+   `__attribute__((aligned(32)))` — one `LSL.L #5`. Costs 944 bytes of **ROM**
+   (`bsp_nodes` is const), not work RAM. Expressed as an alignment, not a pad
+   member, so the generated maps keep positional initializers.
+
+**Do not try to fix a wide store by writing a whole-struct constant copy** —
+`columns[c] = k_seed;` compiled straight back to the same 14 individual
+`clr.b`/`move.w`. This m68k backend has no store-merging pass; the only way to
+cut store traffic is to not perform the stores.
+
+**Cross-build pixel diffs are not available as a guardrail here.** Captures are
+keyed to emulator frames, and a faster ROM lands a *different game frame* on
+each one — even `stationary-combat.txt` (pose-fixed) produced a different
+capture set. Verify cast changes with the traversal counters as the pose proof
+plus an in-ROM probe, the way point 3 above was verified.
+
+**Evaluated and not taken:** replacing `g_node_side_generation` (`u16[640]`,
+1280 B of work RAM) with a second 80-byte "computed" bitmap cleared on position
+change. It is a genuine **~1.2 KB work-RAM** win and removes a word load/compare
+per node, but the speed effect is ~5 subticks — under measurement noise — and
+the cache has subtle invalidation semantics. Take it if work RAM ever gets
+tight (it is at 23596 B free against a 20480 B guardrail), not as a perf lever.
+
 ## Sparse semantic tile oracle (2026-07-19)
 
 The per-column oracle (above) killed the double-buffer-per-column path, but it
