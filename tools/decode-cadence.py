@@ -22,7 +22,7 @@ def main() -> int:
     blob = bytes.fromhex(report["perfMailbox"])
     # u16 magic/last/max/missed, u32 iterations/vblank_sum, u16 hist[8],
     # u32 cast/pack/projection/billboard subtick sums, u32 rebuild_frames
-    fields = struct.unpack(">4H2I8H35I", blob[: 8 + 8 + 16 + 140])
+    fields = struct.unpack(">4H2I8H37I", blob[: 8 + 8 + 16 + 148])
     magic, last, vmax, missed = fields[:4]
     iterations, vblank_sum = fields[4:6]
     hist = fields[6:14]
@@ -37,6 +37,7 @@ def main() -> int:
     bb_setup_sum, bb_rows_sum = fields[42:44]
     pack_columns, pack_flat, pack_mixed = fields[44:47]
     bb_max_bytes, bb_max_subticks = fields[47:49]
+    pack_desc_sum, pack_tiles_sum = fields[49:51]
     if magic != 0xCADE:
         print(f"bad magic 0x{magic:04X} (expected 0xCADE) - wrong build type? "
               "DEBUG_PERF builds publish RendererPerfSnapshot instead.")
@@ -120,6 +121,20 @@ def main() -> int:
             print(f"  pack tiles       = {pack_mixed / rebuilds:7.1f} mixed + "
                   f"{pack_flat / rebuilds:.1f} flat  "
                   f"({pack_sum / (pack_mixed + pack_flat) if (pack_mixed + pack_flat) else 0:.1f} subticks/tile)")
+        if pack_desc_sum or pack_tiles_sum:
+            # Every column pays the prologue (4 describe_wall_column + the
+            # coherence compare) even when it is then skipped, so it divides by
+            # 20 columns; the tile loop only runs on repacked columns.
+            accounted = pack_desc_sum + pack_tiles_sum
+            print(f"  pack prologue    = {pack_desc_sum / rebuilds:7.0f} subticks/rebuild"
+                  f"  ({pack_desc_sum / (rebuilds * 20):.0f}/column of 20,"
+                  f" {100.0 * pack_desc_sum / pack_sum:.0f}% of pack)")
+            print(f"  pack tile loop   = {pack_tiles_sum / rebuilds:7.0f} subticks/rebuild"
+                  f"  ({pack_tiles_sum / (pack_mixed + pack_flat) if (pack_mixed + pack_flat) else 0:.1f}/tile,"
+                  f" {100.0 * pack_tiles_sum / pack_sum:.0f}% of pack)")
+            print(f"  pack unaccounted = {(pack_sum - accounted) / rebuilds:7.0f} subticks/rebuild"
+                  f"  ({100.0 * (pack_sum - accounted) / pack_sum:.0f}%; flat rows, "
+                  f"door overlays, probe overhead)")
         if bb_setup_sum or bb_rows_sum:
             print(f"  bb setup/object  = {bb_setup_sum / div:7.0f} subticks/scene-frame"
                   f"  ({bb_setup_sum / bb_objects if bb_objects else 0:.0f}/object)")

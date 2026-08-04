@@ -425,6 +425,9 @@ void build_bsp_tilemap(const RayColumn *columns,
     // same tile count / DMA cost. Describe each column once and pack MSB-first.
     for (u16 tile_x = 0; tile_x < VIEW_TILE_W; tile_x++) {
         const u16 base_col = (u16)(tile_x * 8);
+#if CADENCE_PACK_SPLIT
+        const u32 desc_start = getSubTick();
+#endif
         const WallColumnDescriptor descriptors[4] = {
             describe_wall_column(&columns[base_col]),
             describe_wall_column(&columns[base_col + 2]),
@@ -445,8 +448,14 @@ void build_bsp_tilemap(const RayColumn *columns,
             wall_desc_equal(&descriptors[2], &s_prev_desc[tile_x][2]) &&
             wall_desc_equal(&descriptors[3], &s_prev_desc[tile_x][3]) &&
             !column_door_active(columns, base_col)) {
+#if CADENCE_PACK_SPLIT
+            g_cadence_pack_desc_subticks += getSubTick() - desc_start;
+#endif
             continue;
         }
+#if CADENCE_PACK_SPLIT
+        g_cadence_pack_desc_subticks += getSubTick() - desc_start;
+#endif
 #if DEBUG_PERF
         oracle_changed_columns++;
 #endif
@@ -487,6 +496,9 @@ void build_bsp_tilemap(const RayColumn *columns,
                 (descriptors[3].flags & RAY_COLUMN_FLAG_DOOR) != 0]
                 [descriptors[3].shade_level][descriptors[3].texture_id][descriptors[3].tex_x]
         };
+#if CADENCE_PACK_SPLIT
+        const u32 tiles_start = getSubTick();
+#endif
         for (u16 tile_y = 0; tile_y < VIEW_TILE_H; tile_y++) {
             const u16 tile_index = view_tile_index(tile_x, tile_y);
             const u16 pixel_y = (u16)(tile_y * 8);
@@ -549,6 +561,9 @@ void build_bsp_tilemap(const RayColumn *columns,
                                      pixel_y, descriptors, packed_columns, &flat_rows);
 #endif
         }
+#if CADENCE_PACK_SPLIT
+        g_cadence_pack_tiles_subticks += getSubTick() - tiles_start;
+#endif
     }
     s_prev_flat_rows = flat_rows;
     s_coherence_valid = TRUE;

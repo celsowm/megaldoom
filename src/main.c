@@ -614,6 +614,8 @@ int main(bool hard) {
                 u32 pack_mixed_tiles;
                 u32 bb_max_bytes;
                 u32 bb_max_subticks;
+                u32 pack_desc_subticks;
+                u32 pack_tiles_subticks;
             } CadenceSnapshot;
             static CadenceSnapshot s_cadence;
             const u16 vb = (u16)(vtimer - cur_vtimer);
@@ -659,6 +661,8 @@ int main(bool hard) {
             s_cadence.pack_mixed_tiles = g_cadence_pack_mixed_tiles;
             s_cadence.bb_max_bytes = g_cadence_bb_max_bytes;
             s_cadence.bb_max_subticks = g_cadence_bb_max_subticks;
+            s_cadence.pack_desc_subticks = g_cadence_pack_desc_subticks;
+            s_cadence.pack_tiles_subticks = g_cadence_pack_tiles_subticks;
             debug_checkpoint_publish_perf(&s_cadence, sizeof(s_cadence));
         }
 #endif

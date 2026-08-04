@@ -53,6 +53,8 @@ u32 g_cadence_bb_setup_subticks;
 u32 g_cadence_bb_rows_subticks;
 u32 g_cadence_bb_max_bytes;
 u32 g_cadence_bb_max_subticks;
+u32 g_cadence_pack_desc_subticks;
+u32 g_cadence_pack_tiles_subticks;
 #endif
 
 void debug_checkpoint_publish_perf(const void *snapshot, u16 bytes) {

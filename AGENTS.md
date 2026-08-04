@@ -805,6 +805,49 @@ splitting). Two consequences:
 2. Further pack work belongs in `renderer_pack.c`, not `renderer_hotpath.s`.
    Attribute the per-tile overhead before writing any more assembly.
 
+### Where the pack stage actually goes (2026-08-04)
+
+Point 2 above was a guess, and measuring it proved it wrong. `CADENCE_PACK_SPLIT`
+(off by default, `EXTRA_FLAGS="... -DCADENCE_PACK_SPLIT=1"`) times the per-column
+prologue — four `describe_wall_column` calls plus the coherence compare, which
+*every* column pays even when it is then skipped — against the 15-tile write
+loop. Timed per column, not per tile: 40 `getSubTick` a rebuild instead of 600,
+so the probe does not distort what it measures.
+
+| route | pack | prologue | tile loop | unaccounted |
+|---|---|---|---|---|
+| `tour-east-combat` | 7489 | 678 (9%) | **6041 (81%)** | 770 (10%) |
+| `barrel-spin` | 7160 | 682 (10%) | **5764 (81%)** | 714 (10%) |
+| `barrel-pointblank` | 4998 | 705 (14%) | 3605 (72%) | 688 (14%) |
+| `checkpoints` | 4205 | 761 (18%) | 2862 (68%) | 582 (14%) |
+| `stationary-combat` | 3757 | 723 (19%) | 2462 (66%) | 572 (15%) |
+
+The prologue is a flat ~34-38 subticks/column everywhere — it does not scale
+with anything, and on the routes that hurt it is under 10%. **Not the lever.**
+The tile loop is 66-81%, and it grows exactly where the mixed-tile count grows
+(11.0/tile on `slow-turn` at 62 mixed, 20.5/tile on `tour-east-combat` at 168).
+
+So the cost is neither the C prologue nor purely the post loops (those are ~25%,
+per the section above). What is left is **per-tile overhead inside the tile
+loop**: `renderer_write_mixed_stride2_tile_asm` is called once per 8-row tile,
+so a column with 9 mixed tiles pays the `movem.l d2-d7/a2-a6` save/restore
+(~196 cycles), the five-argument call sequence, and — the larger part — the
+four lanes' ceiling/wall/floor split arithmetic **nine times over**, when the
+wall geometry of that column is fixed for all 120 rows.
+
+**Next step: one asm call per column, not per tile.** The layout permits it
+exactly. Tiles are column-major (`view_tile_index = tile_x * VIEW_TILE_H +
+tile_y`), so a column's 15 tiles are contiguous, and within that block screen
+row `y` of lane `L` sits at byte `(y>>3)*32 + (y&7)*4 + L`, which is identically
+`4*y + L`. **The tile boundary is invisible to a stride-4 byte walk** — one pass
+over 120 rows per lane, three posts total instead of three posts per tile.
+
+Before attempting it, note the constraint that makes it real work:
+`compare_stride2_tile_asm` (the harness that has caught every asm bug here) is
+built around one `tile_index` and one 8-row tile. A per-column entry point needs
+that harness reworked to compare a whole column, and it must be reworked
+*first*, not after.
+
 ## Sparse semantic tile oracle (2026-07-19)
 
 The per-column oracle (above) killed the double-buffer-per-column path, but it

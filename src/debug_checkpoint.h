@@ -143,6 +143,18 @@ extern u32 g_cadence_bb_setup_subticks;
 extern u32 g_cadence_bb_rows_subticks;
 extern u32 g_cadence_bb_max_bytes;
 extern u32 g_cadence_bb_max_subticks;
+/* Split of the pack stage into the per-column prologue (four
+ * describe_wall_column calls plus the coherence compare, which every column
+ * pays even when it is then skipped) vs the 15-tile write loop. Deliberately
+ * measured per column, not per tile: 2 getSubTick per column is 40 calls a
+ * rebuild, where per-tile timing would be 600 and would distort what it
+ * measures. OFF by default; opt in with
+ * EXTRA_FLAGS="... -DCADENCE_PACK_SPLIT=1". */
+#ifndef CADENCE_PACK_SPLIT
+#define CADENCE_PACK_SPLIT 0
+#endif
+extern u32 g_cadence_pack_desc_subticks;
+extern u32 g_cadence_pack_tiles_subticks;
 #else
 #define CADENCE_STAGE_PROBE 0
 #endif
