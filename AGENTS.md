@@ -738,12 +738,30 @@ on a rotating tile cursor. Across the five routes: **34200 tiles checked,
 `asm_mismatches=0`, `asm_canary_failures=0`, 114 complete 300-tile cycles.**
 Never touch this file without reading those three numbers back.
 
-**Evaluated and rejected: dropping `andi.w #63,d5` from the wall post** by
-duplicating each packed column to 128 entries so `vertical_samples[i] + tex_y`
-(max 126) needs no wrap. It saves 8 of ~72 cycles, but
-`FREEDOOM_WALL_PACKED_PAIRS` is `[2][4][23][64][64]` = **736 KB**; doubling the
-last dimension adds another 736 KB to a 1408 KB cartridge that already uses
-1387 KB. Not affordable.
+**Deferred (NOT rejected on size): dropping `andi.w #63,d5` from the wall post**
+by duplicating each packed column to 128 entries so `vertical_samples[i] +
+tex_y` (max 126) needs no wrap. It saves 8 of ~72 cycles in the wall post.
+`FREEDOOM_WALL_PACKED_PAIRS` is `[2][4][23][64][64]` = 736 KB and doubling the
+last dimension adds another 736 KB.
+
+**There is room for that.** An earlier revision of this section claimed the cart
+was near a 1408 KB limit and called the idea unaffordable — that was wrong.
+1408 KB is just where `sizebnd` currently pads (128 KB-aligned); the actual
+guardrail in `tools/check-rom.ps1` is `$RomMaxBytes = 4 MB` and `.text` is
+1387690 bytes. **Headroom is ~2.6 MB.** Do not cite ROM size as a blocker for a
+precompute-vs-compute tradeoff without checking `size.exe out/rom.out` against
+that 4 MB cap first.
+
+The reason to defer is payoff, not budget: 8 of 72 cycles is ~11% of the wall
+post, which is only part of a mixed tile, so expect low single-digit percent on
+`pack` for +736 KB. Weigh it against other uses of that headroom.
+
+**Bank switching does not help here, and would hurt.** SGDK's `ENABLE_BANK_SWITCH`
+(SEGA/SSF mapper, `rom_head.c` already has the `"SEGA SSF"` branch) reaches 12 MB
+by paging 512 KB banks through the `0x300000-0x3FFFFF` window. That is for *cold*
+bulk assets read once. A table sampled inside the per-pixel wall loop must never
+live behind the window — you would be paying a bank check or swap per lookup. Use
+the plain sub-4 MB space for anything the renderer touches at pixel rate.
 
 ## Sparse semantic tile oracle (2026-07-19)
 
