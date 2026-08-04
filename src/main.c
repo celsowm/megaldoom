@@ -607,6 +607,10 @@ int main(bool hard) {
                 u32 bb_commits;
                 u32 bb_marks;
                 u32 bb_mismatch;
+                u32 bb_setup_subticks;
+                u32 bb_rows_subticks;
+                u32 bb_max_bytes;
+                u32 bb_max_subticks;
             } CadenceSnapshot;
             static CadenceSnapshot s_cadence;
             const u16 vb = (u16)(vtimer - cur_vtimer);
@@ -645,6 +649,10 @@ int main(bool hard) {
             s_cadence.bb_commits = g_cadence_bb_commits;
             s_cadence.bb_marks = g_cadence_bb_marks;
             s_cadence.bb_mismatch = g_cadence_bb_mismatch;
+            s_cadence.bb_setup_subticks = g_cadence_bb_setup_subticks;
+            s_cadence.bb_rows_subticks = g_cadence_bb_rows_subticks;
+            s_cadence.bb_max_bytes = g_cadence_bb_max_bytes;
+            s_cadence.bb_max_subticks = g_cadence_bb_max_subticks;
             debug_checkpoint_publish_perf(&s_cadence, sizeof(s_cadence));
         }
 #endif

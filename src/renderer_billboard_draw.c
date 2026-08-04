@@ -5,8 +5,10 @@
 
 #if CADENCE_STAGE_PROBE
 #define BB_INC(name) (g_cadence_bb_##name++)
+#define BB_ADD(name, n) (g_cadence_bb_##name += (n))
 #else
 #define BB_INC(name) ((void)0)
+#define BB_ADD(name, n) ((void)0)
 #endif
 
 // Differential harness: build with -DBILLBOARD_RASTER_VERIFY=1 to run the
@@ -261,6 +263,148 @@ static void raster_sprite_row(const BillboardRasterJob *job,
     }
 }
 
+// ---------------------------------------------------------------------------
+// Magnified-sprite path.
+//
+// Cost here scales with on-screen area, so a point-blank sprite is the worst
+// case by a wide margin: tools/routes/barrel-pointblank.txt spends 24.3 vblanks
+// in one frame rasterizing 7184 pixel slots, against a 2.3 vblank route average.
+// What makes those frames redundant is magnification -- a 32-row atlas patch
+// stretched over ~110 screen rows means ~5 consecutive screen rows resolve the
+// exact same texels. The loop below resolves one *source texel row* into packed
+// bytes once, and the apply pass stamps it onto every screen row that maps to it.
+//
+// This is deliberately NOT the default path. Materializing the row costs a store
+// and a reload per byte, and for an unmagnified sprite the gather runs every row
+// anyway, so paying that is a straight loss -- measured +44% on stationary-combat
+// when it was applied unconditionally. raster_sprite_row above stays the path for
+// everything that is not magnified.
+static u8 s_row_mask[RAY_VIEW_COLS / 2];
+static u8 s_row_value[RAY_VIEW_COLS / 2];
+// Per 8-pixel tile of the row: all four bytes fully opaque, so the packed tile
+// word can be written whole with one move.l instead of four byte
+// read-modify-writes. A magnified sprite is mostly solid interior, which is
+// exactly when this path runs.
+static u8 s_tile_full[RAY_VIEW_TILE_W];
+static u32 s_tile_word[RAY_VIEW_TILE_W];
+
+// A sprite is worth the row cache once each texel row covers at least two screen
+// rows (tex_y_step is Q16 texels per screen row, so <= 0x8000 means >= 2x), and
+// only if it spans a whole tile so the per-tile pass below is amortized.
+// Overridable so an A/B can disable this path in the same source:
+// EXTRA_FLAGS="... -DBILLBOARD_MAGNIFIED_STEP=0" sends everything down
+// raster_sprite_row.
+#ifndef BILLBOARD_MAGNIFIED_STEP
+#define BILLBOARD_MAGNIFIED_STEP 0x8000u
+#endif
+
+static void gather_sprite_row(const BillboardRasterJob *job,
+                              const u8 *tex_row, u8 tex_y) {
+    const u8 *sc = &job->tex_x_by_col[job->first_byte << 1];
+    const u8 *lut = job->lut;
+    const u16 *post_offsets = job->post_offsets;
+    const u16 first_tile = (u16)(job->first_byte >> 2);
+    const u16 last_tile = (u16)(job->last_byte >> 2);
+
+    for (u16 b = job->first_byte; b <= job->last_byte; b++) {
+        u8 mask = 0;
+        u8 value = 0;
+        u8 tex_x;
+
+        tex_x = sc[0];
+        if (tex_x != 0xFF &&
+            (post_offsets == NULL || pickup_post_contains(post_offsets, tex_x, tex_y))) {
+            const u8 texel = lut[tex_row[tex_x] & 0x0F];
+            if (texel != 0) {
+                BB_INC(opaque);
+                mask = 0xF0;
+                value = (u8)(texel << 4);
+            }
+        }
+        tex_x = sc[1];
+        if (tex_x != 0xFF &&
+            (post_offsets == NULL || pickup_post_contains(post_offsets, tex_x, tex_y))) {
+            const u8 texel = lut[tex_row[tex_x] & 0x0F];
+            if (texel != 0) {
+                BB_INC(opaque);
+                mask |= 0x0F;
+                value |= texel;
+            }
+        }
+        sc += 2;
+        s_row_mask[b] = mask;
+        s_row_value[b] = value;
+    }
+
+    for (u16 t = first_tile; t <= last_tile; t++) {
+        const u16 b0 = (u16)(t << 2);
+        bool full = (bool)((b0 >= job->first_byte) &&
+                           ((u16)(b0 + 3) <= job->last_byte));
+        if (full) {
+            full = (bool)((u8)(s_row_mask[b0] & s_row_mask[b0 + 1] &
+                               s_row_mask[b0 + 2] & s_row_mask[b0 + 3]) == 0xFF);
+        }
+        s_tile_full[t] = (u8)full;
+        if (full) {
+            s_tile_word[t] = ((u32)s_row_value[b0] << 24) |
+                             ((u32)s_row_value[b0 + 1] << 16) |
+                             ((u32)s_row_value[b0 + 2] << 8) |
+                             (u32)s_row_value[b0 + 3];
+        }
+    }
+}
+
+// Stamp the gathered row onto one screen row. The door test is the only thing
+// here that depends on y, which is why it -- and nothing else -- stays per byte.
+static void apply_sprite_row(const BillboardRasterJob *job, u16 y) {
+    const u16 first_tile = (u16)(job->first_byte >> 2);
+    const u16 last_tile = (u16)(job->last_byte >> 2);
+    const bool door = job->has_door_overlay;
+    u16 tile_index = view_tile_index(first_tile, (u16)(y >> 3));
+    u32 *tile_row = &g_view_tiles[tile_index][y & 7];
+
+    for (u16 t = first_tile; t <= last_tile; t++) {
+        if (!door && s_tile_full[t]) {
+            renderer_mark_overlay_tile(tile_index);
+            BB_ADD(bytes, 4);
+            BB_INC(commits);
+            *tile_row = s_tile_word[t];
+        } else {
+            u16 b = (u16)(t << 2);
+            u16 b_end = (u16)(b + 3);
+            u8 *dst;
+            bool tile_marked = FALSE;
+
+            if (b < job->first_byte) b = job->first_byte;
+            if (b_end > job->last_byte) b_end = job->last_byte;
+            dst = (u8 *)tile_row + (b & 3);
+            for (; b <= b_end; b++) {
+                const u8 mask = s_row_mask[b];
+
+                BB_INC(bytes);
+                if (mask != 0 && (!door ||
+                        !door_overlay_blocks_pixel(
+                            &job->columns[(u16)((b << 1) & ~(RAY_COL_STRIDE - 1))],
+                            job->depth, y))) {
+                    if (!tile_marked) {
+                        renderer_mark_overlay_tile(tile_index);
+                        tile_marked = TRUE;
+                    }
+                    BB_INC(commits);
+                    if (mask == 0xFF) {
+                        *dst = s_row_value[b];
+                    } else {
+                        *dst = (u8)((*dst & (u8)~mask) | s_row_value[b]);
+                    }
+                }
+                dst++;
+            }
+        }
+        tile_index = (u16)(tile_index + VIEW_TILE_H);
+        tile_row += (u16)(VIEW_TILE_H * 8);
+    }
+}
+
 // Draw projected billboards object-by-object in painter order, pixel-exact in
 // texture and depth decisions.
 static void draw_billboards_bytewise(const RayColumn *columns,
@@ -312,6 +456,9 @@ static void draw_billboards_bytewise(const RayColumn *columns,
             continue;
         }
         BB_INC(objects);
+#if CADENCE_BB_SPLIT
+        const u32 setup_start = getSubTick();
+#endif
 #if DEBUG_PERF
         const u32 pickup_post_start = (measure_pickup_posts && use_pickup_posts) ?
                                           getSubTick() : 0;
@@ -384,15 +531,41 @@ static void draw_billboards_bytewise(const RayColumn *columns,
                         scene_mul_u32_u16(tex_y_step,
                                          (u16)(y0 - object->top));
         const u8 atlas_y_last = (u8)(object->atlas_y + object->atlas_h - 1);
-        for (s16 y = y0; y <= y1; y++) {
-            u8 tex_y = (u8)(tex_y_acc >> 16);
-            if (tex_y > atlas_y_last) tex_y = atlas_y_last;
-            tex_y_acc += tex_y_step;
-            BB_INC(rows);
-            raster_sprite_row(&job,
-                              &tex.pixels[scene_mulu_word(tex_y, tex.w)],
-                              tex_y, (u16)y);
+#if CADENCE_BB_SPLIT
+        g_cadence_bb_setup_subticks += getSubTick() - setup_start;
+        const u32 rows_start = getSubTick();
+#endif
+        if ((tex_y_step <= BILLBOARD_MAGNIFIED_STEP) &&
+            (job.last_byte - job.first_byte) >= 3) {
+            // 0x100 cannot collide with a u8 tex_y, so the first row gathers.
+            u16 gathered_tex_y = 0x100u;
+            for (s16 y = y0; y <= y1; y++) {
+                u8 tex_y = (u8)(tex_y_acc >> 16);
+                if (tex_y > atlas_y_last) tex_y = atlas_y_last;
+                tex_y_acc += tex_y_step;
+                BB_INC(rows);
+                if (tex_y != gathered_tex_y) {
+                    gather_sprite_row(&job,
+                                      &tex.pixels[scene_mulu_word(tex_y, tex.w)],
+                                      tex_y);
+                    gathered_tex_y = tex_y;
+                }
+                apply_sprite_row(&job, (u16)y);
+            }
+        } else {
+            for (s16 y = y0; y <= y1; y++) {
+                u8 tex_y = (u8)(tex_y_acc >> 16);
+                if (tex_y > atlas_y_last) tex_y = atlas_y_last;
+                tex_y_acc += tex_y_step;
+                BB_INC(rows);
+                raster_sprite_row(&job,
+                                  &tex.pixels[scene_mulu_word(tex_y, tex.w)],
+                                  tex_y, (u16)y);
+            }
         }
+#if CADENCE_BB_SPLIT
+        g_cadence_bb_rows_subticks += getSubTick() - rows_start;
+#endif
 #if DEBUG_PERF
         if (measure_pickup_posts && use_pickup_posts) {
             renderer_perf_record_deep(RENDERER_PERF_DEEP_PICKUP_POSTS,

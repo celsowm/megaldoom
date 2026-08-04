@@ -624,8 +624,9 @@ carries the byte-wise model as the shipping contract and pins
 `tile_index + VIEW_TILE_H` as a required token so the column-major step cannot
 regress silently.
 
-**Still on the table.** At ~2.3 subticks (~230 cycles) per pixel slot the loop is
-close to what this algorithm costs on a 68000, but two per-byte tests survive
+**Still on the table.** (The per-pixel floor claim here was too pessimistic — see
+the point-blank section below, which halved the worst frame by resolving texels
+per source row instead of per screen row.) Two per-byte tests survive
 that are loop-invariant per object: the `post_offsets == NULL` check (twice) and
 `has_door_overlay`. Specialising the loop would cost source duplication for maybe
 4-8%. The larger remaining number in the spin scenario is not billboard at all —
@@ -633,6 +634,63 @@ that are loop-invariant per object: the `post_offsets == NULL` check (twice) and
 routes**, because a rotation invalidates every tile column's coherence entry at
 once. That is the next thing to look at for turning smoothness, and it is
 unrelated to sprites.
+
+### Point-blank sprites: the tail, not the mean (2026-08-04)
+
+The byte-wise rewrite above fixed the *average*, and the report came back that a
+barrel right in your face was still slow. It was: **route averages were hiding a
+30x tail.** `bb WORST frame` (max billboard subticks and bytes in any one scene
+frame, always on) exists for this — `tour-east-combat` averaged 0.60 vb but its
+worst frame spent **18.5 vb**. Always look at the worst frame for anything whose
+cost scales with on-screen area.
+
+`tools/routes/barrel-pointblank.txt` reproduces it deliberately: turn to heading
+168 (the bearing from the E1M1 start to the barrel at 864,3328), walk until the
+barrel's collision stops you ~51 units away, then turn back and forth in place.
+Baseline worst frame: **25.9 vblanks of billboard alone**, 7750 pixel slots.
+
+Attribution (`-DCADENCE_BB_SPLIT=1`): per-object setup is only **35-42
+subticks/object, ~10%**; the row loop is ~90% at ~3-4 subticks per pixel slot,
+and its single most expensive item is the two dependent loads of
+`lut[tex_row[tex_x] & 0x0F]`. So the lever is doing that resolve fewer times, not
+trimming setup.
+
+**Fix: a gated magnified path.** A 32-row atlas patch stretched over ~110 screen
+rows means ~5 consecutive screen rows resolve identical texels.
+`gather_sprite_row` resolves one *source texel row* into packed bytes once and
+`apply_sprite_row` stamps it onto every screen row mapping to it, additionally
+storing fully-opaque tiles as one `move.l` instead of four byte RMWs (a magnified
+sprite is mostly solid interior).
+
+Same-source A/B (`-DBILLBOARD_MAGNIFIED_STEP=0` disables the path), worst frame at
+**identical workload** (3875 bytes / 7750 px both sides):
+
+| route | path off | path on |
+|---|---|---|
+| `barrel-pointblank` worst frame | 33155 (25.90 vb) | **15345 (11.99 vb)** |
+| `stationary-combat` avg | 2546 | 2516 |
+| `checkpoints` avg | 1376 | 1356 |
+
+**-54% on the frame that hitches, -1% (neutral) everywhere else.**
+
+**The gate is the whole point — do not remove it.** Applying the gather/apply
+split unconditionally was measured at **+44% on `stationary-combat`** (2523 ->
+3644): materializing the row costs a store and a reload per byte, and an
+unmagnified sprite gathers every row anyway, so it is a straight loss. The gate
+is `tex_y_step <= 0x8000` (each texel row covers >= 2 screen rows) plus at least
+one full tile of width. `raster_sprite_row` remains the default path.
+
+Cost: 260 bytes of work RAM for the row scratch (23596 -> 23336 free).
+
+**Route averages on `barrel-pointblank` are not comparable across builds** — the
+two A/B builds ran 110 vs 89 iterations and ended at different poses, so `avg
+vblanks` and `cast` there mean nothing (the usual hazard). The worst-frame
+comparison above is valid because both sides rasterized the identical 7750 pixel
+slots. `stationary-combat` and `checkpoints` stayed pose-stable (identical byte
+counts, identical `avg vblanks`), which is what makes their neutrality claim safe.
+
+Verified byte-exact with `-DBILLBOARD_RASTER_VERIFY=1`: 0 mismatches across all
+six routes, both paths.
 
 ## Sparse semantic tile oracle (2026-07-19)
 

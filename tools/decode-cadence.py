@@ -22,7 +22,7 @@ def main() -> int:
     blob = bytes.fromhex(report["perfMailbox"])
     # u16 magic/last/max/missed, u32 iterations/vblank_sum, u16 hist[8],
     # u32 cast/pack/projection/billboard subtick sums, u32 rebuild_frames
-    fields = struct.unpack(">4H2I8H28I", blob[: 8 + 8 + 16 + 112])
+    fields = struct.unpack(">4H2I8H32I", blob[: 8 + 8 + 16 + 128])
     magic, last, vmax, missed = fields[:4]
     iterations, vblank_sum = fields[4:6]
     hist = fields[6:14]
@@ -34,6 +34,7 @@ def main() -> int:
     scene_frames = fields[34]
     (bb_objects, bb_rows, bb_bytes, bb_opaque, bb_commits,
      bb_marks, bb_mismatch) = fields[35:42]
+    bb_setup_sum, bb_rows_sum, bb_max_bytes, bb_max_subticks = fields[42:46]
     if magic != 0xCADE:
         print(f"bad magic 0x{magic:04X} (expected 0xCADE) - wrong build type? "
               "DEBUG_PERF builds publish RendererPerfSnapshot instead.")
@@ -111,6 +112,15 @@ def main() -> int:
             print(f"  bb opaque share  = {100.0 * bb_opaque / pixels:.1f}% of pixel slots")
             print(f"  bb subticks/px   = {bb_sum / pixels:.2f}"
                   f"   ({bb_sum / bb_objects if bb_objects else 0:.0f}/object)")
+        if bb_setup_sum or bb_rows_sum:
+            print(f"  bb setup/object  = {bb_setup_sum / div:7.0f} subticks/scene-frame"
+                  f"  ({bb_setup_sum / bb_objects if bb_objects else 0:.0f}/object)")
+            print(f"  bb row loop      = {bb_rows_sum / div:7.0f} subticks/scene-frame"
+                  f"  ({bb_rows_sum / (bb_bytes * 2) if bb_bytes else 0:.2f}/px,"
+                  f" {bb_rows_sum / bb_rows if bb_rows else 0:.0f}/row)")
+        print(f"  bb WORST frame   = {bb_max_subticks} subticks "
+              f"({bb_max_subticks / 1280.0:.2f} vblanks), {bb_max_bytes} bytes "
+              f"({bb_max_bytes * 2} px)")
         print(f"  bb VERIFY mismatch = {bb_mismatch}"
               f"{'  <-- RASTER DIVERGED' if bb_mismatch else ''}")
 

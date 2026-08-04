@@ -75,7 +75,20 @@ void renderer_render_scene(const RayColumn *columns,
 #if DEBUG_PERF || CADENCE_STAGE_PROBE
     const u32 bb_start = getSubTick();
 #endif
+#if CADENCE_STAGE_PROBE
+    const u32 bb_bytes_start = g_cadence_bb_bytes;
+#endif
     draw_projected_billboards(columns, objects, object_count);
+#if CADENCE_STAGE_PROBE
+    {
+        const u32 frame_bytes = g_cadence_bb_bytes - bb_bytes_start;
+        const u32 frame_subticks = getSubTick() - bb_start;
+        if (frame_bytes > g_cadence_bb_max_bytes) g_cadence_bb_max_bytes = frame_bytes;
+        if (frame_subticks > g_cadence_bb_max_subticks) {
+            g_cadence_bb_max_subticks = frame_subticks;
+        }
+    }
+#endif
 #if DEBUG_PERF
     renderer_perf_set_billboard_subticks(getSubTick() - bb_start);
     const u32 wpn_start = getSubTick();

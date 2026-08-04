@@ -122,6 +122,21 @@ extern u32 g_cadence_bb_marks;
  * the byte-wise rasterizer and the retained reference implementation disagree.
  * Must read 0 on every route. */
 extern u32 g_cadence_bb_mismatch;
+/* Worst single scene frame, not the run average: sprite raster cost scales with
+ * on-screen area, so a point-blank sprite is many times the mean and the mean
+ * hides it. */
+/* Split of billboard cost into per-object setup vs the row raster loop. Costs
+ * 2 getSubTick per drawn object, so OFF by default like the other splits --
+ * opt in with EXTRA_FLAGS="... -DCADENCE_BB_SPLIT=1". Measured 2026-08-04:
+ * setup is only 35-42 subticks/object (~10%); the row loop is ~90% at ~3
+ * subticks per pixel slot, which is why the optimization work targets it. */
+#ifndef CADENCE_BB_SPLIT
+#define CADENCE_BB_SPLIT 0
+#endif
+extern u32 g_cadence_bb_setup_subticks;
+extern u32 g_cadence_bb_rows_subticks;
+extern u32 g_cadence_bb_max_bytes;
+extern u32 g_cadence_bb_max_subticks;
 #else
 #define CADENCE_STAGE_PROBE 0
 #endif
