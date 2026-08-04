@@ -215,6 +215,27 @@ truncating the span to one tile gives 757 of 760 columns (the 3 clean ones have
 0 or 1 mixed tile). Clean run: **1672 columns checked, 0 mismatches, 0 canary
 failures, 83 complete 20-column cycles.**
 
+## Projection: depth-reject before `side` (2026-08-04)
+
+`billboard_measure_object` computed both `forward` and `side` up front, then
+depth-rejected on `forward` alone. Projection re-measures every active registry
+object whenever the player moves *or turns* (the measure cache keys on exact
+pose), and most objects fail that depth test, so the two 32x16 multiplies `side`
+costs were waste on the common path. Nothing between the two points reads it, so
+the reorder is semantics-preserving.
+
+`checkpoints`, the clean comparison (identical `scene frames` = 20 and
+`bb objects drawn` = 4.0 on both sides): projection **1774 -> 1674, -5.6%**.
+
+**Marginal, and recorded as such.** ~100 subticks is under 0.1 vblank, well
+below what anyone can feel. It ships because it is free and provably correct,
+not because it helps. Projection is a near-constant ~1500 subticks on every
+route regardless of what is on screen, and micro-optimizing the per-object path
+will not change that — ~112 objects are measured to draw 1-7. Making it matter
+needs a structural change (not re-measuring every object on every turn), and
+two spatial-cull attempts already failed on cost: see the 2026-07-21 and
+2026-07-29 entries before trying a third.
+
 ## Billboard raster: the barrel-in-view framerate swing (2026-08-03)
 
 Reported from play: spinning 180 degrees near a barrel makes the framerate dip

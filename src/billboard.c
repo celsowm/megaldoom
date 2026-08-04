@@ -225,9 +225,13 @@ bool billboard_measure_object(const PlayerState *player, s16 cos_a, s16 sin_a,
     const s32 dy = object->y - player->y;
     const s32 forward = (billboard_mul_basis_delta(cos_a, dx) +
                          billboard_mul_basis_delta(sin_a, dy)) >> FX_SHIFT;
+    // Depth-reject before computing `side`. Projection re-measures every active
+    // registry object whenever the player moves or turns, and most of them fail
+    // right here, so the two extra 32x16 multiplies `side` needs are pure waste
+    // on the common path. Nothing between here and its first use reads it.
+    if ((forward <= BILLBOARD_MIN_DEPTH) || (forward >= type->max_depth)) return FALSE;
     const s32 side = (billboard_mul_basis_delta(cos_a, dy) -
                       billboard_mul_basis_delta(sin_a, dx)) >> FX_SHIFT;
-    if ((forward <= BILLBOARD_MIN_DEPTH) || (forward >= type->max_depth)) return FALSE;
     BillboardGeometry geometry;
     billboard_get_geometry(object, type, &geometry);
 
