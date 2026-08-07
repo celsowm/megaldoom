@@ -48,16 +48,16 @@ def effect_redraws(frame_count, hold):
 
 def main():
     main_c = (ROOT / "src/main.c").read_text()
-    enemy_c = (ROOT / "src/billboard_enemy.c").read_text()
-    barrel_c = (ROOT / "src/billboard_barrel.c").read_text()
-    billboard_h = (ROOT / "src/billboard.h").read_text()
-    effects_c = (ROOT / "src/billboard_effects.c").read_text()
-    projection_c = (ROOT / "src/billboard_projection.c").read_text()
-    perf_c = (ROOT / "src/renderer_perf_overlay.c").read_text()
-    perf_state_c = (ROOT / "src/renderer_perf.c").read_text()
-    scene_c = (ROOT / "src/renderer_scene.c").read_text()
-    overlay_c = (ROOT / "src/renderer_overlay.c").read_text()
-    redraw_c = (ROOT / "src/renderer_redraw.c").read_text()
+    enemy_c = (ROOT / "src/billboard/billboard_enemy.c").read_text()
+    barrel_c = (ROOT / "src/billboard/billboard_barrel.c").read_text()
+    billboard_h = (ROOT / "src/billboard/billboard.h").read_text()
+    effects_c = (ROOT / "src/billboard/billboard_effects.c").read_text()
+    projection_c = (ROOT / "src/billboard/billboard_projection.c").read_text()
+    perf_c = (ROOT / "src/renderer/renderer_perf_overlay.c").read_text()
+    perf_state_c = (ROOT / "src/renderer/renderer_perf.c").read_text()
+    scene_c = (ROOT / "src/renderer/renderer_scene.c").read_text()
+    overlay_c = (ROOT / "src/renderer/renderer_overlay.c").read_text()
+    redraw_c = (ROOT / "src/renderer/renderer_redraw.c").read_text()
 
     # Weapon flash counts real vblanks (framerate-independent); damage flash
     # stays iteration-based. Both redraw only on activation and final clear.
@@ -106,7 +106,7 @@ def main():
         "s_debug_separation_moves", "g_debug_prop_collision_calls",
         "g_debug_prop_collision_scanned",
     ):
-        assert symbol in projection_c + enemy_c + (ROOT / "src/billboard.c").read_text()
+        assert symbol in projection_c + enemy_c + (ROOT / "src/billboard/billboard.c").read_text()
     assert "sprintf" not in perf_c
     assert "PERF_OVERLAY_REFRESH_FRAMES 30" in perf_c
     assert "VDP_setTileMapDataRect" in perf_c

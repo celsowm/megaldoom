@@ -139,10 +139,10 @@ static u16 bb_lut_divu(const u16 *table, u32 numerator, u16 forward) {
 // WAD patch geometry is projected in native Doom map units
 // (BILLBOARD_WORLD_GEOMETRY_SCALE == 1, matching RAY_WORLD_WALL_HEIGHT's
 // 128-unit wall baseline) and then enlarged per type via
-// BillboardType.visual_scale: pickups and barrels read too small on screen at
-// native size, so both use a 3x visual_scale (BILLBOARD_PICKUP_VISUAL_SCALE /
-// BILLBOARD_BARREL_VISUAL_SCALE); decor props stay at 1x. See
-// billboard_internal.h.
+// BillboardType.visual_scale: pickups read too small on screen at native
+// size, so they use a 3x visual_scale (BILLBOARD_PICKUP_VISUAL_SCALE);
+// barrels use a smaller 2x visual_scale (BILLBOARD_BARREL_VISUAL_SCALE);
+// decor props stay at 1x. See billboard_internal.h.
 static s32 billboard_muls_word(s16 left, s16 right) {
     s32 result = left;
     __asm__ volatile (

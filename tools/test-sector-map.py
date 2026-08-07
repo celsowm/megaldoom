@@ -24,10 +24,10 @@ def declaration(source, typename, symbol):
 
 
 def main():
-    generated = (ROOT / "src/generated_e1m1_map.c").read_text()
-    assets = (ROOT / "src/generated_assets.h").read_text()
-    header = (ROOT / "src/bsp_map.h").read_text()
-    runtime = (ROOT / "src/bsp_map.c").read_text()
+    generated = (ROOT / "src/bsp/generated_e1m1_map.c").read_text()
+    assets = (ROOT / "src/bsp/generated_assets.h").read_text()
+    header = (ROOT / "src/bsp/bsp_map.h").read_text()
+    runtime = (ROOT / "src/bsp/bsp_map.c").read_text()
     main_source = (ROOT / "src/main.c").read_text()
     raycast = (ROOT / "src/raycast.h").read_text()
     extractor = load_extractor()
@@ -84,7 +84,7 @@ def main():
     # accidental fallback in a performance build.
     # renderer_scene.c was split by SRP into several files; the pack-stage
     # code these checks look for now lives across that set.
-    renderer_scene = "\n".join((ROOT / "src" / n).read_text() for n in (
+    renderer_scene = "\n".join((ROOT / "src/renderer" / n).read_text() for n in (
         "renderer_scene.c", "renderer_pack.c", "renderer_doors.c",
         "renderer_billboard_draw.c", "renderer_frame_overlay.c",
         "renderer_upload.c", "renderer_sparse.c",
@@ -108,7 +108,7 @@ def main():
     assert "level[texel] * 0x11" in extractor_source
     assert extractor.texture_u_scale_q12(24) > 0
     assert "FREEDOOM_WALL_TEXTURE_USCALE_Q12[tid]" in (
-        ROOT / "src/bsp_render.c").read_text()
+        ROOT / "src/bsp/bsp_render.c").read_text()
 
     # Runtime and proof use the same canonical Doom collision radius.
     radius = int(re.search(

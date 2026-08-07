@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 EXTRACTOR_PATH = ROOT / "tools/wad-map-extract.py"
-GENERATED_PATH = ROOT / "src/generated_e1m1_map.c"
+GENERATED_PATH = ROOT / "src/bsp/generated_e1m1_map.c"
 CONTROLLER_PATH = ROOT / "src/player_controller.c"
 
 DOOM_HZ = 35

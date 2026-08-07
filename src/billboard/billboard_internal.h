@@ -15,7 +15,7 @@
 #define BILLBOARD_COLLECT_RADIUS_SQ (BILLBOARD_COLLECT_RADIUS * BILLBOARD_COLLECT_RADIUS)
 // Conservative horizontal radius for the visible-subsector prototype. The
 // largest authored billboard extent is barrel explosion BEXPE (31 world units
-// right of its origin) at visual_scale 3 = 93; 96 covers every source patch.
+// right of its origin) at visual_scale 2 = 62; 96 covers every source patch.
 #define BILLBOARD_SUBSECTOR_CULL_RADIUS 96
 // Point-blank barrel detonation fallback. billboard_measure_object rejects
 // anything within BILLBOARD_MIN_DEPTH of the camera forward axis, but a barrel
@@ -61,11 +61,12 @@
 // collision, collection radii and world coordinates remain native.
 #define BILLBOARD_WORLD_GEOMETRY_SCALE 1
 #define BILLBOARD_PICKUP_VISUAL_SCALE 3
-// 2026-07-27: barrels read too small at native scale in play; matched to the
-// pickup 3x factor. Collision radius (BILLBOARD_TYPES' `radius` field, 20u)
-// and explosion AoE (BARREL_EXPLOSION_RADIUS below) are separate fields and
-// are deliberately NOT scaled by this constant.
-#define BILLBOARD_BARREL_VISUAL_SCALE 3
+// 2026-08-07: dropped from 3x to shrink barrel sprites (~33% smaller, the
+// closest this integer-only multiplier gets to a 30% reduction). Collision
+// radius (BILLBOARD_TYPES' `radius` field, 20u) and explosion AoE
+// (BARREL_EXPLOSION_RADIUS below) are separate fields and are deliberately
+// NOT scaled by this constant.
+#define BILLBOARD_BARREL_VISUAL_SCALE 2
 
 #define DUMMY_MOVE_STEP (FX_ONE / 8)
 #define DUMMY_MOVE_INTERVAL 5

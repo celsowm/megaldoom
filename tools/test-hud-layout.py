@@ -24,10 +24,10 @@ def field_pixels(right: int, digits: list[int], widths: list[int], percent: bool
 
 
 def main() -> int:
-    assets = (ROOT / "src/generated_hud_assets.h").read_text()
-    internal = (ROOT / "src/renderer_internal.h").read_text()
-    hud = (ROOT / "src/renderer_hud.c").read_text()
-    renderer = (ROOT / "src/renderer.c").read_text()
+    assets = (ROOT / "src/renderer/generated_hud_assets.h").read_text()
+    internal = (ROOT / "src/renderer/renderer_internal.h").read_text()
+    hud = (ROOT / "src/renderer/renderer_hud.c").read_text()
+    renderer = (ROOT / "src/renderer/renderer.c").read_text()
     generator = (ROOT / "tools/convert-freedoom-assets.ps1").read_text()
 
     assert numeric_define(assets, "FREEDOOM_HUD_PIXEL_W") == 320

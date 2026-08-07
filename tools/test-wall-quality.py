@@ -11,8 +11,8 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 EXTRACTOR_PATH = ROOT / "tools" / "wad-map-extract.py"
-ASSETS_PATH = ROOT / "src" / "generated_assets.h"
-MAP_PATH = ROOT / "src" / "generated_e1m1_map.c"
+ASSETS_PATH = ROOT / "src" / "bsp" / "generated_assets.h"
+MAP_PATH = ROOT / "src" / "bsp" / "generated_e1m1_map.c"
 LEGACY_WORLD_PALETTE = [
     (0x00, 0x00, 0x00), (0x00, 0x00, 0x91), (0x48, 0x00, 0x00),
     (0x24, 0x24, 0x00), (0x24, 0x24, 0x24), (0x48, 0x48, 0x24),
@@ -118,7 +118,7 @@ def main():
     raycast = (ROOT / "src" / "raycast.h").read_text()
     # renderer_scene.c was split by SRP into several files; the pack-stage
     # code these checks look for now lives across that set.
-    renderer = "\n".join((ROOT / "src" / n).read_text() for n in (
+    renderer = "\n".join((ROOT / "src" / "renderer" / n).read_text() for n in (
         "renderer_scene.c", "renderer_pack.c", "renderer_doors.c",
         "renderer_billboard_draw.c", "renderer_frame_overlay.c",
         "renderer_upload.c", "renderer_sparse.c",
@@ -146,7 +146,7 @@ def main():
     assert sum(extractor.world_palette.is_blue(color) for color in palette) >= 1
     assert not any(extractor.world_palette.is_olive(color)
                    for color in palette[1:14])
-    assert "BSP_FLOOR_COLOR" not in (ROOT / "src" / "bsp_render.c").read_text()
+    assert "BSP_FLOOR_COLOR" not in (ROOT / "src" / "bsp" / "bsp_render.c").read_text()
     shade_lut = extractor.build_shade_lut(palette)
     for index, color in enumerate(palette):
         for level in shade_lut:

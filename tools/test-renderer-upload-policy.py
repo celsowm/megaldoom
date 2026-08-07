@@ -66,20 +66,20 @@ def compose_overlay(previous, current):
 
 
 def main():
-    header = (ROOT / "src/renderer_internal.h").read_text()
-    hud_assets = (ROOT / "src/generated_hud_assets.h").read_text()
+    header = (ROOT / "src/renderer/renderer_internal.h").read_text()
+    hud_assets = (ROOT / "src/renderer/generated_hud_assets.h").read_text()
     raycast = (ROOT / "src/raycast.h").read_text()
     # renderer_scene.c was split by SRP into several files; the upload
     # scheduler code these checks look for now lives across that set.
-    scene = "\n".join((ROOT / "src" / n).read_text() for n in (
+    scene = "\n".join((ROOT / "src/renderer" / n).read_text() for n in (
         "renderer_scene.c", "renderer_pack.c", "renderer_doors.c",
         "renderer_billboard_draw.c", "renderer_frame_overlay.c",
         "renderer_upload.c", "renderer_sparse.c",
         "renderer_flats.c",
     ))
-    overlay = (ROOT / "src/renderer_overlay.c").read_text()
-    renderer = (ROOT / "src/renderer.c").read_text()
-    perf = (ROOT / "src/renderer_perf.c").read_text()
+    overlay = (ROOT / "src/renderer/renderer_overlay.c").read_text()
+    renderer = (ROOT / "src/renderer/renderer.c").read_text()
+    perf = (ROOT / "src/renderer/renderer_perf.c").read_text()
     tile_w = define(raycast, "RAY_VIEW_TILE_W")
     tile_h = define(raycast, "RAY_VIEW_TILE_H")
     tile_count = tile_w * tile_h

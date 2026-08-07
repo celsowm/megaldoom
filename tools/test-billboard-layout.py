@@ -7,10 +7,10 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parent.parent
-HEADER = ROOT / "src" / "generated_billboard_assets.h"
-GEOMETRY_HEADER = ROOT / "src" / "generated_billboard_geometry.h"
+HEADER = ROOT / "src" / "billboard" / "generated_billboard_assets.h"
+GEOMETRY_HEADER = ROOT / "src" / "billboard" / "generated_billboard_geometry.h"
 OFFSETS = ROOT / "res" / "originaldoom" / "sprites" / "_offsets.json"
-PUBLIC_HEADER = ROOT / "src" / "billboard.h"
+PUBLIC_HEADER = ROOT / "src" / "billboard" / "billboard.h"
 EXPECTED_TEXTURES = 17
 WORLD_HEIGHT = 48
 EXPECTED_NAMES = [

@@ -180,7 +180,7 @@ def draw_bytewise(sprites: list[Sprite], depths: list[int],
     """Shipping renderer: one byte (two screen pixels) of a packed tile row at a
     time, with out-of-range columns pre-marked in the screen->texel map so the
     inner loop needs no bounds test. Mirrors raster_sprite_row in
-    src/renderer_billboard_draw.c."""
+    src/renderer/renderer_billboard_draw.c."""
     rows = pack_pixels(initial_pixels())
     dirty: set[int] = set()
     for sprite in sprites:
@@ -286,7 +286,7 @@ def assert_equal(sprites: list[Sprite], depths: list[int],
 
 
 def main() -> int:
-    scene = "\n".join((ROOT / "src" / name).read_text(encoding="utf-8")
+    scene = "\n".join((ROOT / "src" / "renderer" / name).read_text(encoding="utf-8")
                       for name in SCENE_SPLIT_FILES)
     required = [
         "tex_x_by_screen_col[RAY_VIEW_COLS]", "raster_sprite_row",

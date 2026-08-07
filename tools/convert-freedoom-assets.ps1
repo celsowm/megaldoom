@@ -875,7 +875,7 @@ foreach ($spec in $BillboardWorldSpecs) {
     $billboardWorldIndex++
 }
 # Enemy (zombieman) animation frames, all scaled into the same 24x48 box.
-# Order MUST match the pose indices in src/billboard_internal.h:
+# Order MUST match the pose indices in src/billboard/billboard_internal.h:
 #   0..3 walk (POSSA1..D1), 4 attack (POSSF1), 5..9 death (POSSH0..L0, L0 = corpse).
 $EnemyFrameNames = @("POSSA1", "POSSB1", "POSSC1", "POSSD1", "POSSF1",
                      "POSSH0", "POSSI0", "POSSJ0", "POSSK0", "POSSL0")

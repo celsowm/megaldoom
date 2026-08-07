@@ -6,8 +6,8 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parent.parent
-MAP_SOURCE = ROOT / "src" / "generated_e1m1_map.c"
-RUNTIME_SOURCE = ROOT / "src" / "billboard.c"
+MAP_SOURCE = ROOT / "src" / "bsp" / "generated_e1m1_map.c"
+RUNTIME_SOURCE = ROOT / "src" / "billboard" / "billboard.c"
 
 CURATED_TYPES = {
     5, 6, 9, 13, 2007, 2011, 2012, 2014, 2015, 2018, 2019,

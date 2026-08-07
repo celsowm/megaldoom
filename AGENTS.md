@@ -15,7 +15,7 @@ work, it does not need a line in this file.
 `compare_stride2_column_asm` (DEBUG_PERF) runs the asm span and the per-tile C
 reference into two canary-guarded scratch blocks and compares. Read back
 `asm_mismatches`, `asm_canary_failures` and `asm_checked_tiles` after any change
-to `src/renderer_hotpath.s`. If you touch the harness itself, also inject a
+to `src/renderer/renderer_hotpath.s`. If you touch the harness itself, also inject a
 deliberate fault and confirm it reports non-zero before reverting — this harness
 spent months silently comparing asm against asm and reporting success (LOG,
 2026-08-04).
@@ -84,7 +84,7 @@ Each is measured and written up in [LOG.md](LOG.md); the date locates the entry.
    ```
    `-b <frames>` is required or BlastEm never exits and no report is written.
 4. Decode the `perfMailbox` hex blob as `RendererPerfSnapshot` (see
-   `src/renderer_perf.h`) using **m68000 struct alignment** (u16/u32 align to
+   `src/renderer/renderer_perf.h`) using **m68000 struct alignment** (u16/u32 align to
    2 bytes, bool is 1 byte) — a plain-C decode gets the field offsets wrong.
 
 `tools/routes/checkpoints.txt` ends in sustained movement (no combat/rotation

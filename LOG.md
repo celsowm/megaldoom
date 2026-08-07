@@ -30,7 +30,7 @@ count**, and a mixed tile costs ~42 subticks more than a flat one. Fitting
 flat` — so only the two tile coefficients are identifiable; don't try to solve
 for a per-column term.
 
-**Fix, in `src/renderer_hotpath.s`.** Each lane emits at most three monotonic
+**Fix, in `src/renderer/renderer_hotpath.s`.** Each lane emits at most three monotonic
 posts (ceiling, wall, floor). The loops re-tested both the post bound and `end_y`
 every pixel — `cmp/bcc/cmp/bcs`, 26 cycles, where the post length is already
 known and `DBRA` costs 10. The wall post additionally re-read `tex_y` from the

@@ -10,8 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 FRONTEND = (ROOT / "src/frontend.c").read_text()
 MAIN = (ROOT / "src/main.c").read_text()
 AUDIO = (ROOT / "src/game_audio.c").read_text()
-RENDERER = (ROOT / "src/renderer.c").read_text()
-BILLBOARD = (ROOT / "src/billboard.c").read_text()
+RENDERER = (ROOT / "src/renderer/renderer.c").read_text()
+BILLBOARD = (ROOT / "src/billboard/billboard.c").read_text()
 ASSETS = ROOT / "res/frontend"
 
 

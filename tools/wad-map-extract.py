@@ -612,7 +612,7 @@ def _is_map_marker(name):
     return name.startswith("MAP") and name[3:].isdigit()
 
 
-# Flat runtime contract (must match src/bsp_map.h / billboard_internal.h).
+# Flat runtime contract (must match src/bsp/bsp_map.h / billboard_internal.h).
 SEG_WALL = 0
 SEG_DOOR = 1
 SEG_EXIT = 2

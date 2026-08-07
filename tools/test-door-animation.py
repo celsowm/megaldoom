@@ -4,20 +4,20 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-MAP = (ROOT / "src/bsp_map.c").read_text()
-HEADER = (ROOT / "src/bsp_map.h").read_text()
+MAP = (ROOT / "src/bsp/bsp_map.c").read_text()
+HEADER = (ROOT / "src/bsp/bsp_map.h").read_text()
 RAYCAST = (ROOT / "src/raycast.h").read_text()
-BSP_RENDER = (ROOT / "src/bsp_render.c").read_text()
+BSP_RENDER = (ROOT / "src/bsp/bsp_render.c").read_text()
 # renderer_scene.c was split by SRP into several files; door-overlay code
 # these checks look for now lives across that set.
-SCENE = "\n".join((ROOT / "src" / n).read_text() for n in (
+SCENE = "\n".join((ROOT / "src/renderer" / n).read_text() for n in (
     "renderer_scene.c", "renderer_pack.c", "renderer_doors.c",
     "renderer_billboard_draw.c", "renderer_frame_overlay.c",
     "renderer_upload.c", "renderer_sparse.c",
     "renderer_flats.c",
 ))
 MAIN = (ROOT / "src/main.c").read_text()
-GENERATED = (ROOT / "src/generated_e1m1_map.c").read_text()
+GENERATED = (ROOT / "src/bsp/generated_e1m1_map.c").read_text()
 
 LIFT_MAX = 256
 STEP_PER_VBLANK = 16

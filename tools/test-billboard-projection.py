@@ -7,10 +7,10 @@ import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 RAYCAST = ROOT / "src" / "raycast.h"
-BILLBOARD = ROOT / "src" / "billboard.c"
-BILLBOARD_INTERNAL = ROOT / "src" / "billboard_internal.h"
-PROJECTOR = ROOT / "src" / "billboard_projection.c"
-BILLBOARD_LUT = ROOT / "src" / "billboard_projection_lut.h"
+BILLBOARD = ROOT / "src" / "billboard" / "billboard.c"
+BILLBOARD_INTERNAL = ROOT / "src" / "billboard" / "billboard_internal.h"
+PROJECTOR = ROOT / "src" / "billboard" / "billboard_projection.c"
+BILLBOARD_LUT = ROOT / "src" / "billboard" / "billboard_projection_lut.h"
 # renderer_scene.c was split by SRP into several files; the packer/billboard-
 # draw code these checks look for now lives across that set.
 SCENE_SPLIT_FILES = [
@@ -110,7 +110,7 @@ def main() -> int:
     billboard = BILLBOARD.read_text(encoding="utf-8")
     billboard_internal = BILLBOARD_INTERNAL.read_text(encoding="utf-8")
     projector = PROJECTOR.read_text(encoding="utf-8")
-    scene = "\n".join((ROOT / "src" / name).read_text(encoding="utf-8")
+    scene = "\n".join((ROOT / "src" / "renderer" / name).read_text(encoding="utf-8")
                       for name in SCENE_SPLIT_FILES)
 
     required = [
@@ -166,8 +166,8 @@ def main() -> int:
     if "#define BILLBOARD_ENEMY_ATLAS_WIDTH 24" not in billboard_internal or \
             "#define BILLBOARD_ENEMY_ATLAS_HEIGHT 48" not in billboard_internal:
         raise ValueError("enemy atlas art dimensions changed unexpectedly")
-    if "#define BILLBOARD_BARREL_VISUAL_SCALE 3" not in billboard_internal:
-        raise ValueError("barrels are not rendered at the required 3x scale")
+    if "#define BILLBOARD_BARREL_VISUAL_SCALE 2" not in billboard_internal:
+        raise ValueError("barrels are not rendered at the required 2x scale")
 
     # bb_lut_divu() (see comment above) always takes the in-range table branch
     # in production, so the numerator passed at each call site is dead code

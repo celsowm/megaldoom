@@ -4,9 +4,9 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-GENERATED = (ROOT / "src/generated_e1m1_map.c").read_text()
-RENDERER = (ROOT / "src/bsp_render.c").read_text()
-BSP_MAP = (ROOT / "src/bsp_map.c").read_text()
+GENERATED = (ROOT / "src/bsp/generated_e1m1_map.c").read_text()
+RENDERER = (ROOT / "src/bsp/bsp_render.c").read_text()
+BSP_MAP = (ROOT / "src/bsp/bsp_map.c").read_text()
 
 FX_SHIFT = 8
 FX_ONE = 1 << FX_SHIFT

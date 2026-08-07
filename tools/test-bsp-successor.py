@@ -3,7 +3,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-RENDERER = (ROOT / "src/bsp_render.c").read_text()
+RENDERER = (ROOT / "src/bsp/bsp_render.c").read_text()
 
 
 def find_next(parent, sample):

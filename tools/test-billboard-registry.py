@@ -6,11 +6,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main():
-    registry = (ROOT / "src/billboard_registry.c").read_text()
-    billboard = (ROOT / "src/billboard.c").read_text()
-    projection = (ROOT / "src/billboard_projection.c").read_text()
-    enemy = (ROOT / "src/billboard_enemy.c").read_text()
-    combat = (ROOT / "src/billboard_combat.c").read_text()
+    registry = (ROOT / "src/billboard/billboard_registry.c").read_text()
+    billboard = (ROOT / "src/billboard/billboard.c").read_text()
+    projection = (ROOT / "src/billboard/billboard_projection.c").read_text()
+    enemy = (ROOT / "src/billboard/billboard_enemy.c").read_text()
+    combat = (ROOT / "src/billboard/billboard_combat.c").read_text()
 
     assert "s_active_indices[BILLBOARD_OBJECT_COUNT]" in registry
     assert "s_enemy_indices[BILLBOARD_OBJECT_COUNT]" in registry

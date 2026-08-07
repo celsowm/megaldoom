@@ -14,27 +14,27 @@ def doom_radius_damage(dx: int, dy: int, target_radius: int) -> int:
 
 
 def main():
-    billboard_h = (ROOT / "src/billboard.h").read_text()
-    internal_h = (ROOT / "src/billboard_internal.h").read_text()
-    billboard_c = (ROOT / "src/billboard.c").read_text()
-    combat_c = (ROOT / "src/billboard_combat.c").read_text()
-    effects_c = (ROOT / "src/billboard_effects.c").read_text()
-    barrel_c = (ROOT / "src/billboard_barrel.c").read_text()
-    explosion_c = (ROOT / "src/billboard_explosion.c").read_text()
-    explosion_h = (ROOT / "src/billboard_explosion.h").read_text()
-    projection_c = (ROOT / "src/billboard_projection.c").read_text()
+    billboard_h = (ROOT / "src/billboard/billboard.h").read_text()
+    internal_h = (ROOT / "src/billboard/billboard_internal.h").read_text()
+    billboard_c = (ROOT / "src/billboard/billboard.c").read_text()
+    combat_c = (ROOT / "src/billboard/billboard_combat.c").read_text()
+    effects_c = (ROOT / "src/billboard/billboard_effects.c").read_text()
+    barrel_c = (ROOT / "src/billboard/billboard_barrel.c").read_text()
+    explosion_c = (ROOT / "src/billboard/billboard_explosion.c").read_text()
+    explosion_h = (ROOT / "src/billboard/billboard_explosion.h").read_text()
+    projection_c = (ROOT / "src/billboard/billboard_projection.c").read_text()
     # renderer_scene.c was split by SRP into several files; billboard-draw
     # code these checks look for now lives across that set.
-    renderer_c = "\n".join((ROOT / "src" / n).read_text() for n in (
+    renderer_c = "\n".join((ROOT / "src/renderer" / n).read_text() for n in (
         "renderer_scene.c", "renderer_pack.c", "renderer_doors.c",
         "renderer_billboard_draw.c", "renderer_frame_overlay.c",
         "renderer_upload.c", "renderer_sparse.c",
         "renderer_flats.c",
     ))
     main_c = (ROOT / "src/main.c").read_text()
-    assets = (ROOT / "src/generated_billboard_assets.h").read_text()
+    assets = (ROOT / "src/billboard/generated_billboard_assets.h").read_text()
     resources = (ROOT / "res/resources.res").read_text()
-    generated_map = (ROOT / "src/generated_e1m1_map.c").read_text()
+    generated_map = (ROOT / "src/bsp/generated_e1m1_map.c").read_text()
 
     # Barrel targeting and direct fire-result handoff.
     assert re.search(

@@ -2,7 +2,7 @@ import json,struct,sys
 
 b=bytes.fromhex(json.load(open(sys.argv[1]))['perfMailbox'])
 
-# Field layout MUST mirror RendererPerfSnapshot in src/renderer_perf.h.
+# Field layout MUST mirror RendererPerfSnapshot in src/renderer/renderer_perf.h.
 # u16/u32 align to 2 bytes on 68000.
 fields=[
     ('upload_dirty_tiles','u16'),('upload_tiles','u16'),('upload_runs','u16'),
