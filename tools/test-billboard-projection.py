@@ -1,6 +1,7 @@
 """Regression checks for the shared billboard/wall projection contract."""
 
 from pathlib import Path
+import json
 import re
 import sys
 
@@ -43,6 +44,78 @@ def span_visible(forward: int, left: int, right: int, depths: list[int]) -> bool
     first = left & ~(STRIDE - 1)
     last = right & ~(STRIDE - 1)
     return any(forward < depths[col] for col in range(first, last + 1, STRIDE))
+
+
+# Pose order must match the ENEMY_* frame indices in billboard_internal.h and
+# $EnemyFrameNames in tools/convert-freedoom-assets.ps1.
+ENEMY_FRAME_NAMES = ["POSSA1", "POSSB1", "POSSC1", "POSSD1", "POSSF1",
+                     "POSSH0", "POSSI0", "POSSJ0", "POSSK0", "POSSL0"]
+SPRITE_OFFSETS = ROOT / "res" / "originaldoom" / "sprites" / "_offsets.json"
+
+
+def _scale_round(value: int, num: int, den: int) -> int:
+    """value * num / den, rounded half-up, sign-symmetric."""
+    sign = -1 if value < 0 else 1
+    return sign * ((abs(value) * num * 2 + den) // (den * 2))
+
+
+def expected_enemy_frame_geometry() -> list[tuple[int, int, int, int]]:
+    """Re-derive ENEMY_FRAME_GEOMETRY from the Doom picture headers.
+
+    Enemy poses are projected through the shared WAD-origin path, so each pose
+    needs its own world box. The scale is pinned to the walk pose so the
+    standing enemy keeps the 2.25x size it was play-tuned to, and the baseline
+    is lifted by that pose's below-origin overhang so walk frames sit exactly on
+    the floor line. Everything else follows from the patch headers -- which is
+    what makes the 17px-tall corpse land flat on the floor instead of being
+    stretched over a standing body's height.
+    """
+    offsets = json.loads(SPRITE_OFFSETS.read_text(encoding="utf-8"))
+    ref = offsets[ENEMY_FRAME_NAMES[0]]
+    sx_num, sx_den = 54, ref["width"]           # 54/41
+    sy_num, sy_den = 108, ref["height"]         # 108/55
+    anchor = ref["height"] - ref["topOffset"]   # 5 native units below origin
+
+    rows = []
+    for name in ENEMY_FRAME_NAMES:
+        patch = offsets[name]
+        source_w = _scale_round(patch["width"], sx_num, sx_den)
+        top_offset = _scale_round(patch["topOffset"] + anchor, sy_num, sy_den)
+        below = _scale_round((patch["height"] - patch["topOffset"]) - anchor,
+                             sy_num, sy_den)
+        rows.append((source_w, top_offset + below, (source_w + 1) // 2, top_offset))
+    return rows
+
+
+def extract_enemy_frame_geometry(source: str) -> list[tuple[int, int, int, int]]:
+    match = re.search(
+        r"ENEMY_FRAME_GEOMETRY\[ENEMY_FRAME_GEOMETRY_COUNT\]\[4\]\s*=\s*\{(.*?)\n\};",
+        source, re.S)
+    if match is None:
+        raise ValueError("ENEMY_FRAME_GEOMETRY table not found in billboard_internal.h")
+    rows = []
+    for row in re.finditer(r"\{\s*(-?\d+),\s*(-?\d+),\s*(-?\d+),\s*(-?\d+)\s*\}",
+                           match.group(1)):
+        rows.append(tuple(int(g) for g in row.groups()))
+    return rows
+
+
+def check_enemy_frame_geometry(billboard_internal: str) -> None:
+    if "#define ENEMY_FRAME_GEOMETRY_COUNT 10" not in billboard_internal:
+        raise ValueError("ENEMY_FRAME_GEOMETRY_COUNT no longer covers the 10 poses")
+    actual = extract_enemy_frame_geometry(billboard_internal)
+    expected = expected_enemy_frame_geometry()
+    if actual != expected:
+        raise ValueError(
+            "ENEMY_FRAME_GEOMETRY drifted from the Doom picture headers:\n"
+            f"  expected {expected}\n  actual   {actual}")
+
+    walk = actual[0]
+    if walk[1] != 108 or walk[0] != 54:
+        raise ValueError("the walk pose no longer keeps its play-tuned 54x108 box")
+    corpse = actual[9]
+    if corpse[1] - corpse[3] != 0:
+        raise ValueError("the POSSL0 corpse no longer rests exactly on the floor line")
 
 
 def projected_q12(value: int, scale: int) -> int:
@@ -136,13 +209,12 @@ def main() -> int:
         raise ValueError("billboard rasterizer still samples the next wall block")
     if "RAY_CAMERA_HEIGHT" not in billboard or "BILLBOARD_SCALE_SHIFT 12" not in billboard:
         raise ValueError("world billboards are not using the shared Q12 render camera")
-    # bb_lut_divu(table, K, forward) replaced the raw divu() call with a
-    # proven-bounded lookup table (see billboard_projection_lut.h), but the
-    # underlying formula -- RAY_CAMERA_HEIGHT * RAY_PROJ_Y / forward -- must
-    # still drive the enemy baseline.
-    if ("bb_lut_divu(g_billboard_recip_enemy_bottom_lut," not in billboard or
-            "(u32)RAY_CAMERA_HEIGHT * RAY_PROJ_Y, (u16)forward)" not in billboard):
-        raise ValueError("enemy baseline is no longer anchored to the rendered floor plane")
+    # Enemies used to own a separate projection branch with its own baseline
+    # LUT. They now ride the shared WAD-origin path, whose origin_y is the same
+    # rendered floor plane -- RAY_CAMERA_HEIGHT scaled by the shared Q12 factor.
+    if ("billboard_project_q12(RAY_CAMERA_HEIGHT, scale_y_q12)" not in billboard or
+            "const s16 origin_y = (s16)(RAY_VIEW_CENTER_Y +" not in billboard):
+        raise ValueError("billboard baseline is no longer anchored to the rendered floor plane")
     if "PLAYER_EYE_HEIGHT * RAY_PROJ_Y" in billboard:
         raise ValueError("enemy projection is using gameplay eye height instead of the render camera")
     if "#define BILLBOARD_WORLD_GEOMETRY_SCALE 1" not in billboard_internal:
@@ -158,11 +230,13 @@ def main() -> int:
         raise ValueError("world billboard projection is not source-geometry driven")
     if "object->atlas_w << 8" not in scene or "object->atlas_h << 16" not in scene:
         raise ValueError("billboard rasterizer is not sampling the generated atlas crop")
-    if "BILLBOARD_ENEMY_WORLD_WIDTH" not in billboard or "uses_wad_origin = FALSE" not in billboard:
-        raise ValueError("enemy legacy geometry is no longer isolated")
-    if "#define BILLBOARD_ENEMY_WORLD_WIDTH 54" not in billboard_internal or \
-            "#define BILLBOARD_ENEMY_WORLD_HEIGHT 108" not in billboard_internal:
-        raise ValueError("enemy geometry no longer uses its 2.25x-enlarged world size")
+    # Enemies must stay on the single shared projection path: one fixed box for
+    # all ten poses is exactly what left corpses floating at standing height.
+    if "uses_wad_origin" in billboard or "uses_wad_origin" in billboard_internal:
+        raise ValueError("a second billboard projection branch has reappeared")
+    if "ENEMY_FRAME_GEOMETRY[(frame < ENEMY_FRAME_GEOMETRY_COUNT) ? frame : 0]" not in billboard:
+        raise ValueError("enemy geometry is no longer selected per pose")
+    check_enemy_frame_geometry(billboard_internal)
     if "#define BILLBOARD_ENEMY_ATLAS_WIDTH 24" not in billboard_internal or \
             "#define BILLBOARD_ENEMY_ATLAS_HEIGHT 48" not in billboard_internal:
         raise ValueError("enemy atlas art dimensions changed unexpectedly")
@@ -171,21 +245,24 @@ def main() -> int:
 
     # bb_lut_divu() (see comment above) always takes the in-range table branch
     # in production, so the numerator passed at each call site is dead code
-    # there -- the table's baked K must match BILLBOARD_ENEMY_WORLD_WIDTH/HEIGHT
-    # or projected enemy size silently uses the old value. Byte-verify every
-    # entry against the exact truncating-division formula (matches divu()).
+    # there -- a table's baked K must match its call site or the projection
+    # silently uses a stale value. Byte-verify every entry against the exact
+    # truncating-division formula (matches divu()).
     lut_source = BILLBOARD_LUT.read_text(encoding="utf-8")
-    enemy_w = 54
-    enemy_h = 108
-    for array_name, k in (
-            ("g_billboard_recip_enemy_w_lut", enemy_w * PROJ_X),
-            ("g_billboard_recip_enemy_h_lut", enemy_h * PROJ_Y)):
-        table = extract_lut(lut_source, array_name)
-        if len(table) != 1535:
-            raise ValueError(f"{array_name} does not have exactly 1535 entries")
-        expected = [k // (i + 1) for i in range(1535)]
-        if table != expected:
-            raise ValueError(f"{array_name} entries do not match K={k} / (index+1)")
+    shared_k = PROJ_X << SCALE_SHIFT
+    table = extract_lut(lut_source, "g_billboard_recip_proj_lut")
+    if len(table) != 1535:
+        raise ValueError("g_billboard_recip_proj_lut does not have exactly 1535 entries")
+    expected = [min(shared_k // (i + 1), 65535) for i in range(1535)]
+    if table != expected:
+        raise ValueError(
+            f"g_billboard_recip_proj_lut entries do not match K={shared_k} / (index+1)")
+    # The retired per-enemy tables baked one fixed 54x108 box as K. Keeping them
+    # around invites the fixed-box geometry back in.
+    for dead in ("g_billboard_recip_enemy_w_lut", "g_billboard_recip_enemy_h_lut",
+                 "g_billboard_recip_enemy_bottom_lut"):
+        if dead in lut_source:
+            raise ValueError(f"{dead} is back; enemies must use per-pose geometry")
     if ("billboard_mul_basis_delta" not in billboard or
             "muls.w %1,%0" not in billboard or
             "return billboard_muls_word(basis, (s16)delta);" not in billboard):
@@ -199,6 +276,12 @@ def main() -> int:
         "cache->object_x == object->x", "cache->object_y == object->y",
         "cache->geometry_key == geometry_key",
         "visual == BILLBOARD_VISUAL_BARREL_EXPLODING",
+        # Every per-frame geometry must fold its frame into the key, or a
+        # stationary object animating in front of a stationary camera keeps
+        # serving its first pose's box -- which would pin a corpse at standing
+        # height however correct ENEMY_FRAME_GEOMETRY is.
+        "visual == BILLBOARD_VISUAL_DUMMY",
+        "visual == BILLBOARD_VISUAL_DUMMY_DAMAGED",
     ]
     if any(token not in projector for token in cache_tokens):
         raise ValueError("billboard measurement cache invalidation contract changed")

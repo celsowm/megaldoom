@@ -49,11 +49,9 @@
 // [72x144] read too tall -- settled 25% down from that, at 2.25x). The atlas
 // art itself stays 24x48 (ROM texel source); only the projected world size
 // grows, so the same pixels are stretched over a bigger screen box, same as
-// the pickup 3x path below. g_billboard_recip_enemy_w_lut/_h_lut in
-// billboard_projection_lut.h bake these values as K = WIDTH/HEIGHT * RAY_PROJ_X/Y
-// -- changing WORLD_WIDTH/HEIGHT again means regenerating those tables too.
-#define BILLBOARD_ENEMY_WORLD_WIDTH 54
-#define BILLBOARD_ENEMY_WORLD_HEIGHT 108
+// the pickup 3x path below. The 2.25x is now carried per pose by
+// ENEMY_FRAME_GEOMETRY (see below) instead of one 54x108 box, so resizing the
+// enemy means rescaling that table, not editing a pair of constants.
 #define BILLBOARD_ENEMY_ATLAS_WIDTH 24
 #define BILLBOARD_ENEMY_ATLAS_HEIGHT 48
 // WAD patch geometry and BSP vertices share native Doom map units. Individual
@@ -122,6 +120,40 @@ static const u8 BARREL_DEATH_FRAME_HOLDS[BARREL_DEATH_FRAME_COUNT] = {1, 1, 1, 1
 #define ENEMY_DEATH_FRAME_BASE 5
 #define ENEMY_DEATH_FRAME_COUNT 5
 
+// Per-pose billboard geometry, in world units, indexed by the pose numbers
+// above. Same {source_w, source_h, left_offset, top_offset} shape as
+// FREEDOOM_BILLBOARD_BARREL_EXPLOSION_GEOMETRY, and read through the same
+// single WAD-origin projection path every billboard uses: top_offset is how far
+// the pose reaches ABOVE the floor line, source_h - top_offset how far below
+// (negative => the whole pose is airborne, which is what a mid-collapse death
+// frame is in Doom).
+//
+// Before 2026-08-07 every pose was stretched over one fixed 54x108 box, so the
+// 17px-tall POSSL0 corpse was smeared over a standing body's height and its
+// visible mass floated at chest level instead of resting on the floor. The
+// stretched-to-fill 24x48 ROM atlas cells are correct as-is; it was the
+// DESTINATION rect that was wrong, so no asset regeneration is involved.
+//
+// Derived from res/originaldoom/sprites/_offsets.json by
+// tools/test-billboard-enemy-geometry.py, which re-derives and asserts every
+// row. Scale factors are pinned to the walk pose so this correction left the
+// standing enemy exactly the size it was tuned to (see the 2.25x note above):
+// Sx = 54/POSSA1.width = 54/41, Sy = 108/POSSA1.height = 108/55, and the
+// baseline is lifted by POSSA1's 5 native units of below-origin overhang.
+#define ENEMY_FRAME_GEOMETRY_COUNT 10
+static const s16 ENEMY_FRAME_GEOMETRY[ENEMY_FRAME_GEOMETRY_COUNT][4] = {
+    { 54, 108, 27, 108},  // 0 POSSA1 walk   41x55 ty50
+    { 49, 108, 25, 112},  // 1 POSSB1 walk   37x55 ty52
+    { 50, 108, 25, 108},  // 2 POSSC1 walk   38x55 ty50
+    { 53, 108, 27, 112},  // 3 POSSD1 walk   40x55 ty52
+    { 36, 108, 18, 108},  // 4 POSSF1 attack 27x55 ty50
+    { 51, 108, 26, 112},  // 5 POSSH0 death  39x55 ty52
+    { 46,  90, 23, 102},  // 6 POSSI0 death  35x46 ty47
+    { 57,  66, 29,  92},  // 7 POSSJ0 death  43x34 ty42  (airborne mid-collapse)
+    { 63,  53, 32,  67},  // 8 POSSK0 death  48x27 ty29  (airborne mid-collapse)
+    { 62,  33, 31,  33},  // 9 POSSL0 corpse 47x17 ty12  (top_offset == source_h
+};                        //                              => flat on the floor)
+
 // Animation cadence (frames at the locked 30fps): ~4 tics/pose like Doom.
 #define ENEMY_WALK_HOLD 4
 #define ENEMY_DEATH_HOLD 5
@@ -148,7 +180,6 @@ typedef struct {
     u8 atlas_y;
     u8 atlas_w;
     u8 atlas_h;
-    bool uses_wad_origin;
 } BillboardGeometry;
 
 typedef struct {

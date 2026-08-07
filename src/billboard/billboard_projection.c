@@ -143,7 +143,14 @@ static u16 billboard_project_one(const BillboardObject *object,
 static u16 billboard_geometry_key(const BillboardObject *object) {
     const BillboardType *type = billboard_get_type(object->type_id);
     const u8 visual = billboard_get_object_visual_id(object, type);
-    const u8 geometry_frame = (visual == BILLBOARD_VISUAL_BARREL_EXPLODING) ?
+    // Every visual whose geometry varies per frame must fold the frame in, or a
+    // stationary object animating in front of a stationary camera keeps serving
+    // the cached top/bottom of its first pose. Enemies joined this list on
+    // 2026-08-07 when death poses got their own boxes (ENEMY_FRAME_GEOMETRY);
+    // without it, a corpse would still be drawn at standing height.
+    const u8 geometry_frame = ((visual == BILLBOARD_VISUAL_BARREL_EXPLODING) ||
+                               (visual == BILLBOARD_VISUAL_DUMMY) ||
+                               (visual == BILLBOARD_VISUAL_DUMMY_DAMAGED)) ?
         billboard_get_object_frame(object) : 0;
 
     return (u16)((object->type_id & 0x1Fu) |

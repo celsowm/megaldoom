@@ -184,7 +184,6 @@ static void billboard_get_geometry(const BillboardObject *object,
         geometry->atlas_y = 0;
         geometry->atlas_w = (u8)source[0];
         geometry->atlas_h = (u8)source[1];
-        geometry->uses_wad_origin = TRUE;
         return;
     }
     if (visual_id >= FREEDOOM_BILLBOARD_WORLD_GEOMETRY_COUNT) {
@@ -200,21 +199,27 @@ static void billboard_get_geometry(const BillboardObject *object,
         geometry->atlas_y = (u8)source[FREEDOOM_BILLBOARD_GEOMETRY_ATLAS_Y];
         geometry->atlas_w = (u8)source[FREEDOOM_BILLBOARD_GEOMETRY_ATLAS_W];
         geometry->atlas_h = (u8)source[FREEDOOM_BILLBOARD_GEOMETRY_ATLAS_H];
-        geometry->uses_wad_origin = TRUE;
         return;
     }
 
-    // Enemy frames use the native 24x48 atlas/world proportion and a
-    // bottom-centred anchor, matching the WAD-origin billboard path.
-    geometry->source_w = BILLBOARD_ENEMY_WORLD_WIDTH;
-    geometry->source_h = BILLBOARD_ENEMY_WORLD_HEIGHT;
-    geometry->left_offset = BILLBOARD_ENEMY_WORLD_WIDTH / 2;
-    geometry->top_offset = BILLBOARD_ENEMY_WORLD_HEIGHT;
+    // Enemy poses carry their own world box (ENEMY_FRAME_GEOMETRY), already
+    // expressed in world units, so they ride the same WAD-origin projection as
+    // every other billboard. The atlas sub-rect stays the full 24x48 cell: each
+    // cell is its whole source patch stretched to fill, so scaling that cell to
+    // the pose's own box reproduces the patch at the right size and height.
+    {
+        const u8 frame = billboard_get_object_frame(object);
+        const s16 *source =
+            ENEMY_FRAME_GEOMETRY[(frame < ENEMY_FRAME_GEOMETRY_COUNT) ? frame : 0];
+        geometry->source_w = source[0];
+        geometry->source_h = source[1];
+        geometry->left_offset = source[2];
+        geometry->top_offset = source[3];
+    }
     geometry->atlas_x = 0;
     geometry->atlas_y = 0;
     geometry->atlas_w = BILLBOARD_ENEMY_ATLAS_WIDTH;
     geometry->atlas_h = BILLBOARD_ENEMY_ATLAS_HEIGHT;
-    geometry->uses_wad_origin = FALSE;
 }
 
 bool billboard_measure_object(const PlayerState *player, s16 cos_a, s16 sin_a,
@@ -240,8 +245,8 @@ bool billboard_measure_object(const PlayerState *player, s16 cos_a, s16 sin_a,
     // expansion covers the separate truncation of centre and edge extents in
     // the exact projector below, so an edge-touching sprite is never lost.
     {
-        const s32 geometry_scale = geometry.uses_wad_origin ?
-            BILLBOARD_WORLD_GEOMETRY_SCALE * type->visual_scale : 1;
+        const s32 geometry_scale =
+            BILLBOARD_WORLD_GEOMETRY_SCALE * type->visual_scale;
         const s32 left_extent = (s32)geometry.left_offset * geometry_scale;
         const s32 right_extent =
             ((s32)geometry.source_w - geometry.left_offset) * geometry_scale;
@@ -264,7 +269,7 @@ bool billboard_measure_object(const PlayerState *player, s16 cos_a, s16 sin_a,
     measure->atlas_w = geometry.atlas_w;
     measure->atlas_h = geometry.atlas_h;
 
-    if (geometry.uses_wad_origin) {
+    {
         // Q12 screen scale via a precomputed table (both axes share the same
         // K == RAY_PROJ_X<<12 == RAY_PROJ_Y<<12, since RAY_PROJ_X == RAY_PROJ_Y).
         // All patch edges then use MULS.W + shifts, avoiding any extra divisions.
@@ -297,22 +302,6 @@ bool billboard_measure_object(const PlayerState *player, s16 cos_a, s16 sin_a,
             measure->half_w = (s16)(measure->right - measure->center_col);
         }
         measure->projected_height = (s16)(measure->bottom - measure->top + 1);
-    } else {
-        measure->half_w = (s16)(bb_lut_divu(g_billboard_recip_enemy_w_lut,
-            (u32)BILLBOARD_ENEMY_WORLD_WIDTH * RAY_PROJ_X, (u16)forward) / 2);
-        if (measure->half_w < 1) measure->half_w = 1;
-        measure->projected_height = (s16)bb_lut_divu(g_billboard_recip_enemy_h_lut,
-            (u32)BILLBOARD_ENEMY_WORLD_HEIGHT * RAY_PROJ_Y, (u16)forward);
-        if (measure->projected_height < 1) measure->projected_height = 1;
-        measure->left = (s16)(measure->center_col - measure->half_w);
-        measure->right = (s16)(measure->center_col + measure->half_w);
-        // Enemies share the BSP render camera with walls and WAD-origin
-        // billboards. PLAYER_EYE_HEIGHT is gameplay geometry; using it here
-        // placed the enemy baseline above the rendered floor plane.
-        measure->bottom = (s16)(RAY_VIEW_CENTER_Y +
-            bb_lut_divu(g_billboard_recip_enemy_bottom_lut,
-                (u32)RAY_CAMERA_HEIGHT * RAY_PROJ_Y, (u16)forward));
-        measure->top = (s16)(measure->bottom - measure->projected_height);
     }
     return TRUE;
 }

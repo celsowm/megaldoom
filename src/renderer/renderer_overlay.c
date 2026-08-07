@@ -13,6 +13,25 @@ static u32 s_current_bits[VIEW_DIRTY_WORD_COUNT];
 // never enters g_view_tiles, so it is deliberately not tracked here.
 static u32 s_prev_overlay_columns;
 static u32 s_cur_overlay_columns;
+// tile index -> screen tile column, for the COLUMN-major g_view_tiles layout
+// (view_tile_index(x, y) == x * VIEW_TILE_H + y, renderer_internal.h). The
+// arithmetic form is `tile_index / VIEW_TILE_H`; a byte table keeps it to one
+// indexed load instead of the 32-bit mulu GCC emits for a divide by 15. ROM
+// only (300 bytes const), so it costs nothing against the work-RAM budget.
+#define OVERLAY_COL_RUN(c) \
+    (c), (c), (c), (c), (c), (c), (c), (c), (c), (c), (c), (c), (c), (c), (c)
+static const u8 s_tile_column[VIEW_TILE_COUNT] = {
+    OVERLAY_COL_RUN(0),  OVERLAY_COL_RUN(1),  OVERLAY_COL_RUN(2),  OVERLAY_COL_RUN(3),
+    OVERLAY_COL_RUN(4),  OVERLAY_COL_RUN(5),  OVERLAY_COL_RUN(6),  OVERLAY_COL_RUN(7),
+    OVERLAY_COL_RUN(8),  OVERLAY_COL_RUN(9),  OVERLAY_COL_RUN(10), OVERLAY_COL_RUN(11),
+    OVERLAY_COL_RUN(12), OVERLAY_COL_RUN(13), OVERLAY_COL_RUN(14), OVERLAY_COL_RUN(15),
+    OVERLAY_COL_RUN(16), OVERLAY_COL_RUN(17), OVERLAY_COL_RUN(18), OVERLAY_COL_RUN(19),
+};
+#undef OVERLAY_COL_RUN
+// The literal table above bakes VIEW_TILE_H == 15 (run length) and
+// VIEW_TILE_W == 20 (run count); the column mask additionally needs W <= 32.
+typedef char overlay_tile_column_shape_check[
+    (VIEW_TILE_H == 15 && VIEW_TILE_W == 20) ? 1 : -1];
 #define OVERLAY_SNAPSHOT_TILE_LIMIT 128
 static u32 s_snapshot_rows[OVERLAY_SNAPSHOT_TILE_LIMIT][8];
 static s16 s_snapshot_slot_by_tile[VIEW_TILE_COUNT];
@@ -87,11 +106,12 @@ void renderer_mark_overlay_tile(u16 tile_index) {
     const u16 word = (u16)(tile_index >> 5);
     const u32 mask = (u32)1u << (tile_index & 31);
 
-    // Record the column even for a repeat touch is unnecessary — a repeat means
-    // the column bit is already set — so track it alongside the first-touch path.
-    s_cur_overlay_columns |= (u32)1u << (tile_index % VIEW_TILE_W);
-
+    // A repeat touch cannot add a column: the first touch of this tile already
+    // set its bit this frame. So the column mask is maintained past the
+    // early-out, keeping it off the per-pixel-run repeat path.
     if ((s_current_bits[word] & mask) != 0) return;
+    s_cur_overlay_columns |= (u32)1u << s_tile_column[tile_index];
+
 #if CADENCE_STAGE_PROBE
     g_cadence_bb_marks++;
 #endif

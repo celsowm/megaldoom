@@ -16,6 +16,42 @@ def count_runs(dirty):
     return sum(tile == 0 or tile - 1 not in dirty for tile in dirty)
 
 
+VIEW_TILE_W = 20
+VIEW_TILE_H = 15
+
+
+def check_overlay_column_mask(overlay, mark_overlay):
+    """The overlay column mask must follow the COLUMN-major g_view_tiles layout.
+
+    build_bsp_tilemap() force-repacks any column that carried an overlay last
+    frame; a coherence-skipped column otherwise keeps the sprite's pixels baked
+    into the framebuffer after the sprite moved -- a ghost clone that only
+    clears once that column's wall descriptors happen to change. The mask was
+    written when g_view_tiles was row-major (tile_index % VIEW_TILE_W == the
+    column); the 2026-07-19 column-major conversion did not touch this file, so
+    the mask indexed the wrong column for two weeks. Re-derive it here.
+    """
+    if "tile_index % VIEW_TILE_W" in mark_overlay:
+        raise AssertionError(
+            "overlay column mask is using row-major arithmetic on a "
+            "column-major tile index (this is the ghost-clone bug)")
+
+    match = re.search(r"s_tile_column\[VIEW_TILE_COUNT\]\s*=\s*\{(.*?)\n\};",
+                      overlay, re.S)
+    if match is None:
+        raise AssertionError("s_tile_column lookup table not found")
+    body = re.sub(r"OVERLAY_COL_RUN\((\d+)\)",
+                  lambda m: ", ".join([m.group(1)] * VIEW_TILE_H), match.group(1))
+    table = [int(v) for v in re.findall(r"\d+", body)]
+    expected = [tile // VIEW_TILE_H for tile in range(VIEW_TILE_W * VIEW_TILE_H)]
+    if table != expected:
+        raise AssertionError(
+            "s_tile_column does not match view_tile_index(x, y) = x * "
+            "VIEW_TILE_H + y")
+    if "s_cur_overlay_columns |= (u32)1u << s_tile_column[tile_index];" not in mark_overlay:
+        raise AssertionError("the overlay column mask no longer uses s_tile_column")
+
+
 def choose_overlay_full(dirty, full_threshold, max_runs):
     if not dirty:
         return False
@@ -178,6 +214,7 @@ def main():
     assert "g_base_built_this_frame" not in scene + overlay
     mark_overlay = overlay[overlay.index("void renderer_mark_overlay_tile"):]
     assert "g_view_tiles[tile_index][row] = s_snapshot_rows" not in mark_overlay
+    check_overlay_column_mask(overlay, mark_overlay)
     assert scene.index("renderer_overlay_restore_previous();") < scene.index(
         "draw_projected_billboards(columns, objects, object_count);")
     assert scene.index("renderer_overlay_base_rebuilt();") < scene.index(
