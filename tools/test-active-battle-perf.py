@@ -61,17 +61,33 @@ def main():
 
     # Weapon flash counts real vblanks (framerate-independent); damage flash
     # stays iteration-based. Both redraw only on activation and final clear.
-    weapon_vblanks = int(re.search(
-        r"#define WEAPON_FLASH_VBLANKS (\d+)", main_c).group(1))
+    # The flash duration is now per-weapon (WEAPON_DEFS in src/weapons.c), so
+    # the cadence property has to hold for EVERY weapon, not just the pistol:
+    # a slow motion frame (~11 vblanks) must still display the flash for one
+    # full frame, which is what makes muzzle feedback survive at any framerate.
+    weapons_c = (ROOT / "src/weapons.c").read_text()
+    # Field order: ammo_type, ammo_per_shot, pellets, spread_cols, melee_range,
+    # cooldown_vblanks, flash_vblanks, automatic, sfx, sfx_len.
+    weapon_flashes = {
+        name: int(row.split(",")[6])
+        for name, row in re.findall(
+            r"^    \[WEAPON_(\w+)\] = \{\s*([^}]*?),\s*$",
+            weapons_c, re.S | re.M)
+    }
+    assert set(weapon_flashes) == {
+        "FIST", "CHAINSAW", "PISTOL", "SHOTGUN", "CHAINGUN"}, weapon_flashes
+    for flash in weapon_flashes.values():
+        assert flash >= 1
+        assert timer_redraws_vblank(flash, 11) == [True, True]
+    # The pistol keeps the shipped 6-vblank flash, so its feel is unchanged.
+    assert weapon_flashes["PISTOL"] == 6
+    assert timer_redraws_vblank(6, 2) == [True, False, False, True]
     damage_frames = int(re.search(
         r"#define PLAYER_DAMAGE_FLASH_FRAMES (\d+)", main_c).group(1)
     )
-    # Idle cadence (2 vblanks/iteration) holds the flash ~3 iterations; a slow
-    # motion frame (~11 vblanks) still displays it for one full frame.
-    assert timer_redraws_vblank(weapon_vblanks, 2) == [True, False, False, True]
-    assert timer_redraws_vblank(weapon_vblanks, 11) == [True, True]
     assert timer_redraws(damage_frames) == [True] + [False] * 5 + [True]
     assert "if (g_weapon_flash == 0)" in main_c
+    assert "g_weapon_flash = weapon->flash_vblanks;" in main_c
     assert "if (g_player_damage_flash == 0)" in main_c
 
     # Four-frame puff and three-frame blood retain two iterations per pose,

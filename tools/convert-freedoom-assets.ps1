@@ -9,6 +9,8 @@ param(
     [string]$LockedDoorTexturePath = "res\originaldoom\textures\BIGDOOR2.png",
     [string]$SwitchTexturePath = "res\originaldoom\textures\SW1COMP.png",
     [string]$HudPath = "res\originaldoom\graphics\STBAR.png",
+    # The pistol keeps dedicated parameters because it is baked by the original
+    # (legacy) stretch-to-box path -- see $WeaponSet below.
     [string]$WeaponIdlePath = "res\originaldoom\sprites\PISGA0.png",
     [string]$WeaponFirePath = "res\originaldoom\sprites\PISGB0.png",
     [string]$WeaponFlashPath = "res\originaldoom\sprites\PISFA0.png",
@@ -43,11 +45,14 @@ $BillboardSourcePath = Join-Path $Root $BillboardPath
 $BillboardKeySourcePath = Join-Path $Root $BillboardKeyPath
 $BillboardDecorSourcePath = Join-Path $Root $BillboardDecorPath
 $BillboardEnemySourcePath = Join-Path $Root $BillboardEnemyPath
-$OutPath = Join-Path $Root "src\generated_assets.h"
-$BillboardOutPath = Join-Path $Root "src\generated_billboard_assets.h"
-$BillboardGeometryOutPath = Join-Path $Root "src\generated_billboard_geometry.h"
-$HudOutPath = Join-Path $Root "src\generated_hud_assets.h"
-$MapOutPath = Join-Path $Root "src\generated_e1m1_map.c"
+# Generated headers live beside the module that consumes them (src/<group>/),
+# not at the src/ root -- keep these in sync with the real tree or a
+# regeneration silently drops stale copies next to the hand-written headers.
+$OutPath = Join-Path $Root "src\bsp\generated_assets.h"
+$BillboardOutPath = Join-Path $Root "src\billboard\generated_billboard_assets.h"
+$BillboardGeometryOutPath = Join-Path $Root "src\billboard\generated_billboard_geometry.h"
+$HudOutPath = Join-Path $Root "src\renderer\generated_hud_assets.h"
+$MapOutPath = Join-Path $Root "src\bsp\generated_e1m1_map.c"
 $WeaponOverlayW = 160
 $WeaponOverlayH = 120
 # Pistol draw box inside the 160x120 view. Was 72x54 (~45% of the viewport in
@@ -58,6 +63,38 @@ $WeaponDrawW = 50
 $WeaponDrawH = 38
 $WeaponDrawX = [int](($WeaponOverlayW - $WeaponDrawW) / 2)
 $WeaponDrawY = $WeaponOverlayH - $WeaponDrawH
+
+# The overlay is drawn as one fixed 8x5 tile rectangle on BG_A, so EVERY weapon
+# must bake into the same tile-aligned box or its tiles would be clipped. That
+# rectangle is view tiles (6,10)..(13,14) -> pixels x 48..111, y 80..119. The
+# pistol's 50x38 box above sits inside it; the wider weapons use the full width.
+# Keep these tile-aligned: generate-renderer-assets.ps1 derives MEGALDOOM_WEAPON_
+# TILE_X/Y/W/H from them with a >>3, and the runtime VRAM window is sized to the
+# resulting tile count.
+$WeaponRectX = 48
+$WeaponRectY = 80
+$WeaponRectW = 64
+$WeaponRectH = 40
+
+# The five shareware weapons, in WeaponId order (src/weapons.h).
+#
+# Legacy = $true selects the original pistol bake: the sprite is STRETCHED into
+# the fixed 50x38 box, ignoring its aspect ratio. That look is what shipped and
+# what the project has iterated on, so it is reproduced bit-for-bit rather than
+# unified with the others. Legacy = $false uses Convert-WeaponFrame, which keeps
+# each sprite's native aspect ratio, scales idle and fire by one shared factor,
+# and anchors both frames on the same Doom psprite origin so the muzzle flash
+# lands on the barrel and the gun does not jump between frames.
+#
+# Flash = "" means the weapon has no muzzle-flash sprite (fist, chainsaw); its
+# fire frame is just the attack pose.
+$WeaponSet = @(
+    [pscustomobject]@{ Name = "FIST";     Idle = "PUNGA0"; Fire = "PUNGC0"; Flash = "";       Legacy = $false }
+    [pscustomobject]@{ Name = "CHAINSAW"; Idle = "SAWGC0"; Fire = "SAWGA0"; Flash = "";       Legacy = $false }
+    [pscustomobject]@{ Name = "PISTOL";   Idle = "PISGA0"; Fire = "PISGB0"; Flash = "PISFA0"; Legacy = $true  }
+    [pscustomobject]@{ Name = "SHOTGUN";  Idle = "SHTGA0"; Fire = "SHTGB0"; Flash = "SHTFA0"; Legacy = $false }
+    [pscustomobject]@{ Name = "CHAINGUN"; Idle = "CHGGA0"; Fire = "CHGGB0"; Flash = "CHGFA0"; Legacy = $false }
+)
 
 if (-not (Test-Path $SourcePath)) {
     throw "Texture source not found: $SourcePath"
@@ -129,6 +166,15 @@ $BillboardWorldSpecs = @(
     @{ Name = "BLUE_ARMOR"; Path = "res\originaldoom\sprites\ARM2A0.png" },
     @{ Name = "CLIP"; Path = "res\originaldoom\sprites\CLIPA0.png" },
     @{ Name = "AMMO_BOX"; Path = "res\originaldoom\sprites\AMMOA0.png" },
+    # Shell ammo and the three collectable weapons. Deliberately NOT added to
+    # WORLD_SPRITE_INPUTS in tools/wad-map-extract.py: that list is the PAL3
+    # histogram, and re-weighting it would recolour every wall, item and the
+    # weapon overlay. These quantize against the frozen palette instead.
+    @{ Name = "SHELLS"; Path = "res\originaldoom\sprites\SHELA0.png" },
+    @{ Name = "SHELL_BOX"; Path = "res\originaldoom\sprites\SBOXA0.png" },
+    @{ Name = "SHOTGUN_PICKUP"; Path = "res\originaldoom\sprites\SHOTA0.png" },
+    @{ Name = "CHAINGUN_PICKUP"; Path = "res\originaldoom\sprites\MGUNA0.png" },
+    @{ Name = "CHAINSAW_PICKUP"; Path = "res\originaldoom\sprites\CSAWA0.png" },
     @{ Name = "CANDLE"; Path = "res\originaldoom\sprites\CANDA0.png" },
     @{ Name = "CANDELABRA"; Path = "res\originaldoom\sprites\CBRAA0.png" },
     @{ Name = "COLUMN"; Path = "res\originaldoom\sprites\COLUA0.png" },
@@ -609,6 +655,108 @@ function Convert-WeaponOverlayFire([string]$GunPath, [string]$FlashPath) {
     return $rows
 }
 
+# --- General (non-legacy) weapon bake -------------------------------------
+#
+# Doom positions every psprite by its WAD leftOffset/topOffset against one
+# shared anchor, so anchor space is the natural common frame for a weapon's idle
+# pose, attack pose and muzzle flash. Anchor coordinate of sprite pixel (px,py)
+# is (px - leftOffset, py - topOffset); the offsets are negative, so this pushes
+# the sprite down and right of the origin exactly as the game does.
+#
+# Get-WeaponPlacement frames ONE pose (the gun plus, if present, its muzzle
+# flash, unioned in anchor space) into the fixed overlay rectangle:
+#
+#   * uniform scale, chosen so the pose spans the rectangle's full 64px width --
+#     the width is the honest constraint, since the rectangle is only 40px tall
+#     while Doom psprites are 60-120px and mostly hand and forearm;
+#   * horizontally centred;
+#   * bottom-pinned, but never allowed to push its own top above the rectangle.
+#     A short pose (the fist) therefore sits on the bottom edge like Doom's, and
+#     a tall one (the shotgun, the chaingun) keeps its barrel and loses the arm
+#     off the bottom of the viewport -- exactly what Doom's 320x200 screen does
+#     to the same sprites.
+#
+# Each pose is framed independently rather than sharing the idle pose's scale.
+# Sharing sounds more correct, but Doom's attack sprites are up to twice the
+# idle's size (SHTGB0 is 119x121 against SHTGA0's 79x60), so a shared scale
+# either shrinks the idle to nothing or clips the attack in half. The shipped
+# pistol bake already frames its two poses independently, so this also keeps the
+# five weapons consistent with each other.
+function Get-WeaponPlacement([string[]]$Names) {
+    $ax0 = [double]::MaxValue; $ay0 = [double]::MaxValue
+    $ax1 = [double]::MinValue; $ay1 = [double]::MinValue
+    foreach ($name in $Names) {
+        if ([string]::IsNullOrEmpty($name)) { continue }
+        $offset = Get-SpriteOffset $name
+        if (-not $offset) { throw "No sprite offsets recorded for $name" }
+        $ax0 = [Math]::Min($ax0, -$offset.leftOffset)
+        $ay0 = [Math]::Min($ay0, -$offset.topOffset)
+        $ax1 = [Math]::Max($ax1, -$offset.leftOffset + $offset.width)
+        $ay1 = [Math]::Max($ay1, -$offset.topOffset + $offset.height)
+    }
+    $scale = $WeaponRectW / ($ax1 - $ax0)
+    $height = ($ay1 - $ay0) * $scale
+    $top = [Math]::Max($WeaponRectY, $WeaponRectY + $WeaponRectH - $height)
+    return [pscustomobject]@{
+        Scale = $scale
+        OriginX = $WeaponRectX - ($ax0 * $scale)
+        OriginY = $top - ($ay0 * $scale)
+    }
+}
+
+# Bake one frame: the gun sprite, optionally with a muzzle flash composited over
+# it. Returns C initialiser rows for the whole 160x120 overlay canvas
+# (0 = transparent) so the tile baker can slice the overlay rectangle out of it.
+function Convert-WeaponFrame([string]$GunName, [string]$FlashName) {
+    $placement = Get-WeaponPlacement @($GunName, $FlashName)
+    $layers = New-Object System.Collections.Generic.List[object]
+    foreach ($name in @($GunName, $FlashName)) {
+        if ([string]::IsNullOrEmpty($name)) { continue }
+        $offset = Get-SpriteOffset $name
+        $path = Join-Path $Root "res\originaldoom\sprites\$name.png"
+        if (-not (Test-Path $path)) { throw "Weapon sprite not found: $path" }
+        [void]$layers.Add([pscustomobject]@{
+            Image = [System.Drawing.Bitmap]::new($path)
+            AX = -$offset.leftOffset
+            AY = -$offset.topOffset
+        })
+    }
+
+    $rows = New-Object System.Collections.Generic.List[string]
+    try {
+        $invScale = 1.0 / $placement.Scale
+        for ($y = 0; $y -lt $WeaponOverlayH; $y++) {
+            $values = New-Object System.Collections.Generic.List[string]
+            for ($x = 0; $x -lt $WeaponOverlayW; $x++) {
+                $index = 0
+                if (($x -ge $WeaponRectX) -and ($x -lt ($WeaponRectX + $WeaponRectW)) -and
+                    ($y -ge $WeaponRectY) -and ($y -lt ($WeaponRectY + $WeaponRectH))) {
+                    # Screen pixel -> anchor space -> per-layer sprite pixel.
+                    $ax = ($x - $placement.OriginX) * $invScale
+                    $ay = ($y - $placement.OriginY) * $invScale
+                    # Later layers (the flash) paint over earlier ones.
+                    foreach ($layer in $layers) {
+                        $sx = [int][Math]::Floor($ax - $layer.AX)
+                        $sy = [int][Math]::Floor($ay - $layer.AY)
+                        if (($sx -ge 0) -and ($sx -lt $layer.Image.Width) -and
+                            ($sy -ge 0) -and ($sy -lt $layer.Image.Height)) {
+                            $pixel = $layer.Image.GetPixel($sx, $sy)
+                            if ($pixel.A -ge 128) {
+                                $index = Get-NearestWorldPaletteIndex $pixel $false $x $y
+                            }
+                        }
+                    }
+                }
+                $values.Add($index.ToString())
+            }
+            $rows.Add("    {" + ($values -join ", ") + "}")
+        }
+    } finally {
+        foreach ($layer in $layers) { $layer.Image.Dispose() }
+    }
+    return $rows
+}
+
 function Get-HudPaletteIndex([System.Drawing.Color]$Color) {
     $index = Get-NearestPaletteIndex $Color
 
@@ -804,8 +952,24 @@ foreach ($name in $HudDigitNames) {
     }
 }
 
-$weaponIdleRows = Convert-WeaponOverlay $WeaponIdleSourcePath $false
-$weaponFireRows = Convert-WeaponOverlayFire $WeaponFireSourcePath $WeaponFlashSourcePath
+$weaponIdleBlocks = New-Object System.Collections.Generic.List[string]
+$weaponFireBlocks = New-Object System.Collections.Generic.List[string]
+$weaponSourceComments = New-Object System.Collections.Generic.List[string]
+foreach ($weapon in $WeaponSet) {
+    if ($weapon.Legacy) {
+        $idleRows = Convert-WeaponOverlay $WeaponIdleSourcePath $false
+        $fireRows = Convert-WeaponOverlayFire $WeaponFireSourcePath $WeaponFlashSourcePath
+    } else {
+        $idleRows = Convert-WeaponFrame $weapon.Idle ""
+        $fireRows = Convert-WeaponFrame $weapon.Fire $weapon.Flash
+    }
+    [void]$weaponIdleBlocks.Add("  {" + "`r`n" + ($idleRows -join ",`r`n") + "`r`n  }")
+    [void]$weaponFireBlocks.Add("  {" + "`r`n" + ($fireRows -join ",`r`n") + "`r`n  }")
+    $flashNote = $(if ([string]::IsNullOrEmpty($weapon.Flash)) { "no flash" } else { $weapon.Flash })
+    [void]$weaponSourceComments.Add(
+        "//   $($weapon.Name): idle $($weapon.Idle), fire $($weapon.Fire) + $flashNote" +
+        $(if ($weapon.Legacy) { " (legacy stretch bake)" } else { "" }))
+}
 $hudTiles = Convert-HudTiles $HudSourcePath
 $faceFrames = Convert-FaceFrames
 $faceTiles = $faceFrames.Tiles
@@ -822,7 +986,11 @@ $billboardKeyRows = Convert-Image $BillboardKeySourcePath 16 16 $true
 $billboardDecorRows = Convert-Image $BillboardDecorSourcePath 16 16 $true
 $billboardWorldW = 24
 $billboardWorldH = 48
-$billboardPickupCount = 11
+# How many entries at the FRONT of $BillboardWorldSpecs are collectibles. Only
+# those get column-post tables (the sparse-sprite raster path); the props and
+# the barrel after them are dense enough to stay on the row packer. Keep this
+# equal to the number of collectible specs listed above CANDLE.
+$billboardPickupCount = 16
 $billboardWorldBlocks = New-Object System.Collections.Generic.List[string]
 $billboardGeometryBlocks = New-Object System.Collections.Generic.List[string]
 $billboardPickupPostOffsetBlocks = New-Object System.Collections.Generic.List[string]
@@ -1102,10 +1270,18 @@ $hudContent = @"
 #define FREEDOOM_HUD_TILE_COUNT 160
 #define FREEDOOM_WEAPON_W $WeaponOverlayW
 #define FREEDOOM_WEAPON_H $WeaponOverlayH
+#define FREEDOOM_WEAPON_COUNT $($WeaponSet.Count)
+// The pistol's own stretch box (legacy bake), kept for reference.
 #define FREEDOOM_WEAPON_DRAW_X $WeaponDrawX
 #define FREEDOOM_WEAPON_DRAW_Y $WeaponDrawY
 #define FREEDOOM_WEAPON_DRAW_W $WeaponDrawW
 #define FREEDOOM_WEAPON_DRAW_H $WeaponDrawH
+// The tile-aligned rectangle EVERY weapon bakes into. This, not DRAW_*, is what
+// the tile baker slices, so all weapons share one 8x5 BG_A tilemap rect.
+#define FREEDOOM_WEAPON_RECT_X $WeaponRectX
+#define FREEDOOM_WEAPON_RECT_Y $WeaponRectY
+#define FREEDOOM_WEAPON_RECT_W $WeaponRectW
+#define FREEDOOM_WEAPON_RECT_H $WeaponRectH
 #define FREEDOOM_FACE_TILE_W $FaceTileW
 #define FREEDOOM_FACE_TILE_H $FaceTileH
 #define FREEDOOM_FACE_FRAME_TILES $($FaceTileW * $FaceTileH)
@@ -1127,8 +1303,7 @@ $hudContent = @"
 
 // Generated by tools/convert-freedoom-assets.ps1.
 // HUD source: $relativeHudSource
-// Weapon idle source: $relativeWeaponIdleSource
-// Weapon fire source: $relativeWeaponFireSource (gun) + $relativeWeaponFlashSource (muzzle flash)
+// Weapon sources: see the per-weapon comment above FREEDOOM_WEAPON_IDLE below.
 // Face source: $relativeFaceSource (animated set baked from res/originaldoom/graphics/STF*.png)
 // Generated at: $generatedAt
 static const u32 FREEDOOM_HUD_TILES[FREEDOOM_HUD_TILE_COUNT][8] = {
@@ -1164,12 +1339,17 @@ static const u16 FREEDOOM_FACE_FRAME_TILE_IDS
 $($faceFrameMaps -join ",`r`n")
 };
 
-static const u8 FREEDOOM_WEAPON_IDLE[FREEDOOM_WEAPON_H][FREEDOOM_WEAPON_W] = {
-$($weaponIdleRows -join ",`r`n")
+// Weapon overlay canvases, in WeaponId order (src/weapons.h):
+$($weaponSourceComments -join "`r`n")
+// These full-canvas arrays are an intermediate: tools/generate-renderer-assets.ps1
+// reads them back and bakes the deduplicated per-weapon VRAM tilesets that the
+// runtime actually uses. No .c file references them.
+static const u8 FREEDOOM_WEAPON_IDLE[FREEDOOM_WEAPON_COUNT][FREEDOOM_WEAPON_H][FREEDOOM_WEAPON_W] = {
+$($weaponIdleBlocks -join ",`r`n")
 };
 
-static const u8 FREEDOOM_WEAPON_FIRE[FREEDOOM_WEAPON_H][FREEDOOM_WEAPON_W] = {
-$($weaponFireRows -join ",`r`n")
+static const u8 FREEDOOM_WEAPON_FIRE[FREEDOOM_WEAPON_COUNT][FREEDOOM_WEAPON_H][FREEDOOM_WEAPON_W] = {
+$($weaponFireBlocks -join ",`r`n")
 };
 
 #endif

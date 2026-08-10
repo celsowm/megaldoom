@@ -42,7 +42,15 @@
 #define BILLBOARD_TYPE_BARREL 13
 #define BILLBOARD_TYPE_TREE 14
 #define BILLBOARD_TYPE_DUMMY 15
-#define BILLBOARD_TYPE_COUNT 16
+// Appended after DUMMY rather than grouped with the other collectibles: these
+// IDs are the row order of BILLBOARD_TYPES in billboard.c, so inserting in the
+// middle would renumber every type above it for no benefit.
+#define BILLBOARD_TYPE_SHELLS 16
+#define BILLBOARD_TYPE_SHELL_BOX 17
+#define BILLBOARD_TYPE_SHOTGUN 18
+#define BILLBOARD_TYPE_CHAINGUN 19
+#define BILLBOARD_TYPE_CHAINSAW 20
+#define BILLBOARD_TYPE_COUNT 21
 #define BILLBOARD_PROP_RADIUS 16
 // Enemy atlas pixels use native Doom world units, enlarged 2.25x on-screen
 // (2026-07-27: 24x48 native read too small in play, then a same-day 3x pass

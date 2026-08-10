@@ -1,7 +1,8 @@
 param(
-    [string]$HudHeader = "src\generated_hud_assets.h",
-    [string]$WorldHeader = "src\generated_assets.h",
-    [string]$OutputHeader = "src\generated_renderer_assets.h",
+    # Generated headers live beside the module that consumes them (src/<group>/).
+    [string]$HudHeader = "src\renderer\generated_hud_assets.h",
+    [string]$WorldHeader = "src\bsp\generated_assets.h",
+    [string]$OutputHeader = "src\renderer\generated_renderer_assets.h",
     # Texture rows walked across a wall's on-screen height. The runtime masks
     # tex_y with WALL_TEX_DIM_MASK (63), so this is the vertical repeat count
     # times 64: 32 shows half the texture stretched over the wall, 64 shows it
@@ -88,78 +89,20 @@ function New-WallSamplingRows {
     return $lines
 }
 
-function New-WeaponOps([int[]]$Pixels) {
-    $dst = New-Object System.Collections.Generic.List[int]
-    $value = New-Object System.Collections.Generic.List[uint32]
-    $clearMask = New-Object System.Collections.Generic.List[uint32]
-    # Single source of truth: the draw box is owned by convert-freedoom-assets.ps1
-    # (which writes FREEDOOM_WEAPON_DRAW_* into generated_hud_assets.h and scales
-    # the sprite into that box). Reading the defines back here keeps the per-tile
-    # ops in sync with the baked pixels instead of duplicating 44/66/72/54.
-    $drawX = Get-DefineValue $hudText "FREEDOOM_WEAPON_DRAW_X"
-    $drawY = Get-DefineValue $hudText "FREEDOOM_WEAPON_DRAW_Y"
-    $drawW = Get-DefineValue $hudText "FREEDOOM_WEAPON_DRAW_W"
-    $drawH = Get-DefineValue $hudText "FREEDOOM_WEAPON_DRAW_H"
-    $tileXStart = $drawX -shr 3
-    $tileXEnd = ($drawX + $drawW - 1) -shr 3
-
-    for ($y = $drawY; $y -lt ($drawY + $drawH); $y++) {
-        $tileY = $y -shr 3
-        $rowY = $y % 8
-        for ($tileX = $tileXStart; $tileX -le $tileXEnd; $tileX++) {
-            $x0 = $tileX * 8
-            $xBegin = [Math]::Max($x0, $drawX)
-            $xStop = [Math]::Min($x0 + 8, $drawX + $drawW)
-            [uint32]$packed = 0
-            [uint32]$mask = 0
-            for ($x = $xBegin; $x -lt $xStop; $x++) {
-                $texel = $Pixels[($y * $viewPxW) + $x]
-                if ($texel -ne 0) {
-                    $shift = (7 - ($x % 8)) * 4
-                    $packed = $packed -bor ([uint32]($texel -band 0x0F) -shl $shift)
-                    $mask = $mask -bor ([uint32]0x0F -shl $shift)
-                }
-            }
-            if ($packed -ne 0) {
-                [void]$dst.Add((($tileY * $viewTileW + $tileX) * 8) + $rowY)
-                [void]$value.Add($packed)
-                [void]$clearMask.Add($mask)
-            }
-        }
-    }
-
-    # Self-assert: each generated mask must equal the runtime nibble-expansion
-    # the old draw_weapon_overlay reconstructed, so the optimized table-lookup
-    # draw loop is image-exact. The old expression is (t<<4)-t in unsigned 32-bit
-    # (t = nonzero-nibble markers); reproduce the u32 wraparound via int64 + mask.
-    for ($i = 0; $i -lt $value.Count; $i++) {
-        $val = $value[$i]
-        $t = [uint32](($val -bor ($val -shr 1) -bor ($val -shr 2) -bor ($val -shr 3)) -band 0x11111111u)
-        $shifted = ($t -shl 4) -band 0xFFFFFFFFu
-        $expected = [uint32]((([int64]$shifted) - ([int64]$t)) -band 0xFFFFFFFFu)
-        if ($clearMask[$i] -ne $expected) {
-            throw ("Weapon clear-mask mismatch at op {0}: generated=0x{1:X8} expected=0x{2:X8}" -f $i, $clearMask[$i], $expected)
-        }
-    }
-
-    $count = $dst.Count
-    return [pscustomobject]@{
-        Count = $count
-        Dst = $dst.ToArray()
-        Value = $value.ToArray()
-        Mask = $clearMask.ToArray()
-    }
-}
-
+# One weapon's VRAM tileset: its idle and fire canvases sliced over the shared
+# overlay rectangle and deduplicated AGAINST EACH OTHER ONLY. Per-weapon (rather
+# than global) dedupe is what keeps the streaming window small: only one weapon
+# is resident at a time, so sharing tiles across weapons would buy nothing and
+# would force the window to hold the union of all five.
 function New-WeaponTileSet([int[]]$IdlePixels, [int[]]$FirePixels) {
-    $drawX = Get-DefineValue $hudText "FREEDOOM_WEAPON_DRAW_X"
-    $drawY = Get-DefineValue $hudText "FREEDOOM_WEAPON_DRAW_Y"
-    $drawW = Get-DefineValue $hudText "FREEDOOM_WEAPON_DRAW_W"
-    $drawH = Get-DefineValue $hudText "FREEDOOM_WEAPON_DRAW_H"
-    $tileX = $drawX -shr 3
-    $tileY = $drawY -shr 3
-    $tileW = (($drawX + $drawW - 1) -shr 3) - $tileX + 1
-    $tileH = (($drawY + $drawH - 1) -shr 3) - $tileY + 1
+    $rectX = Get-DefineValue $hudText "FREEDOOM_WEAPON_RECT_X"
+    $rectY = Get-DefineValue $hudText "FREEDOOM_WEAPON_RECT_Y"
+    $rectW = Get-DefineValue $hudText "FREEDOOM_WEAPON_RECT_W"
+    $rectH = Get-DefineValue $hudText "FREEDOOM_WEAPON_RECT_H"
+    $tileX = $rectX -shr 3
+    $tileY = $rectY -shr 3
+    $tileW = (($rectX + $rectW - 1) -shr 3) - $tileX + 1
+    $tileH = (($rectY + $rectH - 1) -shr 3) - $tileY + 1
     $unique = New-Object System.Collections.Generic.List[object]
     $indexByRows = @{}
     $maps = @()
@@ -363,9 +306,33 @@ $sectorCeilingIndexArray = $sectorCeilingIndex.ToArray()
 
 $damageColor = Get-DefineValue $worldText "MEGALDOOM_WORLD_COLOR_DAMAGE"
 $warningColor = Get-DefineValue $worldText "MEGALDOOM_WORLD_COLOR_WARNING"
+# FREEDOOM_WEAPON_IDLE/FIRE are [FREEDOOM_WEAPON_COUNT][H][W]; Get-ArrayValues
+# flattens the whole thing, so slice one canvas per weapon back out.
+$weaponCount = Get-DefineValue $hudText "FREEDOOM_WEAPON_COUNT"
 $idlePixels = Get-ArrayValues $hudText "FREEDOOM_WEAPON_IDLE"
 $firePixels = Get-ArrayValues $hudText "FREEDOOM_WEAPON_FIRE"
-$weaponTiles = New-WeaponTileSet $idlePixels $firePixels
+$canvasStride = $viewPxW * $viewPxH
+foreach ($name in @("IDLE", "FIRE")) {
+    $actual = $(if ($name -eq "IDLE") { $idlePixels.Count } else { $firePixels.Count })
+    if ($actual -ne ($canvasStride * $weaponCount)) {
+        throw "FREEDOOM_WEAPON_$name has $actual values, expected $($canvasStride * $weaponCount)"
+    }
+}
+$weaponSets = @()
+for ($w = 0; $w -lt $weaponCount; $w++) {
+    $start = $w * $canvasStride
+    $weaponSets += ,(New-WeaponTileSet `
+        $idlePixels[$start..($start + $canvasStride - 1)] `
+        $firePixels[$start..($start + $canvasStride - 1)])
+}
+$weaponTiles = $weaponSets[0]
+$weaponMaxTileCount = ($weaponSets | ForEach-Object { $_.Tiles.Count } | Measure-Object -Maximum).Maximum
+foreach ($set in $weaponSets) {
+    if (($set.TileX -ne $weaponTiles.TileX) -or ($set.TileY -ne $weaponTiles.TileY) -or
+        ($set.TileW -ne $weaponTiles.TileW) -or ($set.TileH -ne $weaponTiles.TileH)) {
+        throw "All weapons must bake into the same overlay tile rectangle"
+    }
+}
 $damageOps = New-OverlayOps "damage" $damageColor
 $lowHealthOps = New-OverlayOps "low_health" $warningColor
 
@@ -399,15 +366,37 @@ foreach ($line in (New-WallSamplingRows)) { [void]$lines.Add($line) }
 [void]$lines.Add("#define MEGALDOOM_WEAPON_TILE_Y $($weaponTiles.TileY)")
 [void]$lines.Add("#define MEGALDOOM_WEAPON_TILE_W $($weaponTiles.TileW)")
 [void]$lines.Add("#define MEGALDOOM_WEAPON_TILE_H $($weaponTiles.TileH)")
-[void]$lines.Add("#define MEGALDOOM_WEAPON_TILE_COUNT $($weaponTiles.Tiles.Count)")
-[void]$lines.Add("static const u32 MEGALDOOM_WEAPON_TILES[MEGALDOOM_WEAPON_TILE_COUNT][8] = {")
-foreach ($tile in $weaponTiles.Tiles) {
-    [void]$lines.Add(((Format-U32Row $tile) + ","))
+[void]$lines.Add("#define MEGALDOOM_WEAPON_COUNT $weaponCount")
+[void]$lines.Add("// Only ONE weapon is resident in VRAM at a time: renderer_set_weapon() DMAs")
+[void]$lines.Add("// the selected weapon's tiles into a fixed MEGALDOOM_WEAPON_MAX_TILE_COUNT")
+[void]$lines.Add("// window at WEAPON_TILE_BASE. Sizing that window to the largest weapon is why")
+[void]$lines.Add("// five weapons fit in the 72 tiles below the SGDK font region.")
+[void]$lines.Add("#define MEGALDOOM_WEAPON_MAX_TILE_COUNT $weaponMaxTileCount")
+[void]$lines.Add("static const u16 MEGALDOOM_WEAPON_TILE_COUNTS[MEGALDOOM_WEAPON_COUNT] = {")
+[void]$lines.Add("    " + (($weaponSets | ForEach-Object { $_.Tiles.Count.ToString() }) -join ", "))
+[void]$lines.Add("};")
+[void]$lines.Add("// Unused slots in a weapon's row are zero-filled; only the first")
+[void]$lines.Add("// MEGALDOOM_WEAPON_TILE_COUNTS[weapon] tiles are ever uploaded.")
+[void]$lines.Add("static const u32 MEGALDOOM_WEAPON_TILES[MEGALDOOM_WEAPON_COUNT][MEGALDOOM_WEAPON_MAX_TILE_COUNT][8] = {")
+foreach ($set in $weaponSets) {
+    [void]$lines.Add("  {")
+    foreach ($tile in $set.Tiles) {
+        [void]$lines.Add(((Format-U32Row $tile) + ","))
+    }
+    for ($pad = $set.Tiles.Count; $pad -lt $weaponMaxTileCount; $pad++) {
+        [void]$lines.Add(((Format-U32Row @(0, 0, 0, 0, 0, 0, 0, 0)) + ","))
+    }
+    [void]$lines.Add("  },")
 }
 [void]$lines.Add("};")
-[void]$lines.Add("static const u16 MEGALDOOM_WEAPON_TILEMAP[2][MEGALDOOM_WEAPON_TILE_W * MEGALDOOM_WEAPON_TILE_H] = {")
-[void]$lines.Add(("    {" + (($weaponTiles.Maps[0] | ForEach-Object { $_.ToString() }) -join ", ") + "},"))
-[void]$lines.Add(("    {" + (($weaponTiles.Maps[1] | ForEach-Object { $_.ToString() }) -join ", ") + "},"))
+[void]$lines.Add("// [weapon][0] = idle pose, [weapon][1] = fire pose. 65535 = transparent cell.")
+[void]$lines.Add("static const u16 MEGALDOOM_WEAPON_TILEMAP[MEGALDOOM_WEAPON_COUNT][2][MEGALDOOM_WEAPON_TILE_W * MEGALDOOM_WEAPON_TILE_H] = {")
+foreach ($set in $weaponSets) {
+    [void]$lines.Add("  {")
+    [void]$lines.Add(("    {" + (($set.Maps[0] | ForEach-Object { $_.ToString() }) -join ", ") + "},"))
+    [void]$lines.Add(("    {" + (($set.Maps[1] | ForEach-Object { $_.ToString() }) -join ", ") + "},"))
+    [void]$lines.Add("  },")
+}
 [void]$lines.Add("};")
 [void]$lines.Add("")
 [void]$lines.Add("typedef struct {")

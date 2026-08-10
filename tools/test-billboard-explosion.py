@@ -44,7 +44,13 @@ def main():
     assert "typedef struct {\n    BillboardShotResult status;" in billboard_h
     assert "BillboardFireResult billboard_fire_center" in billboard_h
     assert "billboard_get_last_explosion_result" not in explosion_h
-    assert "fire_result = billboard_fire_center(" in main_c
+    # main.c fires through fire_weapon(), which fans the weapon's pellets and
+    # merges their results; billboard_fire_center is the per-pellet primitive.
+    assert "fire_result = fire_weapon(weapon, g_ray_columns);" in main_c
+    assert "billboard_fire_center(\n            &g_player, depth, aim_col, weapon_roll_damage());" in main_c
+    # A blast reached by any pellet must still surface through the merged result.
+    assert "merged.explosion_count + hit.explosion_count" in main_c
+    assert "merged.player_damage + hit.player_damage" in main_c
     assert "fire_result.player_damage" in main_c
     assert "fire_result.status == BILLBOARD_SHOT_EXPLOSION" in main_c
 
@@ -120,7 +126,12 @@ def main():
     assert "BILLBOARD_VISUAL_PUFF" in renderer_c
     assert "BILLBOARD_VISUAL_BLOOD" in renderer_c
     assert "billboard_update_effects()" in main_c
-    assert "#define SHOT_COOLDOWN_VBLANKS 12" in main_c
+    # Refire delay moved from a single main.c define into the per-weapon table.
+    # The pistol keeps the shipped 12-vblank feel, so gun pacing is unchanged.
+    weapons_c = (ROOT / "src/weapons.c").read_text()
+    pistol = weapons_c[weapons_c.index("[WEAPON_PISTOL] = {"):]
+    pistol = pistol[:pistol.index("}")]
+    assert "AMMO_BULLETS, 1, 1, 0, 0, 12," in pistol
 
     # Explosion PCM is built into ROM and triggered once per returned event.
     assert 'WAV sfx_barexp       "sound/dsbarexp.wav"  XGM2' in resources

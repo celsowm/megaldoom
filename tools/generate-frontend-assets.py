@@ -24,7 +24,8 @@ PATCHES = (
     "M_SKULL1", "M_SKULL2",
 )
 PROMPT = "PRESS START"
-DOOM_FONT_TEXT = (PROMPT, "MUSIC ON", "MUSIC OFF", "SFX ON", "SFX OFF", "BACK")
+DEATH_PROMPT = "PRESS FIRE"
+DOOM_FONT_TEXT = (PROMPT, DEATH_PROMPT, "MUSIC ON", "MUSIC OFF", "SFX ON", "SFX OFF", "BACK")
 GLYPHS = tuple(sorted({
     f"STCFN{ord(character):03d}"
     for text in DOOM_FONT_TEXT
@@ -36,8 +37,8 @@ SKILL_PATCHES = ("M_JKILL", "M_ROUGH", "M_HURT", "M_ULTRA", "M_NMARE")
 
 def expected_outputs() -> tuple[str, ...]:
     names = [
-        "title.png", "prompt.png", "main_menu.png", "logo.png", "options.png",
-        "skull1.png", "skull2.png",
+        "title.png", "prompt.png", "death_prompt.png", "main_menu.png", "logo.png",
+        "options.png", "skull1.png", "skull2.png",
     ]
     names.extend(f"main_{selected}_{frame}.png" for selected in range(3) for frame in range(2))
     names.extend(
@@ -270,6 +271,33 @@ def screen_overlay(panel: Image.Image) -> Image.Image:
     return screen
 
 
+def doom_text_mask(text: str, width: int, height: int, palette_index: int,
+                    palette: list[tuple[int, int, int]], source: Path = SOURCE) -> Image.Image:
+    """A paletted (not quantized) mask: 0 = transparent, palette_index = lit.
+
+    Unlike every other frontend asset, this is drawn during GAMEPLAY over the
+    live PAL0 world/HUD ramp (renderer.c load_game_palettes), not the frontend
+    menu palette, so it must not be run through indexed()'s per-tile
+    quantizer -- it carries only two literal index values. It still writes the
+    same shared 4x16 palette table as every other frontend PNG so
+    test-frontend.py's cross-image palette-equality check keeps holding.
+    """
+    text_image = doom_text(text, source)
+    mask = Image.new("P", (width, height), 0)
+    flat_palette = [channel for color in palette for channel in color]
+    mask.putpalette(flat_palette + [0] * (768 - len(flat_palette)))
+    mask.info["transparency"] = 0
+    src = text_image.load()
+    dst = mask.load()
+    off_x = (width - text_image.width) // 2
+    for y in range(text_image.height):
+        for x in range(text_image.width):
+            r, g, b, a = src[x, y]
+            if a >= 128:
+                dst[off_x + x, y] = palette_index
+    return mask
+
+
 def generate(source: Path, output: Path) -> None:
     images = {name: load(name, source) for name in PATCHES}
     palette = build_palette(images)
@@ -350,6 +378,13 @@ def generate(source: Path, output: Path) -> None:
         assets[f"confirm_{selected}.png"] = (screen_overlay(panel), True)
     for filename, (image, transparent) in assets.items():
         indexed(image, palette, transparent).save(output / filename, optimize=False)
+
+    # Gameplay-drawn mask: index 9 is the death-prompt red claimed in PAL0 by
+    # renderer.c's load_game_palettes (indices 2-8 are already used by the HUD
+    # tiles). Saved directly -- see doom_text_mask -- instead of through the
+    # indexed()/quantize path every other frontend asset uses.
+    doom_text_mask(DEATH_PROMPT, 96, 8, 9, palette, source).save(
+        output / "death_prompt.png", optimize=False)
 
 
 def publish(source: Path, output: Path) -> None:

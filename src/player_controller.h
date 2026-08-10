@@ -16,11 +16,14 @@
 #define PLAYER_CONTROL_CHANGED 0x0001
 #define PLAYER_CONTROL_USE 0x0002
 #define PLAYER_CONTROL_FIRE 0x0004
-// Reserved Mode 1 actions. They are emitted by the controller now so weapon
-// selection and the automap can attach later without another input remap.
+// Weapon selection: X/Y on a 6-button pad, and C+UP / C+DOWN on either pad so
+// 3-button players can still cycle. The automap is still reserved.
 #define PLAYER_CONTROL_PREVIOUS_WEAPON 0x0008
 #define PLAYER_CONTROL_NEXT_WEAPON 0x0010
 #define PLAYER_CONTROL_TOGGLE_AUTOMAP 0x0020
+// B held, as opposed to PLAYER_CONTROL_FIRE's rising edge. Only the automatic
+// weapons (chaingun, chainsaw) act on this; everything else stays semi-auto.
+#define PLAYER_CONTROL_FIRE_HELD 0x0040
 
 void player_controller_reset(void);
 u16 player_controller_update(PlayerState *player, u16 elapsed_frames, u16 latched_pressed);

@@ -12,20 +12,42 @@
 #include "renderer_perf.h"
 #include "renderer_redraw.h"
 #include "resources.h"
+#include "weapons.h"
+
+// What the player is carrying. Bundled into one struct rather than four more
+// out-parameters: reset_level and sync_hud already thread the whole player
+// state by pointer, and this keeps both signatures readable.
+typedef struct {
+    u16 ammo[AMMO_TYPE_COUNT];
+    u8 current;  // WeaponId
+    u8 owned;    // bitmask of WEAPON_OWNED_BIT(WeaponId)
+} PlayerArsenal;
 
 // Shot timers count real vblanks (not loop iterations) so the gun feel does not
-// stretch when a motion frame takes ~11 vblanks: 12 vblanks ~= 0.2 s between
-// shots at any framerate. The flash is set after its decrement runs, so the
-// firing iteration always renders it and it survives >= 1 displayed frame.
-#define SHOT_COOLDOWN_VBLANKS 12
-#define WEAPON_FLASH_VBLANKS 6
+// stretch when a motion frame takes ~11 vblanks: the pistol's 12 vblanks is
+// ~0.2 s between shots at any framerate. The per-weapon cooldown and flash
+// durations live in WEAPON_DEFS (src/weapons.c); the flash is set after its
+// decrement runs, so the firing iteration always renders it and it survives
+// >= 1 displayed frame.
 #define PLAYER_DAMAGE_FLASH_FRAMES 6
 #define PLAYER_INVULN_FRAMES 24
 #define PLAYER_HIT_PUSH_STEP (FX_ONE / 4)
 #define PLAYER_MAX_HEALTH 100
 #define PLAYER_MAX_ARMOR 200
-#define PLAYER_START_AMMO 50
 #define PLAYER_HIT_DAMAGE 20
+// Doom raises a new weapon before it can fire. One cooldown's worth of vblanks
+// is enough to stop a switch from being a free instant shot.
+#define WEAPON_RAISE_VBLANKS 10
+// Doom locks respawn input for roughly a second after death (PST_REBORN) so a
+// still-held fire button from the killing blow cannot instantly restart the
+// level. Counted in real vblanks, same unit as elapsed_vblanks.
+#define DEATH_INPUT_LOCKOUT_VBLANKS 35
+// Blink period for the death-screen "PRESS FIRE" prompt, counted in main-loop
+// iterations (not vblanks): ~24/32 of the cycle lit. At the target 2-vblank
+// cadence this is close to a 1-second blink; exact timing is not gameplay-
+// critical.
+#define DEATH_PROMPT_BLINK_MASK 0x1F
+#define DEATH_PROMPT_BLINK_ON_FRAMES 24
 // Locked frame cadence: every iteration lasts this many vblanks (1 = 60fps, 2 = 30fps,
 // 3 = 20fps). A steady cadence is what makes movement feel uniform; the lock only pays
 // off when a redraw reliably finishes within this many vblanks. Tune from the DEBUG_PERF
@@ -73,18 +95,23 @@ static void sync_hud(u32 frame,
                      u16 phase_index,
                      u16 player_health,
                      u16 player_armor,
-                     u16 player_ammo,
+                     const PlayerArsenal *arsenal,
                      u8 player_keys,
                      u16 shot_cooldown,
                      DoorActionResult action_status,
                      BillboardShotResult shot_status,
                      bool level_cleared) {
+    // The status bar shows the CURRENT weapon's pool. The melee weapons have no
+    // pool, and Doom leaves the ammo digits blank for them rather than showing
+    // a zero -- renderer_hud.c clears the field when ammo_visible is FALSE.
+    const u8 ammo_type = WEAPON_DEFS[arsenal->current].ammo_type;
     g_hud.frame = frame;
     g_hud.phase = (u16)((phase_index % 99) + 1);
     g_hud.player_health = player_health;
     g_hud.health_percent = (u16)((player_health * 100u) / PLAYER_MAX_HEALTH);
     g_hud.armor = player_armor;
-    g_hud.ammo = player_ammo;
+    g_hud.ammo = (ammo_type == AMMO_NONE) ? 0 : arsenal->ammo[ammo_type];
+    g_hud.ammo_visible = (bool)(ammo_type != AMMO_NONE);
     g_hud.key_mask = player_keys;
     g_hud.shot_cooldown = shot_cooldown;
     g_hud.enemy_count = billboard_get_enemy_count();
@@ -116,7 +143,7 @@ static void wait_scene_upload_complete(void) {
     }
 }
 
-static void render_current_view(u16 player_health, bool base_dirty) {
+static void render_current_view(u16 player_health, bool base_dirty, bool player_dead) {
 #if DEBUG_PERF || CADENCE_STAGE_PROBE
     const u32 cast_start = getSubTick();
 #endif
@@ -142,12 +169,60 @@ static void render_current_view(u16 player_health, bool base_dirty) {
     wait_scene_upload_complete();
     renderer_render_scene(
         g_ray_columns, &g_player, &g_scene_colors, base_dirty,
-        g_weapon_flash > 0, g_player_damage_flash > 0,
+        g_weapon_flash > 0, (bool)((g_player_damage_flash > 0) || player_dead),
         (bool)(player_health <= 20));
 }
 
+static void add_ammo(PlayerArsenal *arsenal, u8 ammo_type, u16 amount) {
+    if ((ammo_type == AMMO_NONE) || (ammo_type >= AMMO_TYPE_COUNT)) return;
+    const u16 total = (u16)(arsenal->ammo[ammo_type] + amount);
+    arsenal->ammo[ammo_type] =
+        (total > AMMO_MAX[ammo_type]) ? AMMO_MAX[ammo_type] : total;
+}
+
+// One trigger pull: `pellets` independent hitscans fanned across `spread_cols`
+// view columns, each blocked by the wall depth at ITS OWN column so an outer
+// shotgun pellet cannot punch through a corner the centre pellet clears. Their
+// results merge into one outcome for the HUD and the reaction sound: the most
+// significant status wins (kill over damage over none), explosion counts and
+// splash damage sum, since one blast can set off several barrels.
+static BillboardFireResult fire_weapon(const WeaponDef *weapon, const RayColumn *columns) {
+    BillboardFireResult merged = {BILLBOARD_SHOT_NONE, 0, 0, 0, 0};
+    const u8 pellets = (weapon->pellets > 0) ? weapon->pellets : 1;
+
+    for (u8 i = 0; i < pellets; i++) {
+        s16 aim_col = RAY_VIEW_CENTER_X;
+        if ((pellets > 1) && (weapon->spread_cols > 0)) {
+            // Fan the pellets evenly across [-spread, +spread].
+            aim_col = (s16)(RAY_VIEW_CENTER_X +
+                (((s16)(2 * i) - (s16)(pellets - 1)) * (s16)weapon->spread_cols) /
+                (s16)(pellets - 1));
+        }
+        if (aim_col < 0) aim_col = 0;
+        if (aim_col >= RAY_VIEW_COLS) aim_col = (s16)(RAY_VIEW_COLS - 1);
+
+        u16 depth = columns[aim_col].depth;
+        // Melee weapons reach only a fixed distance, never all the way to the
+        // wall; billboard_fire_center treats this as the pellet's stop depth.
+        if ((weapon->melee_range > 0) && (depth > weapon->melee_range)) {
+            depth = weapon->melee_range;
+        }
+
+        const BillboardFireResult hit = billboard_fire_center(
+            &g_player, depth, aim_col, weapon_roll_damage());
+        if (hit.status > merged.status) {
+            merged.status = hit.status;
+        }
+        merged.player_damage = (u16)(merged.player_damage + hit.player_damage);
+        merged.explosion_count = (u8)(merged.explosion_count + hit.explosion_count);
+        merged.push_x = (s16)(merged.push_x + hit.push_x);
+        merged.push_y = (s16)(merged.push_y + hit.push_y);
+    }
+    return merged;
+}
+
 static void reset_level(u16 phase_index, DoomSkill skill, bool *level_cleared, u16 *shot_cooldown,
-                        u16 *player_health, u16 *player_armor, u16 *player_ammo,
+                        u16 *player_health, u16 *player_armor, PlayerArsenal *arsenal,
                         u8 *player_keys, u32 *frame) {
     bsp_map_reset(phase_index);
     billboard_init(phase_index, skill);
@@ -160,13 +235,23 @@ static void reset_level(u16 phase_index, DoomSkill skill, bool *level_cleared, u
     *shot_cooldown = 0;
     *player_health = PLAYER_MAX_HEALTH;
     *player_armor = 0;
-    *player_ammo = PLAYER_START_AMMO;
+    // Doom's pistol start: fists and a pistol, one clip, nothing else.
+    for (u16 i = 0; i < AMMO_TYPE_COUNT; i++) {
+        arsenal->ammo[i] = 0;
+    }
+    arsenal->ammo[AMMO_BULLETS] = WEAPON_START_BULLETS;
+    arsenal->owned = WEAPON_START_OWNED;
+    arsenal->current = WEAPON_PISTOL;
+    weapon_reset_damage_roll();
     *player_keys = BSP_KEY_NONE;
     *frame = 0;
 
     renderer_invalidate_scene();
+    // Must follow renderer_draw_static_screen: that path repaints BG_A, and the
+    // weapon selection has to be re-applied on top of a fresh screen anyway.
     renderer_draw_static_screen();
-    sync_hud(*frame, phase_index, *player_health, *player_armor, *player_ammo,
+    renderer_set_weapon(arsenal->current);
+    sync_hud(*frame, phase_index, *player_health, *player_armor, arsenal,
              *player_keys, *shot_cooldown, DOOR_ACTION_NONE, BILLBOARD_SHOT_NONE, FALSE);
     renderer_draw_hud(&g_hud);
 }
@@ -186,10 +271,12 @@ int main(bool hard) {
         u32 frame = 0;
         RendererRedrawState redraw;
         bool level_cleared = FALSE;
+        bool player_dead = FALSE;
+        u16 death_lockout = 0;
         u16 phase_index = 0;
         u16 player_health = PLAYER_MAX_HEALTH;
         u16 player_armor = 0;
-        u16 player_ammo = PLAYER_START_AMMO;
+        PlayerArsenal arsenal;
         u8 player_keys = BSP_KEY_NONE;
         u16 shot_cooldown = 0;
         u16 previous_system_joy;
@@ -203,7 +290,7 @@ int main(bool hard) {
         game_audio_play_music(test_music);
 
         reset_level(phase_index, skill, &level_cleared, &shot_cooldown, &player_health,
-                    &player_armor, &player_ammo, &player_keys, &frame);
+                    &player_armor, &arsenal, &player_keys, &frame);
         JOY_update();
         previous_system_joy = JOY_readJoypad(JOY_1);
         prev_vtimer = vtimer;
@@ -263,7 +350,15 @@ int main(bool hard) {
             }
 
             renderer_restore_after_menu();
-            sync_hud(frame, phase_index, player_health, player_armor, player_ammo,
+            if (player_dead) {
+                // The pause panel borrowed the same PAIR_TILE_BASE region the
+                // death prompt lives in and restore_after_menu cleared BG_A;
+                // reload and re-show it so the death screen picks up where it
+                // left off instead of losing its prompt.
+                frontend_load_death_prompt(renderer_get_menu_tile_base());
+                frontend_set_death_prompt(renderer_get_menu_tile_base(), TRUE);
+            }
+            sync_hud(frame, phase_index, player_health, player_armor, &arsenal,
                      player_keys, shot_cooldown, action_status, shot_status, level_cleared);
             renderer_draw_hud(&g_hud);
             renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE);
@@ -317,7 +412,29 @@ int main(bool hard) {
             renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_EFFECT);
         }
 
-        if (!level_cleared) {
+        // Doom's PST_REBORN: the player is frozen and takes no input while
+        // dead. The world keeps rendering (and enemies keep moving, below) so
+        // the death screen is not a separate blocking menu -- it is the
+        // gameplay view itself, red-locked, with the status bar face and
+        // health at zero, exactly like the original.
+        if (player_dead) {
+            if (death_lockout > 0) {
+                death_lockout = (death_lockout > elapsed_vblanks)
+                    ? (u16)(death_lockout - elapsed_vblanks) : 0;
+            }
+            frontend_set_death_prompt(renderer_get_menu_tile_base(),
+                (bool)((frame & DEATH_PROMPT_BLINK_MASK) < DEATH_PROMPT_BLINK_ON_FRAMES));
+            if ((death_lockout == 0) &&
+                ((latched_pressed & (BUTTON_A | BUTTON_B | BUTTON_C)) != 0)) {
+                frontend_set_death_prompt(renderer_get_menu_tile_base(), FALSE);
+                reset_level(phase_index, skill, &level_cleared, &shot_cooldown, &player_health,
+                            &player_armor, &arsenal, &player_keys, &frame);
+                player_dead = FALSE;
+                renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE);
+            }
+        }
+
+        if (!level_cleared && !player_dead) {
             control = player_controller_update(&g_player, elapsed_frames, latched_pressed);
 #if DEBUG_BLASTEM_CHECKPOINT
             {
@@ -330,16 +447,34 @@ int main(bool hard) {
                 g_checkpoint_prev_y = g_player.y;
             }
 #endif
-        } else if ((system_pressed & BUTTON_A) != 0) {
+        } else if (!player_dead && ((system_pressed & BUTTON_A) != 0)) {
+            // level_cleared's own "press A to advance" path; unreachable while
+            // player_dead (death and level-clear are mutually exclusive) but
+            // guarded explicitly since it shares this branch with that case.
             phase_index = (u16)((phase_index + 1) & 1);
             reset_level(phase_index, skill, &level_cleared, &shot_cooldown, &player_health,
-                        &player_armor, &player_ammo, &player_keys, &frame);
+                        &player_armor, &arsenal, &player_keys, &frame);
             renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE);
         }
 
-        // PLAYER_CONTROL_PREVIOUS_WEAPON, PLAYER_CONTROL_NEXT_WEAPON and
-        // PLAYER_CONTROL_TOGGLE_AUTOMAP are intentionally reserved until the
-        // corresponding weapon and automap systems are implemented.
+        // PLAYER_CONTROL_TOGGLE_AUTOMAP is still reserved: no automap yet.
+        if (!player_dead && ((control & (PLAYER_CONTROL_NEXT_WEAPON |
+                                         PLAYER_CONTROL_PREVIOUS_WEAPON)) != 0)) {
+            const u8 next = weapon_cycle(
+                arsenal.current, arsenal.owned, arsenal.ammo,
+                (bool)((control & PLAYER_CONTROL_NEXT_WEAPON) != 0));
+            if (next != arsenal.current) {
+                arsenal.current = next;
+                renderer_set_weapon(next);
+                // The new weapon has to be raised before it fires, and its idle
+                // pose must replace whatever the old one left on BG_A.
+                if (shot_cooldown < WEAPON_RAISE_VBLANKS) {
+                    shot_cooldown = WEAPON_RAISE_VBLANKS;
+                }
+                g_weapon_flash = 0;
+                renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_WEAPON);
+            }
+        }
 
         if ((control & PLAYER_CONTROL_CHANGED) != 0) {
             renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE);
@@ -355,12 +490,31 @@ int main(bool hard) {
                     }
                     if (player_armor > PLAYER_MAX_ARMOR) player_armor = PLAYER_MAX_ARMOR;
                 } else if (pickup.effect == BILLBOARD_EFFECT_AMMO) {
-                    player_ammo = (u16)((player_ammo + pickup.amount > 99) ? 99 : player_ammo + pickup.amount);
+                    add_ammo(&arsenal, pickup.ammo_type, pickup.amount);
+                } else if (pickup.effect == BILLBOARD_EFFECT_WEAPON) {
+                    add_ammo(&arsenal, pickup.ammo_type, pickup.amount);
+                    arsenal.owned = (u8)(arsenal.owned | WEAPON_OWNED_BIT(pickup.weapon_id));
+                    // Doom switches you to a weapon you just picked up when it
+                    // outranks what you are holding. Never mid-death.
+                    if (!player_dead && (pickup.weapon_id > arsenal.current) &&
+                        weapon_has_ammo(pickup.weapon_id, arsenal.ammo)) {
+                        arsenal.current = pickup.weapon_id;
+                        renderer_set_weapon(arsenal.current);
+                        if (shot_cooldown < WEAPON_RAISE_VBLANKS) {
+                            shot_cooldown = WEAPON_RAISE_VBLANKS;
+                        }
+                        g_weapon_flash = 0;
+                        renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_WEAPON);
+                    }
                 } else if (pickup.effect == BILLBOARD_EFFECT_KEY) {
                     player_keys = (u8)(player_keys | pickup.key_mask);
                 }
                 renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_OTHER);
-                game_audio_play_sfx(sfx_pickup, sizeof(sfx_pickup), SOUND_PCM_CH2);
+                game_audio_play_sfx(
+                    (pickup.effect == BILLBOARD_EFFECT_WEAPON) ? sfx_weapon_up : sfx_pickup,
+                    (pickup.effect == BILLBOARD_EFFECT_WEAPON) ? sizeof(sfx_weapon_up)
+                                                               : sizeof(sfx_pickup),
+                    SOUND_PCM_CH2);
             }
         }
 
@@ -384,24 +538,31 @@ int main(bool hard) {
             }
         }
 
-        if ((control & PLAYER_CONTROL_FIRE) != 0) {
+        // Semi-automatic weapons fire on the button's rising edge; the chaingun
+        // and chainsaw keep firing while it is held. The cooldown gate below is
+        // what paces the automatic ones.
+        const WeaponDef *weapon = &WEAPON_DEFS[arsenal.current];
+        if ((control & (weapon->automatic ? (PLAYER_CONTROL_FIRE | PLAYER_CONTROL_FIRE_HELD)
+                                          : PLAYER_CONTROL_FIRE)) != 0) {
             BillboardShotResult shot = BILLBOARD_SHOT_NONE;
 
-            if ((shot_cooldown == 0) && (player_ammo > 0)) {
+            if ((shot_cooldown == 0) && weapon_has_ammo(arsenal.current, arsenal.ammo)) {
                 debug_checkpoint_mark(DEBUG_CHECKPOINT_COMBAT);
-                fire_result = billboard_fire_center(
-                    &g_player, g_ray_columns[RAY_VIEW_COLS / 2].depth);
+                fire_result = fire_weapon(weapon, g_ray_columns);
                 shot = fire_result.status;
-                shot_cooldown = SHOT_COOLDOWN_VBLANKS;
-                player_ammo--;
-                g_weapon_flash = WEAPON_FLASH_VBLANKS;
+                shot_cooldown = weapon->cooldown_vblanks;
+                if (weapon->ammo_type != AMMO_NONE) {
+                    arsenal.ammo[weapon->ammo_type] =
+                        (u16)(arsenal.ammo[weapon->ammo_type] - weapon->ammo_per_shot);
+                }
+                g_weapon_flash = weapon->flash_vblanks;
                 renderer_draw_weapon_flash();
                 renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_WEAPON);
 
-                // Pistol gunshot on PCM channel 2 (channel 1 is reserved for
-                // music PCM). Connected-hit SFX go on channel 3 so the gunshot
+                // The weapon's own sound on PCM channel 2 (channel 1 is reserved
+                // for music PCM). Connected-hit SFX go on channel 3 so the shot
                 // and the enemy reaction never cancel each other out.
-                game_audio_play_sfx(sfx_pistol, sizeof(sfx_pistol), SOUND_PCM_CH2);
+                game_audio_play_sfx(weapon->sfx, weapon->sfx_len, SOUND_PCM_CH2);
                 if (shot == BILLBOARD_SHOT_DAMAGE) {
                     game_audio_play_sfx(sfx_enemy_pain, sizeof(sfx_enemy_pain), SOUND_PCM_CH3);
                 } else if (shot == BILLBOARD_SHOT_KILL) {
@@ -421,7 +582,7 @@ int main(bool hard) {
             shot_status = shot;
         }
 
-        if (!level_cleared) {
+        if (!level_cleared && !player_dead) {
             // Consume the result returned by this exact trigger pull. Keeping
             // damage on the fire result prevents stale HUD shot state or a later
             // explosion from overwriting the player-facing blast outcome.
@@ -432,11 +593,17 @@ int main(bool hard) {
                     const u16 damage = (u16)(total_damage - armor_absorb);
                     player_armor = (u16)(player_armor - armor_absorb);
                     if (player_health <= damage) {
+                        // Doom's death: freeze the player, lock health/face at
+                        // zero and hold the red screen; reset_level is deferred
+                        // to the player's own FIRE/USE press below.
                         game_audio_play_sfx(sfx_player_death, sizeof(sfx_player_death), SOUND_PCM_CH2);
-                        reset_level(phase_index, skill, &level_cleared, &shot_cooldown,
-                                    &player_health, &player_armor, &player_ammo,
-                                    &player_keys, &frame);
-                        renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE);
+                        player_health = 0;
+                        player_dead = TRUE;
+                        death_lockout = DEATH_INPUT_LOCKOUT_VBLANKS;
+                        debug_checkpoint_mark(DEBUG_CHECKPOINT_DEATH);
+                        player_controller_reset();
+                        frontend_load_death_prompt(renderer_get_menu_tile_base());
+                        renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_DAMAGE);
                     } else {
                         player_apply_world_push(&g_player,
                                                 (s32)fire_result.push_x * PLAYER_HIT_PUSH_STEP,
@@ -463,16 +630,21 @@ int main(bool hard) {
                 }
             }
 
-            if ((enemy_update.hits > 0) && (g_player_invuln == 0)) {
+            if ((enemy_update.hits > 0) && (g_player_invuln == 0) && !player_dead) {
                 const u16 armor_absorb = (u16)(((PLAYER_HIT_DAMAGE / 3) < player_armor) ? (PLAYER_HIT_DAMAGE / 3) : player_armor);
                 const u16 damage = (u16)(PLAYER_HIT_DAMAGE - armor_absorb);
                 player_armor = (u16)(player_armor - armor_absorb);
                 if (player_health <= damage) {
+                    // See the barrel-explosion death branch above: freeze and
+                    // hold red, defer reset_level to the player's own press.
                     game_audio_play_sfx(sfx_player_death, sizeof(sfx_player_death), SOUND_PCM_CH2);
-                    reset_level(phase_index, skill, &level_cleared, &shot_cooldown,
-                                &player_health, &player_armor, &player_ammo,
-                                &player_keys, &frame);
-                    renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE);
+                    player_health = 0;
+                    player_dead = TRUE;
+                    death_lockout = DEATH_INPUT_LOCKOUT_VBLANKS;
+                    debug_checkpoint_mark(DEBUG_CHECKPOINT_DEATH);
+                    player_controller_reset();
+                    frontend_load_death_prompt(renderer_get_menu_tile_base());
+                    renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_DAMAGE);
                 } else {
                     player_apply_world_push(&g_player,
                                             (s32)enemy_update.push_x * PLAYER_HIT_PUSH_STEP,
@@ -499,7 +671,7 @@ int main(bool hard) {
 #if DEBUG_PERF
         renderer_debug_set_gameplay_subticks(getSubTick() - gameplay_start);
 #endif
-        sync_hud(frame, phase_index, player_health, player_armor, player_ammo,
+        sync_hud(frame, phase_index, player_health, player_armor, &arsenal,
                  player_keys, shot_cooldown, action_status, shot_status, level_cleared);
         renderer_draw_hud(&g_hud);
 
@@ -518,7 +690,7 @@ int main(bool hard) {
 #if DEBUG_PERF
             renderer_debug_set_redraw_reasons(renderer_redraw_reasons(&redraw));
 #endif
-            render_current_view(player_health, renderer_redraw_base_is_dirty(&redraw));
+            render_current_view(player_health, renderer_redraw_base_is_dirty(&redraw), player_dead);
             renderer_redraw_consume(&redraw);
             renderer_queue_scene_upload(g_ray_columns, &g_scene_colors);
         }

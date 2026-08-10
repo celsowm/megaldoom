@@ -4,6 +4,7 @@
 #include "generated_billboard_geometry.h"
 #include "billboard_projection_lut.h"
 #include "renderer_perf.h"
+#include "weapons.h"
 
 // type: visual, effect, HP, radius, visual scale, max depth,
 // collectible, targetable, blocking.
@@ -24,7 +25,16 @@ static const BillboardType BILLBOARD_TYPES[BILLBOARD_TYPE_COUNT] = {
     {BILLBOARD_VISUAL_ELEC,        BILLBOARD_EFFECT_NONE,   1, 16, 1, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
     {BILLBOARD_VISUAL_BARREL,      BILLBOARD_EFFECT_NONE,   1, 20, BILLBOARD_BARREL_VISUAL_SCALE, BILLBOARD_MAX_DEPTH, FALSE, TRUE,  TRUE},
     {BILLBOARD_VISUAL_TREE,        BILLBOARD_EFFECT_NONE,   1, 48, 1, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
-    {BILLBOARD_VISUAL_DUMMY,       BILLBOARD_EFFECT_NONE,   3, 24, 1, BILLBOARD_MAX_DEPTH, FALSE, TRUE,  FALSE},
+    // Doom hit points, not "shots to kill": billboard_fire_center now takes a
+    // per-weapon damage amount (weapon_roll_damage, 5/10/15 per bullet), so a
+    // zombieman-class enemy at Doom's 20 HP still dies in about two pistol hits
+    // while a shotgun blast drops it outright. The barrel matches Doom's 20 too.
+    {BILLBOARD_VISUAL_DUMMY,       BILLBOARD_EFFECT_NONE,   20, 24, 1, BILLBOARD_MAX_DEPTH, FALSE, TRUE,  FALSE},
+    {BILLBOARD_VISUAL_SHELLS,      BILLBOARD_EFFECT_AMMO,   1, 16, BILLBOARD_PICKUP_VISUAL_SCALE, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
+    {BILLBOARD_VISUAL_SHELL_BOX,   BILLBOARD_EFFECT_AMMO,   1, 24, BILLBOARD_PICKUP_VISUAL_SCALE, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
+    {BILLBOARD_VISUAL_SHOTGUN_PICKUP,  BILLBOARD_EFFECT_WEAPON, 1, 24, BILLBOARD_PICKUP_VISUAL_SCALE, BILLBOARD_MAX_DEPTH, TRUE, FALSE, FALSE},
+    {BILLBOARD_VISUAL_CHAINGUN_PICKUP, BILLBOARD_EFFECT_WEAPON, 1, 24, BILLBOARD_PICKUP_VISUAL_SCALE, BILLBOARD_MAX_DEPTH, TRUE, FALSE, FALSE},
+    {BILLBOARD_VISUAL_CHAINSAW_PICKUP, BILLBOARD_EFFECT_WEAPON, 1, 24, BILLBOARD_PICKUP_VISUAL_SCALE, BILLBOARD_MAX_DEPTH, TRUE, FALSE, FALSE},
 };
 
 BillboardObject g_billboards[BILLBOARD_OBJECT_COUNT];
@@ -70,6 +80,11 @@ static u8 map_thing_type(u16 doom_type, u8 *visual) {
         case 2019: *visual = BILLBOARD_VISUAL_BLUE_ARMOR; return BILLBOARD_TYPE_BLUE_ARMOR;
         case 2007: *visual = BILLBOARD_VISUAL_CLIP; return BILLBOARD_TYPE_CLIP;
         case 2048: *visual = BILLBOARD_VISUAL_AMMO_BOX; return BILLBOARD_TYPE_AMMO_BOX;
+        case 2008: *visual = BILLBOARD_VISUAL_SHELLS; return BILLBOARD_TYPE_SHELLS;
+        case 2049: *visual = BILLBOARD_VISUAL_SHELL_BOX; return BILLBOARD_TYPE_SHELL_BOX;
+        case 2001: *visual = BILLBOARD_VISUAL_SHOTGUN_PICKUP; return BILLBOARD_TYPE_SHOTGUN;
+        case 2002: *visual = BILLBOARD_VISUAL_CHAINGUN_PICKUP; return BILLBOARD_TYPE_CHAINGUN;
+        case 2005: *visual = BILLBOARD_VISUAL_CHAINSAW_PICKUP; return BILLBOARD_TYPE_CHAINSAW;
         // Decorative THINGS are deliberately omitted on the Mega Drive. They
         // consume projection, LOS, draw and collision time without gameplay.
         case 2035: *visual = BILLBOARD_VISUAL_BARREL; return BILLBOARD_TYPE_BARREL;
@@ -397,9 +412,19 @@ void billboard_invalidate_object_visibility(u16 index) {
     }
 }
 
+// WeaponId of the weapon each weapon-pickup type grants. Kept here rather than
+// in BillboardType so the billboard module does not need the weapon table.
+static u8 pickup_weapon_id(u8 type_id) {
+    switch (type_id) {
+        case BILLBOARD_TYPE_SHOTGUN:  return WEAPON_SHOTGUN;
+        case BILLBOARD_TYPE_CHAINGUN: return WEAPON_CHAINGUN;
+        default:                      return WEAPON_CHAINSAW;
+    }
+}
+
 BillboardPickupResult billboard_collect_near(s32 x, s32 y) {
     BillboardPickupResult result = {FALSE, BILLBOARD_EFFECT_NONE, 0, BSP_KEY_NONE,
-                                    BILLBOARD_PICKUP_NONE};
+                                    BILLBOARD_PICKUP_NONE, AMMO_NONE, WEAPON_FIST};
     const u8 *indices = billboard_registry_active_indices();
     const u16 active_count = billboard_registry_active_count();
     for (u16 slot = 0; slot < active_count; slot++) {
@@ -420,7 +445,25 @@ BillboardPickupResult billboard_collect_near(s32 x, s32 y) {
             result.amount = (object->type_id == BILLBOARD_TYPE_BLUE_ARMOR) ? 200 :
                             ((object->type_id == BILLBOARD_TYPE_ARMOR_BONUS) ? 1 : 100);
         }
-        else if (type->effect == BILLBOARD_EFFECT_AMMO) result.amount = (object->type_id == BILLBOARD_TYPE_AMMO_BOX) ? 20 : 10;
+        else if (type->effect == BILLBOARD_EFFECT_AMMO) {
+            // Doom's pickup amounts: clip 10, box of bullets 50, 4 shells,
+            // 20 shells in a box.
+            switch (object->type_id) {
+                case BILLBOARD_TYPE_AMMO_BOX:
+                    result.amount = 50; result.ammo_type = AMMO_BULLETS; break;
+                case BILLBOARD_TYPE_SHELLS:
+                    result.amount = 4;  result.ammo_type = AMMO_SHELLS;  break;
+                case BILLBOARD_TYPE_SHELL_BOX:
+                    result.amount = 20; result.ammo_type = AMMO_SHELLS;  break;
+                default:
+                    result.amount = 10; result.ammo_type = AMMO_BULLETS; break;
+            }
+        }
+        else if (type->effect == BILLBOARD_EFFECT_WEAPON) {
+            result.weapon_id = pickup_weapon_id(object->type_id);
+            result.amount = WEAPON_PICKUP_AMMO[result.weapon_id];
+            result.ammo_type = WEAPON_DEFS[result.weapon_id].ammo_type;
+        }
         else if (type->effect == BILLBOARD_EFFECT_KEY) {
             if (object->hp == BILLBOARD_VISUAL_BLUE_KEY) result.key_mask = BSP_KEY_BLUE;
             else if (object->hp == BILLBOARD_VISUAL_YELLOW_KEY) result.key_mask = BSP_KEY_YELLOW;

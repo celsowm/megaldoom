@@ -30,6 +30,9 @@
 
 static u16 s_previous_joy = 0;
 static bool s_three_button_map_chord_active = FALSE;
+// Last direction the C+UP/C+DOWN weapon chord was held in (0 = not held), so
+// the selection advances once per press instead of once per frame.
+static s16 s_weapon_chord_dir = 0;
 static volatile u16 s_latched_pressed = 0;
 static u16 s_poll_prev = 0;
 static volatile bool s_poll_active = FALSE;
@@ -112,6 +115,7 @@ static bool simulate_doom_movement_tic(PlayerState *player, s16 forward_command,
 void player_controller_reset(void) {
     s_previous_joy = 0;
     s_three_button_map_chord_active = FALSE;
+    s_weapon_chord_dir = 0;
     s_momentum_x = 0;
     s_momentum_y = 0;
     s_position_remainder_x = 0;
@@ -153,6 +157,12 @@ u16 player_controller_update(PlayerState *player, u16 elapsed_frames, u16 latche
         !six_button_pad && ((joy & THREE_BUTTON_AUTOMAP_CHORD) == THREE_BUTTON_AUTOMAP_CHORD);
     const bool strafing = ((joy & BUTTON_C) != 0) &&
                           ((joy & (BUTTON_LEFT | BUTTON_RIGHT)) != 0);
+    // C is already the modifier that turns lateral D-pad input into strafe, so
+    // C+UP / C+DOWN is the natural free chord for weapon selection and is the
+    // only one available at all on a 3-button pad (A runs, B fires, C uses,
+    // START pauses). Emitted on both pad types so the habit carries over.
+    const bool weapon_chord = ((joy & BUTTON_C) != 0) &&
+                              ((joy & (BUTTON_UP | BUTTON_DOWN)) != 0);
     // C modifies lateral D-pad input into strafe, so it must suppress turn and
     // use for the whole chord rather than leaking an action while strafing.
     const bool turning_left = !strafing && ((joy & BUTTON_LEFT) != 0);
@@ -195,10 +205,10 @@ u16 player_controller_update(PlayerState *player, u16 elapsed_frames, u16 latche
     }
     s_turn_dir = desired_turn;
 
-    if (!three_button_map_chord && ((joy & BUTTON_UP) != 0)) {
+    if (!three_button_map_chord && !weapon_chord && ((joy & BUTTON_UP) != 0)) {
         target_forward += move_command;
     }
-    if (!three_button_map_chord && ((joy & BUTTON_DOWN) != 0)) {
+    if (!three_button_map_chord && !weapon_chord && ((joy & BUTTON_DOWN) != 0)) {
         target_forward -= move_command;
     }
     if (!three_button_map_chord && strafing) {
@@ -230,14 +240,32 @@ u16 player_controller_update(PlayerState *player, u16 elapsed_frames, u16 latche
         // Cached-pad edge OR the ISR latch: a tap that starts and ends between
         // main-loop iterations still fires, since the latch caught its rising
         // edge even though this iteration's cached joy reads no button held.
-        if ((((joy & BUTTON_C) != 0) && ((s_previous_joy & BUTTON_C) == 0) && !strafing) ||
-            (((latched_pressed & BUTTON_C) != 0) && !strafing)) {
+        if ((((joy & BUTTON_C) != 0) && ((s_previous_joy & BUTTON_C) == 0) &&
+             !strafing && !weapon_chord) ||
+            (((latched_pressed & BUTTON_C) != 0) && !strafing && !weapon_chord)) {
             result |= PLAYER_CONTROL_USE;
         }
         if ((((joy & BUTTON_B) != 0) && ((s_previous_joy & BUTTON_B) == 0)) ||
             ((latched_pressed & BUTTON_B) != 0)) {
             result |= PLAYER_CONTROL_FIRE;
         }
+        if ((joy & BUTTON_B) != 0) {
+            result |= PLAYER_CONTROL_FIRE_HELD;
+        }
+    }
+
+    // Weapon chord, edge-triggered on the direction so holding it does not spin
+    // through the whole arsenal. UP selects the next weapon, DOWN the previous,
+    // matching the D-pad direction of Doom's own weapon list.
+    if (weapon_chord) {
+        const s16 direction = ((joy & BUTTON_UP) != 0) ? 1 : -1;
+        if (direction != s_weapon_chord_dir) {
+            result |= (direction > 0) ? PLAYER_CONTROL_NEXT_WEAPON
+                                      : PLAYER_CONTROL_PREVIOUS_WEAPON;
+        }
+        s_weapon_chord_dir = direction;
+    } else {
+        s_weapon_chord_dir = 0;
     }
 
     if (six_button_pad) {

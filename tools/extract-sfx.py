@@ -64,7 +64,12 @@ DEFAULT_SFX = (
     "DSSTNMOV",   # door / platform move
     "DSITEMUP",   # item pickup
     "DSBAREXP",   # exploding barrel
+    "DSSHOTGN",   # shotgun fire
+    "DSPUNCH",    # fist swing
+    "DSSAWFUL",   # chainsaw swing
+    "DSWPNUP",    # weapon pickup
 )
+# The chaingun deliberately reuses DSPISTOL, as Doom does.
 
 
 def read_wad_directory(wad_path):

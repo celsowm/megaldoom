@@ -26,7 +26,8 @@ import world_palette
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_WAD = os.path.join(PROJECT_ROOT, "DOOM1.WAD")
-DEFAULT_ASSET_OUT = os.path.join(PROJECT_ROOT, "src", "generated_assets.h")
+# Generated headers live beside the module that consumes them (src/<group>/).
+DEFAULT_ASSET_OUT = os.path.join(PROJECT_ROOT, "src", "bsp", "generated_assets.h")
 ASSET_ROOT = os.path.join(PROJECT_ROOT, "res", "originaldoom")
 RAYCAST_HEADER = os.path.join(PROJECT_ROOT, "src", "raycast.h")
 
@@ -650,8 +651,11 @@ BOSS_TRIGGER_MAPS = {"E1M8", "E2M8", "E3M8", "E4M6", "E4M8"}
 
 LINE_FLAG_IMPASSABLE = 0x0001
 
-RUNTIME_THING_TYPES = {5, 6, 9, 13, 2007, 2011, 2012, 2014, 2015,
-                       2018, 2019, 2035, 2048, 3001, 3004}
+# The THING types map_thing_type() in src/billboard/billboard.c recognises. Used
+# only for reporting and for the progression certificate's object budget; every
+# THING is emitted to the map regardless. Keep in sync with that switch.
+RUNTIME_THING_TYPES = {5, 6, 9, 13, 2001, 2002, 2005, 2007, 2008, 2011, 2012,
+                       2014, 2015, 2018, 2019, 2035, 2048, 2049, 3001, 3004}
 KEY_THING_MASK = {5: KEY_BLUE, 6: KEY_YELLOW, 13: KEY_RED}
 BLOCKING_THING_RADIUS = {2035: 20}
 

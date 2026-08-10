@@ -9,9 +9,11 @@ ROOT = Path(__file__).resolve().parent.parent
 MAP_SOURCE = ROOT / "src" / "bsp" / "generated_e1m1_map.c"
 RUNTIME_SOURCE = ROOT / "src" / "billboard" / "billboard.c"
 
+# Keep in sync with map_thing_type() in src/billboard/billboard.c and with
+# RUNTIME_THING_TYPES in tools/wad-map-extract.py.
 CURATED_TYPES = {
-    5, 6, 9, 13, 2007, 2011, 2012, 2014, 2015, 2018, 2019,
-    2035, 2048, 3001, 3004,
+    5, 6, 9, 13, 2001, 2002, 2005, 2007, 2008, 2011, 2012, 2014, 2015,
+    2018, 2019, 2035, 2048, 2049, 3001, 3004,
 }
 ENEMY_TYPES = {9, 3001, 3004}
 BARREL_TYPES = {2035}
@@ -41,7 +43,7 @@ def main() -> int:
         )
     ]
     curated = [thing for thing in things if thing[2] in CURATED_TYPES]
-    if len(curated) != 87:
+    if len(curated) != 98:
         raise ValueError(f"unexpected curated E1M1 THING count: {len(curated)}")
     populations = {
         name: [
@@ -71,9 +73,9 @@ def main() -> int:
         for name, runtime in populations.items()
     }
     expected = {
-        "easy": (56, 4, 46, 6),
-        "normal": (58, 6, 46, 6),
-        "hard": (82, 29, 47, 6),
+        "easy": (62, 4, 52, 6),
+        "normal": (64, 6, 52, 6),
+        "hard": (88, 29, 53, 6),
     }
     if actual != expected:
         raise ValueError(
@@ -83,7 +85,7 @@ def main() -> int:
     if any(len(runtime) > MAX_RUNTIME_OBJECTS for runtime in populations.values()):
         raise ValueError("a skill population exceeds BILLBOARD_OBJECT_COUNT")
 
-    print("ok    billboard populations: easy 56, normal 58, hard 82 "
+    print("ok    billboard populations: easy 62, normal 64, hard 88 "
           "single-player objects (all fit the 112-object pool)")
     return 0
 

@@ -27,6 +27,7 @@ def unique_tiles(path: Path) -> int:
 expected = {
     "title.png": (320, 224),
     "prompt.png": (96, 8),
+    "death_prompt.png": (96, 8),
     "main_menu.png": (320, 224),
     "logo.png": (128, 64),
     "options.png": (112, 24),
@@ -81,12 +82,13 @@ for token in (
     "frontend_run", "frontend_run_pause", "frontend_prompt", "FRONTEND_PAUSE_QUIT_TO_TITLE",
     "run_skill_menu", "DOOM_SKILL_HURT_ME_PLENTY", "(selected + 4) % 5",
     "game_audio_toggle_music", "game_audio_toggle_sfx", "wait_for_release", "MAIN_CURSOR_Y 12",
+    "frontend_load_death_prompt", "frontend_set_death_prompt", "DEATH_PROMPT_X", "DEATH_PROMPT_Y",
 ):
     assert token in FRONTEND
 for token in (
     "M_DOOM", "M_NGAME", "M_OPTION", "M_QUITG", "M_OPTTTL", "M_SKILL", "M_JKILL",
     "M_ROUGH", "M_HURT", "M_ULTRA", "M_NMARE", "M_SKULL1", "M_SKULL2", "PRESS START",
-    "centered_doom_text",
+    "centered_doom_text", "PRESS FIRE", "doom_text_mask",
 ):
     assert token in (ROOT / "tools/generate-frontend-assets.py").read_text()
 assert "(selected + 2) % 3" in FRONTEND and "(selected + 1) % 3" in FRONTEND
@@ -106,5 +108,32 @@ assert "init_hud_tiles();" in RENDERER
 for token in ("DOOM_THING_SKILL_EASY", "DOOM_THING_SKILL_MEDIUM", "DOOM_THING_SKILL_HARD", "doom_skill_thing_mask"):
     assert token in BILLBOARD
 assert re.search(r"frontend_run\(\);\s*game_audio_stop_music\(\);\s*renderer_init\(\);", MAIN)
+
+# Death state (Doom's PST_REBORN, reproduced in place -- see main.c): health
+# locks at zero, the screen holds red, and the player is frozen until they
+# press to respawn. PAL0 index 9 is reserved for the death prompt text; the
+# HUD tiles must never grow into it, or the prompt would draw the wrong color.
+for token in (
+    "player_dead", "death_lockout", "DEATH_INPUT_LOCKOUT_VBLANKS",
+    "frontend_load_death_prompt", "frontend_set_death_prompt",
+    "DEBUG_CHECKPOINT_DEATH",
+):
+    assert token in MAIN
+assert "PAL_setColor(9, RGB24_TO_VDPCOLOR(0xD80000));" in RENDERER
+
+hud_assets = (ROOT / "src/renderer/generated_hud_assets.h").read_text()
+hud_tiles_match = re.search(
+    r"FREEDOOM_HUD_TILES\[FREEDOOM_HUD_TILE_COUNT\]\[8\]\s*=\s*\{(.*?)\n\};",
+    hud_assets, re.S)
+assert hud_tiles_match, "could not locate FREEDOOM_HUD_TILES in generated_hud_assets.h"
+hud_nibbles = {
+    int(digit, 16)
+    for word in re.findall(r"0x([0-9A-Fa-f]{8})", hud_tiles_match.group(1))
+    for digit in word
+}
+assert max(hud_nibbles) <= 8, (
+    "FREEDOOM_HUD_TILES now uses PAL0 index 9+, which collides with the "
+    "death-prompt red reserved in renderer.c's load_game_palettes"
+)
 
 print("ok    frontend: title/menu flow, shared palette, pause VRAM and audio gates")

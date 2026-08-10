@@ -10,6 +10,12 @@
 #define BILLBOARD_MAX_PROJECTED_TOTAL \
     (BILLBOARD_MAX_PROJECTED_OBJECTS + BILLBOARD_MAX_PROJECTED_EFFECTS)
 
+// These values ARE atlas indices: visual_id indexes FREEDOOM_BILLBOARD_WORLD_
+// TEXTURES and FREEDOOM_BILLBOARD_WORLD_GEOMETRY directly. They must therefore
+// stay in the exact order of $BillboardWorldSpecs in
+// tools/convert-freedoom-assets.ps1 -- tools/test-billboard-layout.py asserts
+// that order. The collectibles come first, because $billboardPickupCount treats
+// the front of the list as the sprites that get column-post tables.
 typedef enum {
     BILLBOARD_VISUAL_BONUS = 0,
     BILLBOARD_VISUAL_BLUE_KEY = 1,
@@ -22,17 +28,23 @@ typedef enum {
     BILLBOARD_VISUAL_BLUE_ARMOR = 8,
     BILLBOARD_VISUAL_CLIP = 9,
     BILLBOARD_VISUAL_AMMO_BOX = 10,
-    BILLBOARD_VISUAL_CANDLE = 11,
-    BILLBOARD_VISUAL_CANDELABRA = 12,
-    BILLBOARD_VISUAL_COLUMN = 13,
-    BILLBOARD_VISUAL_ELEC = 14,
-    BILLBOARD_VISUAL_BARREL = 15,
-    BILLBOARD_VISUAL_TREE = 16,
-    BILLBOARD_VISUAL_DUMMY = 17,
-    BILLBOARD_VISUAL_DUMMY_DAMAGED = 18,
-    BILLBOARD_VISUAL_BARREL_EXPLODING = 19,
-    BILLBOARD_VISUAL_PUFF = 20,
-    BILLBOARD_VISUAL_BLOOD = 21
+    BILLBOARD_VISUAL_SHELLS = 11,
+    BILLBOARD_VISUAL_SHELL_BOX = 12,
+    BILLBOARD_VISUAL_SHOTGUN_PICKUP = 13,
+    BILLBOARD_VISUAL_CHAINGUN_PICKUP = 14,
+    BILLBOARD_VISUAL_CHAINSAW_PICKUP = 15,
+    BILLBOARD_VISUAL_CANDLE = 16,
+    BILLBOARD_VISUAL_CANDELABRA = 17,
+    BILLBOARD_VISUAL_COLUMN = 18,
+    BILLBOARD_VISUAL_ELEC = 19,
+    BILLBOARD_VISUAL_BARREL = 20,
+    BILLBOARD_VISUAL_TREE = 21,
+    // Past the world atlas: these draw from their own frame arrays.
+    BILLBOARD_VISUAL_DUMMY = 22,
+    BILLBOARD_VISUAL_DUMMY_DAMAGED = 23,
+    BILLBOARD_VISUAL_BARREL_EXPLODING = 24,
+    BILLBOARD_VISUAL_PUFF = 25,
+    BILLBOARD_VISUAL_BLOOD = 26
 } BillboardVisualId;
 
 typedef struct {
@@ -70,7 +82,8 @@ typedef enum {
     BILLBOARD_EFFECT_HEALTH = 1,
     BILLBOARD_EFFECT_ARMOR = 2,
     BILLBOARD_EFFECT_AMMO = 3,
-    BILLBOARD_EFFECT_KEY = 4
+    BILLBOARD_EFFECT_KEY = 4,
+    BILLBOARD_EFFECT_WEAPON = 5
 } BillboardEffect;
 
 typedef struct {
@@ -79,6 +92,11 @@ typedef struct {
     u16 amount;
     u8 key_mask;
     BillboardPickupKind kind;
+    // BILLBOARD_EFFECT_AMMO: which pool `amount` goes into (an AmmoType).
+    // BILLBOARD_EFFECT_WEAPON: the WeaponId granted; `amount` is its free ammo
+    // and ammo_type is the pool that ammo belongs to.
+    u8 ammo_type;
+    u8 weapon_id;
 } BillboardPickupResult;
 
 typedef enum {
@@ -114,7 +132,11 @@ u16 billboard_get_enemy_count(void);
 u16 billboard_get_active_count(void);
 u16 billboard_get_target_count(void);
 u16 billboard_get_target_health(void);
-BillboardFireResult billboard_fire_center(const PlayerState *player, u16 wall_depth);
+// Fire one hitscan pellet down view column `aim_col`, blocked at `wall_depth`
+// (the wall distance at that same column) and dealing `damage` Doom hit points.
+// Multi-pellet weapons call this once per pellet and merge the results.
+BillboardFireResult billboard_fire_center(const PlayerState *player, u16 wall_depth,
+                                          s16 aim_col, u16 damage);
 BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player,
                                                bool redraw_pending);
 BillboardEnemyUpdate billboard_update_barrels(const PlayerState *player);

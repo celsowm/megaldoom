@@ -9,11 +9,10 @@ MAIN = (ROOT / "src/main.c").read_text()
 
 
 def main():
-    # Public future-facing actions remain available even though main deliberately
-    # does not attach gameplay to them yet.
     assert "PLAYER_CONTROL_PREVIOUS_WEAPON 0x0008" in HEADER
     assert "PLAYER_CONTROL_NEXT_WEAPON 0x0010" in HEADER
     assert "PLAYER_CONTROL_TOGGLE_AUTOMAP 0x0020" in HEADER
+    assert "PLAYER_CONTROL_FIRE_HELD 0x0040" in HEADER
     assert "JOY_getJoypadType(JOY_1) == JOY_TYPE_PAD6" in SOURCE
 
     # A selects Doom's 50-unit run command (2x walk), not the old strafe-left
@@ -28,7 +27,22 @@ def main():
     assert "const bool turning_right = !strafing" in SOURCE
     assert "target_strafe -= strafe_command;" in SOURCE
     assert "target_strafe += strafe_command;" in SOURCE
-    assert "((joy & BUTTON_C) != 0) && ((s_previous_joy & BUTTON_C) == 0) && !strafing" in SOURCE
+    assert ("((joy & BUTTON_C) != 0) && ((s_previous_joy & BUTTON_C) == 0) &&\n"
+            "             !strafing && !weapon_chord") in SOURCE
+
+    # Weapon selection: C+UP / C+DOWN on either pad type, edge-triggered on the
+    # direction so holding it does not run through the whole arsenal. Like
+    # strafe, the chord suppresses both USE and forward/back movement.
+    assert ("const bool weapon_chord = ((joy & BUTTON_C) != 0) &&\n"
+            "                              ((joy & (BUTTON_UP | BUTTON_DOWN)) != 0);") in SOURCE
+    assert "!three_button_map_chord && !weapon_chord && ((joy & BUTTON_UP) != 0)" in SOURCE
+    assert "!three_button_map_chord && !weapon_chord && ((joy & BUTTON_DOWN) != 0)" in SOURCE
+    assert "if (direction != s_weapon_chord_dir) {" in SOURCE
+    assert "s_weapon_chord_dir = 0;" in SOURCE
+    # Only the automatic weapons act on the held bit; B's rising edge still
+    # drives everything else.
+    assert "result |= PLAYER_CONTROL_FIRE_HELD;" in SOURCE
+    assert "weapon->automatic ? (PLAYER_CONTROL_FIRE | PLAYER_CONTROL_FIRE_HELD)" in MAIN
 
     # The 3-button A+B+C chord is edge-latched and suppresses its ordinary
     # A/B/C behaviours. X/Y/Z only emit on a detected 6-button pad.
@@ -41,8 +55,8 @@ def main():
     assert "(joy & BUTTON_Z)" in SOURCE
     assert "(joy & BUTTON_MODE)" not in SOURCE
 
-    # Future actions have no current gameplay side effects.
-    assert "intentionally reserved until the" in MAIN
+    # The automap is the one action still without gameplay attached.
+    assert "PLAYER_CONTROL_TOGGLE_AUTOMAP is still reserved" in MAIN
 
     print("ok    controller: Doom 32X Mode 1, 3-button chord, six-button actions")
 

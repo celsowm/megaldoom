@@ -90,7 +90,13 @@ static void spawn_wall_puff(const PlayerState *player, u16 wall_depth) {
         player->y + (((s32)sin_a * distance) >> FX_SHIFT));
 }
 
-BillboardFireResult billboard_fire_center(const PlayerState *player, u16 wall_depth) {
+// One hitscan pellet. `aim_col` is the view column it is aimed down (the screen
+// centre for a single-pellet weapon, a fanned offset for each shotgun pellet)
+// and `wall_depth` is the wall distance at THAT column, so an off-centre pellet
+// is blocked by the geometry it actually points at. `damage` is the weapon's
+// per-pellet damage in Doom hit points.
+BillboardFireResult billboard_fire_center(const PlayerState *player, u16 wall_depth,
+                                          s16 aim_col, u16 damage) {
     BillboardFireResult result = {BILLBOARD_SHOT_NONE, 0, 0, 0, 0};
     BillboardObject *best_object = NULL;
     u16 best_index = 0;
@@ -127,8 +133,8 @@ BillboardFireResult billboard_fire_center(const PlayerState *player, u16 wall_de
         if (measure.forward >= wall_depth) {
             continue;
         }
-        if (RAY_VIEW_CENTER_X < (measure.center_col - measure.half_w) ||
-            RAY_VIEW_CENTER_X > (measure.center_col + measure.half_w)) {
+        if (aim_col < (measure.center_col - measure.half_w) ||
+            aim_col > (measure.center_col + measure.half_w)) {
             continue;
         }
 
@@ -186,8 +192,8 @@ BillboardFireResult billboard_fire_center(const PlayerState *player, u16 wall_de
     }
     push_dummy_on_hit(best_index, best_object, player);
 
-    if (best_object->hp > 1) {
-        best_object->hp--;
+    if (best_object->hp > damage) {
+        best_object->hp = (u8)(best_object->hp - damage);
         result.status = BILLBOARD_SHOT_DAMAGE;
         return result;
     }

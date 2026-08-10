@@ -74,8 +74,19 @@ def main() -> int:
     short = field_pixels(90, [0, 9], widths, True)
     assert wide - short
     assert "clear_number_scratch(tile_count);" in hud
-    assert hud.index("clear_number_scratch(tile_count);") < hud.index("if (field->percent)")
+    assert hud.index("clear_number_scratch(tile_count);") < hud.index(
+        "if (field->percent && !blank)")
     assert "FREEDOOM_HUD_DIGIT_PERCENT" in hud
+
+    # Melee weapons have no ammo pool, so the ammo field composes empty rather
+    # than showing a zero. The blank state needs its own dirty-cache key or a
+    # fist -> pistol switch back to the same count would not repaint.
+    assert "const u8 count = blank ? 0" in hud
+    assert "const u16 ammo_key = state->ammo_visible ? state->ammo : 0xFFFE;" in hud
+    assert "draw_hud_number_ex(&HUD_AMMO_FIELD, state->ammo, !state->ammo_visible);" in hud
+    assert "s_last_ammo = ammo_key;" in hud
+    # 0xFFFE must not collide with a real count: the field clamps at 999.
+    assert "const u16 limit = (max_digits == 3) ? 999 : 99;" in hud
     assert "VDP_setTileMapXY(BG_A" in hud
     assert "VDP_drawText" not in hud and "VDP_setTextPalette" not in hud
     assert "FREEDOOM_HUD_DIGIT_PALETTE" in renderer

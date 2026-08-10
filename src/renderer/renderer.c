@@ -1,10 +1,17 @@
-#include "renderer_internal.h"
+#include "renderer_pack_internal.h"
 #include "generated_assets.h"
 #include "generated_hud_assets.h"
 #include "generated_renderer_assets.h"
 
-#if (WEAPON_TILE_BASE + MEGALDOOM_WEAPON_TILE_COUNT) > HUD_VRAM_SAFE_TILE_LIMIT
+// The weapon VRAM window holds ONE weapon at a time and is sized to the largest
+// of them (renderer_set_weapon streams the rest in on a switch). If a resprite
+// pushes that past the font region the fix is a smaller FREEDOOM_WEAPON_RECT_*
+// in tools/convert-freedoom-assets.ps1, not a higher limit here.
+#if (WEAPON_TILE_BASE + MEGALDOOM_WEAPON_MAX_TILE_COUNT) > HUD_VRAM_SAFE_TILE_LIMIT
 #error "Weapon tiles overlap the SGDK font VRAM region"
+#endif
+#if RENDERER_SPARSE_FB && ((WEAPON_TILE_BASE + MEGALDOOM_WEAPON_MAX_TILE_COUNT) > STATIC_CEILING_ATLAS_BASE)
+#error "Weapon tiles overlap the static ceiling/floor atlas"
 #endif
 
 u32 g_view_tiles[VIEW_TILE_COUNT][8];
@@ -38,6 +45,10 @@ static void load_game_palettes(void) {
     PAL_setColor(6, RGB24_TO_VDPCOLOR(0xB4ACA0));
     PAL_setColor(7, RGB24_TO_VDPCOLOR(0x404020));
     PAL_setColor(8, RGB24_TO_VDPCOLOR(0x301E10));
+    // Index 9 is reserved for the death-screen "PRESS FIRE" prompt (frontend.c
+    // frontend_load_death_prompt / frontend_death_prompt asset). The HUD tiles
+    // only use indices 2-8, so this is otherwise unclaimed in PAL0.
+    PAL_setColor(9, RGB24_TO_VDPCOLOR(0xD80000));
 
     // Palette line 1: native Doom STTNUM/STTPRCNT shading for the transparent
     // BG_A status-number compositor.
@@ -89,8 +100,10 @@ static u32 make_pair_tile_row(u8 left_color, u8 right_color) {
 static void init_hud_tiles(void) {
     VDP_loadTileData((const u32 *)FREEDOOM_HUD_TILES, HUD_TILE_BASE, FREEDOOM_HUD_TILE_COUNT, DMA);
     VDP_loadTileData((const u32 *)FREEDOOM_FACE_TILES, FACE_TILE_BASE, FREEDOOM_FACE_TILE_COUNT, DMA);
-    VDP_loadTileData((const u32 *)MEGALDOOM_WEAPON_TILES, WEAPON_TILE_BASE,
-                     MEGALDOOM_WEAPON_TILE_COUNT, DMA);
+    // Restores whichever weapon is currently selected into the shared window
+    // (the pistol at boot). This runs from renderer_restore_after_menu too, so
+    // it must NOT reset the selection -- a pause must not disarm the player.
+    reload_weapon_tiles();
 }
 
 static void build_view_bank_tilemaps(void) {

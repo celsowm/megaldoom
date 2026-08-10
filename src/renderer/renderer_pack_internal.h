@@ -80,6 +80,10 @@ void draw_projected_billboards(const RayColumn *columns,
 
 // Weapon sprite + damage/low-health screen tint (renderer_frame_overlay.c).
 void draw_weapon_overlay(bool flash);
+// Re-upload the CURRENTLY selected weapon's tileset into the shared VRAM window
+// without changing the selection. Used by renderer_init and by the post-pause
+// restore, which both have to repopulate a window the menus may have clobbered.
+void reload_weapon_tiles(void);
 void draw_overlay_ops(const MegalDoomOverlayRowOp *ops, u16 count);
 void frame_overlay_reset(void);
 

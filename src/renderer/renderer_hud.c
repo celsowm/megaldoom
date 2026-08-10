@@ -82,16 +82,19 @@ static u8 format_number(u16 value, u8 min_digits, u8 max_digits, u8 *digits) {
     return count;
 }
 
-static void draw_hud_number(const HudNumberField *field, u16 value) {
+// `blank` composes an empty field (the transparent scratch alone), used for the
+// melee weapons' ammo slot: Doom shows nothing there rather than a zero.
+static void draw_hud_number_ex(const HudNumberField *field, u16 value, bool blank) {
     const u16 tile_count = (u16)(field->tile_w * HUD_NUMBER_TILE_H);
     const s16 field_pixel_x = (s16)(field->tile_x * 8);
     const s16 local_y = (s16)(HUD_NUMBER_PIXEL_Y - (HUD_PANEL_Y * 8));
     s16 right = (s16)(field->right_x - field_pixel_x);
     u8 digits[3];
-    const u8 count = format_number(value, field->min_digits, field->max_digits, digits);
+    const u8 count = blank ? 0
+        : format_number(value, field->min_digits, field->max_digits, digits);
 
     clear_number_scratch(tile_count);
-    if (field->percent) {
+    if (field->percent && !blank) {
         draw_number_glyph(field, FREEDOOM_HUD_DIGIT_PERCENT, right, local_y);
     }
     for (u8 i = count; i > 0; i--) {
@@ -102,6 +105,10 @@ static void draw_hud_number(const HudNumberField *field, u16 value) {
     VDP_loadTileData((const u32 *)s_hud_number_scratch,
                      (u16)(HUD_NUMBER_TILE_BASE + field->vram_offset),
                      tile_count, DMA);
+}
+
+static void draw_hud_number(const HudNumberField *field, u16 value) {
+    draw_hud_number_ex(field, value, FALSE);
 }
 
 static void draw_hud_number_tilemap(void) {
@@ -200,9 +207,13 @@ void renderer_draw_static_screen(void) {
 }
 
 void renderer_draw_hud(const RendererHudState *state) {
-    if (state->ammo != s_last_ammo) {
-        draw_hud_number(&HUD_AMMO_FIELD, state->ammo);
-        s_last_ammo = state->ammo;
+    // 0xFFFE is the "field is blank" cache key. It cannot collide with a real
+    // count: format_number clamps this field at 999, and 0xFFFF is already the
+    // force-repaint sentinel.
+    const u16 ammo_key = state->ammo_visible ? state->ammo : 0xFFFE;
+    if (ammo_key != s_last_ammo) {
+        draw_hud_number_ex(&HUD_AMMO_FIELD, state->ammo, !state->ammo_visible);
+        s_last_ammo = ammo_key;
     }
     if (state->health_percent != s_last_health) {
         draw_hud_number(&HUD_HEALTH_FIELD, state->health_percent);

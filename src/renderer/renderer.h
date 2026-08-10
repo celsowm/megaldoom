@@ -24,6 +24,9 @@ typedef struct {
     BillboardShotResult shot_status;
     u8 portrait_state;
     bool level_cleared;
+    // FALSE for the melee weapons, which have no ammo pool: Doom leaves the
+    // status-bar ammo digits blank for those rather than showing a zero.
+    bool ammo_visible;
 } RendererHudState;
 
 void renderer_init(void);
@@ -44,6 +47,11 @@ void renderer_render_scene(const RayColumn *columns,
 // ~10-vblank cast+upload; the per-variant cache makes the scene-path redraw of
 // the same variant a no-op.
 void renderer_draw_weapon_flash(void);
+// Select the weapon whose overlay is drawn, streaming its tileset into the
+// shared VRAM window (see renderer_frame_overlay.c). Must be re-called after
+// anything that reclaims that window -- level reset, renderer_restore_after_menu
+// -- as well as on every weapon change. weapon_id is a WeaponId (src/weapons.h).
+void renderer_set_weapon(u8 weapon_id);
 void renderer_queue_scene_upload(const RayColumn *columns,
                                  const RaySceneColors *scene_colors);
 void renderer_upload_scene_step(void);

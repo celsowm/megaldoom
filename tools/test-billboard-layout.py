@@ -11,17 +11,23 @@ HEADER = ROOT / "src" / "billboard" / "generated_billboard_assets.h"
 GEOMETRY_HEADER = ROOT / "src" / "billboard" / "generated_billboard_geometry.h"
 OFFSETS = ROOT / "res" / "originaldoom" / "sprites" / "_offsets.json"
 PUBLIC_HEADER = ROOT / "src" / "billboard" / "billboard.h"
-EXPECTED_TEXTURES = 17
+EXPECTED_TEXTURES = 22
 WORLD_HEIGHT = 48
+# BillboardVisualId values ARE indices into this atlas, so the enum in
+# billboard.h and $BillboardWorldSpecs in tools/convert-freedoom-assets.ps1 must
+# agree with this order. The collectibles come first: $billboardPickupCount in
+# the generator gives column-post tables to the front of the list.
 EXPECTED_NAMES = [
     "BONUS", "BLUE_KEY", "YELLOW_KEY", "RED_KEY", "STIMPACK", "MEDIKIT",
     "ARMOR_BONUS", "GREEN_ARMOR", "BLUE_ARMOR", "CLIP", "AMMO_BOX",
+    "SHELLS", "SHELL_BOX", "SHOTGUN_PICKUP", "CHAINGUN_PICKUP", "CHAINSAW_PICKUP",
     "CANDLE", "CANDELABRA", "COLUMN", "ELEC", "BARREL", "TREE",
 ]
 EXPECTED_SPRITES = [
     "BON1A0", "BKEYA0", "YKEYA0", "RKEYA0", "STIMA0", "MEDIA0",
-    "BON2A0", "ARM1A0", "ARM2A0", "CLIPA0", "AMMOA0", "CANDA0",
-    "CBRAA0", "COLUA0", "ELECA0", "BAR1A0", "TREDA0",
+    "BON2A0", "ARM1A0", "ARM2A0", "CLIPA0", "AMMOA0",
+    "SHELA0", "SBOXA0", "SHOTA0", "MGUNA0", "CSAWA0",
+    "CANDA0", "CBRAA0", "COLUA0", "ELECA0", "BAR1A0", "TREDA0",
 ]
 
 

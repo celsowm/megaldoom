@@ -329,6 +329,29 @@ DoomSkill frontend_run(void) {
     }
 }
 
+// Centred in the 20-tile-wide (160px) view region (VIEW_TILEMAP_X 10 ..
+// VIEW_TILEMAP_X+19), well above the weapon overlay (which starts at view
+// row 10, i.e. screen tile row 15) so the prompt never fights the weapon
+// sprite for the same tiles.
+#define DEATH_PROMPT_X 14
+#define DEATH_PROMPT_Y 8
+
+void frontend_load_death_prompt(u16 tile_base) {
+    VDP_loadTileSet(frontend_death_prompt.tileset, tile_base, DMA);
+}
+
+void frontend_set_death_prompt(u16 tile_base, bool visible) {
+    if (visible) {
+        VDP_setTileMapEx(BG_A, frontend_death_prompt.tilemap,
+                         TILE_ATTR_FULL(PAL0, TRUE, FALSE, FALSE, tile_base),
+                         DEATH_PROMPT_X, DEATH_PROMPT_Y, 0, 0,
+                         frontend_death_prompt.tilemap->w, frontend_death_prompt.tilemap->h, CPU);
+    } else {
+        VDP_clearTileMapRect(BG_A, DEATH_PROMPT_X, DEATH_PROMPT_Y,
+                             frontend_death_prompt.tilemap->w, frontend_death_prompt.tilemap->h);
+    }
+}
+
 FrontendPauseAction frontend_run_pause(u16 tile_base) {
     u16 selected = 0;
     u16 previous;

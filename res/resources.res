@@ -9,6 +9,10 @@ XGM2 intro_music "music/d_intro.vgm"
 # buffer larger than the game's remaining SGDK heap before gameplay starts.
 IMAGE frontend_title          "frontend/title.png"     NONE ALL
 IMAGE frontend_prompt         "frontend/prompt.png"    NONE ALL
+# Drawn during gameplay over the live PAL0 world/HUD ramp, not the frontend
+# palette -- see doom_text_mask() in generate-frontend-assets.py. Index 9 is
+# reserved for it in renderer.c's load_game_palettes.
+IMAGE frontend_death_prompt   "frontend/death_prompt.png" NONE ALL
 IMAGE frontend_main_menu      "frontend/main_menu.png" NONE ALL
 IMAGE frontend_skull1         "frontend/skull1.png"    NONE ALL
 IMAGE frontend_skull2         "frontend/skull2.png"    NONE ALL
@@ -48,3 +52,9 @@ WAV sfx_player_death "sound/dspldeth.wav"  XGM2
 WAV sfx_door         "sound/dsstnmov.wav"  XGM2
 WAV sfx_pickup       "sound/dsitemup.wav"  XGM2
 WAV sfx_barexp       "sound/dsbarexp.wav"  XGM2
+# Per-weapon fire sounds, referenced from the WEAPON_DEFS table in src/weapons.c.
+# The chaingun deliberately reuses sfx_pistol, as Doom does.
+WAV sfx_shotgun      "sound/dsshotgn.wav"  XGM2
+WAV sfx_punch        "sound/dspunch.wav"   XGM2
+WAV sfx_chainsaw     "sound/dssawful.wav"  XGM2
+WAV sfx_weapon_up    "sound/dswpnup.wav"   XGM2
