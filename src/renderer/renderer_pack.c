@@ -15,8 +15,13 @@
 // 2 = distance fog + N/S side shading (Doom-like), 1 = side shading only,
 // 0 = flat, every wall at full brightness. Costs nothing either way: the shade
 // is baked into FREEDOOM_WALL_PACKED_PAIRS and picked once per column.
+// The shade chain never darkens into the ceiling or floor colour (see
+// build_shade_map's `reserved` in tools/world_assets.py), so distance fog can
+// no longer make a far wall merge into a flat -- it now does the opposite, and
+// gives walls the depth cue the flats stopped providing when they went
+// level-wide.
 #ifndef WALL_SHADE_MODE
-#define WALL_SHADE_MODE 0
+#define WALL_SHADE_MODE 2
 #endif
 static u8 g_shade_luts[SHADE_LEVELS][16];
 

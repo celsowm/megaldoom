@@ -64,15 +64,31 @@ def generated_wall_textures(source):
     return result
 
 
+def generated_shade_lut(source):
+    body = re.search(
+        r"FREEDOOM_WORLD_SHADE_LUT\[FREEDOOM_WORLD_SHADE_LEVELS\]\[16\]"
+        r"\s*=\s*\{(.*?)\};", source, re.S)
+    assert body, "shade LUT declaration"
+    return [[int(value) for value in re.findall(r"\d+", level)]
+            for level in re.findall(r"\{([^{}]+)\}", body.group(1))]
+
+
 def _tone_curved_source(extractor, path):
-    """Resize to the wall grid and apply the same tone curve convert_texture()
-    applies before quantizing, so quality checks compare against what the
-    converter actually targets rather than the pre-lift source (see
-    WALL_TONE_GAMMA in tools/world_assets.py)."""
+    """Resize to the wall grid and apply the same tone curve, per-texture
+    contrast normalization AND spatial smoothing convert_texture() applies
+    before quantizing, so quality checks compare against what the converter
+    actually targets rather than the pre-lift source (see WALL_TONE_GAMMA,
+    WALL_TARGET_SPREAD and WALL_SMOOTH_WEIGHT in tools/world_assets.py). Both
+    the PAL3 result and the legacy-palette baseline in spatial_palette_error are
+    scored against this same target, so widening a material's contrast or
+    smoothing it cannot flatter one side of that comparison."""
+    dim = extractor.WALL_TEX_DIM
     with Image.open(path) as image:
-        source = image.convert("RGB").resize(
-            (extractor.WALL_TEX_DIM, extractor.WALL_TEX_DIM), Image.Resampling.BOX)
-    return [extractor.tone_curve(pixel) for pixel in source.get_flattened_data()]
+        source = image.convert("RGB").resize((dim, dim), Image.Resampling.BOX)
+    pixels = [extractor.tone_curve(pixel) for pixel in source.get_flattened_data()]
+    columns = extractor._spatial_smooth(extractor._contrast_normalize(
+        [[pixels[y * dim + x] for y in range(dim)] for x in range(dim)]))
+    return [columns[x][y] for y in range(dim) for x in range(dim)]
 
 
 def assert_no_spurious_green(extractor, palette, texture_name):
@@ -174,7 +190,10 @@ def main():
     assert not any(extractor.world_palette.is_olive(color)
                    for color in palette[1:14])
     assert "BSP_FLOOR_COLOR" not in (ROOT / "src" / "bsp" / "bsp_render.c").read_text()
-    shade_lut = extractor.build_shade_lut(palette)
+    ceiling_index = extractor.GLOBAL_CEILING_INDEX
+    floor_index = extractor.GLOBAL_FLOOR_INDEX
+    shade_lut = extractor.build_shade_lut(palette, 4, (ceiling_index, floor_index))
+    assert generated_shade_lut(assets) == shade_lut, "emitted shade LUT drifted"
     for index, color in enumerate(palette):
         for level in shade_lut:
             shaded = palette[level[index]]
@@ -182,6 +201,16 @@ def main():
                 assert shaded[0] == shaded[1] == shaded[2], (color, shaded)
             if color[1] <= max(color[0], color[2]):
                 assert shaded[1] <= max(shaded[0], shaded[2]), (color, shaded)
+    # Depth shading is ON (WALL_SHADE_MODE 2), so these two are load-bearing:
+    # a chain that reaches black turns distant walls into holes, and one that
+    # reaches a flat index turns them into the ceiling or the floor.
+    for level_index, level in enumerate(shade_lut):
+        for index in range(1, len(palette)):
+            assert level[index] != 0, (level_index, index)
+            if index not in (ceiling_index, floor_index):
+                assert level[index] not in (ceiling_index, floor_index), \
+                    ("shading darkened a wall into a flat colour",
+                     level_index, index, level[index])
     for texture_name in ("BROWN1", "GRAY7", "METAL1", "STONE2", "STARTAN3"):
         assert_no_spurious_green(extractor, palette, texture_name)
         perceptual, baseline = spatial_palette_error(extractor, palette, texture_name)
@@ -195,21 +224,61 @@ def main():
         limit = baseline * (2.5 if texture_name in ("GRAY7", "METAL1", "STONE2") else 1.0)
         assert perceptual <= limit, (texture_name, perceptual, baseline)
 
-    # Regression guard for the "corridors turn into a flat grey field" bug: a
-    # set of E1M1's darkest brown materials used to quantize 79-99% of their
-    # texels to the exact same index as the (then-global) floor colour because
-    # the neutral clamp and PAL3's own dark-band starvation left them nowhere
-    # else to go (see the wall-quality plan). No single index may now dominate
-    # a texture, and each of these must resolve to a real spread of colours.
     wall_textures = generated_wall_textures(assets)
-    for texture_name in ("BROWN144", "BROWN96", "BROWNGRN", "COMPUTE2",
-                         "BRNBIGC", "BRNBIGL", "BRNBIGR"):
-        rows = wall_textures[texture_name]
+
+    # "Churn" -- the share of horizontally adjacent texel pairs with different
+    # palette indices -- is the direct measure of the salt-and-pepper noise that
+    # made brown walls read as confetti. It has to be bounded from ABOVE, not
+    # below: the runtime samples each column at a distance-dependent rate
+    # through MEGALDOOM_WALL_TEX_Y_BY_HEIGHT and skips every other screen column
+    # (RAY_COL_STRIDE 2), so texel-frequency detail is never reconstructed as a
+    # blend -- it aliases into streaks that crawl as the camera moves. Before the
+    # earth ramp and WALL_SMOOTH_WEIGHT, the worst materials sat at 56-71%.
+    # EXITDOOR is the one legitimate outlier: a one-off decorative door whose
+    # source genuinely alternates gilt, grey and red at texel frequency.
+    CHURN_LIMIT = 0.30
+    CHURN_EXEMPT = {"EXITDOOR"}
+    for texture_name, rows in sorted(wall_textures.items()):
+        churn = sum(1 for row in rows for x in range(len(row) - 1)
+                    if row[x] != row[x + 1])
+        churn /= len(rows) * (len(rows[0]) - 1)
+        if texture_name not in CHURN_EXEMPT:
+            assert churn <= CHURN_LIMIT, (texture_name, churn)
+
+    # Structure floor, the other half of the same contract: killing the noise
+    # must not be achieved by flattening a material into one block. Two clauses,
+    # because neither alone says "this still reads as a wall":
+    #   - at least two indices carry real area (a lone dominant index plus a
+    #     scattering of strays is a flat block, whatever len(counts) says), and
+    #   - no index may swallow the whole surface.
+    # Deliberately NOT a tight dominance cap. The old 0.75 cap was a proxy for
+    # "wall must not look like the floor", and it now fights the fix: with
+    # dithering off, a two-tone brick like STARTAN1 legitimately resolves to
+    # 57/41 across two indices. The flat-collision contract is enforced directly
+    # and far more precisely by certify_flat_wall_contrast below.
+    MIN_STRUCTURAL_SHARE = 0.02
+    # Materials whose source really is a near-uniform field: LITE3 is a white
+    # light panel, COMPTILE a two-tone tile. Manufacturing spread into them would
+    # be inventing detail Doom never drew.
+    UNIFORM_MATERIALS = ("LITE3", "COMPTILE", "DOORSTOP", "STARGR1", "SUPPORT2")
+    for texture_name, rows in sorted(wall_textures.items()):
         flat = [value for row in rows for value in row]
         counts = Counter(flat)
+        structural = [index for index, hits in counts.items()
+                      if hits >= MIN_STRUCTURAL_SHARE * len(flat)]
+        assert len(structural) >= 2, (texture_name, counts)
         dominant_share = counts.most_common(1)[0][1] / len(flat)
-        assert dominant_share <= 0.75, (texture_name, dominant_share, counts)
-        assert len(counts) >= 4, (texture_name, counts)
+        cap = 0.90 if texture_name in UNIFORM_MATERIALS else 0.85
+        assert dominant_share <= cap, (texture_name, dominant_share, counts)
+
+    # The contract behind the global flats: no wall may read as an unbroken
+    # field of the ceiling's or the floor's colour, at ANY shade level. Index
+    # inequality alone is not enough -- adjacent PAL3 rungs are only ~0.13 apart
+    # in Oklab, so this is enforced perceptually. Reuses the same function the
+    # bake fails on, so the test and the generator cannot disagree.
+    solid = extractor.certify_flat_wall_contrast(
+        palette, wall_textures, shade_lut, ceiling_index, floor_index)
+    assert solid, "expected some near-solid wall materials to guard against"
 
     sector_visuals = re.search(
         r"FREEDOOM_SECTOR_VISUALS\[.*?\]\[6\]\s*=\s*\{(.*?)\};", assets, re.S)
@@ -219,14 +288,24 @@ def main():
     assert len(rows) == generated_define(assets, "FREEDOOM_SECTOR_VISUAL_COUNT")
     assert all(len(row) == 6 and all(0 <= value < 16 for value in row[:2] + row[3:5])
                and 0 <= row[2] <= 16 and 0 <= row[5] <= 16 for row in rows)
-    # Floor is now per-sector (mirrors the ceiling), not one ROM-constant grey:
-    # 65/85 E1M1 sectors used to render ceiling and floor as one seamless flat
-    # colour. The only remaining contract is that a sector's own floor and
-    # ceiling never resolve to the same index -- see the exclusion in
-    # emit_world_assets()'s flat_color()/floor_allowed computation.
-    for ceiling_a, ceiling_b, _, floor_a, floor_b, _ in rows:
-        assert {ceiling_a, ceiling_b}.isdisjoint({floor_a, floor_b}), \
-            "sector floor must never share an index with its own ceiling"
+    # One ceiling and one floor for the whole level. Per-sector flats folded the
+    # sector's LIGHT level into the material's colour before quantizing, so one
+    # material emitted up to seven different colours (FLOOR5_2) across E1M1's
+    # eight light levels -- and since bsp_cast_frame paints the whole viewport
+    # from the PLAYER's sector, walking between two rooms with the same floor
+    # repainted the screen. That reads as a palette glitch, not as lighting.
+    assert len(set(map(tuple, rows))) == 1, "flats must be level-wide constants"
+    ceiling_a, ceiling_b, ceiling_coverage, floor_a, floor_b, floor_coverage = rows[0]
+    assert (ceiling_a, ceiling_b) == (ceiling_index, ceiling_index)
+    assert (floor_a, floor_b) == (floor_index, floor_index)
+    # Solid, not Bayer-mixed: renderer_flats.c anchors its 4x4 pattern to screen
+    # space (x is always tile-local 0..7, y is y&3), so it never moves with the
+    # camera. On a level-wide flat -- the largest continuous surface on screen --
+    # that reads as fixed dirt on the monitor rather than as texture.
+    assert ceiling_coverage == 0 and floor_coverage == 0
+    separation = extractor.world_palette.distance_sq(
+        palette[ceiling_index], palette[floor_index]) ** 0.5
+    assert separation >= 0.25, separation
 
     # Regeneration to alternate outputs must be byte-identical to the checked-in
     # generated contracts, including palette order and packed pair data.

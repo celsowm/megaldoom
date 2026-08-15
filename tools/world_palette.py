@@ -98,6 +98,14 @@ def chroma(color):
     return math.hypot(a, b)
 
 
+def hue(color):
+    """Oklab hue angle in degrees. Only meaningful above a chroma floor --
+    every neutral lands on the same degenerate ~90 deg, so callers must gate on
+    chroma() first."""
+    _, a, b = oklab(tuple(color))
+    return math.degrees(math.atan2(b, a)) % 360.0
+
+
 def _family_sources(histogram, predicate):
     selected = [(tuple(color), weight) for color, weight in histogram.items()
                 if weight > 0 and predicate(color)]
