@@ -9,10 +9,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 EXTRACTOR = ROOT / "tools/wad-map-extract.py"
+DOOM_MAP = ROOT / "tools/doom_map.py"
 
 
 def load_extractor():
-    spec = importlib.util.spec_from_file_location("wad_map_extract", EXTRACTOR)
+    """Load tools/doom_map.py: the flatten/door-group/seg-classify/certify
+    module all the fixtures and certify_flat_progression() calls below
+    exercise."""
+    spec = importlib.util.spec_from_file_location("doom_map_progression", DOOM_MAP)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

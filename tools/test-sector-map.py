@@ -8,9 +8,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def load_extractor():
-    path = ROOT / "tools/wad-map-extract.py"
-    spec = importlib.util.spec_from_file_location("wad_map_extract", path)
+def load_module(name, relative_path):
+    path = ROOT / relative_path
+    spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -30,7 +30,10 @@ def main():
     runtime = (ROOT / "src/bsp/bsp_map.c").read_text()
     main_source = (ROOT / "src/main.c").read_text()
     raycast = (ROOT / "src/raycast.h").read_text()
-    extractor = load_extractor()
+    doom_map = load_module("doom_map_sector", "tools/doom_map.py")
+    world_assets = load_module("world_assets_sector", "tools/world_assets.py")
+    bsp_emit_source = (ROOT / "tools/bsp_emit.py").read_text()
+    world_assets_source = (ROOT / "tools/world_assets.py").read_text()
 
     expected = {
         "bsp_vertex_count": 467,
@@ -54,8 +57,7 @@ def main():
     }
     for symbol, value in expected_bounds.items():
         assert re.search(rf"const s16 {symbol} = {value};", generated), symbol
-        assert f'lines.append("const s16 {symbol}' in Path(
-            extractor.__file__).read_text()
+        assert f'lines.append("const s16 {symbol}' in bsp_emit_source
 
     rows = []
     for row in re.findall(r"\{([^{}]+)\}", declaration(
@@ -64,14 +66,14 @@ def main():
         assert len(values) == 11, values
         rows.append(values)
     types = Counter(row[7] for row in rows)
-    assert types == {extractor.SEG_WALL: 369,
-                     extractor.SEG_DOOR: 16,
-                     extractor.SEG_EXIT: 1}, types
-    door_rows = [row for row in rows if row[7] == extractor.SEG_DOOR]
+    assert types == {doom_map.SEG_WALL: 369,
+                     doom_map.SEG_DOOR: 16,
+                     doom_map.SEG_EXIT: 1}, types
+    door_rows = [row for row in rows if row[7] == doom_map.SEG_DOOR]
     assert Counter(row[8] for row in door_rows) == {0: 4, 1: 4, 2: 4, 3: 4}
     assert all(row[6] != 0 for row in door_rows), "E1M1 door used fallback texture"
-    assert all(row[9] == extractor.KEY_NONE for row in door_rows)
-    assert all(row[10] & extractor.SEG_FLAG_DIRECT_USE for row in door_rows)
+    assert all(row[9] == doom_map.KEY_NONE for row in door_rows)
+    assert all(row[10] & doom_map.SEG_FLAG_DIRECT_USE for row in door_rows)
 
     forbidden = ("BspLine", "BspRenderSeg", "BspSector", "portal",
                  "floor_height", "ceiling_height", "BSP_SECTOR_RENDERER")
@@ -103,17 +105,16 @@ def main():
     assert "[2][FREEDOOM_WORLD_SHADE_LEVELS][FREEDOOM_WALL_TEXTURE_COUNT]" in assets
     assert "FREEDOOM_WALL_PACKED_PAIRS[" in renderer_scene
     assert "descriptors[0].flags & RAY_COLUMN_FLAG_DOOR" in renderer_scene
-    extractor_source = Path(extractor.__file__).read_text()
-    assert "for door_style in range(2)" in extractor_source
-    assert "level[texel] * 0x11" in extractor_source
-    assert extractor.texture_u_scale_q12(24) > 0
+    assert "for door_style in range(2)" in world_assets_source
+    assert "level[texel] * 0x11" in world_assets_source
+    assert world_assets.texture_u_scale_q12(24) > 0
     assert "FREEDOOM_WALL_TEXTURE_USCALE_Q12[tid]" in (
         ROOT / "src/bsp/bsp_render.c").read_text()
 
     # Runtime and proof use the same canonical Doom collision radius.
     radius = int(re.search(
         r"#define PLAYER_COLLISION_RADIUS (\d+)", raycast).group(1))
-    assert radius == extractor.PLAYER_RADIUS == 16
+    assert radius == doom_map.PLAYER_RADIUS == 16
 
     # Colored keys are persistent bits and every door face shares group state.
     for name, value in (("BSP_KEY_BLUE", 1), ("BSP_KEY_YELLOW", 2),

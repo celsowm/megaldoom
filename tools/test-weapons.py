@@ -106,16 +106,25 @@ assert rect_w // 8 == 8 and rect_h // 8 == 5
 # --- PAL3 is frozen ----------------------------------------------------------
 # The world palette is shared by walls, items, enemies AND the weapon overlay.
 # New weapon sprites are quantized against it; they must never be fed into the
-# histogram that produces it (WORLD_SPRITE_INPUTS in tools/wad-map-extract.py),
+# histogram that produces it (WORLD_SPRITE_INPUTS in tools/world_assets.py),
 # because that would recolour the entire game.
+#
+# Updated 2026-08-15: PAL3 was deliberately rebalanced (dedicated dark-warm
+# slot, chroma-based neutral clamp, tone curve on wall/flat inputs) to fix
+# E1M1's dark brown corridors collapsing onto the floor's own grey -- see the
+# "temos-problema-na-hora" wall-quality plan. This lock exists to catch
+# ACCIDENTAL PAL3 drift from routine wall-only tuning, not to forbid an
+# intentional, user-approved rebalance; when that happens on purpose, update
+# this constant to the new FREEDOOM_WORLD_PALETTE and re-verify the weapon/
+# billboard bake still reads correctly (visual check, not just this test).
 FROZEN_PALETTE = [
-    "000000", "240000", "000048", "242424", "482424", "484848", "6D4824", "6D4848",
-    "486D48", "6D6D6D", "B66D48", "919191", "B6B6B6", "DADADA", "DA2424", "DAB648",
+    "000000", "240000", "00006D", "242424", "482424", "484848", "6D4824", "6D6D6D",
+    "916D48", "6D916D", "919191", "FF4848", "B6916D", "B6B6B6", "DA2424", "DAB648",
 ]
 palette = re.findall(r"0x([0-9A-Fa-f]{6})", re.search(
     r"FREEDOOM_WORLD_PALETTE\[16\]\s*=\s*\{(.*?)\}", WORLD_ASSETS, re.S).group(1))
 assert [entry.upper() for entry in palette] == FROZEN_PALETTE, palette
-extract = (ROOT / "tools/wad-map-extract.py").read_text()
+extract = (ROOT / "tools/world_assets.py").read_text()
 sprite_inputs = re.search(r"WORLD_SPRITE_INPUTS = \[(.*?)\]", extract, re.S).group(1)
 for lump in ("SHTG", "CHGG", "PUNG", "SAWG", "SHOTA0", "MGUNA0", "CSAWA0"):
     assert lump not in sprite_inputs, (

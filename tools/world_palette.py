@@ -84,6 +84,20 @@ def is_saturated_red(color):
     return color[0] >= 145 and color[1] <= 36 and color[2] <= 36
 
 
+def is_dark_warm(color):
+    """Warm colours in the L<0.35 band -- the rung missing between the
+    0x242424 and 0x484848 neutrals where most of E1M1's brown corridor
+    textures (BROWN144, BROWN96, BRNBIG*, COMPUTE2) actually live. Without a
+    dedicated slot here they fall inside the neutral clamp and quantize flat
+    to the floor's own grey (see tools/test-wall-quality.py dark-brown checks)."""
+    return is_warm(color) and oklab(color)[0] < 0.35
+
+
+def chroma(color):
+    _, a, b = oklab(tuple(color))
+    return math.hypot(a, b)
+
+
 def _family_sources(histogram, predicate):
     selected = [(tuple(color), weight) for color, weight in histogram.items()
                 if weight > 0 and predicate(color)]
@@ -116,9 +130,13 @@ def build_palette(histogram, damage, warning):
     selected = []
 
     # Fixed family budgets prevent a sprite-heavy histogram from consuming the
-    # concrete/metal and brown ramps needed by most wall pixels.
+    # concrete/metal and brown ramps needed by most wall pixels. Neutral gets 5
+    # (not fewer): GRAY7/METAL1/STONE2 are quantized neutral-only (see
+    # convert_texture's GRAY/METAL/STONE special case in wad-map-extract.py),
+    # so an under-sized or gappy neutral ramp bands badly regardless of how
+    # good the rest of the palette is.
     _add_greedy_slots(selected, [c for c in available if is_neutral(c)],
-                      _family_sources(histogram, lambda c: max(c) - min(c) <= 18), 4)
+                      _family_sources(histogram, lambda c: max(c) - min(c) <= 18), 5)
     _add_greedy_slots(selected, [c for c in available if is_earth(c) and c[0] <= 145],
                       _family_sources(histogram, lambda c: is_earth(c) and c[0] <= 145), 1)
     _add_greedy_slots(selected, [c for c in available if is_earth(c) and c[0] >= 182],
@@ -128,15 +146,26 @@ def build_palette(histogram, damage, warning):
     _add_greedy_slots(selected, [c for c in available
                                  if is_warm(c) and not is_saturated_red(c) and c[0] <= 182],
                       _family_sources(histogram, is_warm), 1)
+    # Dedicated dark-warm slot: without it, BROWN144/BROWN96/BRNBIG*/COMPUTE2
+    # (source luminance ~35-39/255) fall inside the neutral clamp between
+    # 0x242424 and 0x484848 and quantize flat to the floor's own grey.
+    _add_greedy_slots(selected, [c for c in available if is_dark_warm(c)],
+                      _family_sources(histogram, is_dark_warm), 1)
     _add_greedy_slots(selected, [c for c in available if is_blue(c)],
                       _family_sources(histogram, is_blue), 1)
     _add_greedy_slots(selected, [c for c in available if is_green(c)],
                       _family_sources(histogram, is_green), 1)
+    # One unrestricted slot to round out whatever the fixed budgets above did
+    # not cover, excluded from neutral so the total stays at 5 -- PAL3 was
+    # previously burning 7 of 16 on grey ramps
+    # (000000/242424/484848/6D6D6D/919191/B6B6B6/DADADA) while B6B6B6 and
+    # DADADA have almost no source weight in E1M1 outside LITE3.
     global_candidates = [color for color in available
                          if not is_blue(color) and not is_green(color) and
-                         not is_olive(color) and not is_saturated_red(color)]
+                         not is_olive(color) and not is_saturated_red(color) and
+                         not is_neutral(color)]
     _add_greedy_slots(selected, global_candidates,
-                      _family_sources(histogram, lambda _c: True), 3)
+                      _family_sources(histogram, lambda _c: True), 1)
 
     if len(selected) != 13:
         raise RuntimeError("PAL3 adaptive slot allocation did not produce 13 colours")
@@ -144,9 +173,23 @@ def build_palette(histogram, damage, warning):
     return [black] + selected + [damage, warning]
 
 
-def allowed_indices(rgb, palette, opaque=True):
+def _is_low_chroma(rgb, chroma_threshold):
+    # chroma_threshold is None: legacy RGB-spread clamp (used by sprite/HUD
+    # conversion via world-palette-lut.py, left untouched so PAL3 rebalancing
+    # for walls does not also recolor the weapon and every billboard).
+    # chroma_threshold is a number: Oklab-chroma clamp used for wall/flat
+    # conversion, which correctly separates real dark browns (BROWN144
+    # chroma~0.026, BROWN96 chroma~0.033) from truly neutral surfaces
+    # (COMPUTE2 chroma~0.008, BROWNGRN chroma~0.014) that an absolute RGB
+    # spread of 36 could not tell apart.
+    if chroma_threshold is None:
+        return max(rgb) - min(rgb) <= 36
+    return chroma(rgb) <= chroma_threshold
+
+
+def allowed_indices(rgb, palette, opaque=True, chroma_threshold=None):
     indices = list(range(1 if opaque else 0, len(palette)))
-    if max(rgb) - min(rgb) <= 36:
+    if _is_low_chroma(rgb, chroma_threshold):
         neutral = [index for index in indices if is_neutral(palette[index])]
         if neutral:
             return neutral
@@ -165,23 +208,31 @@ def nearest_index(rgb, palette, allowed=None):
     return min(indices, key=lambda index: (distance_sq(rgb, palette[index]), index))
 
 
-def best_mix(rgb, palette, opaque=True, allowed=None):
-    """Return (primary, secondary, secondary_coverage_0_to_16)."""
-    indices = allowed_indices(rgb, palette, opaque)
+def best_mix(rgb, palette, opaque=True, allowed=None, chroma_threshold=None,
+            pair_max_delta=73, gain_ratio=0.65):
+    """Return (primary, secondary, secondary_coverage_0_to_16).
+
+    pair_max_delta and gain_ratio gate how readily dithering is offered: the
+    defaults match the historical sprite/HUD behaviour (world-palette-lut.py
+    calls this with no overrides). Wall/flat conversion passes tighter values
+    to suppress the salt-and-pepper pairing that RAY_COL_STRIDE turns into a
+    visible, flickering 2px checkerboard (see tools/test-wall-quality.py).
+    """
+    indices = allowed_indices(rgb, palette, opaque, chroma_threshold)
     if allowed is not None:
         allowed_set = set(allowed)
         indices = [index for index in indices if index in allowed_set]
     target = oklab(tuple(rgb))
     primary = nearest_index(rgb, palette, indices)
     primary_error = distance_sq(rgb, palette[primary])
-    if max(rgb) - min(rgb) <= 36:
+    if _is_low_chroma(rgb, chroma_threshold):
         return primary, primary, 0
     best = (primary_error, primary, primary, 0)
     for position, first in enumerate(indices):
         a = oklab(tuple(palette[first]))
         for second in indices[position + 1:]:
             if max(abs(palette[first][channel] - palette[second][channel])
-                   for channel in range(3)) > 73:
+                   for channel in range(3)) > pair_max_delta:
                 continue
             b = oklab(tuple(palette[second]))
             vector = (b[0] - a[0], b[1] - a[1], b[2] - a[2])
@@ -200,7 +251,7 @@ def best_mix(rgb, palette, opaque=True, allowed=None):
     error, first, second, coverage = best
     # Avoid high-contrast salt-and-pepper pairs when their average only barely
     # beats the closest solid colour. Strong gains still receive dithering.
-    if error >= primary_error * 0.65:
+    if error >= primary_error * gain_ratio:
         return primary, primary, 0
     if coverage == 0:
         return first, first, 0
@@ -209,12 +260,15 @@ def best_mix(rgb, palette, opaque=True, allowed=None):
     return first, second, coverage
 
 
-def dither_index(rgb, palette, x, y, opaque=True, cache=None, allowed=None):
+def dither_index(rgb, palette, x, y, opaque=True, cache=None, allowed=None,
+                 chroma_threshold=None, pair_max_delta=73, gain_ratio=0.65):
     key = tuple(int(channel * 31 / 255) * 255 // 31 for channel in rgb)
     if cache is not None and key in cache:
         first, second, coverage = cache[key]
     else:
-        first, second, coverage = best_mix(key, palette, opaque, allowed)
+        first, second, coverage = best_mix(key, palette, opaque, allowed,
+                                           chroma_threshold, pair_max_delta,
+                                           gain_ratio)
         if cache is not None:
             cache[key] = (first, second, coverage)
     return second if BAYER_4X4[y & 3][x & 3] < coverage else first

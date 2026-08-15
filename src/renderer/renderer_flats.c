@@ -40,18 +40,21 @@ static u32 pack_flat_row(const RayFlatColor *material, u16 x, u16 y) {
 
 PackedFlatRows build_flat_rows(const RaySceneColors *scene_colors) {
     PackedFlatRows rows;
-    const u32 fixed_floor = (u32)MEGALDOOM_WORLD_COLOR_FLOOR * 0x11111111u;
     for (u16 y = 0; y < 4; y++) {
 #if RAY_COL_STRIDE == 4
         const u16 ceiling = pack_flat_quad(&scene_colors->ceiling, 0, y);
         rows.ceiling[y] = ((u32)ceiling << 16) | ceiling;
+        const u16 floor = pack_flat_quad(&scene_colors->floor, 0, y);
+        rows.floor[y] = ((u32)floor << 16) | floor;
 #else
         rows.ceiling[y] = pack_flat_row(&scene_colors->ceiling, 0, y);
+        // Per-sector floor, mirroring the ceiling above: tools/wad-map-extract.py
+        // now bakes FREEDOOM_SECTOR_VISUALS[sector][3..5] from that sector's own
+        // floor flat (lit, chroma-clamped, best_mix-dithered) instead of forcing
+        // every sector to one ROM-constant grey. See tools/test-wall-quality.py
+        // for the guardrail that floor and ceiling never share an index.
+        rows.floor[y] = pack_flat_row(&scene_colors->floor, 0, y);
 #endif
-        // Floors are deliberately invariant across sectors. This constant ROM
-        // material eliminates both Bayer sampling and the blue/yellow/brown
-        // transitions that did not add useful navigation information.
-        rows.floor[y] = fixed_floor;
     }
     return rows;
 }
