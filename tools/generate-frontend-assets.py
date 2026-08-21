@@ -15,8 +15,11 @@ from PIL import Image, ImageDraw, ImageFont
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "res" / "originaldoom" / "graphics"
 OUTPUT = ROOT / "res" / "frontend"
+SPRITE_SOURCE = ROOT / "res" / "originaldoom" / "sprites"
+BOOT_SOURCE = ROOT / "res" / "boot"
+SEGA_FONT = BOOT_SOURCE / "SEGA.TTF"
 MANIFEST_NAME = ".frontend-assets.json"
-MANIFEST_VERSION = 1
+MANIFEST_VERSION = 2
 
 PATCHES = (
     "TITLEPIC", "M_DOOM", "M_NGAME", "M_OPTION", "M_QUITG",
@@ -25,7 +28,14 @@ PATCHES = (
 )
 PROMPT = "PRESS START"
 DEATH_PROMPT = "PRESS FIRE"
-DOOM_FONT_TEXT = (PROMPT, DEATH_PROMPT, "MUSIC ON", "MUSIC OFF", "SFX ON", "SFX OFF", "BACK")
+DOOM_FONT_TEXT = (
+    PROMPT, DEATH_PROMPT, "MUSIC ON", "MUSIC OFF", "SFX ON", "SFX OFF", "BACK",
+    "MEGALDOOM", "UNOFFICIAL FAN PORT", "INSPIRED BY DOOM AND ID TECH",
+    "NOT AFFILIATED WITH OR ENDORSED BY", "SEGA, ID SOFTWARE, OR ZENIMAX.",
+    "DOOM IS A TRADEMARK OF ID SOFTWARE.", "BUILT WITH SGDK", "SGDK",
+    "BUILT FOR THE 16-BIT ERA", "SOFTWARE DEVELOPMENT KIT", "FOLLOW THE PROJECT",
+    "GITHUB.COM/CELSOWM/MEGALDOOM", "X.COM/PROFCELSOFONTES", "THANKS FOR PLAYING",
+)
 GLYPHS = tuple(sorted({
     f"STCFN{ord(character):03d}"
     for text in DOOM_FONT_TEXT
@@ -33,12 +43,18 @@ GLYPHS = tuple(sorted({
     if character != " "
 }))
 SKILL_PATCHES = ("M_JKILL", "M_ROUGH", "M_HURT", "M_ULTRA", "M_NMARE")
+BOOT_INPUTS = (
+    SPRITE_SOURCE / "HEADA1.png",
+    BOOT_SOURCE / "sgdk-sparkle-source.png",
+    SEGA_FONT,
+)
 
 
 def expected_outputs() -> tuple[str, ...]:
     names = [
         "title.png", "prompt.png", "death_prompt.png", "main_menu.png", "logo.png",
         "options.png", "skull1.png", "skull2.png",
+        "boot_disclaimer.png", "boot_sgdk.png", "boot_social.png", "cacodemon.png",
     ]
     names.extend(f"main_{selected}_{frame}.png" for selected in range(3) for frame in range(2))
     names.extend(
@@ -59,7 +75,7 @@ def generator_hash() -> str:
 
 
 def source_paths(source: Path) -> tuple[Path, ...]:
-    return tuple(source / f"{name}.png" for name in (*PATCHES, *GLYPHS))
+    return (*tuple(source / f"{name}.png" for name in (*PATCHES, *GLYPHS)), *BOOT_INPUTS)
 
 
 def source_hash(source: Path) -> str:
@@ -204,8 +220,72 @@ def indexed(image: Image.Image, palette: list[tuple[int, int, int]], transparent
     return out
 
 
+def indexed_fixed_palette(image: Image.Image, palette: list[tuple[int, int, int]],
+                          palette_index: int, transparent: bool) -> Image.Image:
+    """Index an image into one VDP palette line (needed by SPRITE resources)."""
+    rgba = image.convert("RGBA")
+    out = Image.new("P", rgba.size, 0)
+    flat_palette = [channel for color in palette for channel in color]
+    out.putpalette(flat_palette + [0] * (768 - len(flat_palette)))
+    source = rgba.load()
+    target = out.load()
+    base = palette_index * 16
+    for y in range(rgba.height):
+        for x in range(rgba.width):
+            r, g, b, a = source[x, y]
+            target[x, y] = base if transparent and a < 128 else nearest((r, g, b), palette, base)
+    if transparent:
+        out.info["transparency"] = base
+    return out
+
+
+def build_cacodemon_palette(image: Image.Image) -> list[tuple[int, int, int]]:
+    """Make a dedicated Genesis-friendly palette for the Cacodemon sprite.
+
+    The frontend palette is tuned for Doom's title/menu patches and has almost
+    no room for the sprite's red, grey and green ramps.  Quantize the opaque
+    source pixels independently, then snap each channel to the Mega Drive's
+    3-bit DAC levels so the sprite keeps its original hue and contrast on PAL1.
+    """
+    rgba = image.convert("RGBA")
+    opaque = [(r, g, b) for r, g, b, a in rgba.getdata() if a >= 128]
+    sample = Image.new("RGB", (len(opaque), 1))
+    sample.putdata(opaque)
+    # Keep a few entries free for the small but distinctive green horns and
+    # brown/olive highlights, which a red-dominant median cut would otherwise
+    # discard entirely.
+    quantized = sample.quantize(colors=12, method=Image.Quantize.MEDIANCUT)
+    raw = quantized.getpalette()
+
+    def genesis_level(channel: int) -> int:
+        return (round(channel * 7 / 255) * 255) // 7
+
+    colors: list[tuple[int, int, int]] = []
+    for index in range(12):
+        color = tuple(genesis_level(channel) for channel in raw[index * 3:index * 3 + 3])
+        if color not in colors:
+            colors.append(color)
+    # A pathological source or quantizer still gets a complete 16-entry
+    # palette, with useful ramps instead of uninitialized palette entries.
+    for color in ((36, 72, 0), (72, 109, 36), (109, 145, 36),
+                  (109, 72, 36), (0, 0, 0), (109, 0, 0),
+                  (182, 0, 0), (255, 0, 0), (72, 72, 72),
+                  (182, 182, 182), (255, 255, 255)):
+        if color not in colors:
+            colors.append(color)
+    return [(0, 0, 0), *colors[:15]]
+
+
 def transparent_canvas(width: int, height: int) -> Image.Image:
     return Image.new("RGBA", (width, height), (0, 0, 0, 0))
+
+
+def centered_boot_text(image: Image.Image, text: str, y: int,
+                       color: tuple[int, int, int, int] = (255, 255, 255, 255)) -> None:
+    # Use the extracted Doom glyphs for every boot label, matching the
+    # existing title and menu. The color argument remains for compatibility
+    # with the earlier prototype callers.
+    centered_doom_text(image, text, y)
 
 
 def centered_text(image: Image.Image, text: str, y: int) -> None:
@@ -219,6 +299,11 @@ def centered_text(image: Image.Image, text: str, y: int) -> None:
 def centered_doom_text(image: Image.Image, text: str, y: int, source: Path = SOURCE) -> None:
     patch = doom_text(text, source)
     image.alpha_composite(patch, ((image.width - patch.width) // 2, y))
+
+
+def centered_doom_text_at(image: Image.Image, text: str, x: int, y: int,
+                          source: Path = SOURCE) -> None:
+    image.alpha_composite(doom_text(text, source), (x, y))
 
 
 def doom_text(text: str, source: Path = SOURCE) -> Image.Image:
@@ -271,6 +356,140 @@ def screen_overlay(panel: Image.Image) -> Image.Image:
     return screen
 
 
+def boot_background() -> Image.Image:
+    image = Image.new("RGBA", (320, 224), (4, 2, 2, 255))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((12, 12, 307, 211), outline=(64, 8, 4, 255), width=2)
+    draw.rectangle((16, 16, 303, 207), outline=(24, 8, 4, 255), width=1)
+    for x, y in ((12, 12), (303, 12), (12, 207), (303, 207)):
+        draw.rectangle((x, y, x + 4, y + 4), fill=(176, 16, 8, 255))
+    return image
+
+
+def draw_sgdk_logo(image: Image.Image, source: Path = SOURCE) -> None:
+    """Render the SGDK wordmark with the supplied SEGA-style display font."""
+    font = ImageFont.truetype(str(SEGA_FONT), 72)
+    draw = ImageDraw.Draw(image)
+    bbox = draw.textbbox((0, 0), "SGDK", font=font, stroke_width=2)
+    width = bbox[2] - bbox[0]
+    x = (image.width - width) // 2
+    y = 54 - bbox[1]
+    # Dark navy extrusion, white keyline, then the bright blue face. The
+    # three passes keep the logo legible against the black/red boot frame.
+    draw.text((x + 3, y + 5), "SGDK", font=font, fill=(4, 8, 32, 255),
+              stroke_width=3, stroke_fill=(4, 8, 32, 255))
+    draw.text((x, y), "SGDK", font=font, fill=(24, 112, 232, 255),
+              stroke_width=2, stroke_fill=(224, 248, 255, 255))
+    draw.text((x, y - 1), "SGDK", font=font, fill=(24, 112, 232, 255),
+              stroke_width=1, stroke_fill=(8, 48, 144, 255))
+
+
+def cropped_sparkles() -> Image.Image:
+    sparkle = Image.open(BOOT_SOURCE / "sgdk-sparkle-source.png").convert("RGBA")
+    bbox = sparkle.getchannel("A").getbbox()
+    if bbox is None:
+        raise RuntimeError("SGDK sparkle source has no visible pixels")
+    sparkle = sparkle.crop(bbox)
+    sparkle.thumbnail((104, 52), Image.Resampling.NEAREST)
+    pixels = sparkle.load()
+    for y in range(sparkle.height):
+        for x in range(sparkle.width):
+            r, g, b, a = pixels[x, y]
+            if a:
+                heat = max(r, g, b)
+                pixels[x, y] = (min(255, heat), min(224, heat // 3), min(160, heat // 6), a)
+    return sparkle
+
+
+def make_boot_disclaimer() -> Image.Image:
+    image = boot_background()
+    centered_boot_text(image, "MEGALDOOM", 34)
+    centered_boot_text(image, "UNOFFICIAL FAN PORT", 68)
+    lines = (
+        "INSPIRED BY DOOM AND ID TECH",
+        "NOT AFFILIATED WITH OR ENDORSED BY",
+        "SEGA, ID SOFTWARE, OR ZENIMAX.",
+        "DOOM IS A TRADEMARK OF ID SOFTWARE.",
+        "BUILT WITH SGDK.",
+    )
+    for index, line in enumerate(lines):
+        centered_boot_text(image, line, 94 + index * 16)
+    return image
+
+
+def make_boot_sgdk() -> Image.Image:
+    image = boot_background()
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((24, 40, 295, 135), fill=(12, 4, 4, 255), outline=(96, 12, 4, 255))
+    draw_sgdk_logo(image)
+    sparkles = cropped_sparkles()
+    image.alpha_composite(sparkles, (25, 13))
+    centered_boot_text(image, "BUILT FOR THE 16-BIT ERA", 160)
+    centered_boot_text(image, "SOFTWARE DEVELOPMENT KIT", 178)
+    return image
+
+
+def draw_github_icon(draw: ImageDraw.ImageDraw, x: int, y: int) -> None:
+    """Draw a compact pixel Octocat mark (the official GitHub silhouette)."""
+    colour = (224, 248, 255, 255)
+    dark = (4, 2, 2, 255)
+    pixels = (
+        "....##....##....",
+        "...####..####...",
+        "..############..",
+        ".##############.",
+        ".##############.",
+        "################",
+        "####.########.##",
+        "################",
+        ".##############.",
+        "..############..",
+        "...##########...",
+        "....########....",
+        "....########....",
+        "...##..##.......",
+        "..##...##.......",
+        ".##....##.......",
+    )
+    for row, line in enumerate(pixels):
+        for column, value in enumerate(line):
+            if value == "#":
+                draw.point((x + column, y + row), fill=colour)
+    # Two one-pixel cutouts keep the silhouette readable at 1x scale.
+    draw.point((x + 5, y + 6), fill=dark)
+    draw.point((x + 10, y + 6), fill=dark)
+
+
+def draw_x_icon(draw: ImageDraw.ImageDraw, x: int, y: int) -> None:
+    """Draw the official X mark's two broad interlocking diagonals."""
+    colour = (224, 248, 255, 255)
+    draw.polygon((
+        (x + 2, y + 1), (x + 5, y + 1), (x + 8, y + 5),
+        (x + 11, y + 1), (x + 14, y + 1), (x + 10, y + 7),
+        (x + 14, y + 14), (x + 11, y + 14), (x + 8, y + 10),
+        (x + 5, y + 14), (x + 2, y + 14), (x + 6, y + 7),
+    ), fill=colour)
+
+
+def make_boot_social() -> Image.Image:
+    image = boot_background()
+    draw = ImageDraw.Draw(image)
+    centered_boot_text(image, "FOLLOW THE PROJECT", 44)
+    draw_github_icon(draw, 42, 97)
+    draw_x_icon(draw, 42, 137)
+    centered_doom_text_at(image, "GITHUB.COM/CELSOWM/MEGALDOOM", 72, 100)
+    centered_doom_text_at(image, "X.COM/PROFCELSOFONTES", 72, 140)
+    centered_boot_text(image, "THANKS FOR PLAYING", 187)
+    return image
+
+
+def make_cacodemon() -> Image.Image:
+    source = Image.open(SPRITE_SOURCE / "HEADA1.png").convert("RGBA")
+    canvas = transparent_canvas(64, 72)
+    canvas.alpha_composite(source, ((64 - source.width) // 2, 72 - source.height))
+    return canvas
+
+
 def doom_text_mask(text: str, width: int, height: int, palette_index: int,
                     palette: list[tuple[int, int, int]], source: Path = SOURCE) -> Image.Image:
     """A paletted (not quantized) mask: 0 = transparent, palette_index = lit.
@@ -300,6 +519,13 @@ def doom_text_mask(text: str, width: int, height: int, palette_index: int,
 
 def generate(source: Path, output: Path) -> None:
     images = {name: load(name, source) for name in PATCHES}
+    boot_disclaimer = make_boot_disclaimer()
+    boot_sgdk = make_boot_sgdk()
+    boot_social = make_boot_social()
+    cacodemon = make_cacodemon()
+    cacodemon_palette = build_cacodemon_palette(cacodemon)
+    # Keep the original Doom title/menu palette selection stable; boot cards
+    # are quantized into that same four-line palette afterward.
     palette = build_palette(images)
     output.mkdir(parents=True, exist_ok=True)
 
@@ -336,6 +562,9 @@ def generate(source: Path, output: Path) -> None:
         "options.png": (options, True),
         "skull1.png": (skulls[0], True),
         "skull2.png": (skulls[1], True),
+        "boot_disclaimer.png": (boot_disclaimer, False),
+        "boot_sgdk.png": (boot_sgdk, False),
+        "boot_social.png": (boot_social, False),
     }
 
     for selected in range(3):
@@ -378,6 +607,12 @@ def generate(source: Path, output: Path) -> None:
         assets[f"confirm_{selected}.png"] = (screen_overlay(panel), True)
     for filename, (image, transparent) in assets.items():
         indexed(image, palette, transparent).save(output / filename, optimize=False)
+
+    # This is a sprite-engine resource. Keep index 0 transparent, but give it
+    # its own quantized palette so Doom's red/grey/green ramps are not forced
+    # through the title/menu palette.
+    indexed_fixed_palette(cacodemon, cacodemon_palette, 0, True).save(
+        output / "cacodemon.png", optimize=False)
 
     # Gameplay-drawn mask: index 9 is the death-prompt red claimed in PAL0 by
     # renderer.c's load_game_palettes (indices 2-8 are already used by the HUD

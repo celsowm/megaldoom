@@ -60,6 +60,10 @@ if ($DebugPerf) { $flags += "-DDEBUG_PERF=1" }
 $effectiveFlags = $flags -join " "
 if ($effectiveFlags) { $env:EXTRA_FLAGS = $effectiveFlags }
 else { Remove-Item Env:\EXTRA_FLAGS -ErrorAction SilentlyContinue }
+# The project Makefile owns its include paths with :=, so pass the complete
+# value on the make command line. This preserves those paths while allowing
+# route/debug callers to inject their requested -D flags.
+$makeExtraFlags = "-Isrc/billboard -Isrc/renderer -Isrc/bsp $effectiveFlags".Trim()
 
 $statePath = Join-Path $Root "build\build-config.json"
 $romStatePath = Join-Path $Root "build\rom-bin.json"
@@ -89,7 +93,7 @@ try {
     }
     # Keep SGDK's target-specific release CFLAGS/AFLAGS, but defer its phony
     # Java padding recipe until the ROM content actually changed.
-    & $Make -f Makefile release "SIZEBND=echo"
+    & $Make -f Makefile release "SIZEBND=echo" "EXTRA_FLAGS=$makeExtraFlags"
     $buildExit = $LASTEXITCODE
     if ($buildExit -eq 0) {
         & python $stateTool seal-link --output (Join-Path $Root "out") --root $Root
@@ -102,7 +106,7 @@ try {
         } elseif ($romDecision -eq "pad") {
             # Use release again so LIBMD and all target-specific SGDK variables
             # remain defined. seal-link makes every prerequisite up to date.
-            & $Make -f Makefile release
+            & $Make -f Makefile release "EXTRA_FLAGS=$makeExtraFlags"
             $buildExit = $LASTEXITCODE
             if ($buildExit -eq 0) {
                 & python $stateTool record-rom --state $romStatePath --rom $romPath

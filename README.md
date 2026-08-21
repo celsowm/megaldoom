@@ -26,7 +26,7 @@ reference-renderer fallback in the product.
 - Placeholder pistol with recoil.
 - HUD and minimap.
 - XGM2 background music (E1M1) and Doom PCM sound effects: pistol gunshot, enemy pain/death, player pain/death, door move and item pickup.
-- Doom `TITLEPIC` boot screen with intro music, animated-skull main menu, audio options and an in-game pause menu.
+- Three-card fan-port/SGDK/social boot sequence with intro music, a bobbing Cacodemon splash, Doom `TITLEPIC`, animated-skull main menu, audio options and an in-game pause menu.
 
 ## New in 0.0.4
 

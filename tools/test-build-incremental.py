@@ -63,7 +63,10 @@ with tempfile.TemporaryDirectory(prefix="megaldoom-build-test-") as folder:
         frontend.generate = real_generate
     assert frontend.complete_outputs(output)
     assert (output / frontend.MANIFEST_NAME).is_file()
-    assert len(frontend.EXPECTED_OUTPUTS) == 36
+    assert len(frontend.EXPECTED_OUTPUTS) == 40
+    assert frontend.SPRITE_SOURCE / "HEADA1.png" in frontend.source_paths(source)
+    assert frontend.BOOT_SOURCE / "sgdk-sparkle-source.png" in frontend.source_paths(source)
+    assert frontend.BOOT_SOURCE / "SEGA.TTF" in frontend.source_paths(source)
 
     mtimes = {name: (output / name).stat().st_mtime_ns for name in frontend.EXPECTED_OUTPUTS}
     cached = run_generator(source, output)

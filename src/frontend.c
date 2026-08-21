@@ -13,6 +13,14 @@
  * label, rather than one tile above it. */
 #define MAIN_CURSOR_Y 12
 #define MAIN_CURSOR_STEP 4
+#define BOOT_CARD_FRAMES 180
+#define BOOT_FADE_FRAMES 8
+#define BOOT_CARD_VISIBLE_FRAMES (BOOT_CARD_FRAMES - (BOOT_FADE_FRAMES * 2))
+#define BOOT_CACODEMON_X 238
+#define BOOT_CACODEMON_Y 104
+
+/* A return from gameplay is a return to the title, not a fresh console boot. */
+static bool s_boot_sequence_played = FALSE;
 
 static void clear_plane_cpu(VDPPlane plane) {
     /* CPU writes avoid competing with XGM2 for DMA/Z80 arbitration. */
@@ -62,6 +70,82 @@ static void draw_panel(const Image *image, u16 tile_base) {
                     0, 0, TRUE, TRUE);
     VDP_setEnable(TRUE);
     game_audio_resume_after_video();
+}
+
+/* The boot cards deliberately avoid draw_panel(): suspending XGM2 to redraw a
+ * card would restart the intro track between cards, while these cards are
+ * intended to play as one continuous opening sequence. */
+static void draw_boot_card(const Image *image) {
+    clear_plane_cpu(BG_A);
+    clear_plane_cpu(BG_B);
+    VDP_waitVSync();
+    VDP_drawImageEx(BG_B, image,
+                    TILE_ATTR_FULL(PAL0, FALSE, FALSE, FALSE, TILE_USER_INDEX),
+                    0, 0, TRUE, TRUE);
+}
+
+static void animate_sgdk_shimmer(u16 frame) {
+    const bool bright = (bool)((frame & 0x10) != 0);
+    PAL_setColor(13, RGB24_TO_VDPCOLOR(bright ? 0x5C0000 : 0x280000));
+    PAL_setColor(14, RGB24_TO_VDPCOLOR(bright ? 0xE02C10 : 0x900C04));
+    PAL_setColor(15, RGB24_TO_VDPCOLOR(bright ? 0xFFF0C0 : 0xD8A060));
+}
+
+static void run_boot_card(const Image *image, bool show_cacodemon) {
+    Sprite *cacodemon = NULL;
+    u16 previous;
+
+    draw_boot_card(image);
+    if (show_cacodemon) {
+        /* Reserve the 96 tiles immediately below the system font. This is the
+         * same 1440-tile user ceiling the frontend test already certifies. */
+        SPR_initEx(96);
+        cacodemon = SPR_addSprite(&frontend_cacodemon, BOOT_CACODEMON_X,
+                                  BOOT_CACODEMON_Y,
+                                  TILE_ATTR(PAL1, TRUE, FALSE, FALSE));
+        if (cacodemon != NULL) SPR_update();
+    }
+
+    PAL_fadeIn(0, 63, image->palette->data, BOOT_FADE_FRAMES, FALSE);
+    if (show_cacodemon) {
+        /* PAL_fadeIn covers all four lines; restore the sprite's dedicated
+         * PAL1 ramp after it has populated PAL0 with the card palette. */
+        PAL_setPalette(PAL1, frontend_cacodemon.palette->data, CPU);
+    }
+    wait_for_release(BUTTON_START);
+    previous = JOY_readJoypad(JOY_1);
+    for (u16 frame = 0; frame < BOOT_CARD_VISIBLE_FRAMES; frame++) {
+        const u16 pressed = read_pressed(&previous);
+        if ((pressed & BUTTON_START) != 0) break;
+        if (show_cacodemon) {
+            animate_sgdk_shimmer(frame);
+            if (cacodemon != NULL) {
+                const s16 bob = (frame & 0x10) ? 2 : -2;
+                SPR_setPosition(cacodemon, BOOT_CACODEMON_X,
+                                (s16)(BOOT_CACODEMON_Y + bob));
+                SPR_update();
+            }
+        }
+        VDP_waitVSync();
+    }
+
+    if (show_cacodemon) {
+        if (cacodemon != NULL) SPR_releaseSprite(cacodemon);
+        SPR_end();
+    }
+    PAL_fadeOut(0, 63, BOOT_FADE_FRAMES, FALSE);
+    clear_plane_cpu(BG_A);
+    clear_plane_cpu(BG_B);
+    /* A single held Start only skips the current card. */
+    wait_for_release(BUTTON_START);
+}
+
+static void run_boot_sequence(void) {
+    frontend_video_init();
+    game_audio_play_music(intro_music);
+    run_boot_card(&frontend_boot_disclaimer, FALSE);
+    run_boot_card(&frontend_boot_sgdk, TRUE);
+    run_boot_card(&frontend_boot_social, FALSE);
 }
 
 static void draw_main_cursor(u16 tile_base, u16 selected, bool alternate) {
@@ -286,6 +370,13 @@ static bool run_main_menu(u16 menu_base, u16 overlay_base, DoomSkill *skill) {
 }
 
 DoomSkill frontend_run(void) {
+    bool title_music_running = FALSE;
+
+    if (!s_boot_sequence_played) {
+        run_boot_sequence();
+        s_boot_sequence_played = TRUE;
+        title_music_running = TRUE;
+    }
     while (TRUE) {
         u16 previous;
         u32 ticks = 0;
@@ -303,7 +394,10 @@ DoomSkill frontend_run(void) {
         VDP_loadTileSet(frontend_prompt.tileset, prompt_base, DMA);
         VDP_setEnable(TRUE);
         VDP_waitVSync();
-        game_audio_play_music(intro_music);
+        if (!title_music_running) {
+            game_audio_play_music(intro_music);
+            title_music_running = TRUE;
+        }
         wait_for_release(BUTTON_START);
         previous = JOY_readJoypad(JOY_1);
         while (TRUE) {

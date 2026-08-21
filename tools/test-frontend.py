@@ -27,6 +27,10 @@ def unique_tiles(path: Path) -> int:
 expected = {
     "title.png": (320, 224),
     "prompt.png": (96, 8),
+    "boot_disclaimer.png": (320, 224),
+    "boot_sgdk.png": (320, 224),
+    "boot_social.png": (320, 224),
+    "cacodemon.png": (64, 72),
     "death_prompt.png": (96, 8),
     "main_menu.png": (320, 224),
     "logo.png": (128, 64),
@@ -58,13 +62,26 @@ for name, size in expected.items():
             tile = image.crop((x, y, x + 8, y + 8))
             assert len({value >> 4 for value in tile.get_flattened_data()}) == 1, \
                 f"{name} tile ({x // 8},{y // 8}) mixes VDP palettes"
-    palettes.append(tuple(image.getpalette()[:192]))
+    if name != "cacodemon.png":
+        palettes.append(tuple(image.getpalette()[:192]))
 assert len(set(palettes)) == 1, "frontend images must share all four palettes"
+
+cacodemon = Image.open(ASSETS / "cacodemon.png")
+assert cacodemon.info.get("transparency") == 0, "Cacodemon index 0 must be transparent"
+cacodemon_colors = cacodemon.getpalette()[:48]
+assert any(cacodemon_colors[index:index + 3][0] > cacodemon_colors[index:index + 3][1]
+           for index in range(3, 48, 3)), "Cacodemon palette lost its red ramp"
 
 title_tiles = unique_tiles(ASSETS / "title.png")
 prompt_tiles = unique_tiles(ASSETS / "prompt.png")
 menu_tiles = max(unique_tiles(path) for path in ASSETS.glob("main_[0-2]_[0-1].png"))
 assert 16 + title_tiles + prompt_tiles < 1440, "title and prompt exceed user VRAM"
+boot_tiles = max(
+    unique_tiles(ASSETS / name)
+    for name in ("boot_disclaimer.png", "boot_sgdk.png", "boot_social.png")
+)
+assert 16 + boot_tiles < 1440, "boot card exceeds user VRAM"
+assert unique_tiles(ASSETS / "cacodemon.png") <= 96, "Cacodemon exceeds reserved sprite VRAM"
 assert 16 + unique_tiles(ASSETS / "main_menu.png") + max(
     unique_tiles(ASSETS / "skull1.png"), unique_tiles(ASSETS / "skull2.png")
 ) < 1440, "main menu exceeds user VRAM"
@@ -83,12 +100,19 @@ for token in (
     "run_skill_menu", "DOOM_SKILL_HURT_ME_PLENTY", "(selected + 4) % 5",
     "game_audio_toggle_music", "game_audio_toggle_sfx", "wait_for_release", "MAIN_CURSOR_Y 12",
     "frontend_load_death_prompt", "frontend_set_death_prompt", "DEATH_PROMPT_X", "DEATH_PROMPT_Y",
+    "run_boot_sequence", "run_boot_card", "BOOT_CARD_FRAMES 180", "BOOT_CACODEMON_X",
+    "frontend_boot_disclaimer", "frontend_boot_sgdk", "frontend_boot_social", "frontend_cacodemon",
+    "SPR_initEx(96)", "SPR_end()", "animate_sgdk_shimmer", "PAL_setPalette(PAL1",
+    "frontend_cacodemon.palette->data",
 ):
     assert token in FRONTEND
 for token in (
     "M_DOOM", "M_NGAME", "M_OPTION", "M_QUITG", "M_OPTTTL", "M_SKILL", "M_JKILL",
     "M_ROUGH", "M_HURT", "M_ULTRA", "M_NMARE", "M_SKULL1", "M_SKULL2", "PRESS START",
     "centered_doom_text", "PRESS FIRE", "doom_text_mask",
+    "HEADA1", "sgdk-sparkle-source.png", "make_boot_disclaimer", "make_boot_sgdk",
+    "make_boot_social", "make_cacodemon", "indexed_fixed_palette", "build_cacodemon_palette",
+    "SEGA.TTF", "ImageFont.truetype",
 ):
     assert token in (ROOT / "tools/generate-frontend-assets.py").read_text()
 assert "(selected + 2) % 3" in FRONTEND and "(selected + 1) % 3" in FRONTEND
@@ -108,6 +132,8 @@ assert "init_hud_tiles();" in RENDERER
 for token in ("DOOM_THING_SKILL_EASY", "DOOM_THING_SKILL_MEDIUM", "DOOM_THING_SKILL_HARD", "doom_skill_thing_mask"):
     assert token in BILLBOARD
 assert re.search(r"frontend_run\(\);\s*game_audio_stop_music\(\);\s*renderer_init\(\);", MAIN)
+assert "game_audio_play_music(intro_music);\n    run_boot_card(&frontend_boot_disclaimer" in FRONTEND
+assert "wait_for_release(BUTTON_START);" in FRONTEND
 
 # Death state (Doom's PST_REBORN, reproduced in place -- see main.c): health
 # locks at zero, the screen holds red, and the player is frozen until they
@@ -136,4 +162,4 @@ assert max(hud_nibbles) <= 8, (
     "death-prompt red reserved in renderer.c's load_game_palettes"
 )
 
-print("ok    frontend: title/menu flow, shared palette, pause VRAM and audio gates")
+print("ok    frontend: title/menu flow, palettes, pause VRAM and audio gates")

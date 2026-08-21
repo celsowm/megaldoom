@@ -1,6 +1,6 @@
 param(
     [string]$Route = "tools\routes\checkpoints.txt",
-    [int]$Frames = 450,
+    [int]$Frames = 900,
     [string]$RequireCheckpoints = "1F",
     [switch]$NoBuild
 )
