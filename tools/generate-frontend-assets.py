@@ -19,7 +19,7 @@ SPRITE_SOURCE = ROOT / "res" / "originaldoom" / "sprites"
 BOOT_SOURCE = ROOT / "res" / "boot"
 SEGA_FONT = BOOT_SOURCE / "SEGA.TTF"
 MANIFEST_NAME = ".frontend-assets.json"
-MANIFEST_VERSION = 3
+MANIFEST_VERSION = 4
 
 PATCHES = (
     "TITLEPIC", "M_DOOM", "M_NGAME", "M_OPTION", "M_QUITG",
@@ -35,6 +35,7 @@ DOOM_FONT_TEXT = (
     "DOOM IS A TRADEMARK OF ID SOFTWARE.", "BUILT WITH SGDK", "SGDK",
     "BUILT FOR THE 16-BIT ERA", "SOFTWARE DEVELOPMENT KIT", "FOLLOW THE PROJECT",
     "GITHUB.COM/CELSOWM/MEGALDOOM", "X.COM/PROFCELSOFONTES", "THANKS FOR PLAYING",
+    "THE MEGALDOOM DEMO", "VERSION 0.1", "PRESS START",
 )
 GLYPHS = tuple(sorted({
     f"STCFN{ord(character):03d}"
@@ -50,6 +51,7 @@ BOOT_INPUTS = (
     *(SPRITE_SOURCE / f"{name}.png" for name in CACODEMON_BOOT_FRAMES),
     SEGA_FONT,
 )
+ENDING_INPUTS = (SOURCE / "WIMAP0.png",)
 
 # This card deliberately owns PAL0.  The image never uses PAL1: PAL1 is the
 # Cacodemon's sprite palette at runtime.  Keep the last four colours for the
@@ -79,6 +81,7 @@ def expected_outputs() -> tuple[str, ...]:
         "title.png", "prompt.png", "death_prompt.png", "main_menu.png", "logo.png",
         "options.png", "skull1.png", "skull2.png",
         "boot_disclaimer.png", "boot_sgdk.png", "boot_social.png", "cacodemon.png",
+        "ending_mars.png", "ending_thanks.png",
     ]
     names.extend(f"main_{selected}_{frame}.png" for selected in range(3) for frame in range(2))
     names.extend(
@@ -99,7 +102,11 @@ def generator_hash() -> str:
 
 
 def source_paths(source: Path) -> tuple[Path, ...]:
-    return (*tuple(source / f"{name}.png" for name in (*PATCHES, *GLYPHS)), *BOOT_INPUTS)
+    return (
+        *tuple(source / f"{name}.png" for name in (*PATCHES, *GLYPHS)),
+        *BOOT_INPUTS,
+        *(source / path.name for path in ENDING_INPUTS),
+    )
 
 
 def source_hash(source: Path) -> str:
@@ -186,11 +193,11 @@ def palette_error(pixels: list[tuple[int, int, int]], palette: list[tuple[int, i
     return total
 
 
-def build_palette(images: dict[str, Image.Image]) -> list[tuple[int, int, int]]:
+def build_palette_for_images(images: list[Image.Image]) -> list[tuple[int, int, int]]:
     """Build four deterministic 15-colour tile palettes for the VDP."""
     tiles = []
-    for name in PATCHES:
-        tiles.extend(image_tiles(images[name]))
+    for image in images:
+        tiles.extend(image_tiles(image))
 
     means = [tuple(sum(pixel[c] for pixel in tile) // len(tile) for c in range(3)) for tile in tiles]
     seeds = [min(range(len(tiles)), key=lambda i: sum(means[i]))]
@@ -210,6 +217,10 @@ def build_palette(images: dict[str, Image.Image]) -> list[tuple[int, int, int]]:
             palettes.append(quantize_pixels(pixels))
         assignments = [min(range(4), key=lambda p: palette_error(tile, palettes[p])) for tile in tiles]
     return [color for palette in palettes for color in palette]
+
+
+def build_palette(images: dict[str, Image.Image]) -> list[tuple[int, int, int]]:
+    return build_palette_for_images([images[name] for name in PATCHES])
 
 
 def nearest(rgb: tuple[int, int, int], palette: list[tuple[int, int, int]], base: int) -> int:
@@ -542,6 +553,39 @@ def make_cacodemon() -> Image.Image:
     return sheet
 
 
+def make_ending_mars(source: Path) -> Image.Image:
+    """Centre the exact 320x200 WIMAP0 frame without scaling or cropping."""
+    original = load("WIMAP0", source)
+    image = Image.new("RGBA", (320, 224), (0, 0, 0, 255))
+    image.alpha_composite(original, (0, 12))
+    return image
+
+
+def indexed_ending_mars(image: Image.Image,
+                        palette: list[tuple[int, int, int]]) -> Image.Image:
+    """Quantize WIMAP0 while keeping its 12-line letterbox literally black.
+
+    `indexed()` chooses one of four palette lines per tile.  Every line keeps
+    its zero entry black, so border pixels use that tile's own line base; this
+    also handles the two mixed 8px rows crossed by the y=12 image boundary.
+    """
+    output = indexed(image, palette, False)
+    pixels = output.load()
+    for y in (*range(0, 12), *range(212, 224)):
+        for x in range(320):
+            pixels[x, y] = (pixels[x, y] >> 4) << 4
+    return output
+
+
+def make_ending_thanks(source: Path) -> Image.Image:
+    image = Image.new("RGBA", (320, 224), (0, 0, 0, 255))
+    centered_doom_text(image, "THANKS FOR PLAYING", 56, source)
+    centered_doom_text(image, "THE MEGALDOOM DEMO", 88, source)
+    centered_doom_text(image, "VERSION 0.1", 120, source)
+    centered_doom_text(image, "PRESS START", 176, source)
+    return image
+
+
 def doom_text_mask(text: str, width: int, height: int, palette_index: int,
                     palette: list[tuple[int, int, int]], source: Path = SOURCE) -> Image.Image:
     """A paletted (not quantized) mask: 0 = transparent, palette_index = lit.
@@ -575,10 +619,13 @@ def generate(source: Path, output: Path) -> None:
     boot_sgdk = make_boot_sgdk()
     boot_social = make_boot_social()
     cacodemon = make_cacodemon()
+    ending_mars = make_ending_mars(source)
+    ending_thanks = make_ending_thanks(source)
     cacodemon_palette = build_cacodemon_palette(cacodemon)
     # Keep the original Doom title/menu palette selection stable; boot cards
     # are quantized into that same four-line palette afterward.
     palette = build_palette(images)
+    ending_mars_palette = build_palette_for_images([ending_mars])
     output.mkdir(parents=True, exist_ok=True)
 
     title = Image.new("RGBA", (320, 224), (0, 0, 0, 255))
@@ -617,6 +664,7 @@ def generate(source: Path, output: Path) -> None:
         "boot_disclaimer.png": (boot_disclaimer, False),
         "boot_sgdk.png": (boot_sgdk, False),
         "boot_social.png": (boot_social, False),
+        "ending_thanks.png": (ending_thanks, False),
     }
 
     for selected in range(3):
@@ -664,6 +712,12 @@ def generate(source: Path, output: Path) -> None:
             image.save(output / filename, optimize=False)
         else:
             indexed(image, palette, transparent).save(output / filename, optimize=False)
+
+    # The intermission map has a much wider earth/sky range than the title
+    # patches.  It owns its four VDP palette lines for the duration of the
+    # ending, preserving WIMAP0 instead of forcing it through menu colours.
+    indexed_ending_mars(ending_mars, ending_mars_palette).save(
+        output / "ending_mars.png", optimize=False)
 
     # This is a sprite-engine resource. Keep index 0 transparent, but give it
     # its own quantized palette so Doom's red/grey/green ramps are not forced

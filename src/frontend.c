@@ -20,6 +20,15 @@
 #define BOOT_CACODEMON_Y 50
 #define BOOT_CACODEMON_ATTACK_START 48
 #define BOOT_CACODEMON_ATTACK_END 64
+#define DEMO_MAP_VISIBLE_FRAMES 360
+#define ENDING_PROMPT_BLINK_MASK 0x3F
+#define ENDING_PROMPT_ON_FRAMES 48
+// Generated at y=176 and centred at x=114.  This is the exact 12-tile span
+// covering PRESS START in frontend_ending_thanks, so blinking never disturbs
+// the closing copy above it.
+#define ENDING_PROMPT_X 14
+#define ENDING_PROMPT_Y 22
+#define ENDING_PROMPT_W 12
 
 /* A return from gameplay is a return to the title, not a fresh console boot. */
 static bool s_boot_sequence_played = FALSE;
@@ -200,6 +209,67 @@ static void run_boot_sequence(void) {
     run_boot_card(&frontend_boot_disclaimer, FALSE);
     run_boot_card(&frontend_boot_sgdk, TRUE);
     run_boot_card(&frontend_boot_social, FALSE);
+}
+
+static void run_demo_map(void) {
+    u16 previous;
+
+    draw_boot_card(&frontend_ending_mars);
+    PAL_fadeIn(0, 63, frontend_ending_mars.palette->data, BOOT_FADE_FRAMES, FALSE);
+    wait_for_release(BUTTON_START);
+    previous = JOY_readJoypad(JOY_1);
+    for (u16 frame = 0; frame < DEMO_MAP_VISIBLE_FRAMES; frame++) {
+        if ((read_pressed(&previous) & BUTTON_START) != 0) break;
+        VDP_waitVSync();
+    }
+    PAL_fadeOut(0, 63, BOOT_FADE_FRAMES, FALSE);
+}
+
+static void set_ending_prompt(bool visible) {
+    if (visible) {
+        VDP_setTileMapEx(BG_B, frontend_ending_thanks.tilemap,
+                         TILE_ATTR_FULL(PAL0, FALSE, FALSE, FALSE, TILE_USER_INDEX),
+                         ENDING_PROMPT_X, ENDING_PROMPT_Y,
+                         ENDING_PROMPT_X, ENDING_PROMPT_Y,
+                         ENDING_PROMPT_W, 1, CPU);
+    } else {
+        VDP_clearTileMapRect(BG_B, ENDING_PROMPT_X, ENDING_PROMPT_Y,
+                             ENDING_PROMPT_W, 1);
+    }
+}
+
+static void run_demo_thanks(void) {
+    u16 previous;
+    u16 ticks = 0;
+
+    draw_boot_card(&frontend_ending_thanks);
+    PAL_fadeIn(0, 63, frontend_ending_thanks.palette->data, BOOT_FADE_FRAMES, FALSE);
+    wait_for_release(BUTTON_START);
+    previous = JOY_readJoypad(JOY_1);
+    while (TRUE) {
+        const u16 pressed = read_pressed(&previous);
+        set_ending_prompt((bool)((ticks & ENDING_PROMPT_BLINK_MASK) < ENDING_PROMPT_ON_FRAMES));
+        if ((pressed & BUTTON_START) != 0) break;
+        ticks++;
+        VDP_waitVSync();
+    }
+    PAL_fadeOut(0, 63, BOOT_FADE_FRAMES, FALSE);
+    clear_plane_cpu(BG_A);
+    clear_plane_cpu(BG_B);
+    wait_for_release(BUTTON_START);
+}
+
+void frontend_run_demo_ending(void) {
+    // Fade the live E1M1 palette before clearing its planes; otherwise the
+    // transition into WIMAP0 would cut straight from the renderer to black.
+    PAL_fadeOut(0, 63, BOOT_FADE_FRAMES, FALSE);
+    frontend_video_init();
+    // d_inter starts on the map and remains uninterrupted through the thanks
+    // card. frontend_run() will start d_intro again after this function exits.
+    game_audio_play_music(intermission_music);
+    run_demo_map();
+    run_demo_thanks();
+    game_audio_stop_music();
 }
 
 static void draw_main_cursor(u16 tile_base, u16 selected, bool alternate) {

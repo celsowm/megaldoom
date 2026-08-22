@@ -40,7 +40,7 @@ with tempfile.TemporaryDirectory(prefix="megaldoom-build-test-") as folder:
     source = temp / "source"
     output = temp / "frontend"
     source.mkdir()
-    for index, name in enumerate((*frontend.PATCHES, *frontend.GLYPHS), start=1):
+    for index, name in enumerate((*frontend.PATCHES, *frontend.GLYPHS, "WIMAP0"), start=1):
         (source / f"{name}.png").write_bytes(f"source-{index}".encode())
 
     current, reason = frontend.cache_status(source, output)
@@ -63,10 +63,11 @@ with tempfile.TemporaryDirectory(prefix="megaldoom-build-test-") as folder:
         frontend.generate = real_generate
     assert frontend.complete_outputs(output)
     assert (output / frontend.MANIFEST_NAME).is_file()
-    assert len(frontend.EXPECTED_OUTPUTS) == 40
+    assert len(frontend.EXPECTED_OUTPUTS) == 42
     for name in frontend.CACODEMON_BOOT_FRAMES:
         assert frontend.SPRITE_SOURCE / f"{name}.png" in frontend.source_paths(source)
     assert frontend.BOOT_SOURCE / "SEGA.TTF" in frontend.source_paths(source)
+    assert source / "WIMAP0.png" in frontend.source_paths(source)
 
     mtimes = {name: (output / name).stat().st_mtime_ns for name in frontend.EXPECTED_OUTPUTS}
     cached = run_generator(source, output)

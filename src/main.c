@@ -271,6 +271,7 @@ int main(bool hard) {
         u32 frame = 0;
         RendererRedrawState redraw;
         bool level_cleared = FALSE;
+        bool demo_exit_pending = FALSE;
         bool player_dead = FALSE;
         u16 death_lockout = 0;
         u16 phase_index = 0;
@@ -447,14 +448,6 @@ int main(bool hard) {
                 g_checkpoint_prev_y = g_player.y;
             }
 #endif
-        } else if (!player_dead && ((system_pressed & BUTTON_A) != 0)) {
-            // level_cleared's own "press A to advance" path; unreachable while
-            // player_dead (death and level-clear are mutually exclusive) but
-            // guarded explicitly since it shares this branch with that case.
-            phase_index = (u16)((phase_index + 1) & 1);
-            reset_level(phase_index, skill, &level_cleared, &shot_cooldown, &player_health,
-                        &player_armor, &arsenal, &player_keys, &frame);
-            renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE);
         }
 
         // PLAYER_CONTROL_TOGGLE_AUTOMAP is still reserved: no automap yet.
@@ -527,7 +520,10 @@ int main(bool hard) {
 
             if (action != DOOR_ACTION_NONE) {
                 if (action == DOOR_ACTION_EXIT) {
-                    level_cleared = TRUE;
+                    // E1M1 is the whole playable demo.  Do not leave the
+                    // renderer/HUD running under an intermission; tear the
+                    // game loop down below and enter the dedicated frontend.
+                    demo_exit_pending = TRUE;
                 }
                 renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE);
                 // Door / platform move sound on PCM channel 3. A toggle or a
@@ -536,6 +532,16 @@ int main(bool hard) {
                     game_audio_play_sfx(sfx_door, sizeof(sfx_door), SOUND_PCM_CH3);
                 }
             }
+        }
+
+        if (demo_exit_pending) {
+            // The V-int pad poll belongs to gameplay.  The ending uses its
+            // own JOY_update edge detector, exactly like title/menu screens.
+            player_controller_set_poll_active(FALSE);
+            renderer_upload_background_disarm();
+            wait_scene_upload_complete();
+            frontend_run_demo_ending();
+            break;
         }
 
         // Semi-automatic weapons fire on the button's rising edge; the chaingun

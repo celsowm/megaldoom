@@ -8,6 +8,26 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## E1M1 demo ending: Mars intermission and thanks card (2026-08-21)
+
+The E1M1 exit switch is now a true end-of-demo transition, rather than setting
+the unused `level_cleared` HUD state and offering a fake next phase.  Gameplay
+disarms its V-int controller poll, drains an in-flight scene upload, and calls
+`frontend_run_demo_ending()`.  That frontend flow owns the display and input:
+an 8-frame fade leads to the original `WIMAP0` Mars map for 360 VBlanks (Start
+can advance), then another fade reaches the black Doom-font thanks card.  Start
+on the card fades out and returns to the normal title flow.
+
+`d_inter.vgm` is compiled as `intermission_music` and starts exactly once on
+the map.  It remains playing through the thanks card; only after the final
+fade does the ending stop it, allowing title code to restart `d_intro` normally.
+The generated map preserves the original 320x200 WIMAP0 pixel geometry exactly,
+centred in the 320x224 mode with literal-black 12px bars above and below.  It is
+never stretched or cropped.  It emits 1,041 unique tiles (1,057 including the
+user tile base), below the 1,440 frontend ceiling.  The map owns four quantized
+palette lines; the thanks card uses the existing Doom red/orange frontend ramp
+and blinks only the exact 12-tile `PRESS START` span.
+
 ## SGDK boot card: Earthworm Jim 2-style Cacodemon splash (2026-08-21)
 
 The former SGDK card was two unrelated designs layered together: a salmon/red

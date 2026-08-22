@@ -2,6 +2,7 @@
 # embedded in the ROM. The generated resources.h exposes `extern const u8 test_music[]`.
 XGM2 test_music  "music/d_e1m1.vgm"
 XGM2 intro_music "music/d_intro.vgm"
+XGM2 intermission_music "music/d_inter.vgm"
 
 # Doom frontend. All images are generated from the extracted DOOM1.WAD patches
 # with one shared PAL0 palette; transparent overlays use palette index zero.
@@ -12,6 +13,8 @@ IMAGE frontend_prompt         "frontend/prompt.png"    NONE ALL
 IMAGE frontend_boot_disclaimer "frontend/boot_disclaimer.png" NONE ALL
 IMAGE frontend_boot_sgdk      "frontend/boot_sgdk.png" NONE ALL
 IMAGE frontend_boot_social    "frontend/boot_social.png" NONE ALL
+IMAGE frontend_ending_mars    "frontend/ending_mars.png" NONE ALL
+IMAGE frontend_ending_thanks  "frontend/ending_thanks.png" NONE ALL
 SPRITE frontend_cacodemon     "frontend/cacodemon.png" 8 9 FAST 0
 # Drawn during gameplay over the live PAL0 world/HUD ramp, not the frontend
 # palette -- see doom_text_mask() in generate-frontend-assets.py. Index 9 is

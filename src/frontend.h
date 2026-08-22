@@ -11,6 +11,9 @@ typedef enum {
 
 DoomSkill frontend_run(void);
 FrontendPauseAction frontend_run_pause(u16 tile_base);
+// E1M1 is the complete public demo: its exit switch runs this intermission
+// and then hands control back to frontend_run() at the title screen.
+void frontend_run_demo_ending(void);
 
 // Death-screen "PRESS FIRE" prompt, drawn on BG_A over the frozen/red-tinted
 // gameplay view (see main.c's death handling). Mirrors the title screen's
