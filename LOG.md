@@ -8,6 +8,112 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## COMPUTE2 semantic facade after visual rejection (2026-08-22)
+
+The generic edge-aware bake below passed its numerical contracts but failed the
+actual corridor view: compressing 128 pixels of COMPUTE2 into 64 still reduced
+the computer bank to isolated red/green marks on a large grey wall.  More blur
+could not restore an object hierarchy that had already been destroyed by the
+horizontal reduction.
+
+COMPUTE2 now keeps the same public `(128,0,128,56)` source window and 128-unit
+world repeat, but selects its rightmost 64x56 Doom module at 1:1 for a semantic
+offline facade.  The source readouts are confined to two dark monitor bays;
+continuous metal rails, screen recesses, lower control bays and cabinet doors
+replace the discarded micro-detail.  This is still one 64x64 PAL3 texture in
+the same 786,432-byte packed runtime table.  Renderer, assembly, PAL3, floor,
+geometry and U scale are unchanged.
+
+The rejected angle is now a permanent preview checkpoint at player
+`(800,3504)`, angle 192, beside linedef 52.  The facade certificate requires
+all five horizontal rails to be continuous, green pixels to remain inside the
+waveform monitors, both monitor pairs to retain dark recesses, and floor index
+7 to be absent from COMPUTE2.  Against the old conversion:
+
+| metric | old | semantic facade |
+|---|---:|---:|
+| horizontal churn | 12.65% | 14.78% |
+| isolated texels | 37 | 12 |
+| edge F1 against facade structure | 0.489 | 0.988 |
+| perceptual quantization error | 0.01134 | 0.00281 |
+
+Preview artifacts are in `out/wall-bake-facade-v4/`; the exact oblique A/B is
+`scenes/compute2-oblique.png` and the motion sheet is
+`motion/compute2-contact.png`.  Actual release-ROM checkpoint captures are in
+`out/wall-facade-rom-captures-v4/`; the additional movement capture is in
+`out/wall-facade-rom-oblique-v4/`.
+
+Runtime cost is exactly unchanged in deterministic release runs, not merely
+within noise: both total cycles and the complete PC histogram match the prior
+bake bit for bit (`checkpoints`: 1351 frames / 627,280,628 cycles;
+`stationary-combat`: 1549 / 716,882,101).  E1M1 remains 470 vertices, 394 SEGs,
+five doors and exit SEG 309 reachable after 164 states; the generated map hash
+remains `AED08E56...66C00A4`.
+
+`test-wall-quality.py`, every test after the known metadata stop, the release
+build and `check-rom.ps1` pass.  The official runner still stops separately at
+the preexisting `STIMA0 WAD geometry metadata drifted`.  Release RAM is 43,264
+bytes used / 22,272 free, `.text` is 1,589,216 bytes and the 1,664 KB ROM
+SHA-256 is
+`40CFDA37DC2461C787C963FA26F3C15D69D2EE78F10E17055AD6209862B1FE77`.
+
+## E1M1 technological walls: curated 64x64 bake (2026-08-22)
+
+Increasing the runtime wall grid to 128x128 was not a free quality lever: the
+shade/door-ready packed table would grow from 786,432 bytes to 3,145,728 bytes,
+while the shipped view still exposes only 80 horizontal samples. The accepted
+change therefore leaves `WALL_TEX_DIM=64`, `RAY_COL_STRIDE=2`, PAL3, the four
+shade levels and every runtime/assembly consumer untouched. It improves source
+simplification offline instead.
+
+`WallBakeRecipe` now scopes an edge-aware 1-4-1 bake to `COMPTILE`, `COMPUTE2`,
+`LITE3`, `STARG3`, `STARGR1`, `STARTAN1`, `STARTAN3` and `SUPPORT2`. Meaningful
+boundaries are found on the established low-pass with Oklab thresholds 0.09 L
+or 0.04 a/b distance; edge texels remain fixed while panel interiors receive a
+second low-pass. One conservative majority cleanup removes isolated indices
+without allowing simultaneous replacements to create new islands. The
+existing COMPUTE2 window remains `(128,0,128,56)`. Doors, switches and all 16
+other catalog entries are byte-identical between the old and new conversion.
+
+The result deliberately leaves COMPTILE and LITE3 byte-identical -- their
+already-regular structures had nothing safe to simplify. Five materials gain
+strict edge F1 while all changed materials reduce horizontal churn:
+
+| material | changed texels | churn before -> after | isolated before -> after | edge F1 before -> after |
+|---|---:|---:|---:|---:|
+| COMPUTE2 | 220 | 12.65% -> 8.85% | 37 -> 17 | 0.354 -> 0.473 |
+| STARG3 | 330 | 17.46% -> 12.50% | 59 -> 32 | 0.266 -> 0.294 |
+| STARGR1 | 173 | 10.07% -> 7.54% | 6 -> 0 | 0.364 -> 0.398 |
+| STARTAN1 | 174 | 6.92% -> 6.27% | 0 -> 0 | 0.345 -> 0.384 |
+| STARTAN3 | 394 | 21.68% -> 15.03% | 52 -> 28 | 0.218 -> 0.256 |
+| SUPPORT2 | 118 | 13.39% -> 10.62% | 4 -> 0 | unchanged (no threshold edges) |
+
+`tools/wall_bake_preview.py` fails before generation unless the WAD hash,
+PAL3/floor, 394-SEGs geometry, five doors, exit certificate, table size and all
+quality bounds hold. It writes eight source/current/candidate/shade atlases,
+thirteen exact fixed-math scene pairs, and eight 12-frame approach/lateral GIFs.
+The audited artifacts are under
+`out/wall-bake-preview-before-generation/`; actual release captures are under
+`out/captures/wall-bake-release-checkpoints/` and
+`out/captures/wall-bake-release-stationary/`.
+
+Release-cadence work stayed pose-identical to the 2026-08-21 material-transfer
+baseline. Timer subticks vary by a few counts, but every workload counter is
+identical:
+
+| route | metric | baseline | curated bake |
+|---|---|---:|---:|
+| checkpoints | cast / pack per rebuild | 5413 / 3415 | 5408 / 3413 |
+| checkpoints | SEGs tested; mixed / flat tiles | 38.5; 80.9 / 204.1 | 38.5; 80.9 / 204.1 |
+| stationary-combat | cast / pack per rebuild | 5842 / 2903 | 5842 / 2905 |
+| stationary-combat | SEGs tested; mixed / flat tiles | 43.1; 65.1 / 158.9 | 43.1; 65.1 / 158.9 |
+
+The complete suite passes after the separately known `STIMA0 WAD geometry
+metadata drifted` stop. Release `check-rom.ps1` reports 43,264 static RAM
+bytes, 22,272 bytes free, 1,589,216 bytes `.text`, and a 1,664 KB ROM. Final
+`out/rom.bin` SHA-256 is
+`7691EA1B34893EE4336B61C349D51D16F338FFB59147EEDEEC438D6F3E0D70CC`.
+
 ## E1M1 demo ending: Mars intermission and thanks card (2026-08-21)
 
 The E1M1 exit switch is now a true end-of-demo transition, rather than setting

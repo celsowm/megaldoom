@@ -33,6 +33,16 @@ tile_x * VIEW_TILE_H + tile_y`. A column's tiles are contiguous, and screen row
 `4*y + L`. Two shipped optimizations rest on this, and one real bug came from
 assuming row-major (LOG, 2026-08-03).
 
+**Wall fidelity tuning is an offline 64x64 bake.** The shipped renderer remains
+`WALL_TEX_DIM=64` at stride 2; its 786,432-byte shade/door packed table would
+quadruple at 128x128 without increasing the 80 sampled screen columns. Curated
+technological-wall simplification lives in `tools/world_assets.py` and must pass
+`tools/wall_bake_preview.py` before regenerating assets. Non-target materials,
+PAL3 and runtime/assembly consumers stay unchanged. COMPUTE2 is the precedent
+that filtering alone cannot repair an oversized semantic panel: preserve its
+world repeat but select/compose a readable source-derived 64x64 facade, and
+always audit the close oblique checkpoint (LOG, 2026-08-22).
+
 **Budgets: 64 KB work RAM, 4 MB ROM.** The work-RAM guardrail is the binding
 one — `tools/check-rom.ps1` errors below 16 KB free and SGDK panics at boot
 around 13.7 KB. ROM is *not* tight: `.text` is ~1.39 MB against a 4 MB cap, so

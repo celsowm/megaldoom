@@ -12,6 +12,7 @@ seg's texture id.
 import os
 import re
 from collections import Counter
+from dataclasses import dataclass
 
 from PIL import Image
 import world_palette
@@ -225,14 +226,58 @@ def build_shade_lut(palette, levels=4, reserved=()):
 # touched; in E1M1 that is COMPUTE2 and the 256x128 fallback.
 WALL_TEX_MAX_SOURCE_WIDTH = 2 * WALL_TEX_DIM
 
-# Curated source windows retain the recognisable part of a material when the
-# flat-map recipe moves it to a simpler wall. COMPUTE2's first 128 columns are
-# almost entirely grey/brown controls; its monitor-green readouts live in the
-# right half. The old generic left crop therefore erased the feature we were
-# trying to preserve. The source PNG remains untouched and the window is baked
-# offline into the same 64x64 runtime texture format.
+@dataclass(frozen=True)
+class WallBakeRecipe:
+    """Offline-only simplification for a detail-heavy wall material.
+
+    The recipe never changes the runtime texture format. ``source_window``
+    selects the recognisable part of a Doom texture; the remaining fields
+    control an edge-aware low-pass on the fixed 64x64 bake and one conservative
+    post-quantization cleanup pass.
+    """
+
+    source_window: tuple | None = None
+    edge_lightness_threshold: float = 0.09
+    edge_colour_threshold: float = 0.04
+    smooth_weight: int = 4
+    cleanup_isolated: bool = True
+    # Optional detail window inside ``source_window``.  This does not change
+    # the Doom/world repeat metadata: it chooses one representative facade
+    # module to fill the fixed 64x64 runtime texture instead of compressing
+    # several tiny modules until their controls become single-pixel noise.
+    facade_window: tuple | None = None
+
+
+# Only structural technological walls are curated. Doors and switches retain
+# their exact old conversion, as do all brown/stone materials. The thresholds
+# match the perceptual separation already used by the flat/wall collision
+# certificate below: a change large enough to identify a panel boundary is
+# preserved, while lower-frequency ripple inside a panel is simplified.
+TECH_WALL_MATERIALS = (
+    "COMPTILE", "COMPUTE2", "LITE3", "STARG3",
+    "STARGR1", "STARTAN1", "STARTAN3", "SUPPORT2",
+)
+WALL_BAKE_RECIPES = {
+    name: WallBakeRecipe(
+        source_window=(128, 0, 128, 56) if name == "COMPUTE2" else None,
+        # The rightmost 64px module contains the large green waveform bank,
+        # metal control panel and lower cabinets.  Sampling it 1:1 keeps those
+        # structures legible in the 160px-wide stride-2 viewport.  The public
+        # source_window remains 128px so the wall's world-space repeat does not
+        # change; this is an offline facade selection only.
+        facade_window=(64, 0, 64, 56) if name == "COMPUTE2" else None,
+    )
+    for name in TECH_WALL_MATERIALS
+}
+
+# Compatibility/readability view used by sampled_texture_dimensions() and by
+# the existing flat-map material-transfer tests. Source selection is part of
+# both the checked-in baseline and the candidate; only the edge-aware bake is
+# optional when producing an A/B preview.
 CURATED_TEXTURE_WINDOWS = {
-    "COMPUTE2": (128, 0, 128, 56),
+    name: recipe.source_window
+    for name, recipe in WALL_BAKE_RECIPES.items()
+    if recipe.source_window is not None
 }
 
 
@@ -420,6 +465,211 @@ def _spatial_smooth(columns, weight=WALL_SMOOTH_WEIGHT):
              for y in range(dim)] for x in range(dim)]
 
 
+def _edge_mask(columns, lightness_threshold, colour_threshold):
+    """Mark meaningful panel/monitor boundaries on the runtime texture torus."""
+    dim = len(columns)
+    labs = [[world_palette.oklab(columns[x][y]) for y in range(dim)]
+            for x in range(dim)]
+    result = [[False] * dim for _ in range(dim)]
+    for x in range(dim):
+        for y in range(dim):
+            here = labs[x][y]
+            for nx, ny in (((x - 1) % dim, y), ((x + 1) % dim, y),
+                           (x, (y - 1) % dim), (x, (y + 1) % dim)):
+                other = labs[nx][ny]
+                colour_delta = ((here[1] - other[1]) ** 2 +
+                                (here[2] - other[2]) ** 2) ** 0.5
+                if (abs(here[0] - other[0]) >= lightness_threshold or
+                        colour_delta >= colour_threshold):
+                    result[x][y] = True
+                    break
+    return result
+
+
+def _edge_aware_spatial_smooth(columns, edge_mask, weight):
+    """Apply a separable 1-weight-1 filter without bleeding across edges."""
+    if weight <= 0:
+        raise ValueError("Wall bake smooth_weight must be positive")
+    dim = len(columns)
+    total = weight + 2
+
+    def tap(grid, x, y, nx, ny):
+        return grid[x][y] if edge_mask[nx][ny] else grid[nx][ny]
+
+    horizontal = [[None] * dim for _ in range(dim)]
+    for x in range(dim):
+        for y in range(dim):
+            if edge_mask[x][y]:
+                horizontal[x][y] = columns[x][y]
+                continue
+            left = tap(columns, x, y, (x - 1) % dim, y)
+            right = tap(columns, x, y, (x + 1) % dim, y)
+            horizontal[x][y] = tuple(
+                (left[c] + weight * columns[x][y][c] + right[c]) // total
+                for c in range(3))
+
+    result = [[None] * dim for _ in range(dim)]
+    for x in range(dim):
+        for y in range(dim):
+            if edge_mask[x][y]:
+                result[x][y] = columns[x][y]
+                continue
+            above = tap(horizontal, x, y, x, (y - 1) % dim)
+            below = tap(horizontal, x, y, x, (y + 1) % dim)
+            result[x][y] = tuple(
+                (above[c] + weight * horizontal[x][y][c] + below[c]) // total
+                for c in range(3))
+    return result
+
+
+def _cleanup_isolated_indices(rows, edge_mask):
+    """Replace one isolated index only when three non-edge neighbours agree."""
+    dim = len(rows)
+    proposals = {}
+    for y in range(dim):
+        for x in range(dim):
+            neighbours = (
+                ((x - 1) % dim, y), ((x + 1) % dim, y),
+                (x, (y - 1) % dim), (x, (y + 1) % dim),
+            )
+            all_values = [rows[ny][nx] for nx, ny in neighbours]
+            # Four agreeing neighbours prove a one-pixel island even when its
+            # contrast made it enter the raw edge mask. Removing that dot does
+            # not cross a boundary; it restores the surrounding region.
+            if len(set(all_values)) == 1 and all_values[0] != rows[y][x]:
+                proposals[(x, y)] = all_values[0]
+                continue
+            if edge_mask[x][y]:
+                continue
+            counts = Counter(
+                rows[ny][nx] for nx, ny in neighbours
+                if not edge_mask[nx][ny])
+            if not counts:
+                continue
+            replacement, hits = counts.most_common(1)[0]
+            if hits >= 3 and replacement != rows[y][x]:
+                proposals[(x, y)] = replacement
+
+    # Simultaneous majority replacements can otherwise create a new island:
+    # two neighbours may both leave a two-pixel feature even though each local
+    # proposal looked safe in isolation. Cancel every proposal participating in
+    # such a conflict. This only removes proposals, so the loop terminates and
+    # cannot introduce an island that was absent before the cleanup stage.
+    active = set(proposals)
+
+    def value_at(x, y):
+        return proposals[(x, y)] if (x, y) in active else rows[y][x]
+
+    while True:
+        cancel = set()
+        for y in range(dim):
+            for x in range(dim):
+                original = rows[y][x]
+                neighbours = (
+                    ((x - 1) % dim, y), ((x + 1) % dim, y),
+                    (x, (y - 1) % dim), (x, (y + 1) % dim),
+                )
+                was_isolated = all(rows[ny][nx] != original
+                                   for nx, ny in neighbours)
+                current = value_at(x, y)
+                is_isolated = all(value_at(nx, ny) != current
+                                  for nx, ny in neighbours)
+                if not was_isolated and is_isolated:
+                    cancel.update(point for point in ((x, y),) + neighbours
+                                  if point in active)
+        if not cancel:
+            break
+        active.difference_update(cancel)
+
+    cleaned = [list(row) for row in rows]
+    for (x, y) in active:
+        cleaned[y][x] = proposals[(x, y)]
+    return cleaned
+
+
+def _compose_compute2_facade_indices(source):
+    """Reduce COMPUTE2 to a readable two-dimensional computer-bank facade.
+
+    The original texture packs several narrow devices into 256x56 pixels.  At
+    160x120 with stride-2 sampling, preserving every lamp is worse than losing
+    detail: the panel body survives but its structure becomes coloured noise.
+    Keep the selected Doom module's actual readouts, then place them inside a
+    small set of continuous bays and rails.  All indices are existing PAL3
+    matches from that source; this changes no runtime format or palette.
+    """
+    dim = WALL_TEX_DIM
+    if dim != 64:
+        raise ValueError("COMPUTE2 facade is authored for WALL_TEX_DIM 64")
+    panel = 10      # neutral metal panel body
+    shadow = 5      # structural rails / screen surround
+    black = 0       # deepest screen cavity
+    highlight = 13  # metal lip
+    result = [[panel] * dim for _ in range(dim)]
+
+    def fill(x0, y0, x1, y1, value):
+        for y in range(y0, y1):
+            result[y][x0:x1] = [value] * (x1 - x0)
+
+    # Four strong horizontal masses survive both distance mip-like skipping
+    # and the oblique projection.  The source's previous single-pixel rails
+    # disappeared precisely in the rejected corridor view.
+    fill(0, 0, 64, 3, shadow)
+    fill(0, 16, 64, 20, shadow)
+    fill(0, 34, 64, 38, shadow)
+    fill(0, 51, 64, 55, shadow)
+    fill(0, 62, 64, 64, shadow)
+
+    # Two large upper instrument windows and two waveform monitors.  Dark
+    # recesses give the green/red source pixels a coherent object to belong to
+    # instead of leaving them floating on a grey plane.
+    for x0, x1 in ((3, 30), (34, 61)):
+        fill(x0, 4, x1, 14, shadow)
+        fill(x0 + 2, 6, x1 - 2, 12, black)
+        fill(x0, 21, x1, 32, shadow)
+        fill(x0 + 2, 23, x1 - 2, 30, black)
+        result[14][x0:x1] = [highlight] * (x1 - x0)
+        result[32][x0:x1] = [highlight] * (x1 - x0)
+
+    # Retain coloured readouts from the selected Doom module, but only inside
+    # their corresponding devices.  Neutral source pixels cannot punch holes
+    # back through the newly continuous surrounds.
+    accents = {1, 4, 6, 8, 9, 11, 12, 13, 14, 15}
+    for y0, y1 in ((6, 12), (23, 30)):
+        for y in range(y0, y1):
+            for x in range(5, 59):
+                if source[y][x] in accents:
+                    result[y][x] = source[y][x]
+
+    # A broad lower control bay replaces scattered mid-wall pixels.  Its
+    # central divider and bottom cabinet doors are copied/simplified from the
+    # same source module.
+    for x0, x1 in ((3, 30), (34, 61)):
+        fill(x0, 40, x1, 49, shadow)
+        fill(x0 + 2, 42, x1 - 2, 48, black)
+    for y in range(42, 48):
+        for x in range(5, 59):
+            if source[y][x] in accents or source[y][x] == highlight:
+                result[y][x] = source[y][x]
+
+    fill(3, 56, 61, 62, shadow)
+    for divider in (3, 17, 31, 32, 46, 60):
+        fill(divider, 56, min(64, divider + 2), 62, black)
+    # Warm cabinet handles, one per door; large enough to remain stable but
+    # deliberately sparse.
+    for x in (10, 24, 39, 53):
+        result[58][x:x + 3] = [6, 8, 6]
+
+    # Vertical stiles tie every horizontal band into one facade.  Highlights
+    # sit on their inner edge so the wall reads as panelled even under shade.
+    for x in (0, 31, 32, 63):
+        fill(x, 0, x + 1, 64, shadow)
+    for x in (2, 33, 61):
+        for y in range(3, 62):
+            if result[y][x] == panel:
+                result[y][x] = highlight
+    return result
+
+
 def _is_earth_material(columns):
     """True when enough texels sit inside PAL3's earth hue window. See
     EARTH_MIN_SHARE -- this is a whole-material decision, not per pixel, so a
@@ -433,7 +683,15 @@ def _is_earth_material(columns):
     return inside >= EARTH_MIN_SHARE * dim * dim
 
 
-def convert_texture(path, palette):
+def convert_texture(path, palette, use_wall_bake_recipe=True,
+                    diagnostics=None):
+    """Convert one wall source into the fixed runtime index grid.
+
+    ``use_wall_bake_recipe=False`` reproduces the pre-curation conversion while
+    retaining source-window selection (notably COMPUTE2). It exists solely for
+    deterministic offline A/B previews and quality tests. Runtime generation
+    always uses the default curated path.
+    """
     with Image.open(path) as image:
         material_name = os.path.splitext(os.path.basename(path))[0].upper()
         window = CURATED_TEXTURE_WINDOWS.get(material_name)
@@ -447,6 +705,15 @@ def convert_texture(path, palette):
             if sampled != image.width:
                 image = image.crop((0, 0, sampled, image.height))
         opaque = _fill_transparent_with_average(image)
+        recipe = WALL_BAKE_RECIPES.get(material_name) if use_wall_bake_recipe else None
+        if recipe is not None and recipe.facade_window is not None:
+            left, top, width, height = recipe.facade_window
+            if (left < 0 or top < 0 or width <= 0 or height <= 0 or
+                    left + width > opaque.width or top + height > opaque.height):
+                raise ValueError("Invalid %s facade window %s for %dx%d source" %
+                                 (material_name, recipe.facade_window,
+                                  opaque.width, opaque.height))
+            opaque = opaque.crop((left, top, left + width, top + height))
         resized = opaque.resize((WALL_TEX_DIM, WALL_TEX_DIM), Image.Resampling.BOX)
         columns = [[resized.getpixel((x, y)) for y in range(WALL_TEX_DIM)]
                   for x in range(WALL_TEX_DIM)]
@@ -464,7 +731,20 @@ def convert_texture(path, palette):
         else:
             smoothed = [[tone_curve(columns[x][y]) for y in range(WALL_TEX_DIM)]
                        for x in range(WALL_TEX_DIM)]
-        smoothed = _spatial_smooth(_contrast_normalize(smoothed))
+        normalized = _contrast_normalize(smoothed)
+        if recipe is None:
+            smoothed = _spatial_smooth(normalized)
+            edge_mask = [[False] * WALL_TEX_DIM for _ in range(WALL_TEX_DIM)]
+        else:
+            # Detect structure after the established low-pass, otherwise every
+            # one-texel rivet/readout becomes an "edge" and defeats the point
+            # of simplifying detail that stride 2 cannot reconstruct.
+            structural = _spatial_smooth(normalized)
+            edge_mask = _edge_mask(
+                structural, recipe.edge_lightness_threshold,
+                recipe.edge_colour_threshold)
+            smoothed = _edge_aware_spatial_smooth(
+                structural, edge_mask, recipe.smooth_weight)
         is_neutral_material = material_name.startswith(("GRAY", "METAL", "STONE"))
         chroma_threshold = WALL_CHROMA_THRESHOLD
         if is_neutral_material:
@@ -501,11 +781,42 @@ def convert_texture(path, palette):
             # actually reconstructed on screen.
             pair_max_delta, gain_ratio = WALL_PAIR_MAX_DELTA, 0.0
         cache = {}
-        return [[world_palette.dither_index(smoothed[x][y], palette,
+        rows = [[world_palette.dither_index(smoothed[x][y], palette,
                                             x, y, False, cache,
                                             allowed, chroma_threshold,
                                             pair_max_delta, gain_ratio)
                  for x in range(WALL_TEX_DIM)] for y in range(WALL_TEX_DIM)]
+        if recipe is not None and recipe.facade_window is not None:
+            rows = _compose_compute2_facade_indices(rows)
+            # The semantic facade is the candidate target for preview/error
+            # accounting.  Its boundaries, not the discarded micro-detail's
+            # boundaries, are what edge retention must certify.
+            smoothed = [[palette[rows[y][x]] for y in range(WALL_TEX_DIM)]
+                        for x in range(WALL_TEX_DIM)]
+            edge_mask = _edge_mask(
+                smoothed, recipe.edge_lightness_threshold,
+                recipe.edge_colour_threshold)
+        if recipe is not None and recipe.cleanup_isolated:
+            rows = _cleanup_isolated_indices(rows, edge_mask)
+            if recipe.facade_window is not None:
+                # A facade module is deliberately magnified so a few original
+                # one-pixel LEDs would otherwise become conspicuous square
+                # sparks.  A second majority pass may cross the raw detector's
+                # micro-edges, but cannot cross a panel boundary because those
+                # boundaries are multi-pixel runs.  This is the semantic
+                # simplification the facade needs: rails and monitors survive;
+                # isolated lamps do not.
+                rows = _cleanup_isolated_indices(
+                    rows, [[False] * WALL_TEX_DIM for _ in range(WALL_TEX_DIM)])
+        if diagnostics is not None:
+            diagnostics.update(
+                material_name=material_name,
+                source_window=window,
+                edge_mask=edge_mask,
+                normalized_columns=normalized,
+                filtered_columns=smoothed,
+            )
+        return rows
 
 
 def solid_wall_colors(textures, shade_lut):

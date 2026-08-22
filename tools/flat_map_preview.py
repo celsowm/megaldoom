@@ -167,7 +167,7 @@ def profile_from_map(name, map_data):
     return PreviewProfile(name, map_data.vertices, segs)
 
 
-def build_texture_bank(profiles, palette):
+def build_texture_bank(profiles, palette, use_wall_bake_recipe=True):
     names = sorted({seg.texture_name for profile in profiles for seg in profile.segs})
     bank = {}
     scales = {}
@@ -176,7 +176,8 @@ def build_texture_bank(profiles, palette):
         with Image.open(path) as image:
             sampled_width, _ = world_assets.sampled_texture_dimensions(
                 name, image.width, image.height)
-        bank[name] = world_assets.convert_texture(path, palette)
+        bank[name] = world_assets.convert_texture(
+            path, palette, use_wall_bake_recipe=use_wall_bake_recipe)
         scales[name] = world_assets.texture_u_scale_q12(sampled_width)
     return bank, scales
 

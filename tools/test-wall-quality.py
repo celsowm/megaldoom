@@ -10,6 +10,8 @@ from pathlib import Path
 
 from PIL import Image
 
+import wall_bake_preview
+
 ROOT = Path(__file__).resolve().parents[1]
 EXTRACTOR_PATH = ROOT / "tools" / "wad-map-extract.py"
 WORLD_ASSETS_PATH = ROOT / "tools" / "world_assets.py"
@@ -178,6 +180,7 @@ def main():
     assert "DOOR_SAFETY_TEXELS (WALL_TEX_DIM / 8)" in renderer
 
     palette = generated_palette(assets)
+    assert tuple(palette) == extractor.FROZEN_WORLD_PALETTE
     vdp_channels = {extractor.md_color((value, value, value))[0]
                     for value in range(256)}
     assert palette[0] == (0, 0, 0)
@@ -225,6 +228,46 @@ def main():
         assert perceptual <= limit, (texture_name, perceptual, baseline)
 
     wall_textures = generated_wall_textures(assets)
+    assert len(wall_textures) == 24
+    assert set(extractor.WALL_BAKE_RECIPES) == set(extractor.TECH_WALL_MATERIALS)
+    assert tuple(extractor.TECH_WALL_MATERIALS) == (
+        "COMPTILE", "COMPUTE2", "LITE3", "STARG3",
+        "STARGR1", "STARTAN1", "STARTAN3", "SUPPORT2",
+    )
+    assert extractor.CURATED_TEXTURE_WINDOWS == {
+        "COMPUTE2": (128, 0, 128, 56),
+    }
+    assert extractor.WALL_BAKE_RECIPES["COMPUTE2"].facade_window == (
+        64, 0, 64, 56,
+    )
+
+    # The candidate and its old-converter baseline are both generated in
+    # memory from the same selected source window and frozen PAL3. This proves
+    # the curation is restricted to the eight declared technological walls;
+    # doors, switches and every other material remain byte-identical.
+    for texture_name, generated in wall_textures.items():
+        path = extractor.texture_path(texture_name)
+        current = extractor.convert_texture(
+            path, palette, use_wall_bake_recipe=False)
+        candidate = extractor.convert_texture(
+            path, palette, use_wall_bake_recipe=True)
+        assert generated == candidate, "%s generated bake drifted" % texture_name
+        if texture_name not in extractor.TECH_WALL_MATERIALS:
+            assert current == candidate, "%s changed outside curated set" % texture_name
+
+    # Runtime storage is deliberately unchanged: 2 door styles x 4 shades x
+    # 24 textures x 64 columns x 64 rows, one packed byte per doubled sample.
+    packed_pair_bytes = (2 * 4 * len(wall_textures) *
+                         extractor.WALL_TEX_DIM * extractor.WALL_TEX_DIM)
+    assert packed_pair_bytes == 786432
+
+    curated_metrics = [wall_bake_preview.texture_metrics(name)
+                       for name in extractor.TECH_WALL_MATERIALS]
+    strict_improvements = wall_bake_preview.certify_metrics(curated_metrics)
+    assert strict_improvements == [
+        "COMPUTE2", "STARG3", "STARGR1", "STARTAN1", "STARTAN3",
+    ]
+    wall_bake_preview.certify_compute2_facade(wall_textures["COMPUTE2"])
 
     # "Churn" -- the share of horizontally adjacent texel pairs with different
     # palette indices -- is the direct measure of the salt-and-pepper noise that
@@ -320,6 +363,22 @@ def main():
         ], cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
         assert generated_map.read_bytes() == MAP_PATH.read_bytes()
         assert generated_assets.read_bytes() == ASSETS_PATH.read_bytes()
+
+        # Exercise the CLI's complete artifact contract in a disposable tree:
+        # eight atlases, fourteen exact-renderer scene pairs (including the
+        # close COMPUTE2 failure angle), and one animated approach/lateral
+        # sequence plus contact sheet per curated material.
+        preview_root = temp_root / "preview"
+        report, scene_paths = wall_bake_preview.build_preview(
+            ROOT / "DOOM1.WAD", preview_root)
+        assert report["wad_sha256"] == wall_bake_preview.EXPECTED_WAD_SHA256
+        assert report["segments"] == 394
+        assert report["packed_pair_bytes"] == 786432
+        assert len(scene_paths) == 14
+        assert len(list((preview_root / "atlases").glob("*.png"))) == 8
+        assert len(list((preview_root / "motion").glob("*.gif"))) == 8
+        assert len(list((preview_root / "motion").glob("*-contact.png"))) == 8
+        assert (preview_root / "report.json").is_file()
 
     print("ok    walls: 64x64, stride 2/80 columns, Doom-faithful deterministic PAL3")
 
