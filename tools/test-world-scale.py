@@ -29,7 +29,7 @@ def load_extractor():
 
 def generated_vertices(source):
     body = re.search(
-        r"const BspVertex bsp_vertices\[\d+\] = \{(.*?)\n\};", source, re.S)
+        r"static const BspVertex e1m1_bsp_vertices\[\d+\] = \{(.*?)\n\};", source, re.S)
     assert body
     return [tuple(map(int, values)) for values in re.findall(
         r"\{\s*(-?\d+),\s*(-?\d+)\s*\}", body.group(1))]
@@ -79,7 +79,7 @@ def main():
     # Subsector material ownership must cover the original subsector set and
     # refer only to emitted E1M1 sectors.
     sector_body = re.search(
-        r"const u16 bsp_subsector_sector\[\d+\] = \{(.*?)\n\};", generated, re.S)
+        r"static const u16 e1m1_bsp_subsector_sector\[\d+\] = \{(.*?)\n\};", generated, re.S)
     assert sector_body
     sector_ids = [int(value) for value in re.findall(r"\d+", sector_body.group(1))]
     assert len(sector_ids) == 239

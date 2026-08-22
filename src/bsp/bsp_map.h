@@ -2,6 +2,7 @@
 #define MEGALDOOM_BSP_MAP_H
 
 #include <genesis.h>
+#include "generated_map_limits.h"
 
 #define BSP_KEY_NONE 0x00u
 #define BSP_KEY_BLUE 0x01u
@@ -43,7 +44,7 @@ typedef struct {
     s16 ny;
     s16 tex_u_offset;
     u8 tex_v_offset;
-    u8 texture_id; // exact generated E1M1 texture ID
+    u8 texture_id; // exact generated shared-map texture ID
     u8 type;       // BspSegType
     u8 door_group; // shared state for every face of one physical door
     u8 required_key; // BSP_KEY_* bit, or BSP_KEY_NONE
@@ -91,6 +92,41 @@ typedef struct {
     u16 flags;
 } BspThing;
 
+// Every generated level is immutable cartridge data. Runtime systems select
+// one descriptor and keep their mutable door/entity/stat state in work RAM.
+typedef struct {
+    const BspVertex *vertices;
+    const BspSeg *segs;
+    const u16 *seg_wall_len;
+    const BspSubsector *subsectors;
+    const u16 *subsector_sector;
+    const BspNode *nodes;
+    const BspThing *things;
+    const u16 *grid_cell_offsets;
+    const u16 *grid_seg_indices;
+    const u8 *secret_sector_bits;
+    u16 root_node;
+    u16 seg_count;
+    u16 vertex_count;
+    u16 subsector_count;
+    u16 node_count;
+    u16 door_count;
+    u16 thing_count;
+    u16 sector_count;
+    u16 secret_count;
+    s16 grid_min_x;
+    s16 grid_min_y;
+    u16 grid_width;
+    u16 grid_height;
+    s16 map_min_x;
+    s16 map_min_y;
+    s16 map_max_x;
+    s16 map_max_y;
+    s32 player_start_x;
+    s32 player_start_y;
+    u16 player_start_angle;
+} BspMapData;
+
 // Child encoding (Doom convention): high bit set => subsector leaf, low bits =
 // index into the corresponding array.
 #define BSP_CHILD_LEAF_BIT 0x8000u
@@ -116,70 +152,66 @@ typedef struct {
 // (src/generated_e1m1_map.c). Default: E1M1.
 // #define BSP_USE_HAND_MAP
 
-// Upper bound on solid segs across any map, for the door-state array.
-#define BSP_MAX_SEGS 2048
+// Cache bounds are generated from the selected cartridge maps rather than
+// retaining E1M1-era headroom in scarce 64 KB work RAM.
+#define BSP_MAX_SEGS MEGALDOOM_MAP_MAX_SEGS
+#define BSP_MAX_VERTICES MEGALDOOM_MAP_MAX_VERTICES
+#define BSP_MAX_SUBSECTORS MEGALDOOM_MAP_MAX_SUBSECTORS
+#define BSP_MAX_NODES MEGALDOOM_MAP_MAX_NODES
 
-// Upper bound for the renderer's per-frame transformed-vertex cache. E1M1 has
-// 467 vertices; keeping a little headroom retains the hand-map/test contract
-// while making the RAM cost explicit and guarded.
-#define BSP_MAX_VERTICES 512
+extern const BspMapData g_e1m1_map;
+extern const BspMapData g_e1m2_map;
+extern const BspMapData *g_bsp_map;
 
-// DEBUG_PERF's visible-subsector oracle keeps one bit for every leaf touched
-// by the front-to-back cast. E1M1 has 237 leaves; retain a little map-growth
-// headroom just as the vertex/node limits above do.
-#define BSP_MAX_SUBSECTORS 256
+bool bsp_select_map(u16 level_index);
+const BspMapData *bsp_current_map(void);
 
-extern const BspVertex bsp_vertices[];
-extern const BspSeg bsp_segs[];
-extern const BspSubsector bsp_subsectors[];
-extern const u16 bsp_subsector_sector[];
-extern const BspNode bsp_nodes[];
-extern const u16 bsp_root_node;
-extern const u16 bsp_seg_count;
-extern const u16 bsp_vertex_count;
-extern const u16 bsp_subsector_count;
-extern const u16 bsp_node_count;
-extern const u16 bsp_door_count;
-extern const BspThing bsp_things[];
-extern const u16 bsp_thing_count;
-
-// Compact parallel ROM table: precomputed horizontal wall length
-// (|bx-ax| + |by-ay|) per seg, so the renderer avoids two vertex lookups and
-// two abs calls per seg visit. Camera-independent, so it belongs in ROM.
-extern const u16 bsp_seg_wall_len[];
+// Compatibility aliases keep the renderer/collision hot paths readable while
+// making every access resolve through the selected ROM descriptor.
+#define bsp_vertices (g_bsp_map->vertices)
+#define bsp_segs (g_bsp_map->segs)
+#define bsp_seg_wall_len (g_bsp_map->seg_wall_len)
+#define bsp_subsectors (g_bsp_map->subsectors)
+#define bsp_subsector_sector (g_bsp_map->subsector_sector)
+#define bsp_nodes (g_bsp_map->nodes)
+#define bsp_things (g_bsp_map->things)
+#define bsp_root_node (g_bsp_map->root_node)
+#define bsp_seg_count (g_bsp_map->seg_count)
+#define bsp_vertex_count (g_bsp_map->vertex_count)
+#define bsp_subsector_count (g_bsp_map->subsector_count)
+#define bsp_node_count (g_bsp_map->node_count)
+#define bsp_door_count (g_bsp_map->door_count)
+#define bsp_thing_count (g_bsp_map->thing_count)
 
 // Offline-generated 256-world-unit broad-phase grid. Each cell owns a slice
 // [offsets[cell], offsets[cell+1]) of segment indices. Exact collision and LOS
 // tests still run against those candidates, preserving map semantics.
 #define BSP_GRID_CELL_SHIFT 8
 #define BSP_GRID_CELL_SIZE (1 << BSP_GRID_CELL_SHIFT)
-extern const s16 bsp_grid_min_x;
-extern const s16 bsp_grid_min_y;
-extern const u16 bsp_grid_width;
-extern const u16 bsp_grid_height;
-extern const u16 bsp_grid_cell_offsets[];
-extern const u16 bsp_grid_seg_indices[];
+#define bsp_grid_min_x (g_bsp_map->grid_min_x)
+#define bsp_grid_min_y (g_bsp_map->grid_min_y)
+#define bsp_grid_width (g_bsp_map->grid_width)
+#define bsp_grid_height (g_bsp_map->grid_height)
+#define bsp_grid_cell_offsets (g_bsp_map->grid_cell_offsets)
+#define bsp_grid_seg_indices (g_bsp_map->grid_seg_indices)
 
 // Exact generated vertex bounds. The renderer uses these once per frame to
 // prove that every camera-relative coordinate fits a signed word before taking
 // the native 68000 MULS.W path; cameras outside that envelope retain the exact
 // 32-bit fallback.
-extern const s16 bsp_map_min_x;
-extern const s16 bsp_map_min_y;
-extern const s16 bsp_map_max_x;
-extern const s16 bsp_map_max_y;
-
-// Upper bound on BSP nodes across any map, sizing the near/far order cache
-// bit array in bsp_render.c. E1M1 uses 236; the hand map uses 1.
-#define BSP_MAX_NODES 640
+#define bsp_map_min_x (g_bsp_map->map_min_x)
+#define bsp_map_min_y (g_bsp_map->map_min_y)
+#define bsp_map_max_x (g_bsp_map->map_max_x)
+#define bsp_map_max_y (g_bsp_map->map_max_y)
 
 // Player 1 start, supplied by the active map's data file.
-extern const s32 bsp_player_start_x;
-extern const s32 bsp_player_start_y;
-extern const u16 bsp_player_start_angle;
+#define bsp_player_start_x (g_bsp_map->player_start_x)
+#define bsp_player_start_y (g_bsp_map->player_start_y)
+#define bsp_player_start_angle (g_bsp_map->player_start_angle)
 
-// Reset per-level mutable state (door open/closed). phase_index is kept for
-// parity with the level flow; geometry is currently shared across phases.
+bool bsp_sector_is_secret(u16 sector_index);
+
+// Select the level and reset its mutable state (doors start closed).
 void bsp_map_reset(u16 phase_index);
 
 // Runtime door state. Non-door segs are never "open".

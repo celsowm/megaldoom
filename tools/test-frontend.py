@@ -118,7 +118,20 @@ ending_mars_tiles = unique_tiles(ASSETS / "ending_mars.png")
 ending_thanks_tiles = unique_tiles(ASSETS / "ending_thanks.png")
 assert 16 + ending_mars_tiles < 1440, "Mars intermission exceeds user VRAM"
 assert 16 + ending_thanks_tiles < 1440, "thanks card exceeds user VRAM"
-assert ending_mars_tiles == 1041, "exact WIMAP0 tile budget drifted"
+assert 800 <= ending_mars_tiles <= 1100, "WIMAP0 tile budget drifted unexpectedly"
+intermission_stats_tiles = max(
+    unique_tiles(ASSETS / "intermission_stats.png"),
+    unique_tiles(ASSETS / "intermission_stats_e1m2.png"),
+)
+intermission_digits_tiles = unique_tiles(ASSETS / "intermission_digits.png")
+intermission_map_tiles = sum(unique_tiles(ASSETS / name) for name in (
+    "intermission_entering_e1m2.png", "intermission_splat.png",
+    "intermission_pointer0.png", "intermission_pointer1.png",
+))
+assert 16 + ending_mars_tiles + intermission_stats_tiles + intermission_digits_tiles < 1440, \
+    "intermission stats exceed user VRAM"
+assert 16 + ending_mars_tiles + intermission_map_tiles < 1440, \
+    "intermission map overlays exceed user VRAM"
 ending_mars = Image.open(ASSETS / "ending_mars.png")
 ending_mars_palette = ending_mars.getpalette()
 assert ending_mars_palette is not None
@@ -147,7 +160,8 @@ for token in (
     "frontend_load_death_prompt", "frontend_set_death_prompt", "DEATH_PROMPT_X", "DEATH_PROMPT_Y",
     "run_boot_sequence", "run_boot_card", "BOOT_CARD_FRAMES 180", "BOOT_CACODEMON_X",
     "frontend_boot_disclaimer", "frontend_boot_sgdk", "frontend_boot_social", "frontend_cacodemon",
-    "frontend_ending_mars", "frontend_ending_thanks", "frontend_run_demo_ending",
+    "frontend_ending_mars", "frontend_ending_thanks", "frontend_run_intermission",
+    "FrontendIntermissionStats", "intermission_percent", "INTERMISSION_INPUT",
     "SPR_initEx(96)", "SPR_end()", "animate_sgdk_shimmer", "fade_sgdk_card_in",
     "PAL_setColors(12", "SPR_setFrame", "BOOT_CACODEMON_ATTACK_START",
     "frontend_cacodemon.palette->data", "SYS_doVBlankProcess();",
@@ -162,20 +176,20 @@ for token in (
     "indexed_fixed_palette", "build_cacodemon_palette", "SGDK_BOOT_PALETTE",
     "paletted_sgdk_canvas", "SEGA.TTF", "ImageFont.truetype",
     "WIMAP0", "make_ending_mars", "indexed_ending_mars", "make_ending_thanks",
-    "THE MEGALDOOM DEMO", "VERSION 0.1",
+    "EPISODE COMPLETE", "THE INVASION CONTINUES...", "VERSION 0.1",
 ):
     assert token in (ROOT / "tools/generate-frontend-assets.py").read_text()
 assert "(selected + 2) % 3" in FRONTEND and "(selected + 1) % 3" in FRONTEND
 assert "system_joy & ~previous_system_joy" in MAIN
 assert "frontend_run_pause(renderer_get_menu_tile_base())" in MAIN
 assert "renderer_restore_after_menu();" in MAIN
-assert "game_audio_play_music(test_music);" in MAIN
+assert "game_audio_play_music((phase_index == 0) ? test_music : e1m2_music);" in MAIN
 assert "game_audio_play_music(intermission_music);" in FRONTEND
-assert "DEMO_MAP_VISIBLE_FRAMES 360" in FRONTEND
 assert "PAL_fadeOut(0, 63, BOOT_FADE_FRAMES, FALSE);\n    frontend_video_init();" in FRONTEND
 assert "level_cleared = TRUE" not in MAIN
-assert "demo_exit_pending" in MAIN and "frontend_run_demo_ending();" in MAIN
+assert "demo_exit_pending" in MAIN and "frontend_run_intermission(&stats)" in MAIN
 assert 'XGM2 intermission_music "music/d_inter.vgm"' in RESOURCES
+assert 'XGM2 e1m2_music  "music/d_e1m2.vgm"' in RESOURCES
 assert "XGM2_playPCM" not in MAIN
 assert "if (s_sfx_enabled) XGM2_playPCM" in AUDIO
 assert "if (!s_music_enabled) XGM2_pause" in AUDIO

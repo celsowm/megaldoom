@@ -67,7 +67,8 @@ for s in sorted(stages, key=lambda s: -out[s]):
 
 print(f"\n  upload: full={out['upload_full']} swap={out['upload_swap']} dirty_tiles={out['upload_dirty_tiles']} runs={out['upload_runs']}")
 print(f"  overlay: restored={out['overlay_restored_tiles']} touched={out['overlay_touched_tiles']} overlap={out['overlay_overlap_tiles']}")
-print(f"  asm_mismatches={out['asm_mismatches']}")
+print(f"  asm: checked={out['asm_checked_tiles']} mismatches={out['asm_mismatches']} "
+      f"canary_failures={out['asm_canary_failures']} cycles={out['asm_cycles']}")
 print(f"  cast_lut: max_invz={out['cast_lut_max_invz']} fallback_hits={out['cast_lut_fallback_hits']}")
 print(f"  billboard_lut: max_forward={out['billboard_lut_max_forward']} fallback_hits={out['billboard_lut_fallback_hits']}")
 oracle_frames = out['visible_subsector_frames']

@@ -328,6 +328,12 @@ WALL_PAIR_MAX_DELTA = 40
 WALL_TARGET_SPREAD = 0.36  # ~2.7 PAL3 rungs
 WALL_MAX_CONTRAST_GAIN = 3.0
 
+# E1M2's three broad stone panels quantize mostly to the global floor rung.
+# Retain that best match where possible, but sparsely move the least-cost
+# texels to their next-best rung so the wall never becomes a flat solid field.
+FLAT_AVOIDING_NEUTRAL_MATERIALS = ("STONE2", "STONE3", "SW1STON1")
+FLAT_AVOIDING_MAX_SHARE = 0.49
+
 # Spatial low-pass applied after the contrast expansion, before quantizing.
 # The expansion above deliberately amplifies luminance detail, and at 16 colours
 # any residual pixel-level ripple lands on alternating palette rungs: measured
@@ -786,6 +792,29 @@ def convert_texture(path, palette, use_wall_bake_recipe=True,
                                             allowed, chroma_threshold,
                                             pair_max_delta, gain_ratio)
                  for x in range(WALL_TEX_DIM)] for y in range(WALL_TEX_DIM)]
+        if material_name in FLAT_AVOIDING_NEUTRAL_MATERIALS:
+            floor_texels = sum(value == GLOBAL_FLOOR_INDEX
+                               for row in rows for value in row)
+            maximum = int(WALL_TEX_DIM * WALL_TEX_DIM *
+                          FLAT_AVOIDING_MAX_SHARE)
+            if floor_texels > maximum:
+                alternatives = [index for index in allowed
+                                if index != GLOBAL_FLOOR_INDEX]
+                candidates = []
+                for y in range(WALL_TEX_DIM):
+                    for x in range(WALL_TEX_DIM):
+                        if rows[y][x] != GLOBAL_FLOOR_INDEX:
+                            continue
+                        replacement = nearest_palette_index(
+                            smoothed[x][y], palette, alternatives)
+                        penalty = (world_palette.distance_sq(
+                            smoothed[x][y], palette[replacement]) -
+                            world_palette.distance_sq(
+                                smoothed[x][y], palette[GLOBAL_FLOOR_INDEX]))
+                        candidates.append((penalty, y, x, replacement))
+                candidates.sort()
+                for _, y, x, replacement in candidates[:floor_texels - maximum]:
+                    rows[y][x] = replacement
         if recipe is not None and recipe.facade_window is not None:
             rows = _compose_compute2_facade_indices(rows)
             # The semantic facade is the candidate target for preview/error

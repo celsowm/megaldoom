@@ -32,7 +32,14 @@ static const u8 s_tile_column[VIEW_TILE_COUNT] = {
 // VIEW_TILE_W == 20 (run count); the column mask additionally needs W <= 32.
 typedef char overlay_tile_column_shape_check[
     (VIEW_TILE_H == 15 && VIEW_TILE_W == 20) ? 1 : -1];
+#if DEBUG_PERF
+/* The asm/C canary harness and perf mailboxes consume several KB of work RAM.
+ * A smaller debug-only snapshot cache keeps enough heap for frontend DMA; its
+ * existing overflow path requests a correct full base rebuild. */
+#define OVERLAY_SNAPSHOT_TILE_LIMIT 64
+#else
 #define OVERLAY_SNAPSHOT_TILE_LIMIT 128
+#endif
 static u32 s_snapshot_rows[OVERLAY_SNAPSHOT_TILE_LIMIT][8];
 static s16 s_snapshot_slot_by_tile[VIEW_TILE_COUNT];
 static u16 s_snapshot_count;

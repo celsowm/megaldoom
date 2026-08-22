@@ -10,7 +10,7 @@
 #define BILLBOARD_PHASE_COUNT 2
 // View dimensions come from raycast.h (RAY_VIEW_COLS/ROWS) -- billboard.h
 // includes it -- instead of being redefined here.
-#define BILLBOARD_OBJECT_COUNT 112
+#define BILLBOARD_OBJECT_COUNT MEGALDOOM_MAP_MAX_ACTIVE_THINGS
 #define BILLBOARD_COLLECT_RADIUS (FX_ONE / 2)
 #define BILLBOARD_COLLECT_RADIUS_SQ (BILLBOARD_COLLECT_RADIUS * BILLBOARD_COLLECT_RADIUS)
 // Conservative horizontal radius for the visible-subsector prototype. The
@@ -191,20 +191,23 @@ typedef struct {
 } BillboardGeometry;
 
 typedef struct {
-    s32 x;
-    s32 y;
+    // The campaign generator certifies authored coordinates plus the enemy
+    // movement margin fit s16. Arithmetic users promote these fields to s32.
+    s16 x;
+    s16 y;
+    s16 home_x;
+    s16 home_y;
+    s16 last_seen_x;
+    s16 last_seen_y;
     u8 type_id;
     u8 hp;
-    bool active;
+    u8 active : 1;
+    u8 saw_player : 1;
+    u8 has_last_seen : 1;
+    u8 reserved_flags : 5;
     u8 move_cooldown;
     u8 attack_cooldown;
-    s32 home_x;
-    s32 home_y;
-    bool saw_player;
     u8 spot_cooldown;
-    s32 last_seen_x;
-    s32 last_seen_y;
-    bool has_last_seen;
     u8 life_state;
     u8 anim_frame;
     u8 anim_timer;

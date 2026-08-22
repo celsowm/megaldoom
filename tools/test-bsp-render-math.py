@@ -22,7 +22,7 @@ RIGHT_SCALE = VIEW_COLS + STRIDE - VIEW_CENTER
 
 def declaration(typename, symbol):
     match = re.search(
-        rf"const {typename} {symbol}\[\d+\] = \{{(.*?)\n\}};",
+        rf"static const {typename} {symbol}\[\d+\] = \{{(.*?)\n\}};",
         GENERATED, re.S)
     assert match, symbol
     return match.group(1)
@@ -256,11 +256,11 @@ def constant(name):
 
 
 def main():
-    vertices = [tuple(row) for row in rows("BspVertex", "bsp_vertices", 2)]
-    segments = rows("BspSeg", "bsp_segs", 11)
-    nodes = rows("BspNode", "bsp_nodes", 14)
-    bounds = (constant("bsp_map_min_x"), constant("bsp_map_min_y"),
-              constant("bsp_map_max_x"), constant("bsp_map_max_y"))
+    vertices = [tuple(row) for row in rows("BspVertex", "e1m1_bsp_vertices", 2)]
+    segments = rows("BspSeg", "e1m1_bsp_segs", 11)
+    nodes = rows("BspNode", "e1m1_bsp_nodes", 14)
+    bounds = (min(x for x, _ in vertices), min(y for _, y in vertices),
+              max(x for x, _ in vertices), max(y for _, y in vertices))
     assert bounds == (min(x for x, _ in vertices), min(y for _, y in vertices),
                       max(x for x, _ in vertices), max(y for _, y in vertices))
 

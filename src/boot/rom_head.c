@@ -19,7 +19,10 @@ const ROMHeader rom_header = {
 #if (ENABLE_BANK_SWITCH != 0)
     0x003FFFFF,
 #else
-    0x000FFFFF,
+    /* The cartridge is a normal linear ROM up to the project's 4 MB cap.
+     * Keeping SGDK's 1 MB sample value here makes emulators mirror addresses
+     * above 0x0FFFFF once the two-map asset set grows past that boundary. */
+    0x003FFFFF,
 #endif
     0xE0FF0000,
     0xE0FFFFFF,

@@ -9,11 +9,28 @@ typedef enum {
     FRONTEND_PAUSE_QUIT_TO_TITLE
 } FrontendPauseAction;
 
+typedef struct {
+    u16 completed_level;
+    u16 next_level;
+    u16 kills;
+    u16 kill_total;
+    u16 items;
+    u16 item_total;
+    u16 secrets;
+    u16 secret_total;
+    u32 time_vblanks;
+    u16 par_seconds;
+} FrontendIntermissionStats;
+
+typedef enum {
+    FRONTEND_INTERMISSION_CONTINUE = 0,
+    FRONTEND_INTERMISSION_TITLE
+} FrontendIntermissionAction;
+
 DoomSkill frontend_run(void);
 FrontendPauseAction frontend_run_pause(u16 tile_base);
-// E1M1 is the complete public demo: its exit switch runs this intermission
-// and then hands control back to frontend_run() at the title screen.
-void frontend_run_demo_ending(void);
+FrontendIntermissionAction frontend_run_intermission(
+    const FrontendIntermissionStats *stats);
 
 // Death-screen "PRESS FIRE" prompt, drawn on BG_A over the frozen/red-tinted
 // gameplay view (see main.c's death handling). Mirrors the title screen's

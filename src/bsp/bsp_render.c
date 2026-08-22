@@ -76,8 +76,10 @@ static void seed_column_default(RayColumn *col) {
 // per node: 1 = front-first (cross >= 0), 0 = back-first. Rebuilt only when
 // player.x or player.y changes; invalidated explicitly on teleport/reset.
 static u8 g_node_side_bits[(BSP_MAX_NODES + 7) / 8];
-static u16 g_node_side_generation[BSP_MAX_NODES];
-static u16 g_position_generation;
+/* Position generations only distinguish the current cached pose.  Eight bits
+ * are sufficient; the existing wrap clear prevents stale equality. */
+static u8 g_node_side_generation[BSP_MAX_NODES];
+static u8 g_position_generation;
 static s32 g_node_cache_px;
 static s32 g_node_cache_py;
 static bool g_node_cache_valid;

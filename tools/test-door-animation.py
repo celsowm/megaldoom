@@ -18,6 +18,7 @@ SCENE = "\n".join((ROOT / "src/renderer" / n).read_text() for n in (
 ))
 MAIN = (ROOT / "src/main.c").read_text()
 GENERATED = (ROOT / "src/bsp/generated_e1m1_map.c").read_text()
+ASSETS = (ROOT / "src/bsp/generated_assets.h").read_text()
 
 LIFT_MAX = 256
 STEP_PER_VBLANK = 16
@@ -32,7 +33,7 @@ def advance(lift, target_open, elapsed_vblanks):
 
 def declaration(typename, symbol):
     match = re.search(
-        rf"const {typename} {symbol}\[\d+\] = \{{(.*?)\n\}};",
+        rf"static const {typename} {symbol}\[\d+\] = \{{(.*?)\n\}};",
         GENERATED, re.S)
     assert match, symbol
     return match.group(1)
@@ -120,12 +121,13 @@ def main():
 
     # E1M1 keeps real slab textures and static DOORTRAK jambs.
     rows = []
-    for row in re.findall(r"\{([^{}]+)\}", declaration("BspSeg", "bsp_segs")):
+    for row in re.findall(r"\{([^{}]+)\}", declaration("BspSeg", "e1m1_bsp_segs")):
         values = [int(value) for value in re.findall(r"-?\d+", row)]
         assert len(values) == 11
         rows.append(values)
     doors = [row for row in rows if row[7] == 1]
-    tracks = [row for row in rows if row[6] == 14]
+    doortrak = int(re.search(r"#define MEGALDOOM_TEX_DOORTRAK (\d+)", ASSETS).group(1))
+    tracks = [row for row in rows if row[6] == doortrak]
     assert len(doors) == 20 and all(row[6] != 0 for row in doors)
     assert tracks and all(row[7] == 0 for row in tracks)
 

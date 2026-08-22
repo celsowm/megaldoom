@@ -8,6 +8,51 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## E1M1 → E1M2 campaign and classic intermission (2026-08-22)
+
+The official input is `DOOM1.WAD` SHA-256
+`77CD3852B5F7114EC64A07A1B1EF1F734736A13BBD186477C9111A7DD8C55F82`.
+Generation now publishes two independent ROM-resident `BspMapData`
+descriptors and one shared atlas of 52 used materials plus fallback.  E1M2 is
+942 vertices, 961 SEGs, 448 subsectors, 447 nodes, 200 sectors, 262 source
+THINGS and six secrets; its supported active populations are 148/168/207 for
+Easy/Medium/Hard.  E1M1 remains 470/394/239/238, three secrets and
+62/64/88 active objects.
+
+Campaign state distinguishes pistol-start new game/death from a level
+transition: E1M1→E1M2 carries health, armor, owned/current weapon and ammo,
+but clears keys and resets map objects, doors, time and secret visitation.
+Results count difficulty-present enemies, Doom count-item bonuses 2014/2015,
+unique special-9 sectors, effective gameplay vblanks and the 0:30/1:15 pars.
+The WIMAP0 intermission implements the two-press acceleration/advance flow,
+animated 2%/3-second counters, E1M1 splat plus blinking E1M2 pointer, and two
+splats before the final card after E1M2.  Its worst overlay estimate is 1092
+of the 1440 user tiles.
+
+The first two-map ROM exposed two old limits that a build-only check missed:
+the cartridge header still advertised a 1 MB end address and 18.3 KB free RAM
+was not enough for the frontend's temporary image buffers.  The header now
+declares the mapper-free 4 MB window.  Byte generation tags for SEG/node
+caches plus reordered s16 billboard state bring the clean release to 44,788
+bytes static / **20,748 free**.  Release `.text` is 2,719,764 bytes and the
+padded ROM is **2,688 KB**, below the 4 MB cap.
+
+The complete Python/native suite and release guardrails pass.  A direct-E1M2
+DEBUG_PERF checkpoint run reached title/menu/gameplay/movement/combat
+(`seen=0x1F`) and checked 109 asm tiles over five harness cycles with **zero
+mismatches and zero canary failures**.  Its 19.6-vblank average is explicitly
+instrumentation-distorted and is not a release cadence claim.  DEBUG_PERF uses
+a 64-tile overlay snapshot cache (release remains 128); overflow already takes
+the correct full-base-rebuild path, leaving 20,516 bytes free in that build.
+
+The offline progression certificate proves the E1M2 red key, keyed door and
+exit reachable.  `tools/routes/e1m2-key-exit.txt` currently validates the
+direct-E1M2 boot, start door, movement and combat, but its key/exit legs are
+not yet checkpoint-complete: deterministic turning drifts with scene cost.
+Do not cite it as a completed playthrough until `DEBUG_CHECKPOINT_KEY|EXIT`
+is observed.  The manual release E1M1→E1M2→title playthrough is likewise a
+user-side acceptance step, not something the headless structural tests prove.
+
 ## COMPUTE2 semantic facade after visual rejection (2026-08-22)
 
 The generic edge-aware bake below passed its numerical contracts but failed the

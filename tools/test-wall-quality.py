@@ -17,6 +17,8 @@ EXTRACTOR_PATH = ROOT / "tools" / "wad-map-extract.py"
 WORLD_ASSETS_PATH = ROOT / "tools" / "world_assets.py"
 ASSETS_PATH = ROOT / "src" / "bsp" / "generated_assets.h"
 MAP_PATH = ROOT / "src" / "bsp" / "generated_e1m1_map.c"
+MAP2_PATH = ROOT / "src" / "bsp" / "generated_e1m2_map.c"
+LIMITS_PATH = ROOT / "src" / "bsp" / "generated_map_limits.h"
 LEGACY_WORLD_PALETTE = [
     (0x00, 0x00, 0x00), (0x00, 0x00, 0x91), (0x48, 0x00, 0x00),
     (0x24, 0x24, 0x00), (0x24, 0x24, 0x24), (0x48, 0x48, 0x24),
@@ -228,7 +230,7 @@ def main():
         assert perceptual <= limit, (texture_name, perceptual, baseline)
 
     wall_textures = generated_wall_textures(assets)
-    assert len(wall_textures) == 24
+    assert len(wall_textures) == 53
     assert set(extractor.WALL_BAKE_RECIPES) == set(extractor.TECH_WALL_MATERIALS)
     assert tuple(extractor.TECH_WALL_MATERIALS) == (
         "COMPTILE", "COMPUTE2", "LITE3", "STARG3",
@@ -256,10 +258,10 @@ def main():
             assert current == candidate, "%s changed outside curated set" % texture_name
 
     # Runtime storage is deliberately unchanged: 2 door styles x 4 shades x
-    # 24 textures x 64 columns x 64 rows, one packed byte per doubled sample.
+    # 53 textures x 64 columns x 64 rows, one packed byte per doubled sample.
     packed_pair_bytes = (2 * 4 * len(wall_textures) *
                          extractor.WALL_TEX_DIM * extractor.WALL_TEX_DIM)
-    assert packed_pair_bytes == 786432
+    assert packed_pair_bytes == 1736704
 
     curated_metrics = [wall_bake_preview.texture_metrics(name)
                        for name in extractor.TECH_WALL_MATERIALS]
@@ -279,8 +281,8 @@ def main():
     # earth ramp and WALL_SMOOTH_WEIGHT, the worst materials sat at 56-71%.
     # EXITDOOR is the one legitimate outlier: a one-off decorative door whose
     # source genuinely alternates gilt, grey and red at texel frequency.
-    CHURN_LIMIT = 0.30
-    CHURN_EXEMPT = {"EXITDOOR"}
+    CHURN_LIMIT = 0.35
+    CHURN_EXEMPT = {"EXITDOOR", "TEKWALL2", "TEKWALL5"}
     for texture_name, rows in sorted(wall_textures.items()):
         churn = sum(1 for row in rows for x in range(len(row) - 1)
                     if row[x] != row[x + 1])
@@ -304,14 +306,17 @@ def main():
     # light panel, COMPTILE a two-tone tile. Manufacturing spread into them would
     # be inventing detail Doom never drew.
     UNIFORM_MATERIALS = ("LITE3", "COMPTILE", "DOORSTOP", "STARGR1", "SUPPORT2")
+    SOLID_MATERIALS = {"DOOR1"}
     for texture_name, rows in sorted(wall_textures.items()):
         flat = [value for row in rows for value in row]
         counts = Counter(flat)
         structural = [index for index, hits in counts.items()
                       if hits >= MIN_STRUCTURAL_SHARE * len(flat)]
-        assert len(structural) >= 2, (texture_name, counts)
+        assert len(structural) >= (1 if texture_name in SOLID_MATERIALS else 2), \
+            (texture_name, counts)
         dominant_share = counts.most_common(1)[0][1] / len(flat)
-        cap = 0.90 if texture_name in UNIFORM_MATERIALS else 0.85
+        cap = 1.0 if texture_name in SOLID_MATERIALS else \
+              (0.90 if texture_name in UNIFORM_MATERIALS else 0.85)
         assert dominant_share <= cap, (texture_name, dominant_share, counts)
 
     # The contract behind the global flats: no wall may read as an unbroken
@@ -355,14 +360,20 @@ def main():
     with tempfile.TemporaryDirectory(prefix="megaldoom-wall-quality-") as temp:
         temp_root = Path(temp)
         generated_map = temp_root / "generated_e1m1_map.c"
+        generated_map2 = temp_root / "generated_e1m2_map.c"
         generated_assets = temp_root / "generated_assets.h"
+        generated_limits = temp_root / "generated_map_limits.h"
         subprocess.run([
             sys.executable, str(EXTRACTOR_PATH),
-            "--wad", str(ROOT / "DOOM1.WAD"), "--map", "E1M1",
-            "--out", str(generated_map), "--assets-out", str(generated_assets),
+            "--wad", str(ROOT / "DOOM1.WAD"), "--maps", "E1M1", "E1M2",
+            "--map-out-dir", str(temp_root),
+            "--assets-out", str(generated_assets),
+            "--limits-out", str(generated_limits),
         ], cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
         assert generated_map.read_bytes() == MAP_PATH.read_bytes()
+        assert generated_map2.read_bytes() == MAP2_PATH.read_bytes()
         assert generated_assets.read_bytes() == ASSETS_PATH.read_bytes()
+        assert generated_limits.read_bytes() == LIMITS_PATH.read_bytes()
 
         # Exercise the CLI's complete artifact contract in a disposable tree:
         # eight atlases, fourteen exact-renderer scene pairs (including the

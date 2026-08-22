@@ -130,6 +130,10 @@ BillboardPickupCounts billboard_get_pickup_counts(void);
 BillboardPickupKind billboard_get_last_pickup_kind(void);
 u16 billboard_get_enemy_count(void);
 u16 billboard_get_active_count(void);
+u16 billboard_get_kill_total(void);
+u16 billboard_get_kill_count(void);
+u16 billboard_get_item_total(void);
+u16 billboard_get_item_count(void);
 u16 billboard_get_target_count(void);
 u16 billboard_get_target_health(void);
 // Fire one hitscan pellet down view column `aim_col`, blocked at `wall_depth`

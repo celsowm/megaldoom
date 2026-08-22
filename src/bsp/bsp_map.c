@@ -1,6 +1,13 @@
 #include "bsp_map.h"
 #include "fixed_math.h"
 
+#if BSP_USE_HAND_MAP
+extern const BspMapData g_hand_map;
+const BspMapData *g_bsp_map = &g_hand_map;
+#else
+const BspMapData *g_bsp_map = &g_e1m1_map;
+#endif
+
 // Geometry (bsp_vertices/segs/subsectors/nodes, root, seg count, player start)
 // is provided by the active map data file: src/generated_e1m1_map.c by default,
 // or src/bsp_map_test.c when BSP_USE_HAND_MAP is defined. This file holds only
@@ -45,8 +52,10 @@ static u16 bsp_ratio_q8(u32 numerator, u32 denominator) {
 #define BSP_DOOR_LIFT_PER_VBLANK 16u
 static u16 g_door_lift[BSP_MAX_DOORS];
 static bool g_door_target_open[BSP_MAX_DOORS];
-static u16 g_query_seen_generation[BSP_MAX_SEGS];
-static u16 g_query_generation = 1;
+/* Byte generations halve this maximum-map cache.  A wrap clears it once per
+ * 255 spatial queries, preserving the same duplicate suppression semantics. */
+static u8 g_query_seen_generation[BSP_MAX_SEGS];
+static u8 g_query_generation = 1;
 static u16 g_visibility_revision = 1;
 
 #if DEBUG_PERF
@@ -65,8 +74,32 @@ static u16 g_los_candidates;
 // extra RAM (MD has only 64KB, so a per-seg bbox array is too costly). Almost every
 // seg is far from any given query and rejects here.
 
+bool bsp_select_map(u16 level_index) {
+#if BSP_USE_HAND_MAP
+    (void)level_index;
+    g_bsp_map = &g_hand_map;
+    return TRUE;
+#else
+    if (level_index == 0) g_bsp_map = &g_e1m1_map;
+    else if (level_index == 1) g_bsp_map = &g_e1m2_map;
+    else return FALSE;
+    return TRUE;
+#endif
+}
+
+const BspMapData *bsp_current_map(void) { return g_bsp_map; }
+
+bool bsp_sector_is_secret(u16 sector_index) {
+    if (sector_index >= g_bsp_map->sector_count ||
+        g_bsp_map->secret_sector_bits == NULL) {
+        return FALSE;
+    }
+    return (bool)((g_bsp_map->secret_sector_bits[sector_index >> 3] &
+                   (1u << (sector_index & 7))) != 0);
+}
+
 void bsp_map_reset(u16 phase_index) {
-    (void)phase_index;
+    bsp_select_map(phase_index);
     for (u16 i = 0; i < bsp_door_count && i < BSP_MAX_DOORS; i++) {
         g_door_lift[i] = 0;
         g_door_target_open[i] = FALSE;

@@ -103,6 +103,11 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
+& python (Join-Path $PSScriptRoot "test-campaign.py")
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
 & python (Join-Path $PSScriptRoot "test-renderer-upload-policy.py")
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE

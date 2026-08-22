@@ -48,6 +48,9 @@ static s32 g_visibility_player_x;
 static s32 g_visibility_player_y;
 static u16 g_visibility_bsp_revision;
 static bool g_visibility_context_valid;
+static u16 g_level_kill_total;
+static u16 g_level_item_total;
+static u16 g_level_item_count;
 #if DEBUG_PERF
 static u16 g_debug_prop_collision_candidates;
 static u16 g_debug_prop_collision_calls;
@@ -327,6 +330,9 @@ void billboard_init(u16 phase_index, DoomSkill skill) {
     (void)phase_index;
     billboard_registry_reset();
     billboard_effects_reset();
+    g_level_kill_total = 0;
+    g_level_item_total = 0;
+    g_level_item_count = 0;
     for (u16 i = 0; i < BILLBOARD_OBJECT_COUNT; i++) g_billboards[i].active = FALSE;
     for (u16 i = 0; i < bsp_thing_count && count < BILLBOARD_OBJECT_COUNT; i++) {
         const u16 flags = bsp_things[i].flags;
@@ -352,6 +358,9 @@ void billboard_init(u16 phase_index, DoomSkill skill) {
         object->home_y = object->y;
         if (type != BILLBOARD_TYPE_KEY) object->hp = billboard_get_type(type)->hit_points;
         billboard_registry_add(object_index);
+        if (type == BILLBOARD_TYPE_DUMMY) g_level_kill_total++;
+        if ((type == BILLBOARD_TYPE_BONUS) ||
+            (type == BILLBOARD_TYPE_ARMOR_BONUS)) g_level_item_total++;
     }
     g_collected_count = 0;
     g_pickup_counts.bonus = 0;
@@ -470,6 +479,10 @@ BillboardPickupResult billboard_collect_near(s32 x, s32 y) {
             else if (object->hp == BILLBOARD_VISUAL_RED_KEY) result.key_mask = BSP_KEY_RED;
             result.kind = BILLBOARD_PICKUP_KEY;
         } else { result.kind = BILLBOARD_PICKUP_BONUS; g_pickup_counts.bonus++; }
+        if ((object->type_id == BILLBOARD_TYPE_BONUS) ||
+            (object->type_id == BILLBOARD_TYPE_ARMOR_BONUS)) {
+            g_level_item_count++;
+        }
         g_collected_count++;
         g_last_pickup_kind = result.kind;
         return result;
@@ -503,6 +516,12 @@ bool billboard_position_blocked(s32 x, s32 y, s32 radius) {
 }
 
 u16 billboard_get_collected_count(void) { return g_collected_count; }
+u16 billboard_get_kill_total(void) { return g_level_kill_total; }
+u16 billboard_get_kill_count(void) {
+    return (u16)(g_level_kill_total - billboard_registry_living_enemy_count());
+}
+u16 billboard_get_item_total(void) { return g_level_item_total; }
+u16 billboard_get_item_count(void) { return g_level_item_count; }
 BillboardPickupCounts billboard_get_pickup_counts(void) { return g_pickup_counts; }
 BillboardPickupKind billboard_get_last_pickup_kind(void) { return g_last_pickup_kind; }
 u16 billboard_get_enemy_count(void) { return billboard_registry_living_enemy_count(); }

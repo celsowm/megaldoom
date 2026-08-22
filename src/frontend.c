@@ -20,7 +20,6 @@
 #define BOOT_CACODEMON_Y 50
 #define BOOT_CACODEMON_ATTACK_START 48
 #define BOOT_CACODEMON_ATTACK_END 64
-#define DEMO_MAP_VISIBLE_FRAMES 360
 #define ENDING_PROMPT_BLINK_MASK 0x3F
 #define ENDING_PROMPT_ON_FRAMES 48
 // Generated at y=176 and centred at x=114.  This is the exact 12-tile span
@@ -29,6 +28,8 @@
 #define ENDING_PROMPT_X 14
 #define ENDING_PROMPT_Y 22
 #define ENDING_PROMPT_W 12
+#define INTERMISSION_INPUT (BUTTON_A | BUTTON_B | BUTTON_C | BUTTON_START)
+#define INTERMISSION_MAP_FRAMES 180
 
 /* A return from gameplay is a return to the title, not a fresh console boot. */
 static bool s_boot_sequence_played = FALSE;
@@ -211,20 +212,6 @@ static void run_boot_sequence(void) {
     run_boot_card(&frontend_boot_social, FALSE);
 }
 
-static void run_demo_map(void) {
-    u16 previous;
-
-    draw_boot_card(&frontend_ending_mars);
-    PAL_fadeIn(0, 63, frontend_ending_mars.palette->data, BOOT_FADE_FRAMES, FALSE);
-    wait_for_release(BUTTON_START);
-    previous = JOY_readJoypad(JOY_1);
-    for (u16 frame = 0; frame < DEMO_MAP_VISIBLE_FRAMES; frame++) {
-        if ((read_pressed(&previous) & BUTTON_START) != 0) break;
-        VDP_waitVSync();
-    }
-    PAL_fadeOut(0, 63, BOOT_FADE_FRAMES, FALSE);
-}
-
 static void set_ending_prompt(bool visible) {
     if (visible) {
         VDP_setTileMapEx(BG_B, frontend_ending_thanks.tilemap,
@@ -259,17 +246,233 @@ static void run_demo_thanks(void) {
     wait_for_release(BUTTON_START);
 }
 
-void frontend_run_demo_ending(void) {
-    // Fade the live E1M1 palette before clearing its planes; otherwise the
-    // transition into WIMAP0 would cut straight from the renderer to black.
+typedef struct {
+    u16 stats;
+    u16 digits;
+} IntermissionStatsTiles;
+
+typedef struct {
+    u16 entering;
+    u16 splat;
+    u16 pointer0;
+    u16 pointer1;
+    u16 end;
+} IntermissionMapTiles;
+
+static IntermissionStatsTiles load_intermission_stats_tiles(u16 completed_level) {
+    IntermissionStatsTiles tiles;
+    u16 next = (u16)(TILE_USER_INDEX + frontend_ending_mars.tileset->numTile);
+    const Image *stats = completed_level == 0
+        ? &frontend_intermission_stats : &frontend_intermission_stats_e1m2;
+    tiles.stats = next;
+    VDP_loadTileSet(stats->tileset, next, DMA);
+    next = (u16)(next + stats->tileset->numTile);
+    tiles.digits = next;
+    VDP_loadTileSet(frontend_intermission_digits.tileset, next, DMA);
+    return tiles;
+}
+
+static IntermissionMapTiles load_intermission_map_tiles(u16 completed_level) {
+    IntermissionMapTiles tiles;
+    u16 next = (u16)(TILE_USER_INDEX + frontend_ending_mars.tileset->numTile);
+    tiles.entering = next;
+    if (completed_level == 0) {
+        VDP_loadTileSet(frontend_intermission_entering_e1m2.tileset, next, DMA);
+        next = (u16)(next + frontend_intermission_entering_e1m2.tileset->numTile);
+    }
+    tiles.splat = next;
+    VDP_loadTileSet(frontend_intermission_splat.tileset, next, DMA);
+    next = (u16)(next + frontend_intermission_splat.tileset->numTile);
+    tiles.pointer0 = next;
+    VDP_loadTileSet(frontend_intermission_pointer0.tileset, next, DMA);
+    next = (u16)(next + frontend_intermission_pointer0.tileset->numTile);
+    tiles.pointer1 = next;
+    VDP_loadTileSet(frontend_intermission_pointer1.tileset, next, DMA);
+    tiles.end = (u16)(next + frontend_intermission_pointer1.tileset->numTile);
+    return tiles;
+}
+
+static void draw_intermission_image(const Image *image, u16 tile_base) {
+    VDP_setTileMapEx(BG_A, image->tilemap,
+                     TILE_ATTR_FULL(PAL0, TRUE, FALSE, FALSE, tile_base),
+                     0, 0, 0, 0, image->tilemap->w, image->tilemap->h, CPU);
+}
+
+static void draw_intermission_glyph(u16 tile_base, u16 glyph, u16 x, u16 y) {
+    VDP_setTileMapEx(BG_A, frontend_intermission_digits.tilemap,
+                     TILE_ATTR_FULL(PAL0, TRUE, FALSE, FALSE, tile_base),
+                     x, y, (u16)(glyph * 2), 0, 2, 2, CPU);
+}
+
+static void draw_intermission_number(u16 tile_base, u16 value, bool percent,
+                                     u16 right, u16 y) {
+    u8 digits[5];
+    u16 count = 0;
+    u16 cursor;
+    if (value == 0) digits[count++] = 0;
+    while (value > 0 && count < 5) {
+        digits[count++] = (u8)(value % 10);
+        value = (u16)(value / 10);
+    }
+    cursor = (u16)(right - (count + (percent ? 1 : 0)) * 2);
+    for (s16 i = (s16)count - 1; i >= 0; i--) {
+        draw_intermission_glyph(tile_base, digits[i], cursor, y);
+        cursor = (u16)(cursor + 2);
+    }
+    if (percent) draw_intermission_glyph(tile_base, 10, cursor, y);
+}
+
+static void draw_intermission_time(u16 tile_base, u16 seconds, u16 right, u16 y) {
+    const u16 minutes = (u16)(seconds / 60);
+    const u16 remainder = (u16)(seconds % 60);
+    u16 cursor = (u16)(right - 10);
+    draw_intermission_glyph(tile_base, (u16)((minutes / 10) % 10), cursor, y);
+    cursor += 2;
+    draw_intermission_glyph(tile_base, (u16)(minutes % 10), cursor, y);
+    cursor += 2;
+    draw_intermission_glyph(tile_base, 11, cursor, y);
+    cursor += 2;
+    draw_intermission_glyph(tile_base, (u16)(remainder / 10), cursor, y);
+    cursor += 2;
+    draw_intermission_glyph(tile_base, (u16)(remainder % 10), cursor, y);
+}
+
+static u16 intermission_percent(u16 value, u16 total) {
+    if (total == 0) return 0;
+    return (u16)(((u32)value * 100u) / total);
+}
+
+static void draw_intermission_values(u16 tile_base,
+                                     u16 kills, u16 items, u16 secrets,
+                                     u16 time_seconds, u16 par_seconds) {
+    VDP_clearTileMapRect(BG_A, 24, 6, 15, 11);
+    VDP_clearTileMapRect(BG_A, 8, 21, 12, 2);
+    VDP_clearTileMapRect(BG_A, 30, 21, 10, 2);
+    draw_intermission_number(tile_base, kills, TRUE, 38, 6);
+    draw_intermission_number(tile_base, items, TRUE, 38, 10);
+    draw_intermission_number(tile_base, secrets, TRUE, 38, 14);
+    draw_intermission_time(tile_base, time_seconds, 20, 21);
+    draw_intermission_time(tile_base, par_seconds, 40, 21);
+}
+
+static void run_intermission_stats(const FrontendIntermissionStats *stats,
+                                   const IntermissionStatsTiles *tiles) {
+    const u16 target_kills = intermission_percent(stats->kills, stats->kill_total);
+    const u16 target_items = intermission_percent(stats->items, stats->item_total);
+    const u16 target_secrets = intermission_percent(stats->secrets, stats->secret_total);
+    const u16 target_time = (u16)(stats->time_vblanks / 60u);
+    u16 kills = 0, items = 0, secrets = 0, time_seconds = 0, par_seconds = 0;
+    u16 stage = 0;
+    u16 previous;
+
+    draw_intermission_image(stats->completed_level == 0
+        ? &frontend_intermission_stats : &frontend_intermission_stats_e1m2,
+        tiles->stats);
+    draw_intermission_values(tiles->digits, 0, 0, 0, 0, 0);
+    wait_for_release(INTERMISSION_INPUT);
+    previous = JOY_readJoypad(JOY_1);
+    while (TRUE) {
+        const u16 pressed = read_pressed(&previous);
+        const bool finished = stage >= 4;
+        if ((pressed & INTERMISSION_INPUT) != 0) {
+            if (!finished) {
+                kills = target_kills;
+                items = target_items;
+                secrets = target_secrets;
+                time_seconds = target_time;
+                par_seconds = stats->par_seconds;
+                stage = 4;
+                game_audio_play_sfx(sfx_door, sizeof(sfx_door), SOUND_PCM_CH2);
+            } else {
+                break;
+            }
+        } else if (stage == 0) {
+            kills = (kills + 2 >= target_kills) ? target_kills : (u16)(kills + 2);
+            if (kills == target_kills) stage++;
+        } else if (stage == 1) {
+            items = (items + 2 >= target_items) ? target_items : (u16)(items + 2);
+            if (items == target_items) stage++;
+        } else if (stage == 2) {
+            secrets = (secrets + 2 >= target_secrets) ? target_secrets : (u16)(secrets + 2);
+            if (secrets == target_secrets) stage++;
+        } else if (stage == 3) {
+            time_seconds = (time_seconds + 3 >= target_time) ? target_time :
+                           (u16)(time_seconds + 3);
+            par_seconds = (par_seconds + 3 >= stats->par_seconds) ? stats->par_seconds :
+                          (u16)(par_seconds + 3);
+            if (time_seconds == target_time && par_seconds == stats->par_seconds) stage++;
+        }
+        draw_intermission_values(tiles->digits, kills, items, secrets,
+                                 time_seconds, par_seconds);
+        if ((stage < 4) && ((vtimer & 3) == 0)) {
+            game_audio_play_sfx(sfx_pickup, sizeof(sfx_pickup), SOUND_PCM_CH2);
+        }
+        SYS_doVBlankProcess();
+    }
+    wait_for_release(INTERMISSION_INPUT);
+}
+
+static void draw_marker(const Image *image, u16 tile_base, u16 x, u16 y) {
+    VDP_setTileMapEx(BG_A, image->tilemap,
+                     TILE_ATTR_FULL(PAL0, TRUE, FALSE, FALSE, tile_base),
+                     x, y, 0, 0, image->tilemap->w, image->tilemap->h, CPU);
+}
+
+static void run_intermission_map(u16 completed_level,
+                                 const IntermissionMapTiles *tiles) {
+    u16 previous;
+    clear_plane_cpu(BG_A);
+    // WIMAP0 node coordinates, converted to the tile-aligned 224-line frame.
+    if (completed_level == 0) {
+        draw_intermission_image(&frontend_intermission_entering_e1m2,
+                                tiles->entering);
+    }
+    draw_marker(&frontend_intermission_splat, tiles->splat, 21, 20);
+    if (completed_level > 0) {
+        draw_marker(&frontend_intermission_splat, tiles->splat, 16, 18);
+    }
+    wait_for_release(INTERMISSION_INPUT);
+    previous = JOY_readJoypad(JOY_1);
+    for (u16 frame = 0; frame < INTERMISSION_MAP_FRAMES; frame++) {
+        if ((read_pressed(&previous) & INTERMISSION_INPUT) != 0) break;
+        if (completed_level == 0) {
+            VDP_clearTileMapRect(BG_A, 10, 18, 8, 2);
+            if ((frame & 31) < 24) {
+                const bool alternate = (bool)((frame & 8) != 0);
+                draw_marker(alternate ? &frontend_intermission_pointer1
+                                      : &frontend_intermission_pointer0,
+                            alternate ? tiles->pointer1 : tiles->pointer0,
+                            10, 18);
+            }
+        }
+        SYS_doVBlankProcess();
+    }
+    wait_for_release(INTERMISSION_INPUT);
+}
+
+FrontendIntermissionAction frontend_run_intermission(
+    const FrontendIntermissionStats *stats) {
     PAL_fadeOut(0, 63, BOOT_FADE_FRAMES, FALSE);
     frontend_video_init();
-    // d_inter starts on the map and remains uninterrupted through the thanks
-    // card. frontend_run() will start d_intro again after this function exits.
+    draw_boot_card(&frontend_ending_mars);
+    const IntermissionStatsTiles stats_tiles =
+        load_intermission_stats_tiles(stats->completed_level);
     game_audio_play_music(intermission_music);
-    run_demo_map();
+    PAL_fadeIn(0, 63, frontend_ending_mars.palette->data, BOOT_FADE_FRAMES, FALSE);
+    run_intermission_stats(stats, &stats_tiles);
+    const IntermissionMapTiles map_tiles =
+        load_intermission_map_tiles(stats->completed_level);
+    run_intermission_map(stats->completed_level, &map_tiles);
+    PAL_fadeOut(0, 63, BOOT_FADE_FRAMES, FALSE);
+    if (stats->completed_level == 0) {
+        game_audio_stop_music();
+        clear_plane_cpu(BG_A);
+        clear_plane_cpu(BG_B);
+        return FRONTEND_INTERMISSION_CONTINUE;
+    }
     run_demo_thanks();
     game_audio_stop_music();
+    return FRONTEND_INTERMISSION_TITLE;
 }
 
 static void draw_main_cursor(u16 tile_base, u16 selected, bool alternate) {

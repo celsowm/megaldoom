@@ -18,7 +18,7 @@ def load_module(name, relative_path):
 
 def declaration(source, typename, symbol):
     match = re.search(
-        rf"const {typename} {symbol}\[\d+\] = \{{(.*?)\n\}};", source, re.S)
+        rf"(?:static )?const {typename} {symbol}\[\d+\] = \{{(.*?)\n\}};", source, re.S)
     assert match, symbol
     return match.group(1)
 
@@ -35,33 +35,28 @@ def main():
     bsp_emit_source = (ROOT / "tools/bsp_emit.py").read_text()
     world_assets_source = (ROOT / "tools/world_assets.py").read_text()
 
-    expected = {
-        "bsp_vertex_count": 470,
-        "bsp_seg_count": 394,
-        "bsp_subsector_count": 239,
-        "bsp_node_count": 238,
-        "bsp_door_count": 5,
-    }
-    for symbol, value in expected.items():
-        match = re.search(rf"const u16 {symbol} = (\d+)u;", generated)
-        assert match and int(match.group(1)) == value, (symbol, match)
+    assert re.search(
+        r"const BspMapData g_e1m1_map = \{.*?"
+        r"237u, 394u, 470u, 239u, 238u, 5u, 143u, 88u, 3u,",
+        generated, re.S)
 
     vertices = [tuple(map(int, values)) for values in re.findall(
         r"\{\s*(-?\d+),\s*(-?\d+)\s*\}",
-        declaration(generated, "BspVertex", "bsp_vertices"))]
+        declaration(generated, "BspVertex", "e1m1_bsp_vertices"))]
     expected_bounds = {
         "bsp_map_min_x": min(x for x, _ in vertices),
         "bsp_map_min_y": min(y for _, y in vertices),
         "bsp_map_max_x": max(x for x, _ in vertices),
         "bsp_map_max_y": max(y for _, y in vertices),
     }
-    for symbol, value in expected_bounds.items():
-        assert re.search(rf"const s16 {symbol} = {value};", generated), symbol
-        assert f'lines.append("const s16 {symbol}' in bsp_emit_source
+    bounds = tuple(expected_bounds[name] for name in (
+        "bsp_map_min_x", "bsp_map_min_y", "bsp_map_max_x", "bsp_map_max_y"))
+    assert re.search(r"\s%d, %d, %d, %d," % bounds, generated)
+    assert "const BspMapData g_%s_map" in bsp_emit_source
 
     rows = []
     for row in re.findall(r"\{([^{}]+)\}", declaration(
-            generated, "BspSeg", "bsp_segs")):
+            generated, "BspSeg", "e1m1_bsp_segs")):
         values = [int(value) for value in re.findall(r"-?\d+", row)]
         assert len(values) == 11, values
         rows.append(values)

@@ -23,6 +23,13 @@ typedef struct {
     u8 owned;    // bitmask of WEAPON_OWNED_BIT(WeaponId)
 } PlayerArsenal;
 
+#define LEVEL_SECRET_BYTES ((MEGALDOOM_MAP_MAX_SECTORS + 7) / 8)
+typedef struct {
+    u32 time_vblanks;
+    u16 secrets_found;
+    u8 visited_secret_bits[LEVEL_SECRET_BYTES];
+} LevelProgress;
+
 // Shot timers count real vblanks (not loop iterations) so the gun feel does not
 // stretch when a motion frame takes ~11 vblanks: the pistol's 12 vblanks is
 // ~0.2 s between shots at any framerate. The per-weapon cooldown and flash
@@ -66,6 +73,9 @@ typedef struct {
 // build with -DDEBUG_BLASTEM_CHECKPOINT=0) for clean release builds.
 #ifndef DEBUG_BLASTEM_CHECKPOINT
 #define DEBUG_BLASTEM_CHECKPOINT 0
+#endif
+#ifndef DEBUG_START_LEVEL
+#define DEBUG_START_LEVEL 0
 #endif
 
 static PlayerState g_player;
@@ -180,6 +190,26 @@ static void add_ammo(PlayerArsenal *arsenal, u8 ammo_type, u16 amount) {
         (total > AMMO_MAX[ammo_type]) ? AMMO_MAX[ammo_type] : total;
 }
 
+static void level_progress_reset(LevelProgress *progress) {
+    progress->time_vblanks = 0;
+    progress->secrets_found = 0;
+    for (u16 i = 0; i < LEVEL_SECRET_BYTES; i++) {
+        progress->visited_secret_bits[i] = 0;
+    }
+}
+
+static void level_progress_visit(LevelProgress *progress, s32 x, s32 y) {
+    const u16 subsector = bsp_find_subsector(x, y);
+    if (subsector >= bsp_subsector_count) return;
+    const u16 sector = bsp_subsector_sector[subsector];
+    if (!bsp_sector_is_secret(sector)) return;
+    const u8 mask = (u8)(1u << (sector & 7));
+    u8 *entry = &progress->visited_secret_bits[sector >> 3];
+    if ((*entry & mask) != 0) return;
+    *entry = (u8)(*entry | mask);
+    progress->secrets_found++;
+}
+
 // One trigger pull: `pellets` independent hitscans fanned across `spread_cols`
 // view columns, each blocked by the wall depth at ITS OWN column so an outer
 // shotgun pellet cannot punch through a corner the centre pellet clears. Their
@@ -221,9 +251,10 @@ static BillboardFireResult fire_weapon(const WeaponDef *weapon, const RayColumn 
     return merged;
 }
 
-static void reset_level(u16 phase_index, DoomSkill skill, bool *level_cleared, u16 *shot_cooldown,
+static void enter_level(u16 phase_index, DoomSkill skill, bool pistol_start,
+                        bool *level_cleared, u16 *shot_cooldown,
                         u16 *player_health, u16 *player_armor, PlayerArsenal *arsenal,
-                        u8 *player_keys, u32 *frame) {
+                        u8 *player_keys, u32 *frame, LevelProgress *progress) {
     bsp_map_reset(phase_index);
     billboard_init(phase_index, skill);
     player_init(&g_player, phase_index);
@@ -233,18 +264,23 @@ static void reset_level(u16 phase_index, DoomSkill skill, bool *level_cleared, u
     g_player_invuln = 0;
     *level_cleared = FALSE;
     *shot_cooldown = 0;
-    *player_health = PLAYER_MAX_HEALTH;
-    *player_armor = 0;
-    // Doom's pistol start: fists and a pistol, one clip, nothing else.
-    for (u16 i = 0; i < AMMO_TYPE_COUNT; i++) {
-        arsenal->ammo[i] = 0;
+    if (pistol_start) {
+        *player_health = PLAYER_MAX_HEALTH;
+        *player_armor = 0;
+        // New game and rebirth use Doom's pistol start. A normal map exit
+        // deliberately skips this block and carries the inventory forward.
+        for (u16 i = 0; i < AMMO_TYPE_COUNT; i++) {
+            arsenal->ammo[i] = 0;
+        }
+        arsenal->ammo[AMMO_BULLETS] = WEAPON_START_BULLETS;
+        arsenal->owned = WEAPON_START_OWNED;
+        arsenal->current = WEAPON_PISTOL;
     }
-    arsenal->ammo[AMMO_BULLETS] = WEAPON_START_BULLETS;
-    arsenal->owned = WEAPON_START_OWNED;
-    arsenal->current = WEAPON_PISTOL;
     weapon_reset_damage_roll();
     *player_keys = BSP_KEY_NONE;
     *frame = 0;
+    level_progress_reset(progress);
+    level_progress_visit(progress, g_player.x, g_player.y);
 
     renderer_invalidate_scene();
     // Must follow renderer_draw_static_screen: that path repaints BG_A, and the
@@ -274,7 +310,8 @@ int main(bool hard) {
         bool demo_exit_pending = FALSE;
         bool player_dead = FALSE;
         u16 death_lockout = 0;
-        u16 phase_index = 0;
+        u16 phase_index = DEBUG_START_LEVEL;
+        LevelProgress level_progress;
         u16 player_health = PLAYER_MAX_HEALTH;
         u16 player_armor = 0;
         PlayerArsenal arsenal;
@@ -288,10 +325,11 @@ int main(bool hard) {
         game_audio_stop_music();
         renderer_init();
         renderer_redraw_init(&redraw);
-        game_audio_play_music(test_music);
+        game_audio_play_music((phase_index == 0) ? test_music : e1m2_music);
 
-        reset_level(phase_index, skill, &level_cleared, &shot_cooldown, &player_health,
-                    &player_armor, &arsenal, &player_keys, &frame);
+        enter_level(phase_index, skill, TRUE, &level_cleared, &shot_cooldown,
+                    &player_health, &player_armor, &arsenal, &player_keys, &frame,
+                    &level_progress);
         JOY_update();
         previous_system_joy = JOY_readJoypad(JOY_1);
         prev_vtimer = vtimer;
@@ -383,6 +421,9 @@ int main(bool hard) {
             elapsed_vblanks = 1;
         }
         elapsed_frames = (elapsed_vblanks > 4) ? 4 : elapsed_vblanks;
+        if (!player_dead && !level_cleared) {
+            level_progress.time_vblanks += elapsed_vblanks;
+        }
         // elapsed_frames is fed to player_controller_update below so turning is time-correct.
 
         if (bsp_update_doors(elapsed_vblanks)) {
@@ -428,8 +469,9 @@ int main(bool hard) {
             if ((death_lockout == 0) &&
                 ((latched_pressed & (BUTTON_A | BUTTON_B | BUTTON_C)) != 0)) {
                 frontend_set_death_prompt(renderer_get_menu_tile_base(), FALSE);
-                reset_level(phase_index, skill, &level_cleared, &shot_cooldown, &player_health,
-                            &player_armor, &arsenal, &player_keys, &frame);
+                enter_level(phase_index, skill, TRUE, &level_cleared, &shot_cooldown,
+                            &player_health, &player_armor, &arsenal, &player_keys, &frame,
+                            &level_progress);
                 player_dead = FALSE;
                 renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE);
             }
@@ -437,11 +479,12 @@ int main(bool hard) {
 
         if (!level_cleared && !player_dead) {
             control = player_controller_update(&g_player, elapsed_frames, latched_pressed);
+            level_progress_visit(&level_progress, g_player.x, g_player.y);
 #if DEBUG_BLASTEM_CHECKPOINT
             {
                 const s32 dx = g_player.x - g_checkpoint_prev_x;
                 const s32 dy = g_player.y - g_checkpoint_prev_y;
-                if (dx > FX_ONE || dx < -FX_ONE || dy > FX_ONE || dy < -FX_ONE) {
+                if (dx != 0 || dy != 0) {
                     debug_checkpoint_mark(DEBUG_CHECKPOINT_MOVED);
                 }
                 g_checkpoint_prev_x = g_player.x;
@@ -501,6 +544,7 @@ int main(bool hard) {
                     }
                 } else if (pickup.effect == BILLBOARD_EFFECT_KEY) {
                     player_keys = (u8)(player_keys | pickup.key_mask);
+                    debug_checkpoint_mark(DEBUG_CHECKPOINT_KEY);
                 }
                 renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_OTHER);
                 game_audio_play_sfx(
@@ -520,10 +564,8 @@ int main(bool hard) {
 
             if (action != DOOR_ACTION_NONE) {
                 if (action == DOOR_ACTION_EXIT) {
-                    // E1M1 is the whole playable demo.  Do not leave the
-                    // renderer/HUD running under an intermission; tear the
-                    // game loop down below and enter the dedicated frontend.
                     demo_exit_pending = TRUE;
+                    debug_checkpoint_mark(DEBUG_CHECKPOINT_EXIT);
                 }
                 renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE);
                 // Door / platform move sound on PCM channel 3. A toggle or a
@@ -540,7 +582,36 @@ int main(bool hard) {
             player_controller_set_poll_active(FALSE);
             renderer_upload_background_disarm();
             wait_scene_upload_complete();
-            frontend_run_demo_ending();
+            FrontendIntermissionStats stats;
+            stats.completed_level = phase_index;
+            stats.next_level = (u16)(phase_index + 1);
+            stats.kills = billboard_get_kill_count();
+            stats.kill_total = billboard_get_kill_total();
+            stats.items = billboard_get_item_count();
+            stats.item_total = billboard_get_item_total();
+            stats.secrets = level_progress.secrets_found;
+            stats.secret_total = bsp_current_map()->secret_count;
+            stats.time_vblanks = level_progress.time_vblanks;
+            stats.par_seconds = (phase_index == 0) ? 30 : 75;
+            const FrontendIntermissionAction intermission =
+                frontend_run_intermission(&stats);
+            if ((phase_index == 0) &&
+                (intermission == FRONTEND_INTERMISSION_CONTINUE)) {
+                phase_index = 1;
+                demo_exit_pending = FALSE;
+                renderer_init();
+                renderer_redraw_init(&redraw);
+                game_audio_play_music(e1m2_music);
+                enter_level(phase_index, skill, FALSE, &level_cleared,
+                            &shot_cooldown, &player_health, &player_armor,
+                            &arsenal, &player_keys, &frame, &level_progress);
+                JOY_update();
+                previous_system_joy = JOY_readJoypad(JOY_1);
+                prev_vtimer = vtimer;
+                player_controller_set_poll_active(TRUE);
+                debug_checkpoint_mark(DEBUG_CHECKPOINT_GAMEPLAY);
+                continue;
+            }
             break;
         }
 

@@ -10,6 +10,8 @@
 #define DEBUG_CHECKPOINT_MOVED    0x08
 #define DEBUG_CHECKPOINT_COMBAT   0x10
 #define DEBUG_CHECKPOINT_DEATH    0x20
+#define DEBUG_CHECKPOINT_KEY      0x40
+#define DEBUG_CHECKPOINT_EXIT     0x80
 
 /* BlastEm's deterministic-route runner reads this single byte through
  * --md-mailbox to confirm a route actually reached the state it claims to

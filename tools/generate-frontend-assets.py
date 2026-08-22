@@ -19,7 +19,7 @@ SPRITE_SOURCE = ROOT / "res" / "originaldoom" / "sprites"
 BOOT_SOURCE = ROOT / "res" / "boot"
 SEGA_FONT = BOOT_SOURCE / "SEGA.TTF"
 MANIFEST_NAME = ".frontend-assets.json"
-MANIFEST_VERSION = 4
+MANIFEST_VERSION = 5
 
 PATCHES = (
     "TITLEPIC", "M_DOOM", "M_NGAME", "M_OPTION", "M_QUITG",
@@ -35,7 +35,7 @@ DOOM_FONT_TEXT = (
     "DOOM IS A TRADEMARK OF ID SOFTWARE.", "BUILT WITH SGDK", "SGDK",
     "BUILT FOR THE 16-BIT ERA", "SOFTWARE DEVELOPMENT KIT", "FOLLOW THE PROJECT",
     "GITHUB.COM/CELSOWM/MEGALDOOM", "X.COM/PROFCELSOFONTES", "THANKS FOR PLAYING",
-    "THE MEGALDOOM DEMO", "VERSION 0.1", "PRESS START",
+    "EPISODE COMPLETE", "THE INVASION CONTINUES...", "VERSION 0.1", "PRESS START",
 )
 GLYPHS = tuple(sorted({
     f"STCFN{ord(character):03d}"
@@ -51,7 +51,12 @@ BOOT_INPUTS = (
     *(SPRITE_SOURCE / f"{name}.png" for name in CACODEMON_BOOT_FRAMES),
     SEGA_FONT,
 )
-ENDING_INPUTS = (SOURCE / "WIMAP0.png",)
+INTERMISSION_PATCHES = (
+    "WIMAP0", "WILV00", "WILV01", "WIOSTK", "WIOSTI", "WISCRT2",
+    "WITIME", "WIPAR", "WISPLAT", "WIURH0", "WIURH1", "WIPCNT",
+    "WICOLON", "WIF", "WIENTER", *(f"WINUM{i}" for i in range(10)),
+)
+ENDING_INPUTS = tuple(SOURCE / f"{name}.png" for name in INTERMISSION_PATCHES)
 
 # This card deliberately owns PAL0.  The image never uses PAL1: PAL1 is the
 # Cacodemon's sprite palette at runtime.  Keep the last four colours for the
@@ -81,7 +86,11 @@ def expected_outputs() -> tuple[str, ...]:
         "title.png", "prompt.png", "death_prompt.png", "main_menu.png", "logo.png",
         "options.png", "skull1.png", "skull2.png",
         "boot_disclaimer.png", "boot_sgdk.png", "boot_social.png", "cacodemon.png",
-        "ending_mars.png", "ending_thanks.png",
+        "ending_mars.png", "ending_thanks.png", "intermission_stats.png",
+        "intermission_stats_e1m2.png",
+        "intermission_entering_e1m2.png", "intermission_digits.png",
+        "intermission_splat.png", "intermission_pointer0.png",
+        "intermission_pointer1.png",
     ]
     names.extend(f"main_{selected}_{frame}.png" for selected in range(3) for frame in range(2))
     names.extend(
@@ -561,6 +570,53 @@ def make_ending_mars(source: Path) -> Image.Image:
     return image
 
 
+def intermission_patch(name: str, source: Path) -> Image.Image:
+    return Image.open(source / f"{name}.png").convert("RGBA")
+
+
+def centered_patch(canvas: Image.Image, patch: Image.Image, y: int) -> None:
+    canvas.alpha_composite(patch, ((canvas.width - patch.width) // 2, y))
+
+
+def make_intermission_stats(source: Path, level_name: str = "WILV00") -> Image.Image:
+    image = transparent_canvas(320, 224)
+    centered_patch(image, intermission_patch(level_name, source), 14)
+    centered_patch(image, intermission_patch("WIF", source), 30)
+    for name, y in (("WIOSTK", 50), ("WIOSTI", 83), ("WISCRT2", 116)):
+        image.alpha_composite(intermission_patch(name, source), (50, y))
+    image.alpha_composite(intermission_patch("WITIME", source), (16, 168))
+    image.alpha_composite(intermission_patch("WIPAR", source), (176, 168))
+    return image
+
+
+def make_intermission_entering(source: Path) -> Image.Image:
+    image = transparent_canvas(320, 224)
+    centered_patch(image, intermission_patch("WIENTER", source), 14)
+    centered_patch(image, intermission_patch("WILV01", source), 32)
+    return image
+
+
+def make_intermission_digits(source: Path) -> Image.Image:
+    # Fixed 16x16 cells make each classic variable-width patch addressable as
+    # a 2x2 tile rectangle without allocating a tileset per glyph.
+    image = transparent_canvas(16 * 12, 16)
+    names = [*(f"WINUM{i}" for i in range(10)), "WIPCNT", "WICOLON"]
+    for index, name in enumerate(names):
+        patch = intermission_patch(name, source)
+        x = index * 16 + (16 - patch.width) // 2
+        image.alpha_composite(patch, (x, 16 - patch.height))
+    return image
+
+
+def padded_intermission_patch(name: str, width: int, height: int,
+                               source: Path) -> Image.Image:
+    image = transparent_canvas(width, height)
+    patch = intermission_patch(name, source)
+    image.alpha_composite(patch, ((width - patch.width) // 2,
+                                  (height - patch.height) // 2))
+    return image
+
+
 def indexed_ending_mars(image: Image.Image,
                         palette: list[tuple[int, int, int]]) -> Image.Image:
     """Quantize WIMAP0 while keeping its 12-line letterbox literally black.
@@ -579,9 +635,10 @@ def indexed_ending_mars(image: Image.Image,
 
 def make_ending_thanks(source: Path) -> Image.Image:
     image = Image.new("RGBA", (320, 224), (0, 0, 0, 255))
-    centered_doom_text(image, "THANKS FOR PLAYING", 56, source)
-    centered_doom_text(image, "THE MEGALDOOM DEMO", 88, source)
-    centered_doom_text(image, "VERSION 0.1", 120, source)
+    centered_doom_text(image, "EPISODE COMPLETE", 48, source)
+    centered_doom_text(image, "THE INVASION CONTINUES...", 80, source)
+    centered_doom_text(image, "THANKS FOR PLAYING", 112, source)
+    centered_doom_text(image, "VERSION 0.1", 136, source)
     centered_doom_text(image, "PRESS START", 176, source)
     return image
 
@@ -621,11 +678,23 @@ def generate(source: Path, output: Path) -> None:
     cacodemon = make_cacodemon()
     ending_mars = make_ending_mars(source)
     ending_thanks = make_ending_thanks(source)
+    intermission_stats = make_intermission_stats(source)
+    intermission_stats_e1m2 = make_intermission_stats(source, "WILV01")
+    intermission_entering = make_intermission_entering(source)
+    intermission_digits = make_intermission_digits(source)
+    intermission_splat = padded_intermission_patch("WISPLAT", 32, 24, source)
+    intermission_pointer0 = padded_intermission_patch("WIURH0", 64, 16, source)
+    intermission_pointer1 = padded_intermission_patch("WIURH1", 64, 16, source)
     cacodemon_palette = build_cacodemon_palette(cacodemon)
     # Keep the original Doom title/menu palette selection stable; boot cards
     # are quantized into that same four-line palette afterward.
     palette = build_palette(images)
-    ending_mars_palette = build_palette_for_images([ending_mars])
+    ending_mars_palette = build_palette_for_images([
+        ending_mars, intermission_stats, intermission_stats_e1m2,
+        intermission_entering,
+        intermission_digits, intermission_splat,
+        intermission_pointer0, intermission_pointer1,
+    ])
     output.mkdir(parents=True, exist_ok=True)
 
     title = Image.new("RGBA", (320, 224), (0, 0, 0, 255))
@@ -718,6 +787,17 @@ def generate(source: Path, output: Path) -> None:
     # ending, preserving WIMAP0 instead of forcing it through menu colours.
     indexed_ending_mars(ending_mars, ending_mars_palette).save(
         output / "ending_mars.png", optimize=False)
+    for filename, image in (
+        ("intermission_stats.png", intermission_stats),
+        ("intermission_stats_e1m2.png", intermission_stats_e1m2),
+        ("intermission_entering_e1m2.png", intermission_entering),
+        ("intermission_digits.png", intermission_digits),
+        ("intermission_splat.png", intermission_splat),
+        ("intermission_pointer0.png", intermission_pointer0),
+        ("intermission_pointer1.png", intermission_pointer1),
+    ):
+        indexed(image, ending_mars_palette, True).save(
+            output / filename, optimize=False)
 
     # This is a sprite-engine resource. Keep index 0 transparent, but give it
     # its own quantized palette so Doom's red/grey/green ramps are not forced

@@ -1,6 +1,7 @@
 # XGM2 music: rescomp runs xgm2tool to convert the VGM into an XGM2 blob
 # embedded in the ROM. The generated resources.h exposes `extern const u8 test_music[]`.
 XGM2 test_music  "music/d_e1m1.vgm"
+XGM2 e1m2_music  "music/d_e1m2.vgm"
 XGM2 intro_music "music/d_intro.vgm"
 XGM2 intermission_music "music/d_inter.vgm"
 
@@ -15,6 +16,13 @@ IMAGE frontend_boot_sgdk      "frontend/boot_sgdk.png" NONE ALL
 IMAGE frontend_boot_social    "frontend/boot_social.png" NONE ALL
 IMAGE frontend_ending_mars    "frontend/ending_mars.png" NONE ALL
 IMAGE frontend_ending_thanks  "frontend/ending_thanks.png" NONE ALL
+IMAGE frontend_intermission_stats "frontend/intermission_stats.png" NONE ALL
+IMAGE frontend_intermission_stats_e1m2 "frontend/intermission_stats_e1m2.png" NONE ALL
+IMAGE frontend_intermission_entering_e1m2 "frontend/intermission_entering_e1m2.png" NONE ALL
+IMAGE frontend_intermission_digits "frontend/intermission_digits.png" NONE ALL
+IMAGE frontend_intermission_splat "frontend/intermission_splat.png" NONE ALL
+IMAGE frontend_intermission_pointer0 "frontend/intermission_pointer0.png" NONE ALL
+IMAGE frontend_intermission_pointer1 "frontend/intermission_pointer1.png" NONE ALL
 SPRITE frontend_cacodemon     "frontend/cacodemon.png" 8 9 FAST 0
 # Drawn during gameplay over the live PAL0 world/HUD ramp, not the frontend
 # palette -- see doom_text_mask() in generate-frontend-assets.py. Index 9 is

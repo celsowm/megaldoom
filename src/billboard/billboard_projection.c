@@ -54,9 +54,11 @@ static u16 billboard_depth_range_max(u16 left, u16 right) {
 }
 
 typedef struct {
-    s32 object_x;
-    s32 object_y;
-    s32 forward;
+    s16 object_x;
+    s16 object_y;
+    /* Successful measurements are bounded by each type's u16 max_depth and
+     * are ultimately submitted to the renderer as u16 depth. */
+    u16 forward;
     u16 camera_generation;
     u16 geometry_key;
     s16 left;
@@ -76,19 +78,6 @@ typedef struct {
 // still run every redraw against the current column buffer.
 static BillboardMeasureCache s_measure_cache[BILLBOARD_OBJECT_COUNT];
 #if DEBUG_PERF || BILLBOARD_VISIBLE_SUBSECTOR_CULL
-typedef struct {
-    s32 object_x;
-    s32 object_y;
-    u16 subsector_id;
-    bool contained;
-    bool valid;
-} BillboardSubsectorCache;
-
-// The lookup is cached by object position so the oracle itself does not turn
-// every redraw into active_count BSP searches. It deliberately keys on the
-// point anchor only: measuring conservative sprite/leaf overlap is a separate
-// correctness problem for any eventual culling implementation.
-static BillboardSubsectorCache s_subsector_cache[BILLBOARD_OBJECT_COUNT];
 #if DEBUG_PERF
 static u16 s_debug_visible_subsector_objects;
 static u16 s_debug_safe_subsector_objects;
@@ -97,16 +86,10 @@ static u16 s_debug_cullable_subsector_objects;
 
 static void billboard_subsector_visibility(u16 index, const BillboardObject *object,
                                            bool *visited, bool *contained) {
-    BillboardSubsectorCache *cache = &s_subsector_cache[index];
-    if (!cache->valid || cache->object_x != object->x || cache->object_y != object->y) {
-        cache->object_x = object->x;
-        cache->object_y = object->y;
-        cache->subsector_id = bsp_find_subsector_with_margin(
-            object->x, object->y, BILLBOARD_SUBSECTOR_CULL_RADIUS, &cache->contained);
-        cache->valid = TRUE;
-    }
-    *visited = bsp_subsector_was_visited(cache->subsector_id);
-    *contained = cache->contained;
+    const u16 subsector_id = bsp_find_subsector_with_margin(
+        object->x, object->y, BILLBOARD_SUBSECTOR_CULL_RADIUS, contained);
+    (void)index;
+    *visited = bsp_subsector_was_visited(subsector_id);
 }
 #endif
 static s32 s_cache_player_x;
@@ -228,7 +211,7 @@ static bool billboard_measure_cached(u16 index,
         player, cos_a, sin_a, object, measure);
     cache->camera_generation = s_cache_generation;
     if (cache->measured) {
-        cache->forward = measure->forward;
+        cache->forward = (u16)measure->forward;
         cache->left = measure->left;
         cache->right = measure->right;
         cache->top = measure->top;
