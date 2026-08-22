@@ -126,7 +126,7 @@ def main():
         rows.append(values)
     doors = [row for row in rows if row[7] == 1]
     tracks = [row for row in rows if row[6] == 14]
-    assert len(doors) == 16 and all(row[6] != 0 for row in doors)
+    assert len(doors) == 20 and all(row[6] != 0 for row in doors)
     assert tracks and all(row[7] == 0 for row in tracks)
 
     # Geometry passability changes only at the fully-open endpoint, where the

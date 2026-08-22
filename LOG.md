@@ -8,6 +8,124 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## SGDK boot card: Earthworm Jim 2-style Cacodemon splash (2026-08-21)
+
+The former SGDK card was two unrelated designs layered together: a salmon/red
+Doom disclaimer frame and a blue wordmark. More importantly, it used PAL1 on
+54 background tiles, then installed the Cacodemon's red palette into PAL1.
+That is why the ROM screenshot turned the nominally black card peach and
+corrupted the wordmark's colours.
+
+The replacement is a dedicated 320x224 PAL0 card: literal index 0 black,
+navy outline, blue-to-cyan SGDK face, white horizontal bands, and indices
+12..15 reserved for a metallic shimmer. There is no frame, subtitle, sparkle
+source or TM. PAL1 contains only the Cacodemon. `frontend_cacodemon` is now a
+384x72 six-frame row assembled from `HEADA1` through `HEADF1`; its largest
+frame is 70 tiles / 7 VDP sprites, inside the existing 96-tile allocation and
+16-hardware-sprite resource limit.
+
+The sprite sits at `(128,50)`, centred over the G/D join. It floats through
+A/B, then once per card plays C→D→E→F on visible frames 48..63 while the logo
+uses its brightest cyan/white palette. The combined PAL0+PAL1 target is faded
+as one 32-colour block, including on fade-out. A static preview alone missed a
+runtime detail: `VDP_waitVSync()` does not flush `SPR_update()`; the card loop
+now calls `SYS_doVBlankProcess()` and the actual sprite table/palette changes
+reach the VDP each frame.
+
+`tools/preview-sgdk-boot.py` writes exact indexed stills and a palette-line
+mask under `out/sgdk-boot-preview/`. The real release capture at
+`out/captures/sgdk-boot-after-animation/contact-sheet.png` contains hover A/B,
+the blue-mouth attack peak, recovery and the clean black background. It is the
+visual artifact to judge in motion; it does not replace user approval.
+
+`test-frontend.py` now rejects any SGDK-card index outside PAL0, non-black
+corners, non-blue card palette, missing shimmer white, and a Cacodemon sheet
+without all red/green/blue/grey ramps or a frame above 96 unique tiles.
+`test-build-incremental.py` fingerprints all six source sprites. The normal
+test entry still stops at the unrelated pre-existing `STIMA0 WAD geometry
+metadata drifted` assertion; frontend tests and every remaining test were run
+separately and passed. Release `check-rom.ps1` reports 43,260 static RAM bytes,
+22,276 bytes free, 1,525,612 bytes `.text`, and a 1,536 KB padded ROM.
+
+## E1M1 technological room: geometry-neutral material transfer (2026-08-21)
+
+The first attempt to retain linedef 50 as an ordinary full-height wall was
+wrong and was rejected from the ROM capture. In Doom it is only an **upper**
+portal band: the adjacent ceilings are 120 and 72, while the 72-unit opening
+below remains traversable. The flat runtime cannot represent that split. It
+promoted the 48-unit band into a 128-unit floor-to-ceiling slab, which became a
+large triangular wall as the player approached. Shortening or fragmenting the
+same proxy only moved the wedge; it did not fix the representation.
+
+The replacement recipe is geometry-neutral. It structurally resolves that
+source feature by endpoints `(896,3360)` / `(896,3104)`, sector heights
+`(-8,120)` / `(0,72)`, and `right.upper=COMPUTE2`, then transfers only its
+material to the existing one-sided north/west room perimeter: linedefs
+40/41/42/52/53 at their current diagnostic indices. Every destination is also
+validated by exact endpoints, sector `(0,72)`, and `right.middle=STARTAN3`.
+Conversion fails on any source or destination mismatch. Linedefs
+37/48/49/50/51/54 remain open, and no new geometry, collision edge or LOS
+occluder is emitted.
+
+The previously checked generated artifact did **not** describe the WAD now in
+the repository. The source hash and drift remain explicit:
+
+| artifact | vertices | flat SEGs | subsectors | doors |
+|---|---:|---:|---:|---:|
+| old checked generated C | 467 | 386 | 237 | 4 |
+| current WAD, recipe off | 470 | **394** | 239 | 5 |
+| rejected full-wall proxy | 470 | 396 | 239 | 5 |
+| material transfer | 470 | **394** | 239 | 5 |
+
+Current WAD SHA-256 is
+`76A22247D76EE9710595F7EE2D8DDED2CE9785FB49287A9AC6348544B858E6F9`.
+The navigation certificate reaches exit SEG 309 after 164 states. The eight
+SEGs between 386 and 394 are pre-existing WAD drift; the accepted converter
+design adds zero.
+
+`COMPUTE2` is 256x56. The generic 128-column cap formerly selected x=0..127,
+which discards nearly all of its green monitors. Its curated offline window is
+now x=128..255 and converts to the same 64x64 runtime format. This is source
+selection, not a runtime format or sampler change. PAL3 remains a frozen
+16-entry ABI; the level-wide floor is still index 7, `#6D6D6D`.
+
+**Visual gate before generation.** `tools/flat_map_preview.py` renders the
+shipped fixed trig gain, 160x120 projection, near clipping, perspective U,
+stride 2, depth occlusion, actual texture conversion, PAL3 and shade LUT.
+Comparisons under `out/flat-map-preview-material-before-generation/` cover
+spawn, approach, entry, beside and west turn. At every pose, clean and
+candidate have identical winning linedefs and depths in all 80 sampled
+columns; changed pixels are restricted to the five destination walls. The
+rejected 396-SEG artifact remains the first panel of the pre-generation
+comparison, making its wedge directly visible. Release captures are under
+`out/captures/material-release-checkpoints/` and
+`out/captures/material-release-stationary/`: the floor is neutral, the route
+and centre stay open, and no transverse wall or triangle appears. Final
+fidelity approval still belongs to the user in motion.
+
+**Release-cadence A/B.** Because the candidate and clean conversion have the
+same 394 SEGs and geometry, the same route workloads remain valid. The new run
+reproduced the earlier clean-baseline counters exactly:
+
+| route | metric | clean 394 | material transfer 394 |
+|---|---|---:|---:|
+| checkpoints | cast / rebuild | 5413 | 5413 |
+| checkpoints | pack / rebuild | 3415 | 3415 |
+| checkpoints | SEGs tested / rebuild | 38.5 | 38.5 |
+| checkpoints | mixed / flat tiles | 80.9 / 204.1 | 80.9 / 204.1 |
+| stationary-combat | cast / rebuild | 5842 | 5842 |
+| stationary-combat | pack / rebuild | 2903 | 2903 |
+| stationary-combat | SEGs tested / rebuild | 43.1 | 43.1 |
+| stationary-combat | mixed / flat tiles | 65.1 / 158.9 | 65.1 / 158.9 |
+
+The material transfer therefore has no measured runtime cost. The full Python
+suite passes except the separately known pre-existing `STIMA0` WAD metadata
+drift in `test-billboard-layout.py`.
+
+Final clean release build passed `check-rom.ps1`: 43,260 bytes static work RAM,
+**22,276 bytes free**, 1,519,006 bytes `.text`, and a padded **1,536 KB ROM**.
+This clears the requested 20 KB RAM headroom and the mapper-free 4 MB ROM cap.
+
 ## Pack stage: DBRA posts in the mixed-tile hotpath (2026-08-04)
 
 Rotation makes `pack` roughly double: **6.5 vb/rebuild spinning

@@ -43,7 +43,10 @@ def main() -> int:
         )
     ]
     curated = [thing for thing in things if thing[2] in CURATED_TYPES]
-    if len(curated) != 98:
+    # The current 76A222...E6F9 WAD contains four additional supported THINGS
+    # relative to the stale generated artifact.  Skill/single-player filtering
+    # removes them, so the three actual runtime populations remain unchanged.
+    if len(curated) != 102:
         raise ValueError(f"unexpected curated E1M1 THING count: {len(curated)}")
     populations = {
         name: [

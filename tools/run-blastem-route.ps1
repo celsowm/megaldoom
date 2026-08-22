@@ -40,5 +40,13 @@ if ($CaptureDir) {
 $args += $RomPath
 Push-Location (Split-Path -Parent $BlastEm)
 try { & $BlastEm @args } finally { Pop-Location }
+# On Windows the headless runner can return a few milliseconds before its
+# report-handle flush becomes visible to this PowerShell process.  A direct
+# existence check intermittently reported failure even though the JSON and all
+# captures appeared immediately afterwards.  Poll briefly; this is not part of
+# emulation time and does not hide a genuinely missing report.
+for ($attempt = 0; $attempt -lt 20 -and -not (Test-Path $Report); $attempt++) {
+    Start-Sleep -Milliseconds 100
+}
 if (-not (Test-Path $Report)) { throw "BlastEm finished without emitting $Report" }
 Write-Host "Deterministic route report: $Report" -ForegroundColor Green

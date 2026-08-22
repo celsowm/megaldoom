@@ -51,6 +51,23 @@ WORLD_SPRITE_INPUTS = [
 ]
 WEAPON_SPRITE_NAMES = ("PISGA0", "PISGB0", "PISFA0")
 
+# PAL3 indices are a runtime asset ABI shared by walls, flats, weapons and
+# billboards.  The adaptive search produced this user-approved palette, but
+# must not rerun when a map recipe adds one texture: GLOBAL_FLOOR_INDEX is 7,
+# so moving the sole green into slot 7 repaints the entire floor.  Keep the
+# exact checked-in order stable; palette changes now require an explicit,
+# separately reviewed update to this constant and the frozen-palette tests.
+FROZEN_WORLD_PALETTE = (
+    (0x00, 0x00, 0x00), (0x24, 0x00, 0x00),
+    (0x00, 0x00, 0x6D), (0x24, 0x24, 0x24),
+    (0x48, 0x24, 0x24), (0x48, 0x48, 0x48),
+    (0x6D, 0x48, 0x24), (0x6D, 0x6D, 0x6D),
+    (0x91, 0x6D, 0x48), (0x6D, 0x91, 0x6D),
+    (0x91, 0x91, 0x91), (0xFF, 0x48, 0x48),
+    (0xB6, 0x91, 0x6D), (0xB6, 0xB6, 0xB6),
+    (0xDA, 0x24, 0x24), (0xDA, 0xB6, 0x48),
+)
+
 
 def texture_macro(name):
     if name == FALLBACK_TEXTURE:
@@ -139,42 +156,11 @@ def nearest_palette_index(rgb, palette, allowed=None):
 
 
 def build_world_palette(texture_names, texture_usage, sectors):
-    histogram = Counter()
-    for name in texture_names:
-        weight = max(1, min(16, texture_usage.get(name, 1)))
-        add_image_histogram(histogram, texture_path(name), (WALL_TEX_DIM, WALL_TEX_DIM),
-                            weight, apply_tone=True)
-
-    # PAL3 is shared by the 3D scene, weapon and every runtime billboard. Feed
-    # every consumed source into the same deterministic histogram so improving
-    # walls cannot silently recolor actors or effects. The weapon sprites are
-    # on screen for 100% of gameplay (unlike any single wall texture or actor),
-    # so they get a much heavier weight than the rest of WORLD_SPRITE_INPUTS.
-    # No tone curve here: sprites are drawn with Doom's original tones, not the
-    # lifted wall/flat ramp, so they must not bias PAL3's family budgets toward
-    # brightened colors that then look wrong on the actual sprite pixels.
-    for name in WORLD_SPRITE_INPUTS:
-        relative = os.path.join("sprites", name + ".png")
-        weight = 48 if name in WEAPON_SPRITE_NAMES else 4
-        add_image_histogram(histogram, os.path.join(ASSET_ROOT, relative),
-                            (32, 32), weight)
-
-    flat_usage = Counter()
-    for sector in sectors:
-        flat_usage[sector["floor_name"]] += 1
-        flat_usage[sector["ceiling_name"]] += 1
-    for name, count in flat_usage.items():
-        average = image_average(flat_path(name))
-        histogram[average] += max(512, count * 128)
-
-    # Palette candidates already live on the VDP's 3-bit/channel grid. Collapse
-    # the source histogram to that grid before the constrained search: the
-    # objective stays identical at console precision and generation remains fast.
-    vdp_histogram = Counter()
-    for color, weight in histogram.items():
-        vdp_histogram[md_color(color)] += weight
-    return world_palette.build_palette(
-        vdp_histogram, (0xD8, 0x28, 0x18), (0xD8, 0xB0, 0x48))
+    # Keep the parameters in the interface: texture conversion callers still
+    # describe the active catalog, and a future intentional palette redesign
+    # can use that evidence offline.  Routine map conversion must be invariant.
+    del texture_names, texture_usage, sectors
+    return list(FROZEN_WORLD_PALETTE)
 
 
 def build_shade_map(palette, reserved=()):
@@ -239,10 +225,33 @@ def build_shade_lut(palette, levels=4, reserved=()):
 # touched; in E1M1 that is COMPUTE2 and the 256x128 fallback.
 WALL_TEX_MAX_SOURCE_WIDTH = 2 * WALL_TEX_DIM
 
+# Curated source windows retain the recognisable part of a material when the
+# flat-map recipe moves it to a simpler wall. COMPUTE2's first 128 columns are
+# almost entirely grey/brown controls; its monitor-green readouts live in the
+# right half. The old generic left crop therefore erased the feature we were
+# trying to preserve. The source PNG remains untouched and the window is baked
+# offline into the same 64x64 runtime texture format.
+CURATED_TEXTURE_WINDOWS = {
+    "COMPUTE2": (128, 0, 128, 56),
+}
+
 
 def sampled_texture_width(width):
     """Source width actually sampled into the WALL_TEX_DIM grid."""
     return min(width, WALL_TEX_MAX_SOURCE_WIDTH)
+
+
+def sampled_texture_dimensions(material_name, width, height):
+    """Return the source window dimensions baked for ``material_name``."""
+    window = CURATED_TEXTURE_WINDOWS.get(material_name.upper())
+    if window is None:
+        return sampled_texture_width(width), height
+    left, top, sampled_width, sampled_height = window
+    if (left < 0 or top < 0 or sampled_width <= 0 or sampled_height <= 0 or
+            left + sampled_width > width or top + sampled_height > height):
+        raise ValueError("Invalid %s texture window %s for %dx%d source" %
+                         (material_name, window, width, height))
+    return sampled_width, sampled_height
 
 
 # Oklab-chroma clamp for wall/flat quantization: separates real dark browns
@@ -426,9 +435,17 @@ def _is_earth_material(columns):
 
 def convert_texture(path, palette):
     with Image.open(path) as image:
-        sampled = sampled_texture_width(image.width)
-        if sampled != image.width:
-            image = image.crop((0, 0, sampled, image.height))
+        material_name = os.path.splitext(os.path.basename(path))[0].upper()
+        window = CURATED_TEXTURE_WINDOWS.get(material_name)
+        if window is not None:
+            left, top, sampled_width, sampled_height = window
+            sampled_texture_dimensions(material_name, image.width, image.height)
+            image = image.crop((left, top, left + sampled_width,
+                                top + sampled_height))
+        else:
+            sampled = sampled_texture_width(image.width)
+            if sampled != image.width:
+                image = image.crop((0, 0, sampled, image.height))
         opaque = _fill_transparent_with_average(image)
         resized = opaque.resize((WALL_TEX_DIM, WALL_TEX_DIM), Image.Resampling.BOX)
         columns = [[resized.getpixel((x, y)) for y in range(WALL_TEX_DIM)]
@@ -448,7 +465,6 @@ def convert_texture(path, palette):
             smoothed = [[tone_curve(columns[x][y]) for y in range(WALL_TEX_DIM)]
                        for x in range(WALL_TEX_DIM)]
         smoothed = _spatial_smooth(_contrast_normalize(smoothed))
-        material_name = os.path.splitext(os.path.basename(path))[0].upper()
         is_neutral_material = material_name.startswith(("GRAY", "METAL", "STONE"))
         chroma_threshold = WALL_CHROMA_THRESHOLD
         if is_neutral_material:
@@ -576,16 +592,15 @@ def texture_u_scale_q12(size):
     return (WALL_TEX_DIM * 4096 + size - 1) // size
 
 
-def emit_world_assets(path, texture_usage, sectors):
+def emit_world_assets(path, texture_usage, sectors, provenance=None):
     texture_names = [FALLBACK_TEXTURE] + sorted(
         name for name in texture_usage if name != FALLBACK_TEXTURE)
     for name in texture_names:
         if not os.path.isfile(texture_path(name)):
             raise FileNotFoundError("Wall texture source not found: %s" % texture_path(name))
 
-    # Derive PAL3 from the exact active-map surfaces plus every runtime sprite.
-    # The result is deterministic, VDP-valid and avoids forcing Doom browns and
-    # grays through the old olive-heavy hand-authored ramp.
+    # PAL3 is a frozen cross-asset ABI. Adding a map texture must never renumber
+    # the floor, weapon or billboard colours (see FROZEN_WORLD_PALETTE).
     palette = build_world_palette(texture_names, texture_usage, sectors)
     if len(palette) != 16:
         raise RuntimeError("World palette must contain exactly 16 colors")
@@ -607,10 +622,10 @@ def emit_world_assets(path, texture_usage, sectors):
         source = texture_path(name)
         with Image.open(source) as image:
             width, height = image.size
-        # The stored grid only ever holds sampled_texture_width() columns, so the
+        # The stored grid only holds the selected source window, so the
         # world repeat must be derived from that, not from the source width, or
         # the material would be stretched instead of repeated.
-        width = sampled_texture_width(width)
+        width, height = sampled_texture_dimensions(name, width, height)
         texture_meta[name] = dict(
             width=width,
             height=height,
@@ -647,13 +662,26 @@ def emit_world_assets(path, texture_usage, sectors):
         "#include \"raycast.h\"",
         "",
         "// Generated deterministically by tools/wad-map-extract.py.",
+    ]
+    if provenance is not None:
+        lines.extend([
+            "// Source SHA-256: %s" % provenance.wad_sha256,
+            "// Flat baseline/final: %d/%d SEGs; curated material: %d linedefs / %d SEGs" % (
+                provenance.baseline_seg_count, len(provenance.out_segs),
+                len(provenance.curated_material_linedefs),
+                provenance.curated_material_segs),
+            "// Certified: exit SEG %d reachable after %d states" % (
+                provenance.certificate["exit_index"],
+                provenance.certificate["states"]),
+        ])
+    lines.extend([
         "// Exact solid-wall texture catalog for E1M1; index 0 is the fallback.",
         "#define FREEDOOM_WALL_TEXTURE_COUNT %d" % len(texture_names),
         "#define FREEDOOM_SECTOR_VISUAL_COUNT %d" % len(sector_visuals),
         "#define MEGALDOOM_WORLD_COLOR_FLOOR %d" % fixed_floor_index,
         "#define MEGALDOOM_WORLD_COLOR_DAMAGE %d" % WORLD_COLOR_DAMAGE,
         "#define MEGALDOOM_WORLD_COLOR_WARNING %d" % WORLD_COLOR_WARNING,
-    ]
+    ])
     for name in texture_names:
         lines.append("#define %s %d" % (texture_macro(name), texture_ids[name]))
     lines.extend([

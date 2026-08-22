@@ -82,8 +82,8 @@ def main():
         r"const u16 bsp_subsector_sector\[\d+\] = \{(.*?)\n\};", generated, re.S)
     assert sector_body
     sector_ids = [int(value) for value in re.findall(r"\d+", sector_body.group(1))]
-    assert len(sector_ids) == 237
-    assert min(sector_ids) >= 0 and max(sector_ids) < 85
+    assert len(sector_ids) == 239
+    assert min(sector_ids) >= 0 and max(sector_ids) < 88
 
     required = (
         "#define DOOM_TICS_PER_SECOND 35",

@@ -16,8 +16,10 @@
 #define BOOT_CARD_FRAMES 180
 #define BOOT_FADE_FRAMES 8
 #define BOOT_CARD_VISIBLE_FRAMES (BOOT_CARD_FRAMES - (BOOT_FADE_FRAMES * 2))
-#define BOOT_CACODEMON_X 238
-#define BOOT_CACODEMON_Y 104
+#define BOOT_CACODEMON_X 128
+#define BOOT_CACODEMON_Y 50
+#define BOOT_CACODEMON_ATTACK_START 48
+#define BOOT_CACODEMON_ATTACK_END 64
 
 /* A return from gameplay is a return to the title, not a fresh console boot. */
 static bool s_boot_sequence_played = FALSE;
@@ -84,16 +86,58 @@ static void draw_boot_card(const Image *image) {
                     0, 0, TRUE, TRUE);
 }
 
-static void animate_sgdk_shimmer(u16 frame) {
-    const bool bright = (bool)((frame & 0x10) != 0);
-    PAL_setColor(13, RGB24_TO_VDPCOLOR(bright ? 0x5C0000 : 0x280000));
-    PAL_setColor(14, RGB24_TO_VDPCOLOR(bright ? 0xE02C10 : 0x900C04));
-    PAL_setColor(15, RGB24_TO_VDPCOLOR(bright ? 0xFFF0C0 : 0xD8A060));
+static const s8 s_boot_cacodemon_bob[16] = {
+    0, -1, -2, -2, -2, -1, 0, 1,
+    2, 2, 2, 1, 0, -1, -2, -1,
+};
+
+/* Entries 12..15 are intentionally reserved by make_boot_sgdk().  Cycling
+ * only those shades gives the blue wordmark a metallic sheen without ever
+ * touching PAL1, which belongs to the Cacodemon. */
+static const u16 s_sgdk_shimmer[4][4] = {
+    { RGB24_TO_VDPCOLOR(0x0049B6), RGB24_TO_VDPCOLOR(0x0092FF),
+      RGB24_TO_VDPCOLOR(0x6DDBFF), RGB24_TO_VDPCOLOR(0xFFFFFF) },
+    { RGB24_TO_VDPCOLOR(0x006DDB), RGB24_TO_VDPCOLOR(0x00B6FF),
+      RGB24_TO_VDPCOLOR(0xB6FFFF), RGB24_TO_VDPCOLOR(0xFFFFFF) },
+    { RGB24_TO_VDPCOLOR(0x0049B6), RGB24_TO_VDPCOLOR(0x00B6FF),
+      RGB24_TO_VDPCOLOR(0xFFFFFF), RGB24_TO_VDPCOLOR(0xB6FFFF) },
+    { RGB24_TO_VDPCOLOR(0x00246D), RGB24_TO_VDPCOLOR(0x006DDB),
+      RGB24_TO_VDPCOLOR(0x00B6FF), RGB24_TO_VDPCOLOR(0x6DDBFF) },
+};
+
+static const u16 s_sgdk_attack_shimmer[4] = {
+    RGB24_TO_VDPCOLOR(0x0092FF), RGB24_TO_VDPCOLOR(0x00D8FF),
+    RGB24_TO_VDPCOLOR(0xB6FFFF), RGB24_TO_VDPCOLOR(0xFFFFFF),
+};
+
+static void animate_sgdk_shimmer(u16 frame, bool attack) {
+    const u16 *colours = attack ? s_sgdk_attack_shimmer
+                                : s_sgdk_shimmer[(frame >> 2) & 3];
+    PAL_setColors(12, colours, 4, CPU);
+}
+
+static void fade_sgdk_card_in(const Image *image) {
+    /* The card owns PAL0 and the sprite owns PAL1.  Fade the two targets as
+     * one 32-colour block so the Cacodemon never pops over a completed logo. */
+    u16 palette[32];
+    for (u16 index = 0; index < 16; index++) {
+        palette[index] = image->palette->data[index];
+        palette[16 + index] = frontend_cacodemon.palette->data[index];
+    }
+    PAL_fadeIn(0, 31, palette, BOOT_FADE_FRAMES, FALSE);
+}
+
+static u16 sgdk_cacodemon_frame(u16 frame) {
+    if (frame >= BOOT_CACODEMON_ATTACK_START && frame < BOOT_CACODEMON_ATTACK_END) {
+        return (u16)(2 + ((frame - BOOT_CACODEMON_ATTACK_START) >> 2));
+    }
+    return (frame >> 3) & 1;
 }
 
 static void run_boot_card(const Image *image, bool show_cacodemon) {
     Sprite *cacodemon = NULL;
     u16 previous;
+    u16 cacodemon_frame = 0;
 
     draw_boot_card(image);
     if (show_cacodemon) {
@@ -106,11 +150,10 @@ static void run_boot_card(const Image *image, bool show_cacodemon) {
         if (cacodemon != NULL) SPR_update();
     }
 
-    PAL_fadeIn(0, 63, image->palette->data, BOOT_FADE_FRAMES, FALSE);
     if (show_cacodemon) {
-        /* PAL_fadeIn covers all four lines; restore the sprite's dedicated
-         * PAL1 ramp after it has populated PAL0 with the card palette. */
-        PAL_setPalette(PAL1, frontend_cacodemon.palette->data, CPU);
+        fade_sgdk_card_in(image);
+    } else {
+        PAL_fadeIn(0, 63, image->palette->data, BOOT_FADE_FRAMES, FALSE);
     }
     wait_for_release(BUTTON_START);
     previous = JOY_readJoypad(JOY_1);
@@ -118,22 +161,33 @@ static void run_boot_card(const Image *image, bool show_cacodemon) {
         const u16 pressed = read_pressed(&previous);
         if ((pressed & BUTTON_START) != 0) break;
         if (show_cacodemon) {
-            animate_sgdk_shimmer(frame);
+            const u16 next_frame = sgdk_cacodemon_frame(frame);
+            const bool attack = next_frame >= 2;
+            animate_sgdk_shimmer(frame, attack);
             if (cacodemon != NULL) {
-                const s16 bob = (frame & 0x10) ? 2 : -2;
+                const s16 bob = s_boot_cacodemon_bob[(frame >> 1) & 15];
+                if (next_frame != cacodemon_frame) {
+                    SPR_setFrame(cacodemon, next_frame);
+                    cacodemon_frame = next_frame;
+                }
                 SPR_setPosition(cacodemon, BOOT_CACODEMON_X,
                                 (s16)(BOOT_CACODEMON_Y + bob));
                 SPR_update();
             }
         }
-        VDP_waitVSync();
+        /* SPR_update and the palette sheen are queued work; VDP_waitVSync
+         * merely waits for blanking, while this commits the sprite table and
+         * palette on every boot-card frame. */
+        SYS_doVBlankProcess();
     }
 
     if (show_cacodemon) {
+        PAL_fadeOut(0, 31, BOOT_FADE_FRAMES, FALSE);
         if (cacodemon != NULL) SPR_releaseSprite(cacodemon);
         SPR_end();
+    } else {
+        PAL_fadeOut(0, 63, BOOT_FADE_FRAMES, FALSE);
     }
-    PAL_fadeOut(0, 63, BOOT_FADE_FRAMES, FALSE);
     clear_plane_cpu(BG_A);
     clear_plane_cpu(BG_B);
     /* A single held Start only skips the current card. */

@@ -36,11 +36,11 @@ def main():
     world_assets_source = (ROOT / "tools/world_assets.py").read_text()
 
     expected = {
-        "bsp_vertex_count": 467,
-        "bsp_seg_count": 386,
-        "bsp_subsector_count": 237,
-        "bsp_node_count": 236,
-        "bsp_door_count": 4,
+        "bsp_vertex_count": 470,
+        "bsp_seg_count": 394,
+        "bsp_subsector_count": 239,
+        "bsp_node_count": 238,
+        "bsp_door_count": 5,
     }
     for symbol, value in expected.items():
         match = re.search(rf"const u16 {symbol} = (\d+)u;", generated)
@@ -66,14 +66,19 @@ def main():
         assert len(values) == 11, values
         rows.append(values)
     types = Counter(row[7] for row in rows)
-    assert types == {doom_map.SEG_WALL: 369,
-                     doom_map.SEG_DOOR: 16,
-                     doom_map.SEG_EXIT: 1}, types
+    assert types == {doom_map.SEG_WALL: 371,
+                     doom_map.SEG_DOOR: 20,
+                     doom_map.SEG_EXIT: 1,
+                     doom_map.SEG_TRIGGER: 2}, types
     door_rows = [row for row in rows if row[7] == doom_map.SEG_DOOR]
-    assert Counter(row[8] for row in door_rows) == {0: 4, 1: 4, 2: 4, 3: 4}
+    assert Counter(row[8] for row in door_rows) == {
+        0: 4, 1: 4, 2: 4, 3: 4, 4: 4}
     assert all(row[6] != 0 for row in door_rows), "E1M1 door used fallback texture"
     assert all(row[9] == doom_map.KEY_NONE for row in door_rows)
-    assert all(row[10] & doom_map.SEG_FLAG_DIRECT_USE for row in door_rows)
+    assert all(not (row[10] & doom_map.SEG_FLAG_DIRECT_USE)
+               for row in door_rows if row[8] == 0)
+    assert all(row[10] & doom_map.SEG_FLAG_DIRECT_USE
+               for row in door_rows if row[8] != 0)
 
     forbidden = ("BspLine", "BspRenderSeg", "BspSector", "portal",
                  "floor_height", "ceiling_height", "BSP_SECTOR_RENDERER")
@@ -129,7 +134,7 @@ def main():
     assert "target_count > 0" not in main_source
     assert "billboard_consume_key" not in main_source
 
-    print("ok    flat E1M1: 386 textured segs, 4 grouped doors, persistent RGB keys")
+    print("ok    flat E1M1: 394 textured segs, 5 grouped doors, persistent RGB keys")
 
 
 if __name__ == "__main__":

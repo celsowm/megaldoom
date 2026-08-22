@@ -5,9 +5,12 @@ navigation proof.
 
 The runtime is deliberately one level high. Structural walls, grouped doors,
 switches, colored locks and exits survive; height-only stairs, lifts, ledges
-and drop-offs become open passages. Before either generated file is replaced,
-load_map()'s offline navigation proof must find a medium-skill single-player
-route to an exit.
+and drop-offs normally become open passages. A structurally validated offline
+recipe may transfer the material of an erased height feature onto an existing
+solid room perimeter. It never emits geometry or changes collision/LOS.
+Heights and recipe metadata never enter the runtime. Before either
+generated file is replaced, load_map()'s offline navigation proof must find a
+medium-skill single-player route to an exit.
 
 Knows nothing about C code generation or texture/palette baking -- its output
 (MapData) is plain parsed/derived data that bsp_emit.py turns into C source
@@ -17,9 +20,11 @@ and world_assets.py's texture_usage/sectors inputs are read from.
 from array import array
 from collections import Counter
 from dataclasses import dataclass
+import hashlib
 import math
 import struct
 
+from flat_map_recipes import resolve_flat_material_transfers
 from world_assets import FALLBACK_TEXTURE
 
 # Flat runtime contract (must match src/bsp/bsp_map.h / billboard_internal.h).
@@ -91,6 +96,11 @@ class MapData:
     next_door_group: int
     door_face_counts: Counter
     fallback_door_faces: int
+    wad_sha256: str
+    baseline_seg_count: int
+    curated_material_linedefs: list
+    curated_material_segs: int
+    curated_material_reports: list
     required_key_mask: int
     certificate: dict
 
@@ -524,7 +534,7 @@ def certify_flat_progression(vertices, segs, things, start_x, start_y):
     raise ValueError(detail)
 
 
-def load_map(wad, mapn):
+def load_map(wad, mapn, apply_recipes=True):
     """Parse `mapn`'s lumps out of `wad` and flatten them into a MapData."""
 
     def need(member):
@@ -576,6 +586,9 @@ def load_map(wad, mapn):
             "<HHHHHHH", lines_raw, i * 14)
         linedefs.append(dict(v1=v1, v2=v2, flags=flags, special=special,
                              tag=tag, right=right, left=left))
+
+    material_transfers = resolve_flat_material_transfers(
+        mapn, vertices, linedefs, sidedefs, sectors) if apply_recipes else {}
 
     segs = []
     for i in range(len(segs_raw) // 12):
@@ -690,7 +703,7 @@ def load_map(wad, mapn):
             linedefs[line_id]["special"], KEY_NONE)
 
     # --- Classify each linedef in the flattened world. ---------------------- #
-    def line_solid(line_id, ld):
+    def line_solid_without_recipe(line_id, ld):
         if ld["left"] == 0xFFFF:
             return True
         if ld["flags"] & LINE_FLAG_IMPASSABLE:
@@ -730,6 +743,7 @@ def load_map(wad, mapn):
         ld = linedefs[seg["ld"]]
         front_side = front_side_for(seg)
         back_side = back_side_for(seg)
+        transfer = material_transfers.get(seg["ld"])
         seg_type = SEG_WALL
         door_group = DOOR_GROUP_NONE
         required_key = KEY_NONE
@@ -770,6 +784,14 @@ def load_map(wad, mapn):
                         break
                 if name != FALLBACK_TEXTURE:
                     break
+        if transfer is not None:
+            # The destination is already a solid one-sided wall. Preserve its
+            # offsets and replace only the material; source line 50 remains an
+            # open height transition and emits no SEG.
+            target_side = sidedefs[transfer.target_side_id]
+            name = transfer.recipe.source.texture_name
+            xoff = seg["offset"] + target_side["xoff"]
+            yoff = target_side["yoff"]
         return seg_type, name, xoff, yoff, door_group, required_key, flags
 
     # --- Rebuild subsectors with only flat solid/interactive segs. ---------- #
@@ -786,7 +808,7 @@ def load_map(wad, mapn):
         start = len(out_segs)
         for k in range(count):
             seg = segs[first + k]
-            if not line_solid(seg["ld"], linedefs[seg["ld"]]):
+            if not line_solid_without_recipe(seg["ld"], linedefs[seg["ld"]]):
                 continue
             ax, ay = vertices[seg["v1"]]
             bx, by = vertices[seg["v2"]]
@@ -800,6 +822,8 @@ def load_map(wad, mapn):
             texture_usage[texture_name] += 1
             out_segs.append(dict(v1=seg["v1"], v2=seg["v2"],
                                 nx=nx, ny=ny, texture_name=texture_name,
+                                source_linedef=seg["ld"],
+                                curated_material=seg["ld"] in material_transfers,
                                 tex_u_offset=tex_u_offset, tex_v_offset=tex_v_offset,
                                 type=stype, door_group=door_group,
                                 required_key=required_key, flags=flags))
@@ -866,6 +890,28 @@ def load_map(wad, mapn):
     fallback_door_faces = sum(1 for seg in out_segs
                               if seg["type"] == SEG_DOOR and
                               seg["texture_name"] == FALLBACK_TEXTURE)
+    curated_material_segs = sum(1 for seg in out_segs
+                                if seg["curated_material"])
+    curated_material_reports = []
+    grouped_transfers = {}
+    for target_id, transfer in sorted(material_transfers.items()):
+        key = (transfer.recipe.name, transfer.source_linedef)
+        grouped_transfers.setdefault(key, []).append(target_id)
+    for (name, source_id), target_ids in grouped_transfers.items():
+        transfer = material_transfers[target_ids[0]]
+        curated_material_reports.append(dict(
+            name=name,
+            source_linedef=source_id,
+            source_linedef_hint=transfer.recipe.source.linedef_hint,
+            target_linedefs=target_ids,
+            target_linedef_hints=[target.linedef_hint
+                                  for target in transfer.recipe.targets],
+            texture=transfer.recipe.source.texture_name,
+            retextured_segs=sum(1 for seg in out_segs
+                                if seg["source_linedef"] in target_ids),
+            added_segs=0,
+        ))
+    baseline_seg_count = len(out_segs)
 
     return MapData(
         mapn=mapn,
@@ -887,6 +933,11 @@ def load_map(wad, mapn):
         next_door_group=next_door_group,
         door_face_counts=door_face_counts,
         fallback_door_faces=fallback_door_faces,
+        wad_sha256=hashlib.sha256(wad.data).hexdigest().upper(),
+        baseline_seg_count=baseline_seg_count,
+        curated_material_linedefs=sorted(material_transfers),
+        curated_material_segs=curated_material_segs,
+        curated_material_reports=curated_material_reports,
         required_key_mask=required_key_mask,
         certificate=certificate,
     )

@@ -46,6 +46,19 @@ cold bulk assets — never put a table sampled at pixel rate behind it.
 approval does not survive real gameplay; the stride-4 revert (LOG, 2026-07-27)
 is the precedent.
 
+**Frontend sprite animation needs `SYS_doVBlankProcess()`, not only
+`VDP_waitVSync()`.** The latter waits for blanking but does not commit queued
+`SPR_update()` sprite-table work. A boot card can therefore look correct in a
+static capture while its animation is frozen. Keep the per-frame system VBlank
+process wherever a frontend card moves sprites or cycles queued palette data.
+
+**Do not promote Doom upper/lower portal bands to flat walls.** A full-height
+runtime SEG changes rendering, collision and LOS and becomes a wedge at close
+range. For strict-2D room simplification, first try a structurally validated
+offline material transfer onto existing solid perimeter geometry, and prove
+the recipe-on/off SEG geometry and per-column depth are identical (LOG,
+2026-08-21).
+
 ## Dead ends — do not redo without new evidence
 
 Each is measured and written up in [LOG.md](LOG.md); the date locates the entry.
@@ -76,9 +89,10 @@ Each is measured and written up in [LOG.md](LOG.md); the date locates the entry.
    ```
    python tools/resolve-symbol.py out/symbol.txt g_debug_perf_mailbox --bytes 128
    ```
-3. Run the deterministic route through the custom BlastEm build and capture a report:
+3. Run the deterministic route through the custom BlastEm build and capture a report
+   (the current frontend reaches gameplay around frame 1180):
    ```
-   .externals/blastem/build/windows/blastem.exe -b 600 out/rom.bin \
+    .externals/blastem/build/windows/blastem.exe -b 1400 out/rom.bin \
      --md-route tools/routes/checkpoints.txt --md-report out/perf.json \
      --md-perf-mailbox <ADDR>:128
    ```

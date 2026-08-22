@@ -25,6 +25,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_WAD = os.path.join(PROJECT_ROOT, "DOOM1.WAD")
 # Generated headers live beside the module that consumes them (src/<group>/).
 DEFAULT_ASSET_OUT = os.path.join(PROJECT_ROOT, "src", "bsp", "generated_assets.h")
+DEFAULT_MAP_OUT_DIR = os.path.join(PROJECT_ROOT, "src", "bsp")
 
 bsp_emit.set_wall_tex_dim(world_assets.WALL_TEX_DIM)
 
@@ -35,6 +36,8 @@ def main():
     ap.add_argument("--map", default="E1M1")
     ap.add_argument("--out", default=None)
     ap.add_argument("--assets-out", default=DEFAULT_ASSET_OUT)
+    ap.add_argument("--no-recipes", action="store_true",
+                    help="disable curated material transfers for a clean-WAD A/B baseline")
     ap.add_argument("--certify-only", action="store_true",
                     help="parse/classify/certify and report without emitting files")
     args = ap.parse_args()
@@ -42,10 +45,10 @@ def main():
     wad = WadFile(args.wad)
     mapn = args.map.upper()
     out_path = args.out or os.path.join(
-        PROJECT_ROOT, "src", "generated_%s_map.c" % mapn.lower()
+        DEFAULT_MAP_OUT_DIR, "generated_%s_map.c" % mapn.lower()
     )
 
-    map_data = doom_map.load_map(wad, mapn)
+    map_data = doom_map.load_map(wad, mapn, apply_recipes=not args.no_recipes)
 
     if args.certify_only:
         print("Map %s flat progression certified" % mapn)
@@ -59,6 +62,17 @@ def main():
                map_data.certificate["states"]))
         print("  textures : %d door faces still require fallback" %
               map_data.fallback_door_faces)
+        print("  source   : SHA-256 %s" % map_data.wad_sha256)
+        print("  material : baseline/final=%d/%d, targets=%s (%d retextured SEGs)" %
+              (map_data.baseline_seg_count, len(map_data.out_segs),
+               map_data.curated_material_linedefs,
+               map_data.curated_material_segs))
+        for transfer in map_data.curated_material_reports:
+            print("             %s source %d (hint %d) -> %s, %s, +%d SEGs" %
+                  (transfer["name"], transfer["source_linedef"],
+                   transfer["source_linedef_hint"],
+                   transfer["target_linedefs"], transfer["texture"],
+                   transfer["added_segs"]))
         return
 
     asset_temp = args.assets_out + ".tmp"
@@ -67,7 +81,7 @@ def main():
         if os.path.exists(temp_path):
             os.remove(temp_path)
     texture_ids, texture_meta, sector_visuals, palette = world_assets.emit_world_assets(
-        asset_temp, map_data.texture_usage, map_data.sectors)
+        asset_temp, map_data.texture_usage, map_data.sectors, map_data)
     report = bsp_emit.emit_map_c(map_temp, args.wad, map_data, texture_ids, texture_meta)
     os.replace(asset_temp, args.assets_out)
     os.replace(map_temp, out_path)
@@ -95,6 +109,17 @@ def main():
     print("  doors    : %d groups, faces=%s, fallback faces=%d" %
           (map_data.next_door_group, dict(sorted(map_data.door_face_counts.items())),
            map_data.fallback_door_faces))
+    print("  source   : SHA-256 %s" % map_data.wad_sha256)
+    print("  material : baseline/final=%d/%d, targets=%s (%d retextured SEGs)" %
+          (map_data.baseline_seg_count, len(map_data.out_segs),
+           map_data.curated_material_linedefs,
+           map_data.curated_material_segs))
+    for transfer in map_data.curated_material_reports:
+        print("             %s source %d (hint %d) -> %s, %s, +%d SEGs" %
+              (transfer["name"], transfer["source_linedef"],
+               transfer["source_linedef_hint"],
+               transfer["target_linedefs"], transfer["texture"],
+               transfer["added_segs"]))
     print("  keys     : available=0x%02X required=0x%02X reached=%s" %
           (map_data.certificate["available_keys"], map_data.required_key_mask,
            map_data.certificate["reached_masks"]))

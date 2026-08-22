@@ -19,7 +19,7 @@ SPRITE_SOURCE = ROOT / "res" / "originaldoom" / "sprites"
 BOOT_SOURCE = ROOT / "res" / "boot"
 SEGA_FONT = BOOT_SOURCE / "SEGA.TTF"
 MANIFEST_NAME = ".frontend-assets.json"
-MANIFEST_VERSION = 2
+MANIFEST_VERSION = 3
 
 PATCHES = (
     "TITLEPIC", "M_DOOM", "M_NGAME", "M_OPTION", "M_QUITG",
@@ -43,11 +43,35 @@ GLYPHS = tuple(sorted({
     if character != " "
 }))
 SKILL_PATCHES = ("M_JKILL", "M_ROUGH", "M_HURT", "M_ULTRA", "M_NMARE")
+CACODEMON_BOOT_FRAMES = (
+    "HEADA1", "HEADB1", "HEADC1", "HEADD1", "HEADE1", "HEADF1",
+)
 BOOT_INPUTS = (
-    SPRITE_SOURCE / "HEADA1.png",
-    BOOT_SOURCE / "sgdk-sparkle-source.png",
+    *(SPRITE_SOURCE / f"{name}.png" for name in CACODEMON_BOOT_FRAMES),
     SEGA_FONT,
 )
+
+# This card deliberately owns PAL0.  The image never uses PAL1: PAL1 is the
+# Cacodemon's sprite palette at runtime.  Keep the last four colours for the
+# per-frame logo shimmer in frontend.c.
+SGDK_BOOT_PALETTE = [
+    (0, 0, 0),       # transparent/background black
+    (0, 0, 36),      # navy keyline
+    (0, 0, 73),      # logo top
+    (0, 0, 109),
+    (0, 0, 146),
+    (0, 36, 182),
+    (0, 109, 219),
+    (36, 182, 255),
+    (182, 255, 255),
+    (0, 36, 109),
+    (0, 73, 146),
+    (36, 109, 182),
+    (0, 73, 182),    # animated sheen 0
+    (0, 146, 255),   # animated sheen 1
+    (109, 219, 255), # animated sheen 2
+    (255, 255, 255), # animated sheen 3
+]
 
 
 def expected_outputs() -> tuple[str, ...]:
@@ -248,29 +272,34 @@ def build_cacodemon_palette(image: Image.Image) -> list[tuple[int, int, int]]:
     3-bit DAC levels so the sprite keeps its original hue and contrast on PAL1.
     """
     rgba = image.convert("RGBA")
-    opaque = [(r, g, b) for r, g, b, a in rgba.getdata() if a >= 128]
+    opaque = [(r, g, b) for r, g, b, a in rgba.get_flattened_data() if a >= 128]
     sample = Image.new("RGB", (len(opaque), 1))
     sample.putdata(opaque)
-    # Keep a few entries free for the small but distinctive green horns and
-    # brown/olive highlights, which a red-dominant median cut would otherwise
-    # discard entirely.
-    quantized = sample.quantize(colors=12, method=Image.Quantize.MEDIANCUT)
+    # The blue fireball in C/D and the green eye/horns are essential to the
+    # planned boot attack.  Seed those ramps before filling the remainder
+    # with source-derived shades, so a red-dominant median cut cannot erase
+    # either accent.
+    quantized = sample.quantize(colors=8, method=Image.Quantize.MEDIANCUT)
     raw = quantized.getpalette()
 
     def genesis_level(channel: int) -> int:
         return (round(channel * 7 / 255) * 255) // 7
 
     colors: list[tuple[int, int, int]] = []
-    for index in range(12):
-        color = tuple(genesis_level(channel) for channel in raw[index * 3:index * 3 + 3])
+    for color in ((109, 0, 0), (255, 0, 0),
+                  (0, 0, 72), (0, 0, 255),
+                  (36, 72, 0), (109, 145, 36),
+                  (72, 72, 72), (182, 182, 182), (255, 255, 255)):
         if color not in colors:
+            colors.append(color)
+    for index in range(8):
+        color = tuple(genesis_level(channel) for channel in raw[index * 3:index * 3 + 3])
+        if color != (0, 0, 0) and color not in colors:
             colors.append(color)
     # A pathological source or quantizer still gets a complete 16-entry
     # palette, with useful ramps instead of uninitialized palette entries.
-    for color in ((36, 72, 0), (72, 109, 36), (109, 145, 36),
-                  (109, 72, 36), (0, 0, 0), (109, 0, 0),
-                  (182, 0, 0), (255, 0, 0), (72, 72, 72),
-                  (182, 182, 182), (255, 255, 255)):
+    for color in ((109, 72, 36), (182, 72, 36), (255, 145, 109),
+                  (36, 36, 36), (219, 219, 219), (72, 109, 36)):
         if color not in colors:
             colors.append(color)
     return [(0, 0, 0), *colors[:15]]
@@ -366,39 +395,64 @@ def boot_background() -> Image.Image:
     return image
 
 
-def draw_sgdk_logo(image: Image.Image, source: Path = SOURCE) -> None:
-    """Render the SGDK wordmark with the supplied SEGA-style display font."""
-    font = ImageFont.truetype(str(SEGA_FONT), 72)
-    draw = ImageDraw.Draw(image)
-    bbox = draw.textbbox((0, 0), "SGDK", font=font, stroke_width=2)
+def paletted_sgdk_canvas() -> Image.Image:
+    """Return an opaque PAL0-only 320x224 card for the SGDK boot scene."""
+    image = Image.new("P", (320, 224), 0)
+    flat_palette = [channel for color in SGDK_BOOT_PALETTE for channel in color]
+    image.putpalette(flat_palette + [0] * (768 - len(flat_palette)))
+    return image
+
+
+def draw_sgdk_logo(image: Image.Image) -> None:
+    """Draw the blue/cyan, banded SGDK wordmark directly into PAL0.
+
+    Rendering literal palette indices is intentional: the card must never be
+    quantized into the shared Doom frontend palettes because PAL1 belongs to
+    the Cacodemon while this card is on screen.
+    """
+    font = ImageFont.truetype(str(SEGA_FONT), 84)
+    probe = ImageDraw.Draw(Image.new("L", (1, 1)))
+    bbox = probe.textbbox((0, 0), "SGDK", font=font, stroke_width=2)
     width = bbox[2] - bbox[0]
-    x = (image.width - width) // 2
-    y = 54 - bbox[1]
-    # Dark navy extrusion, white keyline, then the bright blue face. The
-    # three passes keep the logo legible against the black/red boot frame.
-    draw.text((x + 3, y + 5), "SGDK", font=font, fill=(4, 8, 32, 255),
-              stroke_width=3, stroke_fill=(4, 8, 32, 255))
-    draw.text((x, y), "SGDK", font=font, fill=(24, 112, 232, 255),
-              stroke_width=2, stroke_fill=(224, 248, 255, 255))
-    draw.text((x, y - 1), "SGDK", font=font, fill=(24, 112, 232, 255),
-              stroke_width=1, stroke_fill=(8, 48, 144, 255))
+    x = (image.width - width) // 2 - bbox[0]
+    top = 118
+    y = top - bbox[1]
 
+    outline = Image.new("L", image.size, 0)
+    face = Image.new("L", image.size, 0)
+    ImageDraw.Draw(outline).text((x, y), "SGDK", font=font, fill=255,
+                                 stroke_width=2, stroke_fill=255)
+    ImageDraw.Draw(face).text((x, y), "SGDK", font=font, fill=255)
 
-def cropped_sparkles() -> Image.Image:
-    sparkle = Image.open(BOOT_SOURCE / "sgdk-sparkle-source.png").convert("RGBA")
-    bbox = sparkle.getchannel("A").getbbox()
-    if bbox is None:
-        raise RuntimeError("SGDK sparkle source has no visible pixels")
-    sparkle = sparkle.crop(bbox)
-    sparkle.thumbnail((104, 52), Image.Resampling.NEAREST)
-    pixels = sparkle.load()
-    for y in range(sparkle.height):
-        for x in range(sparkle.width):
-            r, g, b, a = pixels[x, y]
-            if a:
-                heat = max(r, g, b)
-                pixels[x, y] = (min(255, heat), min(224, heat // 3), min(160, heat // 6), a)
-    return sparkle
+    output = image.load()
+    outline_pixels = outline.load()
+    face_pixels = face.load()
+    for py in range(top, min(image.height, top + 88)):
+        rel_y = py - top
+        for px in range(28, 292):
+            if outline_pixels[px, py] >= 112:
+                output[px, py] = 1
+            if face_pixels[px, py] < 112:
+                continue
+
+            # Blue top, cyan lower face, with two hard horizontal bands like
+            # the Earthworm Jim 2 SEGA wordmark.  The diagonal fragments use
+            # entries 12..15, which frontend.c cycles as the sheen.
+            if rel_y < 13:
+                index = 2
+            elif rel_y < 27:
+                index = 3
+            elif rel_y < 42:
+                index = 4
+            elif rel_y < 56:
+                index = 6
+            else:
+                index = 7
+            if rel_y in (17, 18, 48, 49):
+                index = 8
+            elif 12 <= rel_y <= 65 and ((px + rel_y * 2) % 64) < 4:
+                index = 12 + ((px // 16 + rel_y // 8) & 3)
+            output[px, py] = index
 
 
 def make_boot_disclaimer() -> Image.Image:
@@ -418,14 +472,8 @@ def make_boot_disclaimer() -> Image.Image:
 
 
 def make_boot_sgdk() -> Image.Image:
-    image = boot_background()
-    draw = ImageDraw.Draw(image)
-    draw.rectangle((24, 40, 295, 135), fill=(12, 4, 4, 255), outline=(96, 12, 4, 255))
+    image = paletted_sgdk_canvas()
     draw_sgdk_logo(image)
-    sparkles = cropped_sparkles()
-    image.alpha_composite(sparkles, (25, 13))
-    centered_boot_text(image, "BUILT FOR THE 16-BIT ERA", 160)
-    centered_boot_text(image, "SOFTWARE DEVELOPMENT KIT", 178)
     return image
 
 
@@ -484,10 +532,14 @@ def make_boot_social() -> Image.Image:
 
 
 def make_cacodemon() -> Image.Image:
-    source = Image.open(SPRITE_SOURCE / "HEADA1.png").convert("RGBA")
-    canvas = transparent_canvas(64, 72)
-    canvas.alpha_composite(source, ((64 - source.width) // 2, 72 - source.height))
-    return canvas
+    """Pack six Doom frames into one SGDK animation row (6 x 64 by 72)."""
+    sheet = transparent_canvas(64 * len(CACODEMON_BOOT_FRAMES), 72)
+    for frame_index, frame_name in enumerate(CACODEMON_BOOT_FRAMES):
+        source = Image.open(SPRITE_SOURCE / f"{frame_name}.png").convert("RGBA")
+        canvas = transparent_canvas(64, 72)
+        canvas.alpha_composite(source, ((64 - source.width) // 2, 72 - source.height))
+        sheet.alpha_composite(canvas, (frame_index * 64, 0))
+    return sheet
 
 
 def doom_text_mask(text: str, width: int, height: int, palette_index: int,
@@ -606,7 +658,12 @@ def generate(source: Path, output: Path) -> None:
         centered_text(panel, "NO", 76)
         assets[f"confirm_{selected}.png"] = (screen_overlay(panel), True)
     for filename, (image, transparent) in assets.items():
-        indexed(image, palette, transparent).save(output / filename, optimize=False)
+        if filename == "boot_sgdk.png":
+            # The SGDK card is already literal indexed PAL0 art.  Do not send
+            # it through the shared Doom palette quantizer.
+            image.save(output / filename, optimize=False)
+        else:
+            indexed(image, palette, transparent).save(output / filename, optimize=False)
 
     # This is a sprite-engine resource. Keep index 0 transparent, but give it
     # its own quantized palette so Doom's red/grey/green ramps are not forced
@@ -687,7 +744,7 @@ def main() -> int:
 
     publish(source, output)
 
-    print("generated frontend assets with four shared 16-colour tile palettes")
+    print("generated frontend assets (shared frontend palettes plus isolated SGDK PAL0)")
     return 0
 
 

@@ -30,7 +30,7 @@ expected = {
     "boot_disclaimer.png": (320, 224),
     "boot_sgdk.png": (320, 224),
     "boot_social.png": (320, 224),
-    "cacodemon.png": (64, 72),
+    "cacodemon.png": (384, 72),
     "death_prompt.png": (96, 8),
     "main_menu.png": (320, 224),
     "logo.png": (128, 64),
@@ -62,15 +62,45 @@ for name, size in expected.items():
             tile = image.crop((x, y, x + 8, y + 8))
             assert len({value >> 4 for value in tile.get_flattened_data()}) == 1, \
                 f"{name} tile ({x // 8},{y // 8}) mixes VDP palettes"
-    if name != "cacodemon.png":
+    if name not in ("cacodemon.png", "boot_sgdk.png"):
         palettes.append(tuple(image.getpalette()[:192]))
 assert len(set(palettes)) == 1, "frontend images must share all four palettes"
+
+boot_sgdk = Image.open(ASSETS / "boot_sgdk.png")
+assert set(boot_sgdk.get_flattened_data()) <= set(range(16)), \
+    "SGDK boot card must stay entirely in PAL0"
+assert boot_sgdk.getpixel((0, 0)) == 0 and boot_sgdk.getpixel((319, 223)) == 0, \
+    "SGDK boot background must be literal black"
+sgdk_palette = boot_sgdk.getpalette()
+assert sgdk_palette is not None
+assert any(sgdk_palette[index:index + 3] == [255, 255, 255]
+           for index in range(36, 48, 3)), "SGDK shimmer lost its white highlight"
+assert all(sgdk_palette[index + 2] >= sgdk_palette[index]
+           and sgdk_palette[index + 2] >= sgdk_palette[index + 1]
+           for index in range(3, 48, 3)), "SGDK boot card contains a non-blue palette entry"
 
 cacodemon = Image.open(ASSETS / "cacodemon.png")
 assert cacodemon.info.get("transparency") == 0, "Cacodemon index 0 must be transparent"
 cacodemon_colors = cacodemon.getpalette()[:48]
 assert any(cacodemon_colors[index:index + 3][0] > cacodemon_colors[index:index + 3][1]
            for index in range(3, 48, 3)), "Cacodemon palette lost its red ramp"
+assert any(cacodemon_colors[index + 1] > cacodemon_colors[index]
+           and cacodemon_colors[index + 1] > cacodemon_colors[index + 2]
+           for index in range(3, 48, 3)), "Cacodemon palette lost its green ramp"
+assert any(cacodemon_colors[index + 2] > cacodemon_colors[index]
+           and cacodemon_colors[index + 2] > cacodemon_colors[index + 1]
+           for index in range(3, 48, 3)), "Cacodemon palette lost its blue attack ramp"
+assert any(cacodemon_colors[index] == cacodemon_colors[index + 1] == cacodemon_colors[index + 2]
+           and cacodemon_colors[index] > 0 for index in range(3, 48, 3)), \
+    "Cacodemon palette lost its grey ramp"
+for frame in range(6):
+    frame_image = cacodemon.crop((frame * 64, 0, (frame + 1) * 64, 72))
+    tiles = {
+        bytes(frame_image.crop((x, y, x + 8, y + 8)).get_flattened_data())
+        for y in range(0, 72, 8)
+        for x in range(0, 64, 8)
+    }
+    assert len(tiles) <= 96, f"Cacodemon frame {frame} exceeds reserved sprite VRAM"
 
 title_tiles = unique_tiles(ASSETS / "title.png")
 prompt_tiles = unique_tiles(ASSETS / "prompt.png")
@@ -81,7 +111,6 @@ boot_tiles = max(
     for name in ("boot_disclaimer.png", "boot_sgdk.png", "boot_social.png")
 )
 assert 16 + boot_tiles < 1440, "boot card exceeds user VRAM"
-assert unique_tiles(ASSETS / "cacodemon.png") <= 96, "Cacodemon exceeds reserved sprite VRAM"
 assert 16 + unique_tiles(ASSETS / "main_menu.png") + max(
     unique_tiles(ASSETS / "skull1.png"), unique_tiles(ASSETS / "skull2.png")
 ) < 1440, "main menu exceeds user VRAM"
@@ -102,17 +131,19 @@ for token in (
     "frontend_load_death_prompt", "frontend_set_death_prompt", "DEATH_PROMPT_X", "DEATH_PROMPT_Y",
     "run_boot_sequence", "run_boot_card", "BOOT_CARD_FRAMES 180", "BOOT_CACODEMON_X",
     "frontend_boot_disclaimer", "frontend_boot_sgdk", "frontend_boot_social", "frontend_cacodemon",
-    "SPR_initEx(96)", "SPR_end()", "animate_sgdk_shimmer", "PAL_setPalette(PAL1",
-    "frontend_cacodemon.palette->data",
+    "SPR_initEx(96)", "SPR_end()", "animate_sgdk_shimmer", "fade_sgdk_card_in",
+    "PAL_setColors(12", "SPR_setFrame", "BOOT_CACODEMON_ATTACK_START",
+    "frontend_cacodemon.palette->data", "SYS_doVBlankProcess();",
 ):
     assert token in FRONTEND
 for token in (
     "M_DOOM", "M_NGAME", "M_OPTION", "M_QUITG", "M_OPTTTL", "M_SKILL", "M_JKILL",
     "M_ROUGH", "M_HURT", "M_ULTRA", "M_NMARE", "M_SKULL1", "M_SKULL2", "PRESS START",
     "centered_doom_text", "PRESS FIRE", "doom_text_mask",
-    "HEADA1", "sgdk-sparkle-source.png", "make_boot_disclaimer", "make_boot_sgdk",
-    "make_boot_social", "make_cacodemon", "indexed_fixed_palette", "build_cacodemon_palette",
-    "SEGA.TTF", "ImageFont.truetype",
+    "HEADA1", "HEADB1", "HEADC1", "HEADD1", "HEADE1", "HEADF1",
+    "make_boot_disclaimer", "make_boot_sgdk", "make_boot_social", "make_cacodemon",
+    "indexed_fixed_palette", "build_cacodemon_palette", "SGDK_BOOT_PALETTE",
+    "paletted_sgdk_canvas", "SEGA.TTF", "ImageFont.truetype",
 ):
     assert token in (ROOT / "tools/generate-frontend-assets.py").read_text()
 assert "(selected + 2) % 3" in FRONTEND and "(selected + 1) % 3" in FRONTEND
