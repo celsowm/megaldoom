@@ -89,11 +89,33 @@ def perceptual_error(rows, target_columns):
 
 
 def texture_metrics(name):
+    """Bake one material with and without its recipe, and measure the pair.
+
+    Every comparison below answers one question -- "does the curated recipe
+    improve this material over the plain conversion?" -- so both sides are
+    baked through _convert_texture, which skips convert_texture's churn
+    fallback. That fallback is a per-material decision about resolution, and it
+    can fire on one side and not the other; when it does, the comparison stops
+    being about the recipe and becomes a half-resolution bake measured against
+    a full-resolution one, which reads the extra texels as noise and as new
+    isolated dots. STARTAN3 measured churn 0.105 vs 0.242 and isolated 0 vs 2
+    that way, against 0.298 vs 0.242 and 4 vs 2 -- improvements on both counts
+    -- once each side bakes on the same grid.
+
+    What the SHIPPED bake does, fallback included, is a separate contract: it
+    is what the preview renders, what the absolute WALL_CHURN_LIMIT ceiling in
+    certify_metrics is applied to, what the COMPUTE2 facade is certified on,
+    and what tools/test-wall-quality.py asserts against the real header.
+    """
     diagnostics = {}
     path = world_assets.texture_path(name)
-    current = world_assets.convert_texture(
+    shipped_current = world_assets.convert_texture(
         path, PALETTE, use_wall_bake_recipe=False)
-    candidate = world_assets.convert_texture(
+    shipped_candidate = world_assets.convert_texture(
+        path, PALETTE, use_wall_bake_recipe=True)
+    current = world_assets._convert_texture(
+        path, PALETTE, use_wall_bake_recipe=False)
+    candidate = world_assets._convert_texture(
         path, PALETTE, use_wall_bake_recipe=True,
         diagnostics=diagnostics)
     current_target = world_assets._spatial_smooth(
@@ -107,12 +129,17 @@ def texture_metrics(name):
         diagnostics["edge_mask"], palette_edge_mask(candidate))
     return {
         "name": name,
-        "current": current,
-        "candidate": candidate,
+        # The shipped grids: rendered by the preview, and the subject of every
+        # absolute contract (churn ceiling, COMPUTE2 facade).
+        "current": shipped_current,
+        "candidate": shipped_candidate,
         "diagnostics": diagnostics,
         "changed_texels": sum(
-            current[y][x] != candidate[y][x]
+            shipped_current[y][x] != shipped_candidate[y][x]
             for y in range(HEIGHT) for x in range(WIDTH)),
+        "shipped_candidate_churn": churn(shipped_candidate),
+        # Same-lattice pair: every recipe-vs-no-recipe comparison. See the
+        # docstring for why these must not go through the churn fallback.
         "current_churn": churn(current),
         "candidate_churn": churn(candidate),
         "current_isolated": isolated_count(current),
@@ -184,7 +211,8 @@ def certify_metrics(metrics):
         name = result["name"]
         if name == "COMPUTE2":
             certify_compute2_facade(result["candidate"])
-        if result["candidate_churn"] > 0.35:
+        # Absolute ceiling on what actually ships, fallback and all.
+        if result["shipped_candidate_churn"] > 0.35:
             raise AssertionError("%s churn exceeds 35%%" % name)
         churn_margin = 0.04 if name == "COMPUTE2" else 0.02
         if result["candidate_churn"] > result["current_churn"] + churn_margin:

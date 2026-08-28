@@ -132,8 +132,44 @@ WALL_TONE_GAMMA = 0.55
 
 
 def tone_curve(rgb):
-    return tuple(int(round(255.0 * ((max(0, min(255, channel)) / 255.0) ** WALL_TONE_GAMMA)))
-                 for channel in rgb)
+    """Apply WALL_TONE_GAMMA's lift to a texel without touching its hue.
+
+    The curve is evaluated on the BRIGHTEST channel and the resulting factor
+    is applied to all three equally, so the channel ratios -- which is what
+    hue and chroma are -- pass through unchanged.
+
+    Raising each channel to the power independently, which is what this used
+    to do, pulls them together instead: a channel sitting at 0.4 of the
+    brightest lands at 0.4**0.55 = 0.60 of it, so every texel drifts toward
+    grey. Measured over the E1M1 wall sources that is an 11-16% chroma loss
+    on precisely the materials the quantizer then had no choice but to send
+    to the neutral ramp (STARTAN3 -15%, STARG3 -16%, BROWN1 -11%), and it
+    happened BEFORE the quantizer ever saw them -- so no amount of
+    WALL_CHROMA_LOSS_WEIGHT could recover it. Scaling uniformly instead
+    *raises* chroma against the source by 33-101% at the same lightness,
+    which matters because the VDP's 3-bit lattice is nearly empty in the
+    0.010-0.050 chroma band where Doom's wall art lives: a texel a little
+    more saturated has a warm rung to land on, one a little less has only
+    grey. Map-wide, E1M1's wall area rendering pure neutral falls 40.7% ->
+    26.4%.
+
+    Materials that are genuinely grey cannot be tinted by this, structurally
+    and at any gamma: when r == g == b the brightest channel IS every
+    channel, so the uniform factor is the per-channel one and the texel stays
+    exactly neutral. LITE3, SUPPORT2, STARGR1 and DOORSTOP measure 100%
+    neutral before and after, which is what says the new colour is being
+    reached by genuinely warm texels rather than leaking as a cast.
+
+    Because the factor is derived from the brightest channel, no channel can
+    exceed 255: the brightest maps exactly as the old curve mapped it, and
+    every other channel is smaller. There is nothing to clip.
+    """
+    brightest = max(max(0, min(255, channel)) for channel in rgb)
+    if brightest <= 0:
+        return (0, 0, 0)
+    lifted = 255.0 * ((brightest / 255.0) ** WALL_TONE_GAMMA)
+    scale = lifted / brightest
+    return tuple(int(round(max(0, min(255, channel)) * scale)) for channel in rgb)
 
 
 def _fill_transparent_with_average(image):
@@ -394,15 +430,26 @@ EARTH_HUE_RANGE = (50.0, 105.0)
 EARTH_MIN_CHROMA = 0.030
 # Share of texels that must sit inside the hue window for the material to be
 # treated as earth. Measured after smoothing (i.e. on exactly what gets
-# quantized), E1M1 splits across a wide gap: the brown corridor/panel materials
-# score 48-100%, then STARTAN3 at 29%, then nothing until EXITDOOR at 17%.
-# 0.35 deliberately leaves STARTAN3 out. Pulling it in for family consistency
-# with STARTAN1 was tried and rejected on measurement: only 29% of its texels
-# are earth-hued, and confining the other 71% to the earth ramp doubled its
-# spatial_palette_error (1.10 against a 0.57 legacy baseline). Multi-material
-# decorations stay out for the same reason -- forcing EXITDOOR onto the ramp
-# repaints its grey metalwork brown, which is worse than the problem solved.
-EARTH_MIN_SHARE = 0.35
+# quantized). The policy this encodes has not changed: single-material brown
+# corridor/panel walls go on the earth ramp, two-tone materials whose grey
+# metalwork is real do not. Pulling STARTAN3 in for family consistency with
+# STARTAN1 was tried and rejected on measurement, and forcing EXITDOOR onto the
+# ramp repaints its grey metalwork brown -- worse than the problem solved.
+#
+# Re-derived from 0.35 when tone_curve stopped desaturating: every material's
+# earth share rises once hue survives the tone lift, so the same 0.35 would have
+# silently reclassified STARTAN3 (0.317 -> 0.490) and painted its grey supports
+# brown -- exactly the failure the paragraph above rejects. The threshold is the
+# midpoint of the widest gap in E1M1's distribution, which is also where that
+# policy line falls: DOOR1 at 0.651 is the last single-material brown, STARTAN3
+# at 0.490 the first two-tone wall, and nothing sits in between. The gap is
+# wider than the one 0.35 used to sit in (0.161 against 0.087), so the split is
+# less marginal than before, not more.
+#
+# One material changes class: LITEBLU3 (0.405) leaves the earth ramp. That is a
+# fix rather than a cost -- the ramp excludes PAL3's only blue (index 2), so
+# classifying a blue light panel as earth was banning it from its own colour.
+EARTH_MIN_SHARE = 0.57
 # A near-solid wall material must stay clear of each flat colour on at least ONE
 # of two axes: lightness, or colour (Oklab a/b). Failing both at once is what
 # makes a wall stop reading as a wall and merge into the floor or ceiling.
@@ -645,16 +692,30 @@ def _convert_texture(path, palette, use_wall_bake_recipe=True,
                 structural, edge_mask, recipe.smooth_weight)
         is_neutral_material = material_name.startswith(("GRAY", "METAL", "STONE"))
         chroma_threshold = WALL_CHROMA_THRESHOLD
+        # gain_ratio 0 disables dithering outright, for every wall. The Bayer
+        # pattern is defined in texture space but the runtime samples each
+        # column at a distance-dependent rate through
+        # MEGALDOOM_WALL_TEX_Y_BY_HEIGHT, so the pattern never survives
+        # resampling as a blend -- it arrives as noise that crawls when the
+        # camera moves. Measured over all 23 E1M1 materials, dropping it lowers
+        # mean churn from 37% to 31% and *improves* per-texel accuracy, because
+        # the averaging the dither pays for is never actually reconstructed on
+        # screen.
+        #
+        # The neutral bucket used to be exempt, on sprite-tuned defaults
+        # (73, 0.65), justified by "it rarely fires anyway -- best_mix takes its
+        # low-chroma early return on exactly-neutral texels". That was only true
+        # because the old per-channel tone_curve desaturated every source into
+        # the early return. Once tone_curve stopped destroying hue the exemption
+        # armed itself: STONE3's vertical churn went 0.267 -> 0.393, straight
+        # through WALL_CHURN_LIMIT, as the dither finally started firing on a
+        # large flat stone wall -- which is the one artifact playtesting has
+        # already rejected outright. The runtime resamples every wall the same
+        # way regardless of material family, so there is one rule, not two.
+        pair_max_delta, gain_ratio = WALL_PAIR_MAX_DELTA, 0.0
         if is_neutral_material:
             allowed = [index for index in range(0, WORLD_COLOR_DAMAGE)
                        if world_palette.is_neutral(palette[index])]
-            # Sprite-tuned dither defaults kept for this bucket: smooth grey
-            # gradients are the one case where dithering blends rather than
-            # speckles. In practice it rarely fires anyway -- best_mix takes its
-            # low-chroma early return on exactly-neutral texels -- so the noise
-            # here was source detail, which WALL_SMOOTH_WEIGHT handles (GRAY7
-            # churn 37% -> 18% with the same three structural indices).
-            pair_max_delta, gain_ratio = 73, 0.65
         else:
             if _is_earth_material(smoothed):
                 allowed = list(EARTH_RAMP_INDICES)
@@ -668,16 +729,6 @@ def _convert_texture(path, palette, use_wall_bake_recipe=True,
                 chroma_threshold = -1.0
             else:
                 allowed = range(0, WORLD_COLOR_DAMAGE)
-            # gain_ratio 0 disables dithering outright for textured walls. The
-            # Bayer pattern is defined in texture space but the runtime samples
-            # each column at a distance-dependent rate through
-            # MEGALDOOM_WALL_TEX_Y_BY_HEIGHT, so the pattern never survives
-            # resampling as a blend -- it arrives as noise that crawls when the
-            # camera moves. Measured over all 23 E1M1 materials, dropping it
-            # lowers mean churn from 37% to 31% and *improves* per-texel
-            # accuracy, because the averaging the dither pays for is never
-            # actually reconstructed on screen.
-            pair_max_delta, gain_ratio = WALL_PAIR_MAX_DELTA, 0.0
         cache = {}
         rows = [[world_palette.dither_index(smoothed[x][y], palette,
                                             x, y, False, cache,
