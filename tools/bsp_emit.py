@@ -12,12 +12,14 @@ from dataclasses import dataclass
 
 from doom_map import validate_spatial_grid
 
-WALL_TEX_DIM = None  # set by set_wall_tex_dim() before emit_map_c() is called
+WALL_TEX_WIDTH = None
+WALL_TEX_HEIGHT = None  # set before emit_map_c() is called
 
 
-def set_wall_tex_dim(value):
-    global WALL_TEX_DIM
-    WALL_TEX_DIM = value
+def set_wall_tex_dims(width, height):
+    global WALL_TEX_WIDTH, WALL_TEX_HEIGHT
+    WALL_TEX_WIDTH = width
+    WALL_TEX_HEIGHT = height
 
 
 @dataclass
@@ -43,8 +45,9 @@ def emit_map_c(path, wad_path, map_data, texture_ids, texture_meta):
         if not -32768 <= seg["tex_u_offset"] <= 32767:
             raise SystemExit("texture U offset out of s16 range: %d" % seg["tex_u_offset"])
         seg["tex"] = texture_ids[name]
-        seg["tex_v"] = ((seg["tex_v_offset"] * WALL_TEX_DIM) //
-                        texture_meta[name]["height"]) & (WALL_TEX_DIM - 1)
+        source_height = texture_meta[name]["height"]
+        seg["tex_v"] = ((seg["tex_v_offset"] * WALL_TEX_HEIGHT) //
+                        source_height) & (WALL_TEX_HEIGHT - 1)
 
     root = (len(nodes) - 1) if nodes else 0x8000
 

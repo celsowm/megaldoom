@@ -40,17 +40,14 @@
 #define PLAYER_EYE_HEIGHT 41
 #define PLAYER_MAX_STEP 24
 
-// Wall/door/switch textures are WALL_TEX_DIM x WALL_TEX_DIM palette-index texels
-// (see generated_assets.h). This is the single source of truth for the wall
-// texture size; every consumer derives from it:
-//   - RayColumn.tex_x and the vertical sampler wrap with WALL_TEX_DIM_MASK
-//     (so WALL_TEX_DIM MUST stay a power of two),
-//   - bsp_render.c derives each seg's horizontal ushift from it,
-//   - renderer.c builds the x-WALL_TEX_DIM vertical sampling table from it,
-//   - the generated arrays are declared [WALL_TEX_DIM][WALL_TEX_DIM].
-// Exact texture IDs and source dimensions are generated from the active WAD map.
-#define WALL_TEX_DIM 64
-#define WALL_TEX_DIM_MASK (WALL_TEX_DIM - 1)
+// Wall/door/switch textures use independent power-of-two runtime axes. The
+// horizontal axis stays at 64 because RAY_COL_STRIDE==2 supplies 80 samples;
+// the vertical axis is 128 so a near wall can retain its source row structure.
+// Exact source dimensions and repeat scales are generated from the active WAD.
+#define WALL_TEX_WIDTH 64
+#define WALL_TEX_WIDTH_MASK (WALL_TEX_WIDTH - 1)
+#define WALL_TEX_HEIGHT 128
+#define WALL_TEX_HEIGHT_MASK (WALL_TEX_HEIGHT - 1)
 
 typedef struct {
     s32 x;

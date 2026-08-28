@@ -45,6 +45,19 @@ static void build_shade_luts(void) {
 // never skip against stale cached descriptors. See build_bsp_tilemap().
 static bool s_coherence_valid = FALSE;
 
+static const u8 *packed_wall_column(const WallColumnDescriptor *descriptor) {
+    if (descriptor->flags & RAY_COLUMN_FLAG_DOOR) {
+        const u8 door_index = FREEDOOM_WALL_DOOR_TEXTURE_INDEX[
+            descriptor->texture_id];
+        if (door_index != 0xFF) {
+            return FREEDOOM_WALL_DOOR_PACKED_PAIRS[
+                descriptor->shade_level][door_index][descriptor->tex_x];
+        }
+    }
+    return FREEDOOM_WALL_PACKED_PAIRS[
+        descriptor->shade_level][descriptor->texture_id][descriptor->tex_x];
+}
+
 void pack_stage_reset(void) {
     build_shade_luts();
     s_coherence_valid = FALSE;
@@ -61,7 +74,7 @@ static WallColumnDescriptor describe_textured_column(u16 wall_h,
     const u16 bottom = (u16)(top + wall_h);
     const u8 tid = (u8)((texture_id < FREEDOOM_WALL_TEXTURE_COUNT) ?
                             texture_id : MEGALDOOM_TEX_FALLBACK);
-    const u8 (*tex)[WALL_TEX_DIM] = FREEDOOM_WALL_TEXTURES[tid];
+    const u8 (*tex)[WALL_TEX_WIDTH] = FREEDOOM_WALL_TEXTURES[tid];
     // Distance fog + side shading fold into one LUT selection per column: the fog
     // level grows with depth, and N/S ("shade") walls add one extra darkening step.
     // g_shade_luts[0] is the identity, so near front walls are unshaded; every level
@@ -81,14 +94,18 @@ static WallColumnDescriptor describe_textured_column(u16 wall_h,
 #endif
     const u8 *shade_map = g_shade_luts[fog_level];
     const u8 *ty_table = MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[wall_h];
-    const u8 tex_x = (u8)(tex_x_value & WALL_TEX_DIM_MASK);
+    const u8 tex_x = (u8)(tex_x_value & WALL_TEX_WIDTH_MASK);
+    const u8 texture_height = (u8)FREEDOOM_WALL_TEXTURE_HEIGHT[tid];
+    const u16 v_scale_q12 = FREEDOOM_WALL_TEXTURE_VSCALE_Q12[tid];
 
 #if RAY_COL_STRIDE == 4
     return (WallColumnDescriptor){top, bottom, (const u8 *)tex, shade_map, ty_table,
-                                  tex_x, tex_y_value, tid, (u8)fog_level, flags};
+                                  tex_x, tex_y_value, tid, (u8)fog_level, flags,
+                                  texture_height, v_scale_q12};
 #else
     return (WallColumnDescriptor){top, bottom, (const u8 *)tex, shade_map, ty_table,
-                                  tex_x, tex_y_value, tid, (u8)fog_level, flags};
+                                  tex_x, tex_y_value, tid, (u8)fog_level, flags,
+                                  texture_height, v_scale_q12};
 #endif
 }
 
@@ -201,8 +218,7 @@ static __attribute__((noinline)) void write_mixed_stride4_tile(
         if (run_end > end_y) run_end = end_y;
         while (y < run_end) {
             const u8 pair = packed_column[
-                (descriptor->vertical_samples[y - descriptor->top] +
-                 descriptor->tex_y) & WALL_TEX_DIM_MASK];
+                wall_packed_y(descriptor, (u16)(y - descriptor->top))];
             dst[0] = pair;
             dst[1] = pair;
             dst += 4;
@@ -252,12 +268,8 @@ void build_bsp_tilemap(const RayColumn *columns,
         if (descriptors[1].bottom > max_bottom) max_bottom = descriptors[1].bottom;
 
         const u8 *const packed_columns[2] = {
-            FREEDOOM_WALL_PACKED_PAIRS[
-                (descriptors[0].flags & RAY_COLUMN_FLAG_DOOR) != 0]
-                [descriptors[0].shade_level][descriptors[0].texture_id][descriptors[0].tex_x],
-            FREEDOOM_WALL_PACKED_PAIRS[
-                (descriptors[1].flags & RAY_COLUMN_FLAG_DOOR) != 0]
-                [descriptors[1].shade_level][descriptors[1].texture_id][descriptors[1].tex_x]
+            packed_wall_column(&descriptors[0]),
+            packed_wall_column(&descriptors[1])
         };
         for (u16 tile_y = 0; tile_y < VIEW_TILE_H; tile_y++) {
             const u16 tile_index = view_tile_index(tile_x, tile_y);
@@ -386,10 +398,10 @@ static void compare_stride2_column_asm(u16 tile_x,
         for (u16 t = 0; t < mixed_tiles; t++) {
             for (u16 row = 0; row < 8; row++) {
                 if (g_asm_col_probe.tiles[t][row] != g_c_col_probe.tiles[t][row]) {
-                    mismatch = TRUE;
-                }
+                mismatch = TRUE;
             }
         }
+    }
     }
     canary_failure = (bool)(probe_canary_broken(&g_asm_col_probe) ||
                             probe_canary_broken(&g_c_col_probe));
@@ -437,8 +449,7 @@ static __attribute__((noinline)) void write_mixed_stride2_tile_reference(
         if (run_end > end_y) run_end = end_y;
         while (y < run_end) {
             *dst = packed_column[
-                (descriptor->vertical_samples[y - descriptor->top] +
-                 descriptor->tex_y) & WALL_TEX_DIM_MASK];
+                wall_packed_y(descriptor, (u16)(y - descriptor->top))];
             dst += 4;
             y++;
         }
@@ -572,18 +583,10 @@ void build_bsp_tilemap(const RayColumn *columns,
         if (descriptors[3].bottom > max_bottom) max_bottom = descriptors[3].bottom;
 
         const u8 *const packed_columns[4] = {
-            FREEDOOM_WALL_PACKED_PAIRS[
-                (descriptors[0].flags & RAY_COLUMN_FLAG_DOOR) != 0]
-                [descriptors[0].shade_level][descriptors[0].texture_id][descriptors[0].tex_x],
-            FREEDOOM_WALL_PACKED_PAIRS[
-                (descriptors[1].flags & RAY_COLUMN_FLAG_DOOR) != 0]
-                [descriptors[1].shade_level][descriptors[1].texture_id][descriptors[1].tex_x],
-            FREEDOOM_WALL_PACKED_PAIRS[
-                (descriptors[2].flags & RAY_COLUMN_FLAG_DOOR) != 0]
-                [descriptors[2].shade_level][descriptors[2].texture_id][descriptors[2].tex_x],
-            FREEDOOM_WALL_PACKED_PAIRS[
-                (descriptors[3].flags & RAY_COLUMN_FLAG_DOOR) != 0]
-                [descriptors[3].shade_level][descriptors[3].texture_id][descriptors[3].tex_x]
+            packed_wall_column(&descriptors[0]),
+            packed_wall_column(&descriptors[1]),
+            packed_wall_column(&descriptors[2]),
+            packed_wall_column(&descriptors[3])
         };
 #if CADENCE_PACK_SPLIT
         const u32 tiles_start = getSubTick();

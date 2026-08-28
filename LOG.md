@@ -1184,3 +1184,22 @@ path behind a compile-time flag, keep the full positional `g_view_tiles`
 framebuffer in RAM at first (reduce DMA only; don't mix in a CPU/raster
 change simultaneously), and re-measure real DMA timing/run-count before
 removing the existing uploader.
+
+## 64x128 wall representation (2026-08-28)
+
+Implemented the first wall-quality slice from `WALL_TEXTURE_QUALITY_IMPROVEMENT_PLAN.md`:
+the packed wall table now uses independent 64-wide / 128-high axes, preserves
+native 72/56-row textures through per-texture V scale metadata, samples distant
+walls on the old even-row lattice, and indexes the door-style plane sparsely
+(14 door textures across E1M1/E1M2). The offline bake keeps the validated
+COMPUTE2 facade recipe and adds the same bounded anti-churn treatment to the
+two curated TEKWALL materials that otherwise exceeded the 0.35 motion-churn
+ceiling.
+
+Validation: `test-wall-quality.py`, `test-sector-map.py`, and
+`test-door-animation.py` pass; generated assets regenerate byte-identically;
+the release guardrail reports 20,996 bytes free work RAM and 3,398,676 bytes
+code/data ROM (3,328 KB aligned image). The DEBUG_PERF checkpoint route proved
+the 24-byte descriptor ASM contract with `asm_checked_tiles=50`,
+`asm_mismatches=0`, and `asm_canary_failures=0`. A deliberate one-byte fault in
+the differential harness produced `asm_mismatches=50` before being reverted.

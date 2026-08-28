@@ -37,7 +37,8 @@ EXPECTED_CAMPAIGN_WAD_SHA256 = (
     "77CD3852B5F7114EC64A07A1B1EF1F734736A13BBD186477C9111A7DD8C55F82"
 )
 
-bsp_emit.set_wall_tex_dim(world_assets.WALL_TEX_DIM)
+bsp_emit.set_wall_tex_dims(world_assets.WALL_TEX_WIDTH,
+                           world_assets.WALL_TEX_HEIGHT)
 
 
 def ensure_extracted_assets(wad_path, wad_sha256):
@@ -190,6 +191,12 @@ def main():
         combined_usage = Counter()
         for campaign_map in campaign_maps:
             combined_usage.update(campaign_map.texture_usage)
+        door_texture_names = {
+            seg["texture_name"]
+            for campaign_map in campaign_maps
+            for seg in campaign_map.out_segs
+            if seg["type"] == doom_map.SEG_DOOR
+        }
         sector_owner = max(campaign_maps, key=lambda value: len(value.sectors))
 
         temp_paths = []
@@ -208,7 +215,8 @@ def main():
                 os.remove(temp_path)
 
         texture_ids, texture_meta, _, palette = world_assets.emit_world_assets(
-            asset_temp, combined_usage, sector_owner.sectors, None)
+            asset_temp, combined_usage, sector_owner.sectors, None,
+            door_texture_names)
         reports = []
         for campaign_map, _, temp in map_outputs:
             reports.append(bsp_emit.emit_map_c(
@@ -244,7 +252,9 @@ def main():
         if os.path.exists(temp_path):
             os.remove(temp_path)
     texture_ids, texture_meta, sector_visuals, palette = world_assets.emit_world_assets(
-        asset_temp, map_data.texture_usage, map_data.sectors, map_data)
+        asset_temp, map_data.texture_usage, map_data.sectors, map_data,
+        {seg["texture_name"] for seg in map_data.out_segs
+         if seg["type"] == doom_map.SEG_DOOR})
     report = bsp_emit.emit_map_c(map_temp, args.wad, map_data, texture_ids, texture_meta)
     os.replace(asset_temp, args.assets_out)
     os.replace(map_temp, out_path)

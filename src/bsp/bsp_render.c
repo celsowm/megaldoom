@@ -462,14 +462,14 @@ static void draw_seg(u16 seg_index) {
             door->height = (u16)height;
             door->depth = (u16)depth_col;
             door->lift = door_lift;
-            door->tex_x = (u8)(scaled_u & WALL_TEX_DIM_MASK);
+            door->tex_x = (u8)(scaled_u & WALL_TEX_WIDTH_MASK);
             door->tex_y = seg->tex_v_offset;
             door->texture_id = tid;
             door->shade = shade;
         } else {
             col->height = (u16)height;
             col->depth = (u16)depth_col;
-            col->tex_x = (u8)(scaled_u & WALL_TEX_DIM_MASK);
+            col->tex_x = (u8)(scaled_u & WALL_TEX_WIDTH_MASK);
             col->tex_y = seg->tex_v_offset;
             col->texture_id = tid;
             col->shade = shade;

@@ -109,7 +109,7 @@ def main():
     assert "style_wall_texel" in SCENE
     assert "MEGALDOOM_WORLD_COLOR_WARNING" in SCENE
     assert "descriptor->tex_x < DOOR_FRAME_TEXELS" in SCENE
-    assert "tex_y >= (WALL_TEX_DIM - DOOR_SAFETY_TEXELS)" in SCENE
+    assert "tex_y >= (descriptor->texture_height - safety)" in SCENE
     assert "door_overlay_blocks_pixel" in SCENE
     door_top = 0
     visible_bottom = height - ((height * 128) >> 8)

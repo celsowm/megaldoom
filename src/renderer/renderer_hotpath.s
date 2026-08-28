@@ -12,7 +12,7 @@
  * GCC's m68k ABI gives each u16 argument a four-byte stack slot and right-aligns
  * the word within it. After saving d2-d7/a2-a6 (44 bytes), pointers are at
  * sp+60,64,68 and the two words are at sp+54 and sp+58.
- * WallColumnDescriptor is 22 bytes: top=0, bottom=2, vertical_samples=12,
+ * WallColumnDescriptor is 24 bytes: top=0, bottom=2, vertical_samples=12,
  * tex_y=17. PackedFlatRows has ceiling at 0 and floor at 16.
  *
  * `tiles` is the first tile of a run of consecutive tiles in one tile column,
@@ -45,7 +45,7 @@
  *     the loop at all, and its post-loop value is just min(bottom, end_y),
  *     which the length computation already produced.
  *   - The wall post's `moveq #0,d5` is loop-invariant, which is not obvious:
- *     `andi.w #63,d5` leaves bits 6-15 clear, `move.b` writes only bits 0-7,
+ *     `andi.w #127,d5` leaves bits 7-15 clear, `move.b` writes only bits 0-7,
  *     and `add.b` discards its carry, so d5's high byte is still zero at the
  *     top of the next iteration. One moveq per post, not per pixel.
  *   - The flat posts recomputed ((y&3)<<2)+lane every pixel (move/andi/lsl/add
@@ -118,7 +118,7 @@ renderer_write_mixed_stride2_span_asm:
 .Lwall_loop:
     move.b  (a4)+,d5
     add.b   d4,d5
-    andi.w  #63,d5
+    andi.w  #127,d5
     move.b  0(a5,d5.w),(a6)
     addq.l  #4,a6
     dbra    d2,.Lwall_loop
@@ -141,7 +141,7 @@ renderer_write_mixed_stride2_span_asm:
     dbra    d5,.Lfloor_loop
 
 .Lnext_lane:
-    adda.w  #22,a1
+    adda.w  #24,a1
     addq.w  #1,d6
     cmpi.w  #4,d6
     bcs.w   .Lmixed_lane

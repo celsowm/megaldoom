@@ -102,10 +102,12 @@ def main():
     assert "FREEDOOM_WALL_TEXTURES" in assets
     assert "FREEDOOM_WALL_TEXTURE_USCALE_Q12" in assets
     assert "FREEDOOM_WALL_PACKED_PAIRS" in assets
-    assert "[2][FREEDOOM_WORLD_SHADE_LEVELS][FREEDOOM_WALL_TEXTURE_COUNT]" in assets
+    assert "[FREEDOOM_WORLD_SHADE_LEVELS][FREEDOOM_WALL_TEXTURE_COUNT]" in assets
+    assert "FREEDOOM_WALL_DOOR_PACKED_PAIRS" in assets
     assert "FREEDOOM_WALL_PACKED_PAIRS[" in renderer_scene
-    assert "descriptors[0].flags & RAY_COLUMN_FLAG_DOOR" in renderer_scene
-    assert "for door_style in range(2)" in world_assets_source
+    assert "packed_wall_column" in renderer_scene
+    assert "FREEDOOM_WALL_DOOR_TEXTURE_INDEX" in renderer_scene
+    assert "FREEDOOM_WALL_DOOR_TEXTURE_COUNT" in world_assets_source
     assert "level[texel] * 0x11" in world_assets_source
     assert world_assets.texture_u_scale_q12(24) > 0
     assert "FREEDOOM_WALL_TEXTURE_USCALE_Q12[tid]" in (

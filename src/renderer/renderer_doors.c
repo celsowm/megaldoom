@@ -1,8 +1,7 @@
 #include "renderer_pack_internal.h"
 #include "generated_assets.h"
 
-#define DOOR_FRAME_TEXELS (WALL_TEX_DIM / 16)
-#define DOOR_SAFETY_TEXELS (WALL_TEX_DIM / 8)
+#define DOOR_FRAME_TEXELS (WALL_TEX_WIDTH / 16)
 
 #if RAY_COL_STRIDE == 2
 static u8 style_wall_texel(const WallColumnDescriptor *descriptor,
@@ -14,13 +13,15 @@ static u8 style_wall_texel(const WallColumnDescriptor *descriptor,
     // around the original BIGDOOR art: a dark metal frame plus a yellow/black
     // moving safety edge.
     // The centre remains the real WAD texture.
+    const u8 frame_height = (u8)(descriptor->texture_height / 16);
+    const u8 safety = (u8)(descriptor->texture_height / 8);
     if (descriptor->tex_x < DOOR_FRAME_TEXELS ||
-        descriptor->tex_x >= (WALL_TEX_DIM - DOOR_FRAME_TEXELS) ||
-        tex_y < DOOR_FRAME_TEXELS) {
+        descriptor->tex_x >= (WALL_TEX_WIDTH - DOOR_FRAME_TEXELS) ||
+        tex_y < frame_height) {
         return 0;
     }
-    if (tex_y >= (WALL_TEX_DIM - DOOR_SAFETY_TEXELS)) {
-        return (descriptor->tex_x & DOOR_SAFETY_TEXELS) ?
+    if (tex_y >= (descriptor->texture_height - safety)) {
+        return (descriptor->tex_x & safety) ?
                    MEGALDOOM_WORLD_COLOR_WARNING : 0;
     }
     return texel;
@@ -31,13 +32,15 @@ static u8 style_wall_texel(const WallColumnDescriptor *descriptor,
                            u8 tex_y,
                            u8 texel) {
     if ((descriptor->flags & RAY_COLUMN_FLAG_DOOR) == 0) return texel;
+    const u8 frame_height = (u8)(descriptor->texture_height / 16);
+    const u8 safety = (u8)(descriptor->texture_height / 8);
     if (descriptor->tex_x < DOOR_FRAME_TEXELS ||
-        descriptor->tex_x >= (WALL_TEX_DIM - DOOR_FRAME_TEXELS) ||
-        tex_y < DOOR_FRAME_TEXELS) {
+        descriptor->tex_x >= (WALL_TEX_WIDTH - DOOR_FRAME_TEXELS) ||
+        tex_y < frame_height) {
         return 0;
     }
-    if (tex_y >= (WALL_TEX_DIM - DOOR_SAFETY_TEXELS)) {
-        return (descriptor->tex_x & DOOR_SAFETY_TEXELS) ?
+    if (tex_y >= (descriptor->texture_height - safety)) {
+        return (descriptor->tex_x & safety) ?
                    MEGALDOOM_WORLD_COLOR_WARNING : 0;
     }
     return texel;
@@ -50,9 +53,8 @@ static u8 sample_door_overlay(const WallColumnDescriptor *descriptor,
     u16 source_y = (u16)(y - descriptor->top + lift_pixels);
     const u16 full_height = (u16)(descriptor->bottom - descriptor->top);
     if (source_y >= full_height) source_y = (u16)(full_height - 1);
-    const u8 tex_y = (u8)((descriptor->vertical_samples[source_y] +
-                           descriptor->tex_y) & WALL_TEX_DIM_MASK);
-    const u8 texel = descriptor->texture[(tex_y * WALL_TEX_DIM) +
+    const u8 tex_y = (u8)wall_source_y(descriptor, source_y);
+    const u8 texel = descriptor->texture[(tex_y * WALL_TEX_WIDTH) +
                                           descriptor->tex_x] & 0x0F;
     return descriptor->shade_map[style_wall_texel(descriptor, tex_y, texel)];
 }

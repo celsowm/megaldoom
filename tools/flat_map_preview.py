@@ -3,7 +3,7 @@
 
 This is deliberately an offline verifier, not a second game renderer.  It uses
 the shipped fixed-point basis, 160x120 projection, near clipping, stride 2,
-perspective-correct wall U, 64-row wall sampling, converted textures, PAL3 and
+perspective-correct wall U, 64x128 wall sampling, converted textures, PAL3 and
 the four-level shade LUT.  The three profiles are rendered side by side:
 
 * the currently checked-in generated map;
@@ -158,8 +158,7 @@ def profile_from_map(name, map_data):
         texture_name = source["texture_name"]
         with Image.open(world_assets.texture_path(texture_name)) as image:
             texture_height = image.height
-        tex_v = ((source["tex_v_offset"] * world_assets.WALL_TEX_DIM) //
-                 texture_height) & (world_assets.WALL_TEX_DIM - 1)
+        tex_v = source["tex_v_offset"] % texture_height
         segs.append(PreviewSeg(
             source["v1"], source["v2"], source["nx"], source["ny"],
             texture_name, source["tex_u_offset"], tex_v,
@@ -266,7 +265,7 @@ def render_profile(profile, pose, textures, u_scales, palette, shade_lut):
                 height = max(1, min(VIEW_H,
                     (PROJ_Y * WALL_HEIGHT * invz) >> 14))
                 columns[sample] = (
-                    depth, height, scaled_u & (world_assets.WALL_TEX_DIM - 1),
+                    depth, height, scaled_u & (world_assets.WALL_TEX_WIDTH - 1),
                     seg, seg_id)
 
     pixels = [[CEILING_INDEX if y < VIEW_H // 2 else FLOOR_INDEX
@@ -282,9 +281,15 @@ def render_profile(profile, pose, textures, u_scales, palette, shade_lut):
         bottom = top + height
         level = _shade_level(depth, seg.ny)
         texture = textures[seg.texture_name]
+        with Image.open(world_assets.texture_path(seg.texture_name)) as image:
+            _, source_height = world_assets.sampled_texture_dimensions(
+                seg.texture_name, image.width, image.height)
+        v_scale = world_assets.texture_v_scale_q12(source_height)
         for y in range(top, bottom):
-            tex_y = (((y - top) * world_assets.WALL_TEX_DIM) // height +
-                     seg.tex_v) & (world_assets.WALL_TEX_DIM - 1)
+            canonical_y = ((y - top) * world_assets.WALL_TEX_HEIGHT) // height
+            tex_y = ((canonical_y * v_scale) >> 12) + seg.tex_v
+            if tex_y >= source_height:
+                tex_y -= source_height
             color = shade_lut[level][texture[tex_y][tex_x] & 0x0F]
             x = sample * STRIDE
             pixels[y][x] = color

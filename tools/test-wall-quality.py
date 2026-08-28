@@ -56,7 +56,7 @@ def generated_define(source, name):
 
 
 def generated_wall_textures(source):
-    """Parse FREEDOOM_WALL_TEXTURES into {name: [[index,...]x64]x64}."""
+    """Parse FREEDOOM_WALL_TEXTURES into {name: [[index,...]x128]x128}."""
     start = source.index("FREEDOOM_WALL_TEXTURES")
     end = source.index("};", start)
     body = source[start:end]
@@ -86,13 +86,15 @@ def _tone_curved_source(extractor, path):
     the PAL3 result and the legacy-palette baseline in spatial_palette_error are
     scored against this same target, so widening a material's contrast or
     smoothing it cannot flatter one side of that comparison."""
-    dim = extractor.WALL_TEX_DIM
+    width = extractor.WALL_TEX_WIDTH
     with Image.open(path) as image:
-        source = image.convert("RGB").resize((dim, dim), Image.Resampling.BOX)
+        height = extractor.sampled_texture_dimensions(
+            path.stem.upper(), image.width, image.height)[1]
+        source = image.convert("RGB").resize((width, height), Image.Resampling.BOX)
     pixels = [extractor.tone_curve(pixel) for pixel in source.get_flattened_data()]
     columns = extractor._spatial_smooth(extractor._contrast_normalize(
-        [[pixels[y * dim + x] for y in range(dim)] for x in range(dim)]))
-    return [columns[x][y] for y in range(dim) for x in range(dim)]
+        [[pixels[y * width + x] for y in range(height)] for x in range(width)]))
+    return [columns[x][y] for y in range(height) for x in range(width)]
 
 
 def assert_no_spurious_green(extractor, palette, texture_name):
@@ -115,14 +117,16 @@ def assert_no_spurious_green(extractor, palette, texture_name):
 
 def spatial_palette_error(extractor, palette, texture_name):
     path = Path(extractor.texture_path(texture_name))
-    dim = extractor.WALL_TEX_DIM
+    width = extractor.WALL_TEX_WIDTH
+    height = extractor.WALL_TEX_HEIGHT
     source_flat = _tone_curved_source(extractor, path)
-    source = {(x, y): source_flat[y * dim + x] for y in range(dim) for x in range(dim)}
+    source = {(x, y): source_flat[y * width + x]
+              for y in range(height) for x in range(width)}
     converted = extractor.convert_texture(path, palette)
     perceptual = 0.0
     rgb_baseline = 0.0
-    for by in range(0, extractor.WALL_TEX_DIM, 4):
-        for bx in range(0, extractor.WALL_TEX_DIM, 4):
+    for by in range(0, height, 4):
+        for bx in range(0, width, 4):
             pixels = [source[(x, y)]
                       for y in range(by, by + 4) for x in range(bx, bx + 4)]
             target_rgb = tuple(sum(pixel[channel] for pixel in pixels) // 16
@@ -173,13 +177,15 @@ def main():
     ))
     assets = ASSETS_PATH.read_text()
 
-    assert extractor.WALL_TEX_DIM == 64
-    assert re.search(r"#define WALL_TEX_DIM 64\b", raycast)
+    assert extractor.WALL_TEX_WIDTH == 64
+    assert extractor.WALL_TEX_HEIGHT == 128
+    assert re.search(r"#define WALL_TEX_WIDTH 64\b", raycast)
+    assert re.search(r"#define WALL_TEX_HEIGHT 128\b", raycast)
     assert re.search(r"#define RAY_COL_STRIDE 2\b", raycast)
     assert "FREEDOOM_WALL_PACKED_PAIRS" in assets
     assert "FREEDOOM_WALL_PACKED_PAIRS[" in renderer
-    assert "DOOR_FRAME_TEXELS (WALL_TEX_DIM / 16)" in renderer
-    assert "DOOR_SAFETY_TEXELS (WALL_TEX_DIM / 8)" in renderer
+    assert "DOOR_FRAME_TEXELS (WALL_TEX_WIDTH / 16)" in renderer
+    assert "texture_height / 8" in renderer
 
     palette = generated_palette(assets)
     assert tuple(palette) == extractor.FROZEN_WORLD_PALETTE
@@ -231,7 +237,7 @@ def main():
 
     wall_textures = generated_wall_textures(assets)
     assert len(wall_textures) == 53
-    assert set(extractor.WALL_BAKE_RECIPES) == set(extractor.TECH_WALL_MATERIALS)
+    assert set(extractor.WALL_BAKE_RECIPES) == set(extractor.CURATED_WALL_MATERIALS)
     assert tuple(extractor.TECH_WALL_MATERIALS) == (
         "COMPTILE", "COMPUTE2", "LITE3", "STARG3",
         "STARGR1", "STARTAN1", "STARTAN3", "SUPPORT2",
@@ -254,20 +260,22 @@ def main():
         candidate = extractor.convert_texture(
             path, palette, use_wall_bake_recipe=True)
         assert generated == candidate, "%s generated bake drifted" % texture_name
-        if texture_name not in extractor.TECH_WALL_MATERIALS:
+        if texture_name not in extractor.CURATED_WALL_MATERIALS:
             assert current == candidate, "%s changed outside curated set" % texture_name
 
-    # Runtime storage is deliberately unchanged: 2 door styles x 4 shades x
-    # 53 textures x 64 columns x 64 rows, one packed byte per doubled sample.
-    packed_pair_bytes = (2 * 4 * len(wall_textures) *
-                         extractor.WALL_TEX_DIM * extractor.WALL_TEX_DIM)
-    assert packed_pair_bytes == 1736704
+    # The normal plane remains fully prepacked; the sparse door plane avoids
+    # duplicating all 53 textures for the two door styles.
+    door_count = generated_define(assets, "FREEDOOM_WALL_DOOR_TEXTURE_COUNT")
+    packed_pair_bytes = (4 * (len(wall_textures) + door_count) *
+                         extractor.WALL_TEX_WIDTH * extractor.WALL_TEX_HEIGHT)
+    assert packed_pair_bytes == 2195456
 
     curated_metrics = [wall_bake_preview.texture_metrics(name)
                        for name in extractor.TECH_WALL_MATERIALS]
     strict_improvements = wall_bake_preview.certify_metrics(curated_metrics)
     assert strict_improvements == [
         "COMPUTE2", "STARG3", "STARGR1", "STARTAN1", "STARTAN3",
+        "SUPPORT2",
     ]
     wall_bake_preview.certify_compute2_facade(wall_textures["COMPUTE2"])
 
@@ -284,11 +292,21 @@ def main():
     CHURN_LIMIT = 0.35
     CHURN_EXEMPT = {"EXITDOOR", "TEKWALL2", "TEKWALL5"}
     for texture_name, rows in sorted(wall_textures.items()):
-        churn = sum(1 for row in rows for x in range(len(row) - 1)
+        with Image.open(extractor.texture_path(texture_name)) as image:
+            active_height = extractor.sampled_texture_dimensions(
+                texture_name, image.width, image.height)[1]
+        churn = sum(1 for row in rows[:active_height] for x in range(len(row) - 1)
                     if row[x] != row[x + 1])
-        churn /= len(rows) * (len(rows[0]) - 1)
+        churn /= active_height * (len(rows[0]) - 1)
+        vertical_churn = sum(
+            1 for y in range(active_height - 1)
+            for x in range(len(rows[0]))
+            if rows[y][x] != rows[y + 1][x]
+        )
+        vertical_churn /= max(1, (active_height - 1) * len(rows[0]))
         if texture_name not in CHURN_EXEMPT:
             assert churn <= CHURN_LIMIT, (texture_name, churn)
+            assert vertical_churn <= CHURN_LIMIT, (texture_name, vertical_churn)
 
     # Structure floor, the other half of the same contract: killing the noise
     # must not be achieved by flattening a material into one block. Two clauses,
@@ -384,14 +402,14 @@ def main():
             ROOT / "DOOM1.WAD", preview_root)
         assert report["wad_sha256"] == wall_bake_preview.EXPECTED_WAD_SHA256
         assert report["segments"] == 394
-        assert report["packed_pair_bytes"] == 786432
+        assert report["packed_pair_bytes"] == 917504
         assert len(scene_paths) == 14
         assert len(list((preview_root / "atlases").glob("*.png"))) == 8
         assert len(list((preview_root / "motion").glob("*.gif"))) == 8
         assert len(list((preview_root / "motion").glob("*-contact.png"))) == 8
         assert (preview_root / "report.json").is_file()
 
-    print("ok    walls: 64x64, stride 2/80 columns, Doom-faithful deterministic PAL3")
+    print("ok    walls: 64x128, stride 2/80 columns, native-V short textures")
 
 
 if __name__ == "__main__":

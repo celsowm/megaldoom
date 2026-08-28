@@ -4,15 +4,10 @@ param(
     [string]$WorldHeader = "src\bsp\generated_assets.h",
     [string]$OutputHeader = "src\renderer\generated_renderer_assets.h",
     # Texture rows walked across a wall's on-screen height. The runtime masks
-    # tex_y with WALL_TEX_DIM_MASK (63), so this is the vertical repeat count
-    # times 64: 32 shows half the texture stretched over the wall, 64 shows it
-    # exactly once, 128 twice. Doom tiles by world height -- E1M1's computer
-    # corridor is 128 units tall against COMPUTE2's 56, so it shows ~2.3
-    # copies, which is where its dense horizontal banding comes from.
-    # 64 is the default: one full texture per wall. 128 matches Doom's density
-    # more closely but makes distant walls shimmer, which is the artefact the
-    # stride-4 experiment was reverted over.
-    [int]$WallTexRowsPerWall = 64
+    # The runtime wall lattice is 128 rows. Far walls below 64 pixels are
+    # intentionally emitted on its even-row sub-lattice so they retain the
+    # old 64-row candidate set instead of increasing vertical churn.
+    [int]$WallTexRowsPerWall = 128
 )
 
 $ErrorActionPreference = "Stop"
@@ -82,7 +77,9 @@ function New-WallSamplingRows {
     for ($height = 1; $height -le 120; $height++) {
         $row = New-Object System.Collections.Generic.List[int]
         for ($relY = 0; $relY -lt 120; $relY++) {
-            [void]$row.Add(([int][Math]::Floor(($relY * $WallTexRowsPerWall) / $height) -band 0xFF))
+            $sample = [int][Math]::Floor(($relY * $WallTexRowsPerWall) / $height)
+            if ($height -lt 64) { $sample = $sample -band 0xFE }
+            [void]$row.Add($sample -band 0xFF)
         }
         [void]$lines.Add(((Format-ByteRow @($row)) + ","))
     }

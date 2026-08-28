@@ -23,7 +23,29 @@ typedef struct {
     u8 texture_id;
     u8 shade_level;
     u8 flags;
+    u8 texture_height;
+    u16 v_scale_q12;
 } WallColumnDescriptor;
+
+static inline u16 wall_source_y(const WallColumnDescriptor *descriptor,
+                                u16 rel_y) {
+    u16 tex_y = (u16)(((u32)descriptor->vertical_samples[rel_y] *
+                       descriptor->v_scale_q12) >> 12);
+    const u16 offset = (u16)(((u32)descriptor->tex_y *
+                              descriptor->v_scale_q12) >> 12);
+    tex_y = (u16)(tex_y + offset);
+    if (descriptor->texture_height == WALL_TEX_HEIGHT) return tex_y;
+    if (tex_y >= descriptor->texture_height) {
+        tex_y = (u16)(tex_y - descriptor->texture_height);
+    }
+    return tex_y;
+}
+
+static inline u16 wall_packed_y(const WallColumnDescriptor *descriptor,
+                                u16 rel_y) {
+    return (u16)((descriptor->vertical_samples[rel_y] + descriptor->tex_y) &
+                 WALL_TEX_HEIGHT_MASK);
+}
 
 WallColumnDescriptor describe_wall_column(const RayColumn *column);
 WallColumnDescriptor describe_door_overlay(const RayDoorOverlay *door);
