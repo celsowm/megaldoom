@@ -311,14 +311,16 @@ def main():
     curated_metrics = [wall_bake_preview.texture_metrics(name)
                        for name in extractor.TECH_WALL_MATERIALS]
     strict_improvements = wall_bake_preview.certify_metrics(curated_metrics)
-    # COMPTILE joined this list when the bake moved to the display grid: its
-    # edge F1 goes 0.493 -> 0.521 because the 2:1 horizontal average that used
-    # to blur its tile grid is gone. Every hard guard in certify_metrics
+    # COMPTILE left this list when the horizontal low-pass moved to the pair
+    # lattice: its edge F1 gain fell to +0.002, under the 0.005 the certifier
+    # calls a strict improvement, because the uncurated bake it is measured
+    # against now keeps the same tile grid the recipe used to be needed to
+    # rescue. It is still improved, and every hard guard in certify_metrics
     # (churn ceiling and margin, isolated texels, 5% perceptual error, edge
-    # regression) still holds for all eight.
+    # regression) still holds for all eight -- COMPTILE's isolated texels go
+    # 54 -> 20, STARG3's 155 -> 6 and STARTAN3's 168 -> 2.
     assert strict_improvements == [
-        "COMPTILE", "COMPUTE2", "STARG3", "STARGR1", "STARTAN1", "STARTAN3",
-        "SUPPORT2",
+        "COMPUTE2", "STARG3", "STARGR1", "STARTAN1", "STARTAN3", "SUPPORT2",
     ]
     wall_bake_preview.certify_compute2_facade(display_textures["COMPUTE2"])
 

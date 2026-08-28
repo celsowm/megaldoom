@@ -46,11 +46,13 @@ COMPUTE2_RAIL_ROWS = ((0, 3), (16, 20), (34, 38), (51, 55), (62, 64))
 COMPUTE2_INSTRUMENT_COLUMNS = ((3, 30), (34, 61))
 COMPUTE2_READOUT_BAYS = ((6, 12), (23, 30), (42, 48))
 COMPUTE2_ACCENT_INDICES = frozenset({1, 4, 6, 8, 9, 11, 12, 13, 14, 15})
-# Share of horizontally adjacent texels whose palette index differs. The prior
-# "ugly walls" investigation concluded the defect was churn, not resolution, so
-# this ceiling governs whether a material is allowed sub-texel horizontal
-# detail at all (see convert_texture). tools/test-wall-quality.py asserts the
-# same constant rather than restating the number.
+# Share of adjacent samples whose palette index differs. The prior "ugly walls"
+# investigation concluded the defect was churn, not resolution, so this ceiling
+# governs whether a material is allowed sub-texel horizontal detail at all (see
+# convert_texture, which asks it of pair_column_churn -- the lattice that can
+# actually alias) and bounds what the bake may emit as displayed (which
+# tools/test-wall-quality.py asserts of horizontal_churn). Both callers assert
+# this constant rather than restating the number.
 WALL_CHURN_LIMIT = 0.35
 FALLBACK_TEXTURE = "__FALLBACK__"
 FALLBACK_TEXTURE_SOURCE = "GRAY7"
@@ -396,6 +398,17 @@ FLAT_AVOIDING_MAX_SHARE = 0.49
 # what turns it into the crawling vertical streaks visible in motion. A 1-w-1
 # separable kernel on the runtime texture torus (matching the wrap the runtime
 # sampler uses) removes the ripple while leaving real edges intact.
+#
+# The horizontal half of that kernel is applied on the PAIR lattice, not on the
+# display lattice, because only the pair lattice can alias. Since Fatia 1 each
+# packed byte carries two adjacent texels that the hotpath's single move.b
+# always draws together, in fixed left/right order, at the same screen scale
+# (view tiles are never flipped). Detail *inside* a pair is therefore nailed to
+# the byte: the DDA cannot resample it, so it can never crawl. Detail *between*
+# pairs is what MEGALDOOM_WALL_TEX_X steps through at a distance-dependent rate,
+# and that is the ripple this filter exists to remove. Blurring the display
+# lattice destroyed both, which is the "pre-processing over-simplifies detail"
+# complaint: it was calibrated against the 2:1 squash that Fatia 1 removed.
 WALL_SMOOTH_WEIGHT = 2
 # PAL3 carries a 5-rung earth ramp -- 1 #240000, 4 #482424, 6 #6D4824,
 # 8 #916D48, 12 #B6916D -- as evenly spread in Oklab L (0.163..0.682) as the
@@ -526,18 +539,114 @@ def _contrast_normalize(columns):
     return result
 
 
-def _spatial_smooth(columns, weight=WALL_SMOOTH_WEIGHT):
-    """Separable 1-weight-1 blur, wrapping like the runtime sampler. See
-    WALL_SMOOTH_WEIGHT."""
-    width = len(columns)
+def _pair_split(columns):
+    """Decompose a display-lattice texture into pair means and the residual.
+
+    The mean grid is the lattice the runtime samples; the residual is the part
+    of the signal that is nailed to a packed byte and therefore cannot be
+    resampled. Filtering the first and restoring the second is what lets the
+    low-pass remove crawl without removing detail.
+    """
+    pairs = len(columns) // 2
     height = len(columns[0])
+    mean = [[tuple((columns[2 * p][y][c] + columns[2 * p + 1][y][c]) / 2.0
+                   for c in range(3))
+             for y in range(height)] for p in range(pairs)]
+    residual = [[tuple(columns[x][y][c] - mean[x // 2][y][c] for c in range(3))
+                 for y in range(height)] for x in range(len(columns))]
+    return mean, residual
+
+
+def _pair_join(mean, residual):
+    return [[tuple(max(0, min(255, int(round(mean[x // 2][y][c] +
+                                             residual[x][y][c]))))
+                   for c in range(3))
+             for y in range(len(residual[0]))] for x in range(len(residual))]
+
+
+def _tap(grid, x, y, nx, ny, edge_mask):
+    """A neighbour sample, clamped to the centre when the neighbour is an edge."""
+    return grid[x][y] if edge_mask is not None and edge_mask[nx][ny] else grid[nx][ny]
+
+
+def _blur_axis(grid, weight, edge_mask, vertical):
+    """One half of the separable 1-weight-1 kernel, wrapping like the runtime.
+
+    Both the plain and the edge-aware filter are this same kernel; the only
+    difference is whether a mask clamps taps at boundaries, so there is one
+    implementation rather than two that must be kept in step.
+    """
+    width = len(grid)
+    height = len(grid[0])
     total = weight + 2
-    horizontal = [[tuple((columns[(x - 1) % width][y][c] + weight * columns[x][y][c] +
-                          columns[(x + 1) % width][y][c]) // total for c in range(3))
-                   for y in range(height)] for x in range(width)]
-    return [[tuple((horizontal[x][(y - 1) % height][c] + weight * horizontal[x][y][c] +
-                    horizontal[x][(y + 1) % height][c]) // total for c in range(3))
-             for y in range(height)] for x in range(width)]
+    result = [[None] * height for _ in range(width)]
+    for x in range(width):
+        for y in range(height):
+            if edge_mask is not None and edge_mask[x][y]:
+                result[x][y] = grid[x][y]
+                continue
+            if vertical:
+                a = _tap(grid, x, y, x, (y - 1) % height, edge_mask)
+                b = _tap(grid, x, y, x, (y + 1) % height, edge_mask)
+            else:
+                a = _tap(grid, x, y, (x - 1) % width, y, edge_mask)
+                b = _tap(grid, x, y, (x + 1) % width, y, edge_mask)
+            centre = grid[x][y]
+            result[x][y] = tuple((a[c] + weight * centre[c] + b[c]) / total
+                                 for c in range(3))
+    return result
+
+
+def _horizontal_smooth(columns, weight, edge_mask=None, pair_preserving=True):
+    """1-weight-1 blur along x, wrapping like the runtime sampler.
+
+    On the display lattice the filter runs on the pair means and the intra-pair
+    residual is added back untouched, so the half of the signal the DDA cannot
+    resample survives at full amplitude. On any other lattice -- the curated
+    facade grid, and the pair-width fallback bake -- one column already *is* one
+    sample, so the plain blur is the same filter. See WALL_SMOOTH_WEIGHT.
+    """
+    if not pair_preserving or len(columns) != WALL_TEX_DISPLAY_WIDTH:
+        return _quantize(_blur_axis(columns, weight, edge_mask, False))
+    mean, residual = _pair_split(columns)
+    # A pair containing an edge texel is an edge pair: the mask exists to stop
+    # the filter reaching across a panel boundary, and the pair is the sample.
+    pair_mask = None if edge_mask is None else [
+        [edge_mask[2 * p][y] or edge_mask[2 * p + 1][y]
+         for y in range(len(columns[0]))]
+        for p in range(len(mean))]
+    return _pair_join(_blur_axis(mean, weight, pair_mask, False), residual)
+
+
+def _quantize(grid):
+    return [[tuple(max(0, min(255, int(round(value)))) for value in cell)
+             for cell in column] for column in grid]
+
+
+def _smooth(columns, weight, edge_mask=None, pair_preserving=True):
+    """Separable blur, wrapping like the runtime sampler. See
+    WALL_SMOOTH_WEIGHT."""
+    if weight <= 0:
+        raise ValueError("Wall bake smooth_weight must be positive")
+    horizontal = _horizontal_smooth(columns, weight, edge_mask, pair_preserving)
+    return _quantize(_blur_axis(horizontal, weight, edge_mask, True))
+
+
+def _spatial_smooth(columns, weight=WALL_SMOOTH_WEIGHT):
+    return _smooth(columns, weight)
+
+
+def _edge_aware_spatial_smooth(columns, edge_mask, weight):
+    """Apply the separable filter a second time without bleeding across edges.
+
+    Not pair-preserving, and that is the point: its only caller runs it on the
+    output of _spatial_smooth, which already carried the intra-pair residual
+    through untouched. This pass is the extra simplification a curated recipe
+    asks for -- it flattens what survived, everywhere except across a panel
+    boundary. Preserving the residual twice would mean never filtering it at
+    all, and measurably costs these materials edge retention.
+    """
+    return _smooth(columns, weight, edge_mask, pair_preserving=False)
 
 
 def _edge_mask(columns, lightness_threshold, colour_threshold):
@@ -562,43 +671,6 @@ def _edge_mask(columns, lightness_threshold, colour_threshold):
     return result
 
 
-def _edge_aware_spatial_smooth(columns, edge_mask, weight):
-    """Apply a separable 1-weight-1 filter without bleeding across edges."""
-    if weight <= 0:
-        raise ValueError("Wall bake smooth_weight must be positive")
-    width = len(columns)
-    height = len(columns[0])
-    total = weight + 2
-
-    def tap(grid, x, y, nx, ny):
-        return grid[x][y] if edge_mask[nx][ny] else grid[nx][ny]
-
-    horizontal = [[None] * height for _ in range(width)]
-    for x in range(width):
-        for y in range(height):
-            if edge_mask[x][y]:
-                horizontal[x][y] = columns[x][y]
-                continue
-            left = tap(columns, x, y, (x - 1) % width, y)
-            right = tap(columns, x, y, (x + 1) % width, y)
-            horizontal[x][y] = tuple(
-                (left[c] + weight * columns[x][y][c] + right[c]) // total
-                for c in range(3))
-
-    result = [[None] * height for _ in range(width)]
-    for x in range(width):
-        for y in range(height):
-            if edge_mask[x][y]:
-                result[x][y] = columns[x][y]
-                continue
-            above = tap(horizontal, x, y, x, (y - 1) % height)
-            below = tap(horizontal, x, y, x, (y + 1) % height)
-            result[x][y] = tuple(
-                (above[c] + weight * horizontal[x][y][c] + below[c]) // total
-                for c in range(3))
-    return result
-
-
 def _cleanup_isolated_indices(rows, edge_mask):
     """Replace one isolated index only when three non-edge neighbours agree."""
     width = len(rows[0])
@@ -616,6 +688,18 @@ def _cleanup_isolated_indices(rows, edge_mask):
             # not cross a boundary; it restores the surrounding region.
             if len(set(all_values)) == 1 and all_values[0] != rows[y][x]:
                 proposals[(x, y)] = all_values[0]
+                continue
+            # No neighbour agrees at all, and the other nibble of this texel's
+            # own byte does not either. A boundary is a run of texels; a sample
+            # that nothing around it supports, on any lattice, is a speck. This
+            # is the same island proof as the clause above, taken from "every
+            # neighbour agrees with every other" to "none agrees with this one",
+            # and like that clause it may act inside the edge mask -- which is
+            # the only reason these survived at panel corners.
+            partner = rows[y][(x ^ 1) if width == WALL_TEX_DISPLAY_WIDTH else x]
+            if (all(value != rows[y][x] for value in all_values) and
+                    partner != rows[y][x]):
+                proposals[(x, y)] = Counter(all_values).most_common(1)[0][0]
                 continue
             if edge_mask[x][y]:
                 continue
@@ -779,6 +863,23 @@ def horizontal_churn(rows, active_height):
     return changed / (active_height * (width - 1))
 
 
+def pair_column_churn(rows, active_height):
+    """horizontal_churn measured between PAIR columns instead of texels.
+
+    The two metrics answer different questions and both are needed. The eye
+    sees the displayed grid, which is what horizontal_churn reports. But only a
+    change from one pair to the next can crawl, because the pair column is the
+    unit MEGALDOOM_WALL_TEX_X steps through at a distance-dependent rate; a
+    change inside a pair is two nibbles of one byte that the hotpath always
+    emits together, at one scale, in fixed order. So the question "may this
+    material carry sub-texel detail at all?" has to be asked of this metric --
+    asking it of the displayed grid counts the very detail being granted as a
+    reason to refuse it.
+    """
+    return horizontal_churn([pair_column_texels(row) for row in rows],
+                            active_height)
+
+
 def pair_column_texels(row):
     """The one texel per PAIR column that FREEDOOM_WALL_TEXTURES stores.
 
@@ -854,7 +955,12 @@ def convert_texture(path, palette, use_wall_bake_recipe=True,
             sampled_texture_dimensions(
                 material_name_for(path), image.width, image.height)[1],
             WALL_TEX_HEIGHT)
-    if horizontal_churn(rows, active_height) <= WALL_CHURN_LIMIT:
+    # Both metrics have to clear the ceiling: the pair lattice because that is
+    # what can crawl in motion, and the displayed grid because that is what
+    # reads as salt-and-pepper standing still. Detail is granted only where it
+    # is neither.
+    if (pair_column_churn(rows, active_height) <= WALL_CHURN_LIMIT and
+            horizontal_churn(rows, active_height) <= WALL_CHURN_LIMIT):
         return rows
     return _resize_index_rows_x(
         _convert_texture(path, palette, use_wall_bake_recipe, diagnostics,
