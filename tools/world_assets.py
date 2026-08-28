@@ -510,7 +510,17 @@ def _contrast_normalize(columns):
             # f = ratio**1.25. Applying f to all three channels equally keeps
             # their ratio -- i.e. the hue -- and keeps r==g==b materials exactly
             # neutral.
-            scale = ((median + (value - median) * gain) / value) ** 1.25
+            # Clamped at 0: expanding around the median drives luminance
+            # negative for texels far enough below it, and a negative base
+            # under ** 1.25 silently returns a COMPLEX number in Python, which
+            # then dies in round() several frames of stack later. Only
+            # WALL_TONE_GAMMA's lift keeps the expression positive today, so
+            # any darker tone curve trips it.
+            target = max(0.0, median + (value - median) * gain)
+            if target <= 0.0:
+                result[x][y] = (0, 0, 0)
+                continue
+            scale = (target / value) ** 1.25
             result[x][y] = tuple(max(0, min(255, int(round(channel * scale))))
                                  for channel in color)
     return result
