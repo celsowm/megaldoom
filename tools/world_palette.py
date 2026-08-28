@@ -43,12 +43,38 @@ def oklab(rgb):
     )
 
 
-def distance_sq(first, second):
+def distance_sq(first, second, chroma_loss_weight=0.0):
+    """Perceptual distance, optionally penalising desaturation asymmetrically.
+
+    The base term slightly favours lightness accuracy: Doom walls read
+    primarily through their ramps, while hue errors create the objectionable
+    olive cast.
+
+    chroma_loss_weight exists because that base term, on its own, systematically
+    greys walls out. PAL3's neutral rungs sit at Oklab L 0.000/0.260/0.402/
+    0.535/0.657/0.776 and its warm rungs at 0.163/0.309/0.436/0.562/0.682 --
+    interleaved, so roughly half of a tan texel's possible lightnesses land
+    nearer a grey than a brown. A genuine tan like STARTAN3's (155,138,118),
+    chroma 0.035, then measures closer to #919191 (0.00148) than to #B6916D
+    (0.00294) and quantizes flat grey, because the grey's chroma *undershoot*
+    and the brown's *overshoot* cost the same while the lightness term breaks
+    the tie. Weighting chroma symmetrically does not help -- it penalises the
+    overshoot just as hard, and measured over E1M1 it makes STARTAN3 worse
+    (70.2% -> 75.1% neutral).
+
+    The asymmetry is the point: losing chroma reads as the wrong material,
+    while carrying too much reads as vivid. Only the loss is charged, so a
+    source texel that is exactly neutral pays nothing and cannot be tinted --
+    which is why LITE3, SUPPORT2 and STONE2 stay 100% neutral at every weight.
+    """
     a = oklab(tuple(first))
     b = oklab(tuple(second))
-    # Slightly favour lightness accuracy: Doom walls read primarily through
-    # their ramps, while hue errors create the objectionable olive cast.
-    return 1.25 * (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2
+    cost = 1.25 * (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2
+    if chroma_loss_weight:
+        loss = math.hypot(a[1], a[2]) - math.hypot(b[1], b[2])
+        if loss > 0.0:
+            cost += chroma_loss_weight * loss * loss
+    return cost
 
 
 def is_neutral(color):
@@ -215,13 +241,14 @@ def allowed_indices(rgb, palette, opaque=True, chroma_threshold=None):
     return indices
 
 
-def nearest_index(rgb, palette, allowed=None):
+def nearest_index(rgb, palette, allowed=None, chroma_loss_weight=0.0):
     indices = range(len(palette)) if allowed is None else allowed
-    return min(indices, key=lambda index: (distance_sq(rgb, palette[index]), index))
+    return min(indices, key=lambda index:
+               (distance_sq(rgb, palette[index], chroma_loss_weight), index))
 
 
 def best_mix(rgb, palette, opaque=True, allowed=None, chroma_threshold=None,
-            pair_max_delta=73, gain_ratio=0.65):
+            pair_max_delta=73, gain_ratio=0.65, chroma_loss_weight=0.0):
     """Return (primary, secondary, secondary_coverage_0_to_16).
 
     pair_max_delta and gain_ratio gate how readily dithering is offered: the
@@ -235,8 +262,8 @@ def best_mix(rgb, palette, opaque=True, allowed=None, chroma_threshold=None,
         allowed_set = set(allowed)
         indices = [index for index in indices if index in allowed_set]
     target = oklab(tuple(rgb))
-    primary = nearest_index(rgb, palette, indices)
-    primary_error = distance_sq(rgb, palette[primary])
+    primary = nearest_index(rgb, palette, indices, chroma_loss_weight)
+    primary_error = distance_sq(rgb, palette[primary], chroma_loss_weight)
     if _is_low_chroma(rgb, chroma_threshold):
         return primary, primary, 0
     best = (primary_error, primary, primary, 0)
@@ -273,14 +300,15 @@ def best_mix(rgb, palette, opaque=True, allowed=None, chroma_threshold=None,
 
 
 def dither_index(rgb, palette, x, y, opaque=True, cache=None, allowed=None,
-                 chroma_threshold=None, pair_max_delta=73, gain_ratio=0.65):
+                 chroma_threshold=None, pair_max_delta=73, gain_ratio=0.65,
+                 chroma_loss_weight=0.0):
     key = tuple(int(channel * 31 / 255) * 255 // 31 for channel in rgb)
     if cache is not None and key in cache:
         first, second, coverage = cache[key]
     else:
         first, second, coverage = best_mix(key, palette, opaque, allowed,
                                            chroma_threshold, pair_max_delta,
-                                           gain_ratio)
+                                           gain_ratio, chroma_loss_weight)
         if cache is not None:
             cache[key] = (first, second, coverage)
     return second if BAYER_4X4[y & 3][x & 3] < coverage else first

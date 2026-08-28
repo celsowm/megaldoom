@@ -181,8 +181,20 @@ def add_image_histogram(histogram, path, size, weight, apply_tone=False):
                 histogram[color] += weight
 
 
+# Charged only when a candidate carries LESS chroma than the source, so a
+# neutral texel is never tinted (see world_palette.distance_sq). 8.0 is where
+# the E1M1 sweep flattens: map-wide neutral share 50.7 / 43.8 / 42.2 / 40.9 /
+# 40.4% at weights 0 / 2 / 4 / 8 / 16, with STARTAN3 -- 20.9% of the map --
+# going 70.2% -> 52.5% neutral and LITE3 / SUPPORT2 / STONE2 pinned at 100%
+# throughout. Sprites, the weapon and billboards keep the unweighted metric:
+# tools/world-palette-lut.py calls best_mix without this, so PAL3 rebalancing
+# for walls cannot recolour them.
+WALL_CHROMA_LOSS_WEIGHT = 8.0
+
+
 def nearest_palette_index(rgb, palette, allowed=None):
-    return world_palette.nearest_index(rgb, palette, allowed)
+    return world_palette.nearest_index(rgb, palette, allowed,
+                                       WALL_CHROMA_LOSS_WEIGHT)
 
 
 def build_world_palette(texture_names, texture_usage, sectors):
@@ -950,7 +962,8 @@ def _convert_texture(path, palette, use_wall_bake_recipe=True,
         rows = [[world_palette.dither_index(smoothed[x][y], palette,
                                             x, y, False, cache,
                                             allowed, chroma_threshold,
-                                            pair_max_delta, gain_ratio)
+                                            pair_max_delta, gain_ratio,
+                                            WALL_CHROMA_LOSS_WEIGHT)
                  for x in range(bake_width)] for y in range(bake_height)]
         if material_name in FLAT_AVOIDING_NEUTRAL_MATERIALS:
             floor_texels = sum(value == GLOBAL_FLOOR_INDEX
