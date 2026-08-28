@@ -8,7 +8,8 @@
 // Exact solid-wall texture catalog for E1M1; index 0 is the fallback.
 #define FREEDOOM_WALL_TEXTURE_COUNT 53
 #define FREEDOOM_SECTOR_VISUAL_COUNT 200
-#define MEGALDOOM_WORLD_COLOR_FLOOR 3
+#define MEGALDOOM_WORLD_COLOR_CEILING 3
+#define MEGALDOOM_WORLD_COLOR_FLOOR 7
 #define MEGALDOOM_WORLD_COLOR_DAMAGE 14
 #define MEGALDOOM_WORLD_COLOR_WARNING 15
 #define MEGALDOOM_TEX_FALLBACK 0
@@ -279,13 +280,10 @@ static const u8 FREEDOOM_WORLD_SHADE_MAP[16] = {
     0, 1, 1, 3, 1, 5, 4, 5, 6, 9, 5, 8, 8, 10, 6, 12
 };
 
+// The shade chain itself is NOT emitted: renderer_pack.c derives it by
+// chaining FREEDOOM_WORLD_SHADE_MAP FREEDOOM_WORLD_SHADE_LEVELS times,
+// so a second ROM copy could only ever disagree with what is drawn.
 #define FREEDOOM_WORLD_SHADE_LEVELS 4
-static const u8 FREEDOOM_WORLD_SHADE_LUT[FREEDOOM_WORLD_SHADE_LEVELS][16] = {
-    {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15},
-    {0, 1, 1, 3, 1, 5, 4, 5, 6, 9, 5, 8, 8, 10, 6, 12},
-    {0, 1, 1, 3, 1, 5, 1, 5, 4, 9, 5, 6, 6, 5, 4, 8},
-    {0, 1, 1, 3, 1, 5, 1, 5, 1, 9, 5, 4, 4, 5, 1, 6},
-};
 
 static const u16 FREEDOOM_WALL_TEXTURE_USCALE_Q12[FREEDOOM_WALL_TEXTURE_COUNT] = {
     2048, 10923, 2048, 2048, 2048, 8192, 8192, 2048, 2048, 2048, 4096, 4096, 2048, 2048, 2048, 2048, 2048, 2048, 4096, 4096, 32768, 32768, 32768, 2048, 2048, 8192, 16384, 16384, 16384, 4096, 4096, 2048, 4096, 4096, 4096, 4096, 2048, 4096, 4096, 2048, 2048, 2048, 2048, 4096, 4096, 2048, 4096, 4096, 4096, 2048, 2048, 2048, 2048

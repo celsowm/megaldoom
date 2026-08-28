@@ -5,6 +5,8 @@ import json
 import re
 import sys
 
+import raycast_constants
+
 
 ROOT = Path(__file__).resolve().parent.parent
 RAYCAST = ROOT / "src" / "raycast.h"
@@ -29,7 +31,7 @@ PROJ_Y = 80
 CAMERA_HEIGHT = 64
 SCALE_SHIFT = 12
 WORLD_GEOMETRY_SCALE = 1
-STRIDE = 2
+STRIDE = raycast_constants.col_stride()
 
 
 def project_x(side: int, forward: int) -> int:

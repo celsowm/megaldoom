@@ -7,6 +7,7 @@
 // the renderer's public API (renderer.h / renderer_internal.h).
 #include "renderer_internal.h"
 #include "bsp_render.h"
+#include "renderer_pack_abi.h"
 
 // Per-column wall/door description, produced once per sampled column by the
 // pack stage (renderer_pack.c) and consumed by the pack stage itself, door
@@ -26,6 +27,21 @@ typedef struct {
     u8 texture_height;
     u16 v_scale_q12;
 } WallColumnDescriptor;
+
+// renderer_hotpath.s indexes this struct by the offsets in renderer_pack_abi.h.
+// The asm cannot use offsetof, so these are the checks that keep the two views
+// of the layout from drifting apart silently.
+_Static_assert(__builtin_offsetof(WallColumnDescriptor, top) == WALL_DESC_OFF_TOP,
+               "asm wall post reads top at WALL_DESC_OFF_TOP");
+_Static_assert(__builtin_offsetof(WallColumnDescriptor, bottom) == WALL_DESC_OFF_BOTTOM,
+               "asm wall post reads bottom at WALL_DESC_OFF_BOTTOM");
+_Static_assert(__builtin_offsetof(WallColumnDescriptor, vertical_samples) ==
+                   WALL_DESC_OFF_VERTICAL_SAMPLES,
+               "asm wall post reads the DDA at WALL_DESC_OFF_VERTICAL_SAMPLES");
+_Static_assert(__builtin_offsetof(WallColumnDescriptor, tex_y) == WALL_DESC_OFF_TEX_Y,
+               "asm wall post reads tex_y at WALL_DESC_OFF_TEX_Y");
+_Static_assert(sizeof(WallColumnDescriptor) == WALL_DESC_SIZE,
+               "asm advances one lane by WALL_DESC_SIZE");
 
 static inline u16 wall_source_y(const WallColumnDescriptor *descriptor,
                                 u16 rel_y) {
@@ -56,6 +72,14 @@ typedef struct {
     u32 ceiling[4];
     u32 floor[4];
 } PackedFlatRows;
+
+// Same contract as above: the asm's two flat posts index this by byte.
+_Static_assert(__builtin_offsetof(PackedFlatRows, ceiling) == PACK_FLAT_OFF_CEILING,
+               "asm flat posts read ceiling at PACK_FLAT_OFF_CEILING");
+_Static_assert(__builtin_offsetof(PackedFlatRows, floor) == PACK_FLAT_OFF_FLOOR,
+               "asm flat posts read floor at PACK_FLAT_OFF_FLOOR");
+_Static_assert(sizeof(((PackedFlatRows *)0)->ceiling) == PACK_FLAT_ROWS_BYTES,
+               "asm wraps the flat index with PACK_FLAT_INDEX_MASK");
 
 PackedFlatRows build_flat_rows(const RaySceneColors *scene_colors);
 

@@ -1,3 +1,19 @@
+/*
+ * Every constant this file needs comes from the shared C/asm header below --
+ * SGDK assembles .s through `gcc -x assembler-with-cpp`, so there is no second
+ * copy of the descriptor layout, the lane count or the texture masks here.
+ * renderer_pack_internal.h _Static_asserts each of those against the real C
+ * definition, which turns what used to be a silent texture-corruption bug into
+ * a build failure.
+ */
+#include "renderer_pack_abi.h"
+
+/* This is the stride-2 packer. renderer_pack.c declares and calls it only under
+ * the same condition, and supplies a pure-C packer for stride 4, so a
+ * comparison build (EXTRA_FLAGS="-DRAY_COL_STRIDE=4") assembles this file to
+ * nothing rather than emitting a function whose lane count no longer matches. */
+#if RAY_COL_STRIDE == 2
+
     .text
     .align  2
     .globl  renderer_write_mixed_stride2_span_asm
@@ -9,11 +25,8 @@
  *     const u8 *const packed_columns[4],
  *     const PackedFlatRows *flat_rows);
  *
- * GCC's m68k ABI gives each u16 argument a four-byte stack slot and right-aligns
- * the word within it. After saving d2-d7/a2-a6 (44 bytes), pointers are at
- * sp+60,64,68 and the two words are at sp+54 and sp+58.
- * WallColumnDescriptor is 24 bytes: top=0, bottom=2, vertical_samples=12,
- * tex_y=17. PackedFlatRows has ceiling at 0 and floor at 16.
+ * The stack layout and the WallColumnDescriptor / PackedFlatRows offsets are
+ * defined once in renderer_pack_abi.h and used symbolically below.
  *
  * `tiles` is the first tile of a run of consecutive tiles in one tile column,
  * and row_count spans all of them. That works because the view tilemap is
@@ -57,13 +70,13 @@
  * doubles their count: 149/rebuild spinning vs 75 translating).
  */
 renderer_write_mixed_stride2_span_asm:
-    movem.l d2-d7/a2-a6,-(sp)
-    movea.l 48(sp),a0              /* first tile of the run */
-    move.w  54(sp),d7              /* first screen y (right-aligned u16) */
-    move.w  58(sp),d1              /* row count */
-    movea.l 60(sp),a1              /* descriptor */
-    movea.l 64(sp),a2              /* packed-column pointer table */
-    movea.l 68(sp),a3              /* flat rows */
+    movem.l d2-d7/a2-a6,-(sp)      /* PACK_ASM_SAVED_REGS registers */
+    movea.l PACK_ARG_TILES(sp),a0  /* first tile of the run */
+    move.w  PACK_ARG_PIXEL_Y(sp),d7 /* first screen y (right-aligned u16) */
+    move.w  PACK_ARG_ROW_COUNT(sp),d1
+    movea.l PACK_ARG_DESCRIPTORS(sp),a1
+    movea.l PACK_ARG_PACKED_COLUMNS(sp),a2
+    movea.l PACK_ARG_FLAT_ROWS(sp),a3
     add.w   d7,d1                  /* end_y; loop-invariant across all lanes */
     moveq   #0,d6                  /* byte lane 0..3 */
 
@@ -72,8 +85,11 @@ renderer_write_mixed_stride2_span_asm:
     movea.l a0,a6
     adda.w  d6,a6                  /* first byte for this lane */
     move.w  d7,d0                  /* y */
-    move.w  (a1),d3                /* top */
-    move.w  2(a1),d4               /* bottom */
+    /* WALL_DESC_OFF_TOP is asserted to be 0; spelled as (a1) rather than
+     * 0(a1) because a zero displacement is not free -- d16(An) costs 4 cycles
+     * more than (An), which is the same reason the posts below write to (a6). */
+    move.w  (a1),d3                        /* top */
+    move.w  WALL_DESC_OFF_BOTTOM(a1),d4    /* bottom */
 
     move.w  d3,d2                  /* min(top, end_y) */
     cmp.w   d1,d2
@@ -85,17 +101,17 @@ renderer_write_mixed_stride2_span_asm:
     sub.w   d0,d2                  /* ceiling post length */
     subq.w  #1,d2
     move.w  d2,d5                  /* DBRA counter */
-    lea     0(a3,d6.w),a4          /* ceiling row bytes for this lane */
-    move.w  d0,d2                  /* flat index = (y & 3) * 4 */
+    lea     PACK_FLAT_OFF_CEILING(a3,d6.w),a4 /* ceiling rows for this lane */
+    move.w  d0,d2                  /* flat index = (y & 3) * PACK_TILE_ROW_BYTES */
     andi.w  #3,d2
     lsl.w   #2,d2
     add.w   d5,d0                  /* y advances past the whole post */
     addq.w  #1,d0
 .Lceiling_loop:
     move.b  0(a4,d2.w),(a6)
-    addq.l  #4,a6
-    addq.w  #4,d2
-    andi.w  #15,d2                 /* the flat pattern repeats every 4 rows */
+    addq.l  #PACK_TILE_ROW_BYTES,a6
+    addq.w  #PACK_TILE_ROW_BYTES,d2
+    andi.w  #PACK_FLAT_INDEX_MASK,d2 /* the flat pattern repeats every 4 rows */
     dbra    d5,.Lceiling_loop
 
 .Lwall_setup:
@@ -106,11 +122,11 @@ renderer_write_mixed_stride2_span_asm:
 .Lwall_ready:
     cmp.w   d2,d0
     bcc.s   .Lfloor_setup
-    movea.l 12(a1),a4              /* vertical sample DDA */
+    movea.l WALL_DESC_OFF_VERTICAL_SAMPLES(a1),a4 /* vertical sample DDA */
     move.w  d0,d5
     sub.w   d3,d5                  /* y - top: where this tile enters the DDA */
     adda.w  d5,a4
-    move.b  17(a1),d4              /* texture vertical offset; bottom is dead */
+    move.b  WALL_DESC_OFF_TEX_Y(a1),d4 /* vertical offset; bottom is dead */
     sub.w   d0,d2                  /* wall post length */
     add.w   d2,d0                  /* y after the post, for the floor setup */
     subq.w  #1,d2                  /* DBRA counter */
@@ -118,9 +134,9 @@ renderer_write_mixed_stride2_span_asm:
 .Lwall_loop:
     move.b  (a4)+,d5
     add.b   d4,d5
-    andi.w  #127,d5
+    andi.w  #WALL_TEX_HEIGHT_MASK,d5
     move.b  0(a5,d5.w),(a6)
-    addq.l  #4,a6
+    addq.l  #PACK_TILE_ROW_BYTES,a6
     dbra    d2,.Lwall_loop
 
 .Lfloor_setup:
@@ -129,22 +145,24 @@ renderer_write_mixed_stride2_span_asm:
     move.w  d1,d5                  /* floor post length */
     sub.w   d0,d5
     subq.w  #1,d5
-    lea     16(a3,d6.w),a4         /* floor row bytes for this lane */
-    move.w  d0,d2                  /* flat index = (y & 3) * 4 */
+    lea     PACK_FLAT_OFF_FLOOR(a3,d6.w),a4 /* floor rows for this lane */
+    move.w  d0,d2                  /* flat index = (y & 3) * PACK_TILE_ROW_BYTES */
     andi.w  #3,d2
     lsl.w   #2,d2
 .Lfloor_loop:
     move.b  0(a4,d2.w),(a6)
-    addq.l  #4,a6
-    addq.w  #4,d2
-    andi.w  #15,d2
+    addq.l  #PACK_TILE_ROW_BYTES,a6
+    addq.w  #PACK_TILE_ROW_BYTES,d2
+    andi.w  #PACK_FLAT_INDEX_MASK,d2
     dbra    d5,.Lfloor_loop
 
 .Lnext_lane:
-    adda.w  #24,a1
+    adda.w  #WALL_DESC_SIZE,a1
     addq.w  #1,d6
-    cmpi.w  #4,d6
+    cmpi.w  #PACK_LANES,d6
     bcs.w   .Lmixed_lane
 
     movem.l (sp)+,d2-d7/a2-a6
     rts
+
+#endif /* RAY_COL_STRIDE == 2 */

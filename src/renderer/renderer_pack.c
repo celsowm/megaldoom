@@ -8,7 +8,12 @@
 // higher level applies the luminance-derived mapping emitted alongside PAL3, so
 // no hand-authored palette indices can shift a hue to blue. N/S ("shade") walls
 // add one extra level.
-#define SHADE_LEVELS 4
+//
+// The level count is a property of the baked asset, not of the renderer: it is
+// how many shade planes tools/world_assets.py emitted into
+// FREEDOOM_WALL_PACKED_PAIRS. Deriving it here means changing the bake cannot
+// leave the runtime indexing planes that were never generated.
+#define SHADE_LEVELS FREEDOOM_WORLD_SHADE_LEVELS
 // depth (world units) >> FOG_SHIFT picks the base fog level. Tuned so mid-room
 // walls sit around level 1-2 and distant walls saturate at the darkest level.
 #define FOG_SHIFT 9
@@ -122,9 +127,8 @@ WallColumnDescriptor describe_door_overlay(const RayDoorOverlay *door) {
                                     RAY_COLUMN_FLAG_DOOR);
 }
 
-// Sampled cast columns feeding one 8px-wide tile column (4 at stride 2, 2 at
-// stride 4).
-#define PACK_LANES (8 / RAY_COL_STRIDE)
+// PACK_LANES (sampled cast columns per 8px tile column: 4 at stride 2, 2 at
+// stride 4) is defined in renderer_pack_abi.h, which the asm hotpath shares.
 
 // Previous base build's per-tile-column packing inputs, for coherence skipping.
 static WallColumnDescriptor s_prev_desc[VIEW_TILE_W][PACK_LANES];

@@ -1,7 +1,14 @@
 #ifndef MEGALDOOM_RAYCAST_H
 #define MEGALDOOM_RAYCAST_H
 
+// The geometry below is the single source of truth for BOTH the C renderer and
+// the hand-written pack hotpath (renderer_hotpath.s). SGDK assembles .s through
+// `gcc -x assembler-with-cpp`, so the assembler sees these #defines verbatim and
+// never has to spell a copy of them out. Everything that is C-only lives behind
+// __ASSEMBLER__ so the include stays cheap for the assembler.
+#ifndef __ASSEMBLER__
 #include <genesis.h>
+#endif
 
 // View geometry — single source of truth for the render viewport. The BSP caster,
 // billboard and renderer all derive from these: VIEW_TILE_W/H in
@@ -48,6 +55,8 @@
 #define WALL_TEX_WIDTH_MASK (WALL_TEX_WIDTH - 1)
 #define WALL_TEX_HEIGHT 128
 #define WALL_TEX_HEIGHT_MASK (WALL_TEX_HEIGHT - 1)
+
+#ifndef __ASSEMBLER__
 
 typedef struct {
     s32 x;
@@ -96,5 +105,7 @@ typedef struct {
 void player_init(PlayerState *player, u16 phase_index);
 void player_try_move(PlayerState *player, s16 forward, s16 strafe);
 void player_apply_world_push(PlayerState *player, s32 dx, s32 dy);
+
+#endif // __ASSEMBLER__
 
 #endif

@@ -3,16 +3,15 @@
 
 #define DOOR_FRAME_TEXELS (WALL_TEX_WIDTH / 16)
 
-#if RAY_COL_STRIDE == 2
+// Preserve a stable interactive silhouette around the original BIGDOOR art: a
+// dark metal frame plus a yellow/black moving safety edge, with the real WAD
+// texture in the centre. This is stride-independent -- it works in texel space,
+// not in sampled-column space -- so it is one function, not one per stride.
 static u8 style_wall_texel(const WallColumnDescriptor *descriptor,
                            u8 tex_y,
                            u8 texel) {
     if ((descriptor->flags & RAY_COLUMN_FLAG_DOOR) == 0) return texel;
 
-    // At 80 sampled wall columns, preserve a stable interactive silhouette
-    // around the original BIGDOOR art: a dark metal frame plus a yellow/black
-    // moving safety edge.
-    // The centre remains the real WAD texture.
     const u8 frame_height = (u8)(descriptor->texture_height / 16);
     const u8 safety = (u8)(descriptor->texture_height / 8);
     if (descriptor->tex_x < DOOR_FRAME_TEXELS ||
@@ -26,26 +25,6 @@ static u8 style_wall_texel(const WallColumnDescriptor *descriptor,
     }
     return texel;
 }
-
-#else
-static u8 style_wall_texel(const WallColumnDescriptor *descriptor,
-                           u8 tex_y,
-                           u8 texel) {
-    if ((descriptor->flags & RAY_COLUMN_FLAG_DOOR) == 0) return texel;
-    const u8 frame_height = (u8)(descriptor->texture_height / 16);
-    const u8 safety = (u8)(descriptor->texture_height / 8);
-    if (descriptor->tex_x < DOOR_FRAME_TEXELS ||
-        descriptor->tex_x >= (WALL_TEX_WIDTH - DOOR_FRAME_TEXELS) ||
-        tex_y < frame_height) {
-        return 0;
-    }
-    if (tex_y >= (descriptor->texture_height - safety)) {
-        return (descriptor->tex_x & safety) ?
-                   MEGALDOOM_WORLD_COLOR_WARNING : 0;
-    }
-    return texel;
-}
-#endif
 
 static u8 sample_door_overlay(const WallColumnDescriptor *descriptor,
                               u16 y,

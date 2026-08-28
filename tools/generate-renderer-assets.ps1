@@ -3,15 +3,32 @@ param(
     [string]$HudHeader = "src\renderer\generated_hud_assets.h",
     [string]$WorldHeader = "src\bsp\generated_assets.h",
     [string]$OutputHeader = "src\renderer\generated_renderer_assets.h",
-    # Texture rows walked across a wall's on-screen height. The runtime masks
-    # The runtime wall lattice is 128 rows. Far walls below 64 pixels are
-    # intentionally emitted on its even-row sub-lattice so they retain the
-    # old 64-row candidate set instead of increasing vertical churn.
-    [int]$WallTexRowsPerWall = 128
+    # Texture rows walked across a wall's on-screen height. Read from
+    # src/raycast.h (WALL_TEX_HEIGHT) rather than restated here, so the sampling
+    # table can never be generated for a lattice the runtime does not mask to.
+    # Far walls below half that height are deliberately emitted on the even-row
+    # sub-lattice so they keep the coarser candidate set instead of raising
+    # vertical churn.
+    [int]$WallTexRowsPerWall = 0
 )
 
 $ErrorActionPreference = "Stop"
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
+
+# src/raycast.h is the single source of truth for the wall texture axes; the C
+# renderer and the asm hotpath read the same defines via renderer_pack_abi.h.
+$RaycastPath = Join-Path $Root (Join-Path "src" "raycast.h")
+if (-not (Test-Path $RaycastPath)) {
+    throw "raycast.h not found: $RaycastPath"
+}
+$RaycastText = Get-Content -Raw $RaycastPath
+if ($WallTexRowsPerWall -le 0) {
+    $wallHeight = [regex]::Match($RaycastText, '(?m)^#define\s+WALL_TEX_HEIGHT\s+(\d+)\s*$')
+    if (-not $wallHeight.Success) {
+        throw "WALL_TEX_HEIGHT is missing from $RaycastPath"
+    }
+    $WallTexRowsPerWall = [int]$wallHeight.Groups[1].Value
+}
 $HudPath = Join-Path $Root $HudHeader
 $WorldPath = Join-Path $Root $WorldHeader
 $OutPath = Join-Path $Root $OutputHeader
@@ -78,7 +95,7 @@ function New-WallSamplingRows {
         $row = New-Object System.Collections.Generic.List[int]
         for ($relY = 0; $relY -lt 120; $relY++) {
             $sample = [int][Math]::Floor(($relY * $WallTexRowsPerWall) / $height)
-            if ($height -lt 64) { $sample = $sample -band 0xFE }
+            if ($height -lt ($WallTexRowsPerWall / 2)) { $sample = $sample -band 0xFE }
             [void]$row.Add($sample -band 0xFF)
         }
         [void]$lines.Add(((Format-ByteRow @($row)) + ","))

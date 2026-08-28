@@ -15,31 +15,16 @@ from collections import Counter
 from dataclasses import dataclass
 
 from PIL import Image
+import raycast_constants
 import world_palette
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ASSET_ROOT = os.path.join(PROJECT_ROOT, "res", "originaldoom")
-RAYCAST_HEADER = os.path.join(PROJECT_ROOT, "src", "raycast.h")
 
-
-def runtime_wall_tex_dims():
-    with open(RAYCAST_HEADER, "r", encoding="utf-8") as stream:
-        source = stream.read()
-    values = []
-    for axis in ("WIDTH", "HEIGHT"):
-        match = re.search(r"^#define\s+WALL_TEX_%s\s+(\d+)\s*$" % axis,
-                          source, re.MULTILINE)
-        if not match:
-            raise RuntimeError("WALL_TEX_%s is missing from src/raycast.h" % axis)
-        dimension = int(match.group(1))
-        if dimension <= 0 or dimension & (dimension - 1):
-            raise RuntimeError("WALL_TEX_%s must be a positive power of two" % axis)
-        values.append(dimension)
-    return tuple(values)
-
-
-# Converter and runtime intentionally share the public definition in raycast.h.
-WALL_TEX_WIDTH, WALL_TEX_HEIGHT = runtime_wall_tex_dims()
+# Converter and runtime intentionally share the public definition in raycast.h,
+# read through tools/raycast_constants.py so every offline consumer resolves it
+# the same way.
+WALL_TEX_WIDTH, WALL_TEX_HEIGHT = raycast_constants.wall_tex_dims()
 FALLBACK_TEXTURE = "__FALLBACK__"
 FALLBACK_TEXTURE_SOURCE = "GRAY7"
 WORLD_COLOR_DAMAGE = 14
@@ -406,6 +391,10 @@ WALL_SOLID_SHARE = 0.5
 # carry the sprites and need to stay readable, ceilings should recede.
 GLOBAL_CEILING_INDEX = 3
 GLOBAL_FLOOR_INDEX = 7
+# Distance-fog steps baked into FREEDOOM_WALL_PACKED_PAIRS. Emitted as
+# FREEDOOM_WORLD_SHADE_LEVELS and used to size the shade chain, so the
+# renderer can never index a plane the bake did not generate.
+WORLD_SHADE_LEVELS = 4
 
 
 def _has_short_period_vertical_banding(columns):
@@ -988,17 +977,6 @@ def emit_world_assets(path, texture_usage, sectors, provenance=None,
     palette = build_world_palette(texture_names, texture_usage, sectors)
     if len(palette) != 16:
         raise RuntimeError("World palette must contain exactly 16 colors")
-    # Retained as MEGALDOOM_WORLD_COLOR_FLOOR: a neutral fallback still used by
-    # the (currently dead, RENDERER_SPARSE_FB==0) static-atlas boot path in
-    # renderer.c. Per-sector floors below no longer force every sector to it.
-    floor_candidates = [
-        index for index in range(1, WORLD_COLOR_DAMAGE)
-        if world_palette.is_neutral(palette[index])
-    ]
-    if not floor_candidates:
-        raise RuntimeError("World palette has no neutral fixed-floor color")
-    fixed_floor_index = nearest_palette_index(
-        (36, 36, 36), palette, floor_candidates)
     texture_ids = {name: index for index, name in enumerate(texture_names)}
     if door_texture_names is None:
         # Keep the standalone converter conservative. The map extraction CLI
@@ -1050,7 +1028,7 @@ def emit_world_assets(path, texture_usage, sectors, provenance=None,
     # The flats are chosen before the shade chain so distant walls cannot darken
     # into them; see build_shade_map's `reserved`.
     shade_map = build_shade_map(palette, (GLOBAL_CEILING_INDEX, GLOBAL_FLOOR_INDEX))
-    shade_lut = build_shade_lut(palette, 4,
+    shade_lut = build_shade_lut(palette, WORLD_SHADE_LEVELS,
                                 (GLOBAL_CEILING_INDEX, GLOBAL_FLOOR_INDEX))
     certify_flat_wall_contrast(palette, dict(zip(texture_names, converted)),
                                shade_lut, GLOBAL_CEILING_INDEX, GLOBAL_FLOOR_INDEX)
@@ -1079,7 +1057,8 @@ def emit_world_assets(path, texture_usage, sectors, provenance=None,
         "// Exact solid-wall texture catalog for E1M1; index 0 is the fallback.",
         "#define FREEDOOM_WALL_TEXTURE_COUNT %d" % len(texture_names),
         "#define FREEDOOM_SECTOR_VISUAL_COUNT %d" % len(sector_visuals),
-        "#define MEGALDOOM_WORLD_COLOR_FLOOR %d" % fixed_floor_index,
+        "#define MEGALDOOM_WORLD_COLOR_CEILING %d" % GLOBAL_CEILING_INDEX,
+        "#define MEGALDOOM_WORLD_COLOR_FLOOR %d" % GLOBAL_FLOOR_INDEX,
         "#define MEGALDOOM_WORLD_COLOR_DAMAGE %d" % WORLD_COLOR_DAMAGE,
         "#define MEGALDOOM_WORLD_COLOR_WARNING %d" % WORLD_COLOR_WARNING,
     ])
@@ -1105,13 +1084,10 @@ def emit_world_assets(path, texture_usage, sectors, provenance=None,
         "    " + ", ".join(str(value) for value in shade_map),
         "};",
         "",
-        "#define FREEDOOM_WORLD_SHADE_LEVELS 4",
-        "static const u8 FREEDOOM_WORLD_SHADE_LUT[FREEDOOM_WORLD_SHADE_LEVELS][16] = {",
-    ])
-    for level in shade_lut:
-        lines.append("    {" + ", ".join(str(value) for value in level) + "},")
-    lines.extend([
-        "};",
+        "// The shade chain itself is NOT emitted: renderer_pack.c derives it by",
+        "// chaining FREEDOOM_WORLD_SHADE_MAP FREEDOOM_WORLD_SHADE_LEVELS times,",
+        "// so a second ROM copy could only ever disagree with what is drawn.",
+        "#define FREEDOOM_WORLD_SHADE_LEVELS %d" % WORLD_SHADE_LEVELS,
         "",
         "static const u16 FREEDOOM_WALL_TEXTURE_USCALE_Q12[FREEDOOM_WALL_TEXTURE_COUNT] = {",
         "    " + ", ".join(str(texture_meta[name]["u_scale_q12"]) for name in texture_names),

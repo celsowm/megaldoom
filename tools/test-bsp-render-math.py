@@ -3,6 +3,8 @@
 import re
 from pathlib import Path
 
+import raycast_constants
+
 ROOT = Path(__file__).resolve().parents[1]
 GENERATED = (ROOT / "src/bsp/generated_e1m1_map.c").read_text()
 RENDERER = (ROOT / "src/bsp/bsp_render.c").read_text()
@@ -13,9 +15,9 @@ FX_ONE = 1 << FX_SHIFT
 ANGLE_90 = 64
 NEAR = 16
 PROJ_X = 80
-VIEW_CENTER = 80
-VIEW_COLS = 160
-STRIDE = 2
+VIEW_COLS, _VIEW_ROWS = raycast_constants.view_pixels()
+VIEW_CENTER = VIEW_COLS // 2
+STRIDE = raycast_constants.col_stride()
 LEFT_SCALE = VIEW_CENTER + STRIDE + 1
 RIGHT_SCALE = VIEW_COLS + STRIDE - VIEW_CENTER
 

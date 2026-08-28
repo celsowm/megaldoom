@@ -10,6 +10,7 @@ from pathlib import Path
 
 from PIL import Image
 
+import raycast_constants
 import wall_bake_preview
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -69,12 +70,26 @@ def generated_wall_textures(source):
 
 
 def generated_shade_lut(source):
-    body = re.search(
-        r"FREEDOOM_WORLD_SHADE_LUT\[FREEDOOM_WORLD_SHADE_LEVELS\]\[16\]"
-        r"\s*=\s*\{(.*?)\};", source, re.S)
-    assert body, "shade LUT declaration"
-    return [[int(value) for value in re.findall(r"\d+", level)]
-            for level in re.findall(r"\{([^{}]+)\}", body.group(1))]
+    """Rebuild the shade chain exactly the way the renderer does.
+
+    There is no FREEDOOM_WORLD_SHADE_LUT in the header any more: chaining
+    FREEDOOM_WORLD_SHADE_MAP is the one definition of the chain, and
+    renderer_pack.c's build_shade_luts() does precisely this at scene init.
+    Deriving it here means the test checks the table that is actually drawn
+    rather than a parallel copy that could silently disagree with it.
+    """
+    levels = re.search(r"#define\s+FREEDOOM_WORLD_SHADE_LEVELS\s+(\d+)", source)
+    assert levels, "shade level count"
+    body = re.search(r"FREEDOOM_WORLD_SHADE_MAP\[16\]\s*=\s*\{(.*?)\};",
+                     source, re.S)
+    assert body, "shade map declaration"
+    shade_map = [int(value) for value in re.findall(r"\d+", body.group(1))]
+    assert len(shade_map) == 16, "shade map must cover the 16 palette entries"
+
+    lut = [list(range(16))]
+    for _ in range(1, int(levels.group(1))):
+        lut.append([shade_map[value & 0x0F] for value in lut[-1]])
+    return lut
 
 
 def _tone_curved_source(extractor, path):
@@ -177,11 +192,15 @@ def main():
     ))
     assets = ASSETS_PATH.read_text()
 
-    assert extractor.WALL_TEX_WIDTH == 64
-    assert extractor.WALL_TEX_HEIGHT == 128
-    assert re.search(r"#define WALL_TEX_WIDTH 64\b", raycast)
-    assert re.search(r"#define WALL_TEX_HEIGHT 128\b", raycast)
-    assert re.search(r"#define RAY_COL_STRIDE 2\b", raycast)
+    # The shipped quality profile, pinned in exactly one place. Changing any of
+    # these is a deliberate visual decision (stride in particular: it IS the
+    # wall's horizontal resolution, and stride 4 shipped once and was reverted),
+    # so it must be edited here as well as in raycast.h.
+    assert raycast_constants.wall_tex_dims() == (64, 128)
+    assert raycast_constants.col_stride() == 2
+    # ...and the bake reads that same header rather than carrying its own copy.
+    assert (extractor.WALL_TEX_WIDTH, extractor.WALL_TEX_HEIGHT) == \
+        raycast_constants.wall_tex_dims()
     assert "FREEDOOM_WALL_PACKED_PAIRS" in assets
     assert "FREEDOOM_WALL_PACKED_PAIRS[" in renderer
     assert "DOOR_FRAME_TEXELS (WALL_TEX_WIDTH / 16)" in renderer
