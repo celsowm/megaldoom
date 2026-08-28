@@ -25,6 +25,24 @@ ASSET_ROOT = os.path.join(PROJECT_ROOT, "res", "originaldoom")
 # read through tools/raycast_constants.py so every offline consumer resolves it
 # the same way.
 WALL_TEX_WIDTH, WALL_TEX_HEIGHT = raycast_constants.wall_tex_dims()
+# WALL_TEX_WIDTH is the number of PAIR COLUMNS the runtime indexes (tex_x), not
+# the number of texels a row shows. Each packed byte covers the two horizontal
+# pixels of one stride-2 sample, and both nibbles used to hold the same index --
+# so a row displayed 128 pixels wide only ever carried 64 distinct texels.
+# Baking at WALL_TEX_DISPLAY_WIDTH and packing the two nibbles independently
+# gives every displayed pixel its own texel at exactly the same ROM cost and the
+# same single `move.b` in the hotpath.
+WALL_TEX_DISPLAY_WIDTH = 2 * WALL_TEX_WIDTH
+# The curated COMPUTE2 facade is hand-authored on this square lattice. It is
+# composed there and resampled onto the bake grid, so widening the bake grid
+# cannot silently re-register the artwork.
+COMPUTE2_FACADE_DIM = 64
+# Share of horizontally adjacent texels whose palette index differs. The prior
+# "ugly walls" investigation concluded the defect was churn, not resolution, so
+# this ceiling governs whether a material is allowed sub-texel horizontal
+# detail at all (see convert_texture). tools/test-wall-quality.py asserts the
+# same constant rather than restating the number.
+WALL_CHURN_LIMIT = 0.35
 FALLBACK_TEXTURE = "__FALLBACK__"
 FALLBACK_TEXTURE_SOURCE = "GRAY7"
 WORLD_COLOR_DAMAGE = 14
@@ -205,15 +223,13 @@ def build_shade_lut(palette, levels=4, reserved=()):
     return result
 
 
-# Every texture is stored in a WALL_TEX_WIDTH-wide grid, so a source wider than
-# this loses horizontal detail with nothing gained: COMPUTE2 (256x56) was being
-# squashed 4:1 across while its 56 rows were stretched to 64, which turned a
-# panel of small readouts into horizontal mush. Capping the sampled width at
-# 2*WALL_TEX_WIDTH keeps the squash at 2:1 -- what every 128-wide texture already
-# gets and what STARTAN3 et al look fine at -- at the cost of the material
-# repeating over half the world distance. Only sources wider than the cap are
-# touched; in E1M1 that is COMPUTE2 and the 256x128 fallback.
-WALL_TEX_MAX_SOURCE_WIDTH = 2 * WALL_TEX_WIDTH
+# Sources wider than the display grid still lose detail with nothing gained:
+# COMPUTE2 (256x56) squashed 4:1 turned a panel of small readouts into
+# horizontal mush. The cap keeps the material repeating over half the world
+# distance instead. Now that the grid is WALL_TEX_DISPLAY_WIDTH, a 128-wide
+# source is carried 1:1 rather than averaged 2:1, which is where the 26 of 53
+# textures with 128-wide sources recover their structure.
+WALL_TEX_MAX_SOURCE_WIDTH = WALL_TEX_DISPLAY_WIDTH
 
 @dataclass(frozen=True)
 class WallBakeRecipe:
@@ -272,7 +288,7 @@ CURATED_TEXTURE_WINDOWS = {
 
 
 def sampled_texture_width(width):
-    """Source width actually sampled into the WALL_TEX_WIDTH grid."""
+    """Source width actually sampled into the display grid."""
     return min(width, WALL_TEX_MAX_SOURCE_WIDTH)
 
 
@@ -602,9 +618,10 @@ def _compose_compute2_facade_indices(source):
     small set of continuous bays and rails.  All indices are existing PAL3
     matches from that source; this changes no runtime format or palette.
     """
-    dim = WALL_TEX_WIDTH
-    if dim != 64:
-        raise ValueError("COMPUTE2 facade is authored for WALL_TEX_WIDTH 64")
+    dim = COMPUTE2_FACADE_DIM
+    if len(source) != dim or len(source[0]) != dim:
+        raise ValueError("COMPUTE2 facade expects a %dx%d authoring grid" %
+                         (dim, dim))
     panel = 10      # neutral metal panel body
     shadow = 5      # structural rails / screen surround
     black = 0       # deepest screen cavity
@@ -675,6 +692,69 @@ def _compose_compute2_facade_indices(source):
     return result
 
 
+def _resize_index_rows_x(rows, width):
+    """Nearest-neighbour resize of an indexed [y][x] grid in U only.
+
+    The U counterpart of _resize_index_rows; widening and narrowing are the
+    same nearest-neighbour walk, so they are one function.
+    """
+    if not rows or width <= 0:
+        raise ValueError("Cannot resize an empty indexed texture")
+    source_width = len(rows[0])
+    return [[row[(x * source_width) // width] for x in range(width)]
+            for row in rows]
+
+
+def material_name_for(path):
+    """The uppercase material name a texture path stands for."""
+    return os.path.splitext(os.path.basename(path))[0].upper()
+
+
+def horizontal_churn(rows, active_height):
+    """Share of horizontally adjacent texels that change palette index.
+
+    Measured on the grid as displayed -- one texel per screen pixel -- because
+    that is the sampling the eye actually sees, and only over the rows the
+    runtime's V scale can reach.
+    """
+    width = len(rows[0])
+    if width < 2 or active_height < 1:
+        return 0.0
+    changed = sum(1 for row in rows[:active_height]
+                  for x in range(width - 1) if row[x] != row[x + 1])
+    return changed / (active_height * (width - 1))
+
+
+def pair_column_texels(row):
+    """The one texel per PAIR column that FREEDOOM_WALL_TEXTURES stores.
+
+    The packed table carries both texels of every pair; this table carries the
+    even one, because its only reader is the door overlay recompositor, which
+    indexes by tex_x and restyles most of what it samples. Named so the rule
+    lives here rather than being restated wherever the table is checked.
+    """
+    return [row[2 * pair] for pair in range(WALL_TEX_WIDTH)]
+
+
+def packed_pair_byte(level, left_index, right_index):
+    """One FREEDOOM_WALL_PACKED_PAIRS byte: the two pixels of a stride-2 sample.
+
+    The hotpath writes this byte straight into a 4bpp tile row, so the high
+    nibble lands on the even screen pixel and the low nibble on the odd one.
+    Carrying two adjacent display texels here rather than one index twice is
+    what doubles the wall's horizontal resolution for zero runtime cost.
+    """
+    return ((level[left_index & 0x0F] & 0x0F) << 4) | (level[right_index & 0x0F] & 0x0F)
+
+
+def _resize_columns_x(columns, width):
+    """Nearest-neighbour resize of an indexed/RGB [x][y] grid in U only."""
+    if not columns or width <= 0:
+        raise ValueError("Cannot resize an empty column grid")
+    source_width = len(columns)
+    return [list(columns[(x * source_width) // width]) for x in range(width)]
+
+
 def _resize_index_rows(rows, height):
     """Nearest-neighbour resize of an indexed [y][x] grid in V only."""
     if not rows or height <= 0:
@@ -699,6 +779,37 @@ def _is_earth_material(columns):
 
 def convert_texture(path, palette, use_wall_bake_recipe=True,
                     diagnostics=None):
+    """Bake at display resolution, but only where the material can carry it.
+
+    Doubling the horizontal texel count is free at runtime, and for most
+    materials it lowers churn as well as raising detail: the 2:1 box average it
+    replaces was blurring real structure. A few high-frequency technological
+    walls are the exception -- at 1:1 they exceed WALL_CHURN_LIMIT, which is the
+    metric that predicted the previous round of "ugly walls" and of shimmer in
+    motion. Those fall back to the pair-averaged representation they have today,
+    so this change can improve a wall but never make one noisier.
+
+    The decision is measured per material rather than listed by name, so a WAD
+    or recipe change cannot leave a stale exemption behind.
+    """
+    rows = _convert_texture(path, palette, use_wall_bake_recipe, diagnostics)
+    if len(rows[0]) != WALL_TEX_DISPLAY_WIDTH:
+        return rows
+    with Image.open(path) as image:
+        active_height = min(
+            sampled_texture_dimensions(
+                material_name_for(path), image.width, image.height)[1],
+            WALL_TEX_HEIGHT)
+    if horizontal_churn(rows, active_height) <= WALL_CHURN_LIMIT:
+        return rows
+    return _resize_index_rows_x(
+        _convert_texture(path, palette, use_wall_bake_recipe, diagnostics,
+                         bake_width_override=WALL_TEX_WIDTH),
+        WALL_TEX_DISPLAY_WIDTH)
+
+
+def _convert_texture(path, palette, use_wall_bake_recipe=True,
+                     diagnostics=None, bake_width_override=None):
     """Convert one wall source into the fixed runtime index grid.
 
     ``use_wall_bake_recipe=False`` reproduces the pre-curation conversion while
@@ -707,7 +818,7 @@ def convert_texture(path, palette, use_wall_bake_recipe=True,
     always uses the default curated path.
     """
     with Image.open(path) as image:
-        material_name = os.path.splitext(os.path.basename(path))[0].upper()
+        material_name = material_name_for(path)
         window = CURATED_TEXTURE_WINDOWS.get(material_name)
         if window is not None:
             left, top, sampled_width, sampled_height = window
@@ -729,15 +840,22 @@ def convert_texture(path, palette, use_wall_bake_recipe=True,
                                   opaque.width, opaque.height))
             opaque = opaque.crop((left, top, left + width, top + height))
         bake_height = min(opaque.height, WALL_TEX_HEIGHT)
-        resized = opaque.resize((WALL_TEX_WIDTH, bake_height), Image.Resampling.BOX)
+        # A curated facade is hand-authored on the square COMPUTE2_FACADE_DIM
+        # lattice and deliberately throws horizontal detail away, so it bakes
+        # there and is widened once at the end. Everything else bakes at full
+        # display resolution, which is where the 2:1 horizontal squash goes.
+        bake_width = (COMPUTE2_FACADE_DIM
+                      if (recipe is not None and recipe.facade_window is not None)
+                      else (bake_width_override or WALL_TEX_DISPLAY_WIDTH))
+        resized = opaque.resize((bake_width, bake_height), Image.Resampling.BOX)
         columns = [[resized.getpixel((x, y)) for y in range(bake_height)]
-                  for x in range(WALL_TEX_WIDTH)]
+                  for x in range(bake_width)]
         if _has_short_period_vertical_banding(columns):
             # 4-tap vertical box average: wide enough to flatten a period-4
             # alternation (unlike a narrow 1-2-1 blur, which softens the edges
             # but leaves the alternation itself intact and still aliasable).
-            smoothed = [[None] * bake_height for _ in range(WALL_TEX_WIDTH)]
-            for x in range(WALL_TEX_WIDTH):
+            smoothed = [[None] * bake_height for _ in range(bake_width)]
+            for x in range(bake_width):
                 column = columns[x]
                 for y in range(bake_height):
                     taps = [column[(y + offset) % bake_height]
@@ -746,11 +864,11 @@ def convert_texture(path, palette, use_wall_bake_recipe=True,
                         sum(tap[c] for tap in taps) // 4 for c in range(3)))
         else:
             smoothed = [[tone_curve(columns[x][y]) for y in range(bake_height)]
-                       for x in range(WALL_TEX_WIDTH)]
+                       for x in range(bake_width)]
         normalized = _contrast_normalize(smoothed)
         if recipe is None:
             smoothed = _spatial_smooth(normalized)
-            edge_mask = [[False] * bake_height for _ in range(WALL_TEX_WIDTH)]
+            edge_mask = [[False] * bake_height for _ in range(bake_width)]
         else:
             # Detect structure after the established low-pass, otherwise every
             # one-texel rivet/readout becomes an "edge" and defeats the point
@@ -801,18 +919,18 @@ def convert_texture(path, palette, use_wall_bake_recipe=True,
                                             x, y, False, cache,
                                             allowed, chroma_threshold,
                                             pair_max_delta, gain_ratio)
-                 for x in range(WALL_TEX_WIDTH)] for y in range(bake_height)]
+                 for x in range(bake_width)] for y in range(bake_height)]
         if material_name in FLAT_AVOIDING_NEUTRAL_MATERIALS:
             floor_texels = sum(value == GLOBAL_FLOOR_INDEX
                                for row in rows for value in row)
-            maximum = int(WALL_TEX_WIDTH * bake_height *
+            maximum = int(bake_width * bake_height *
                           FLAT_AVOIDING_MAX_SHARE)
             if floor_texels > maximum:
                 alternatives = [index for index in allowed
                                 if index != GLOBAL_FLOOR_INDEX]
                 candidates = []
                 for y in range(bake_height):
-                    for x in range(WALL_TEX_WIDTH):
+                    for x in range(bake_width):
                         if rows[y][x] != GLOBAL_FLOOR_INDEX:
                             continue
                         replacement = nearest_palette_index(
@@ -827,13 +945,13 @@ def convert_texture(path, palette, use_wall_bake_recipe=True,
                     rows[y][x] = replacement
         if recipe is not None and recipe.facade_window is not None:
             rows = _compose_compute2_facade_indices(
-                _resize_index_rows(rows, WALL_TEX_WIDTH))
+                _resize_index_rows(rows, COMPUTE2_FACADE_DIM))
             rows = _resize_index_rows(rows, bake_height)
             # The semantic facade is the candidate target for preview/error
             # accounting.  Its boundaries, not the discarded micro-detail's
             # boundaries, are what edge retention must certify.
             smoothed = [[palette[rows[y][x]] for y in range(bake_height)]
-                        for x in range(WALL_TEX_WIDTH)]
+                        for x in range(bake_width)]
             edge_mask = _edge_mask(
                 smoothed, recipe.edge_lightness_threshold,
                 recipe.edge_colour_threshold)
@@ -848,7 +966,18 @@ def convert_texture(path, palette, use_wall_bake_recipe=True,
                 # simplification the facade needs: rails and monitors survive;
                 # isolated lamps do not.
                 rows = _cleanup_isolated_indices(
-                    rows, [[False] * bake_height for _ in range(WALL_TEX_WIDTH)])
+                    rows, [[False] * bake_height for _ in range(bake_width)])
+        # A facade baked on its authoring lattice is widened onto the display
+        # grid here, with every derived grid, so nothing below this point has
+        # to know which lattice the material came from.
+        target_width = bake_width_override or WALL_TEX_DISPLAY_WIDTH
+        if bake_width != target_width:
+            rows = _resize_index_rows_x(rows, target_width)
+            normalized = _resize_columns_x(normalized, target_width)
+            smoothed = _resize_columns_x(smoothed, target_width)
+            edge_mask = _resize_columns_x(edge_mask, target_width)
+            bake_width = target_width
+
         # Keep short source textures native. The unused tail is padding only;
         # the runtime's per-texture V scale guarantees that it is never sampled.
         if bake_height < WALL_TEX_HEIGHT:
@@ -858,11 +987,11 @@ def convert_texture(path, palette, use_wall_bake_recipe=True,
             def pad_columns(grid):
                 return [[grid[x][y % bake_height]
                          for y in range(WALL_TEX_HEIGHT)]
-                        for x in range(WALL_TEX_WIDTH)]
+                        for x in range(bake_width)]
             def pad_mask(grid):
                 return [[grid[x][y % bake_height]
                          for y in range(WALL_TEX_HEIGHT)]
-                        for x in range(WALL_TEX_WIDTH)]
+                        for x in range(bake_width)]
             diagnostics.update(
                 material_name=material_name,
                 source_window=window,
@@ -870,7 +999,7 @@ def convert_texture(path, palette, use_wall_bake_recipe=True,
                 normalized_columns=pad_columns(normalized),
                 filtered_columns=pad_columns(smoothed),
             )
-        return rows
+    return rows
 
 
 def solid_wall_colors(textures, shade_lut):
@@ -1105,6 +1234,10 @@ def emit_world_assets(path, texture_usage, sectors, provenance=None,
         "    " + ", ".join(str(texture_meta[name]["v_scale_q12"]) for name in texture_names),
         "};",
         "",
+        "// One texel per PAIR column, not per displayed pixel: the only reader",
+        "// is the door overlay recompositor, which indexes by tex_x and restyles",
+        "// most of what it samples. The full-resolution texels live in the",
+        "// packed-pair table below.",
         "static const u8 FREEDOOM_WALL_TEXTURES[FREEDOOM_WALL_TEXTURE_COUNT][WALL_TEX_HEIGHT][WALL_TEX_WIDTH] = {",
     ])
     for texture_index, rows in enumerate(converted):
@@ -1113,7 +1246,8 @@ def emit_world_assets(path, texture_usage, sectors, provenance=None,
             texture_meta[texture_names[texture_index]]["width"],
             texture_meta[texture_names[texture_index]]["height"]))
         for row in rows:
-            lines.append("        {" + ", ".join(str(value) for value in row) + "},")
+            lines.append("        {" + ", ".join(
+                str(value) for value in pair_column_texels(row)) + "},")
         lines.append("    },")
     lines.extend([
         "};",
@@ -1121,8 +1255,9 @@ def emit_world_assets(path, texture_usage, sectors, provenance=None,
         "// ROM-resident, shade-ready pairs for the shipped stride-2 wall packer.",
         "// The regular table contains every wall texture. Door framing is kept",
         "// in a second compact table because only door faces read it.",
-        "// Each u8 repeats one 4bpp palette index across the two horizontal",
-        "// pixels of a sampled ray.",
+        "// Each u8 carries the two horizontal pixels of one sampled ray as",
+        "// independent nibbles (high = even pixel, low = odd), so a wall row",
+        "// shows WALL_TEX_DISPLAY_WIDTH distinct texels, not WALL_TEX_WIDTH.",
         "static const u8 FREEDOOM_WALL_PACKED_PAIRS",
         "    [FREEDOOM_WORLD_SHADE_LEVELS][FREEDOOM_WALL_TEXTURE_COUNT]",
         "    [WALL_TEX_WIDTH][WALL_TEX_HEIGHT] = {",
@@ -1135,7 +1270,9 @@ def emit_world_assets(path, texture_usage, sectors, provenance=None,
             for tex_x in range(WALL_TEX_WIDTH):
                 source_height = texture_meta[texture_names[texture_index]]["height"]
                 v_scale_q12 = texture_meta[texture_names[texture_index]]["v_scale_q12"]
-                colors = [level[rows[(tex_y * v_scale_q12) >> 12][tex_x] & 0x0F] * 0x11
+                colors = [packed_pair_byte(level,
+                                           rows[(tex_y * v_scale_q12) >> 12][2 * tex_x],
+                                           rows[(tex_y * v_scale_q12) >> 12][2 * tex_x + 1])
                           for tex_y in range(WALL_TEX_HEIGHT)]
                 lines.append("            {" + ", ".join(
                     "0x%04X" % value for value in colors) + "},")
@@ -1166,16 +1303,21 @@ def emit_world_assets(path, texture_usage, sectors, provenance=None,
                 v_scale_q12 = texture_meta[name]["v_scale_q12"]
                 for tex_y in range(WALL_TEX_HEIGHT):
                     source_y = (tex_y * v_scale_q12) >> 12
-                    texel = rows[source_y][tex_x] & 0x0F
+                    left = rows[source_y][2 * tex_x] & 0x0F
+                    right = rows[source_y][2 * tex_x + 1] & 0x0F
                     border = WALL_TEX_WIDTH // 16
                     safety = texture_meta[name]["height"] // 8
                     frame_height = texture_meta[name]["height"] // 16
+                    # The frame and the moving safety stripe are decided per pair
+                    # column, matching style_wall_texel() in renderer_doors.c;
+                    # only the door's centre carries independent texels.
                     if (tex_x < border or tex_x >= WALL_TEX_WIDTH - border or
                             source_y < frame_height):
-                        texel = 0
+                        left = right = 0
                     elif source_y >= source_height - safety:
-                        texel = WORLD_COLOR_WARNING if tex_x & safety else 0
-                    colors.append(level[texel] * 0x11)
+                        left = right = (WORLD_COLOR_WARNING
+                                        if tex_x & safety else 0)
+                    colors.append(packed_pair_byte(level, left, right))
                 lines.append("            {" + ", ".join(
                     "0x%04X" % value for value in colors) + "},")
             lines.append("        },")

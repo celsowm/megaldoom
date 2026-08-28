@@ -29,7 +29,9 @@ EXPECTED_WAD_SHA256 = (
 )
 PALETTE = list(world_assets.FROZEN_WORLD_PALETTE)
 TECH_MATERIALS = tuple(world_assets.TECH_WALL_MATERIALS)
-WIDTH = world_assets.WALL_TEX_WIDTH
+# The preview shows what reaches the screen: convert_texture() emits one
+# texel per displayed pixel, two per packed byte.
+WIDTH = world_assets.WALL_TEX_DISPLAY_WIDTH
 HEIGHT = world_assets.WALL_TEX_HEIGHT
 FONT = ImageFont.load_default()
 # Close to linedef 52 (x=704, y=3552..3360), looking north along it.  This is
@@ -125,10 +127,13 @@ def texture_metrics(name):
 
 def certify_compute2_facade(rows):
     """Structural contract for the deliberately semantic COMPUTE2 bake."""
-    # COMPUTE2 is one of the native 56-row sources. Inspect its semantic
-    # facade on the 64-row authoring grid, then let the runtime V scale map it
-    # back to the native storage rows.
-    rows = world_assets._resize_index_rows(rows[:56], 64)
+    # COMPUTE2 is one of the native 56-row sources. Inspect its semantic facade
+    # on the square authoring lattice it was composed on -- both axes, since the
+    # bake grid is wider than that lattice -- then let the runtime V scale map
+    # it back to the native storage rows.
+    dim = world_assets.COMPUTE2_FACADE_DIM
+    rows = world_assets._resize_index_rows_x(
+        world_assets._resize_index_rows(rows[:56], dim), dim)
     for y0, y1 in ((0, 3), (16, 20), (34, 38), (51, 55), (62, 64)):
         candidates = range(max(0, y0 - 1), min(64, y1 + 2))
         if max(sum(value == 5 for value in rows[y]) for y in candidates) < 60:
@@ -398,8 +403,11 @@ def build_preview(wad_path=DEFAULT_WAD, output_dir=DEFAULT_OUTPUT):
         (profile,), PALETTE, use_wall_bake_recipe=True)
     door_texture_count = len({seg["texture_name"] for seg in map_data.out_segs
                               if seg["type"] == doom_map.SEG_DOOR})
-    packed_bytes = (4 * len(current_textures) * WIDTH * HEIGHT +
-                    4 * door_texture_count * WIDTH * HEIGHT)
+    # One packed byte per PAIR column per row -- it carries two displayed
+    # texels, so this total is unchanged by the sub-texel bake.
+    pair_columns = world_assets.WALL_TEX_WIDTH
+    packed_bytes = (4 * len(current_textures) * pair_columns * HEIGHT +
+                    4 * door_texture_count * pair_columns * HEIGHT)
     if packed_bytes <= 0:
         raise AssertionError("packed wall table size drifted")
     if scales != candidate_scales:

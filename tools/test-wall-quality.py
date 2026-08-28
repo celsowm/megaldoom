@@ -101,7 +101,7 @@ def _tone_curved_source(extractor, path):
     the PAL3 result and the legacy-palette baseline in spatial_palette_error are
     scored against this same target, so widening a material's contrast or
     smoothing it cannot flatter one side of that comparison."""
-    width = extractor.WALL_TEX_WIDTH
+    width = extractor.WALL_TEX_DISPLAY_WIDTH
     with Image.open(path) as image:
         height = extractor.sampled_texture_dimensions(
             path.stem.upper(), image.width, image.height)[1]
@@ -132,7 +132,7 @@ def assert_no_spurious_green(extractor, palette, texture_name):
 
 def spatial_palette_error(extractor, palette, texture_name):
     path = Path(extractor.texture_path(texture_name))
-    width = extractor.WALL_TEX_WIDTH
+    width = extractor.WALL_TEX_DISPLAY_WIDTH
     height = extractor.WALL_TEX_HEIGHT
     source_flat = _tone_curved_source(extractor, path)
     source = {(x, y): source_flat[y * width + x]
@@ -256,6 +256,14 @@ def main():
 
     wall_textures = generated_wall_textures(assets)
     assert len(wall_textures) == 53
+    # What actually reaches the screen: one texel per displayed pixel, which is
+    # what FREEDOOM_WALL_PACKED_PAIRS carries. Every quality contract below is
+    # measured on this, and emit_world_assets certifies the very same grids, so
+    # the test and the generator cannot be fed different pictures.
+    display_textures = {
+        name: extractor.convert_texture(extractor.texture_path(name), palette)
+        for name in wall_textures
+    }
     assert set(extractor.WALL_BAKE_RECIPES) == set(extractor.CURATED_WALL_MATERIALS)
     assert tuple(extractor.TECH_WALL_MATERIALS) == (
         "COMPTILE", "COMPUTE2", "LITE3", "STARG3",
@@ -278,7 +286,8 @@ def main():
             path, palette, use_wall_bake_recipe=False)
         candidate = extractor.convert_texture(
             path, palette, use_wall_bake_recipe=True)
-        assert generated == candidate, "%s generated bake drifted" % texture_name
+        emitted = [extractor.pair_column_texels(row) for row in candidate]
+        assert generated == emitted, "%s generated bake drifted" % texture_name
         if texture_name not in extractor.CURATED_WALL_MATERIALS:
             assert current == candidate, "%s changed outside curated set" % texture_name
 
@@ -287,16 +296,23 @@ def main():
     door_count = generated_define(assets, "FREEDOOM_WALL_DOOR_TEXTURE_COUNT")
     packed_pair_bytes = (4 * (len(wall_textures) + door_count) *
                          extractor.WALL_TEX_WIDTH * extractor.WALL_TEX_HEIGHT)
+    # Unchanged by the sub-texel pair change: the same byte count now carries
+    # WALL_TEX_DISPLAY_WIDTH texels per row instead of WALL_TEX_WIDTH.
     assert packed_pair_bytes == 2195456
 
     curated_metrics = [wall_bake_preview.texture_metrics(name)
                        for name in extractor.TECH_WALL_MATERIALS]
     strict_improvements = wall_bake_preview.certify_metrics(curated_metrics)
+    # COMPTILE joined this list when the bake moved to the display grid: its
+    # edge F1 goes 0.493 -> 0.521 because the 2:1 horizontal average that used
+    # to blur its tile grid is gone. Every hard guard in certify_metrics
+    # (churn ceiling and margin, isolated texels, 5% perceptual error, edge
+    # regression) still holds for all eight.
     assert strict_improvements == [
-        "COMPUTE2", "STARG3", "STARGR1", "STARTAN1", "STARTAN3",
+        "COMPTILE", "COMPUTE2", "STARG3", "STARGR1", "STARTAN1", "STARTAN3",
         "SUPPORT2",
     ]
-    wall_bake_preview.certify_compute2_facade(wall_textures["COMPUTE2"])
+    wall_bake_preview.certify_compute2_facade(display_textures["COMPUTE2"])
 
     # "Churn" -- the share of horizontally adjacent texel pairs with different
     # palette indices -- is the direct measure of the salt-and-pepper noise that
@@ -308,15 +324,18 @@ def main():
     # earth ramp and WALL_SMOOTH_WEIGHT, the worst materials sat at 56-71%.
     # EXITDOOR is the one legitimate outlier: a one-off decorative door whose
     # source genuinely alternates gilt, grey and red at texel frequency.
-    CHURN_LIMIT = 0.35
+    # Measured on the DISPLAY grid -- one texel per screen pixel, which is what
+    # FREEDOOM_WALL_PACKED_PAIRS carries and the eye sees. The emitted
+    # FREEDOOM_WALL_TEXTURES is a decimation for the door overlay and is the
+    # noisiest possible view of a material, so it is the wrong thing to gate on.
+    CHURN_LIMIT = extractor.WALL_CHURN_LIMIT
     CHURN_EXEMPT = {"EXITDOOR", "TEKWALL2", "TEKWALL5"}
-    for texture_name, rows in sorted(wall_textures.items()):
+    for texture_name in sorted(display_textures):
         with Image.open(extractor.texture_path(texture_name)) as image:
             active_height = extractor.sampled_texture_dimensions(
                 texture_name, image.width, image.height)[1]
-        churn = sum(1 for row in rows[:active_height] for x in range(len(row) - 1)
-                    if row[x] != row[x + 1])
-        churn /= active_height * (len(rows[0]) - 1)
+        rows = display_textures[texture_name]
+        churn = extractor.horizontal_churn(rows, active_height)
         vertical_churn = sum(
             1 for y in range(active_height - 1)
             for x in range(len(rows[0]))
@@ -344,7 +363,7 @@ def main():
     # be inventing detail Doom never drew.
     UNIFORM_MATERIALS = ("LITE3", "COMPTILE", "DOORSTOP", "STARGR1", "SUPPORT2")
     SOLID_MATERIALS = {"DOOR1"}
-    for texture_name, rows in sorted(wall_textures.items()):
+    for texture_name, rows in sorted(display_textures.items()):
         flat = [value for row in rows for value in row]
         counts = Counter(flat)
         structural = [index for index, hits in counts.items()
@@ -362,7 +381,7 @@ def main():
     # in Oklab, so this is enforced perceptually. Reuses the same function the
     # bake fails on, so the test and the generator cannot disagree.
     solid = extractor.certify_flat_wall_contrast(
-        palette, wall_textures, shade_lut, ceiling_index, floor_index)
+        palette, display_textures, shade_lut, ceiling_index, floor_index)
     assert solid, "expected some near-solid wall materials to guard against"
 
     sector_visuals = re.search(

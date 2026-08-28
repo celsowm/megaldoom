@@ -108,7 +108,17 @@ def main():
     assert "packed_wall_column" in renderer_scene
     assert "FREEDOOM_WALL_DOOR_TEXTURE_INDEX" in renderer_scene
     assert "FREEDOOM_WALL_DOOR_TEXTURE_COUNT" in world_assets_source
-    assert "level[texel] * 0x11" in world_assets_source
+    # Both packed tables go through packed_pair_byte, and a byte carries the
+    # two pixels of one stride-2 sample as independent nibbles (high = even
+    # pixel). Checked functionally rather than by matching source text.
+    assert "packed_pair_byte" in world_assets_source
+    assert "* 0x11" not in world_assets_source, (
+        "packed bytes must carry two texels, not one index twice")
+    identity = list(range(16))
+    assert world_assets.packed_pair_byte(identity, 0xA, 0x3) == 0xA3
+    assert world_assets.packed_pair_byte(identity, 0x7, 0x7) == 0x77
+    darker = [0] * 16
+    assert world_assets.packed_pair_byte(darker, 0xA, 0x3) == 0x00
     assert world_assets.texture_u_scale_q12(24) > 0
     assert "FREEDOOM_WALL_TEXTURE_USCALE_Q12[tid]" in (
         ROOT / "src/bsp/bsp_render.c").read_text()
