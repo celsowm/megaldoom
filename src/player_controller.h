@@ -24,9 +24,21 @@
 // B held, as opposed to PLAYER_CONTROL_FIRE's rising edge. Only the automatic
 // weapons (chaingun, chainsaw) act on this; everything else stays semi-auto.
 #define PLAYER_CONTROL_FIRE_HELD 0x0040
+// The weapon bob offset moved this update (momentum bob advanced or decayed to
+// neutral) without the player necessarily crossing a whole-pixel world step, so
+// the renderer still needs a frame to re-apply the BG_A scroll. Cheaper than
+// PLAYER_CONTROL_CHANGED: it only asks for a weapon-overlay redraw, no re-cast.
+#define PLAYER_CONTROL_WEAPON_BOB 0x0080
 
 void player_controller_reset(void);
 u16 player_controller_update(PlayerState *player, u16 elapsed_frames, u16 latched_pressed);
+
+// Doom-style weapon bob, in screen pixels, recomputed on the 35 Hz movement
+// simulation from player momentum (never from raw D-pad state). The renderer
+// applies these as an offset from the weapon's neutral origin; a stationary
+// player reads (0, 0). Horizontal is +/-, vertical is 0..N (positive lobe).
+s16 player_controller_weapon_bob_x(void);
+s16 player_controller_weapon_bob_y(void);
 
 // Called from the V-Int callback while poll is active: refreshes the pad and
 // ORs any newly-pressed bits into a latch, so a tap shorter than one main-loop

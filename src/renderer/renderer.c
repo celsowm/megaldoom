@@ -75,11 +75,17 @@ static void init_video(void) {
     VDP_setHInterrupt(FALSE);
     VDP_setHilightShadow(FALSE);
     VDP_setTextPlane(BG_A);
+    // Weapon bob scrolls BG_A as a whole plane; keep both axes in plain-scroll
+    // mode (the frontend leaves it here, but do not depend on that).
+    VDP_setScrollingMode(HSCROLL_PLANE, VSCROLL_PLANE);
+    VDP_setHorizontalScroll(BG_A, 0);
+    VDP_setVerticalScroll(BG_A, 0);
 
     load_game_palettes();
 
     VDP_clearPlane(BG_A, TRUE);
     VDP_clearPlane(BG_B, TRUE);
+    VDP_clearPlane(WINDOW, TRUE);
     VDP_setBackgroundColor(0);
 }
 
@@ -229,6 +235,7 @@ void renderer_init(void) {
     init_video();
     init_hud_tiles();
     init_view_tilemap();
+    renderer_hud_window_setup();
     g_view_dirty_bank_mask = 0;
 #if RENDERER_SPARSE_FB
     init_static_atlas();

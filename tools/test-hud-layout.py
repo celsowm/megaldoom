@@ -87,7 +87,12 @@ def main() -> int:
     assert "s_last_ammo = ammo_key;" in hud
     # 0xFFFE must not collide with a real count: the field clamps at 999.
     assert "const u16 limit = (max_digits == 3) ? 999 : 99;" in hud
-    assert "VDP_setTileMapXY(BG_A" in hud
+    # The status numbers ride the WINDOW plane, not BG_A: BG_A is whole-plane
+    # scrolled for Doom weapon bob (renderer_frame_overlay.c) and the bar must
+    # stay put. The window is pinned over the bottom HUD_PANEL_H rows.
+    assert "VDP_setTileMapXY(WINDOW" in hud
+    assert "VDP_setTileMapXY(BG_A" not in hud
+    assert "VDP_setWindowOnBottom(HUD_PANEL_H)" in hud
     assert "VDP_drawText" not in hud and "VDP_setTextPalette" not in hud
     assert "FREEDOOM_HUD_DIGIT_PALETTE" in renderer
     assert "HUD number tiles overlap the SGDK font VRAM region" in internal

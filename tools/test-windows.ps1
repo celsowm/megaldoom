@@ -83,6 +83,11 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
+& python (Join-Path $PSScriptRoot "test-weapon-bob.py")
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
 & python (Join-Path $PSScriptRoot "test-bsp-render-math.py")
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE

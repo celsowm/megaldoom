@@ -29,6 +29,10 @@ void renderer_render_scene(const RayColumn *columns,
                            bool low_health_warning) {
     const bool rebuild_base = (bool)(base_dirty ||
         renderer_overlay_requires_base_rebuild());
+    // Present the latest 35 Hz bob offset as a BG_A scroll. Cheap and idempotent;
+    // the controller owns the phase/amplitude, the renderer only reads it.
+    renderer_apply_weapon_bob(player_controller_weapon_bob_x(),
+                              player_controller_weapon_bob_y());
 #if DEBUG_PERF
     u32 stage_start = getSubTick();
     renderer_reset_frame_modified();

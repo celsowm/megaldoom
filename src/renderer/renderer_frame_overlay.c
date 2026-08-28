@@ -49,6 +49,30 @@ void renderer_draw_weapon_flash(void) {
     draw_weapon_overlay(TRUE);
 }
 
+// BG_A now holds only the weapon tilemap (the status-bar numbers moved to the
+// WINDOW plane), so a whole-plane scroll bobs the weapon at pixel precision for
+// the cost of one VDP register write and zero tile DMA. The last-applied cache
+// keeps a steady walk from re-poking the register.
+//
+// SGDK plane-scroll convention: +H shifts the plane right (so +bob_x tracks the
+// weapon right), +V shifts the plane up. bob_y is Doom's always-positive lobe
+// and only ever DIPS the gun down (-V): the 3D view is parked flush against the
+// status bar (VIEW_TILEMAP_Y), so the gun's bottom rows dip into the WINDOW/HUD
+// region where plane A is suppressed and the cut-off edge is never seen. A
+// downward dip also reveals a sliver of scene above the hands, exactly like
+// Doom. Lifting the gun (+V) would float its base over the floor, so bob_y is
+// never negative.
+static s16 s_bob_applied_x = -1;
+static s16 s_bob_applied_y = -1;
+
+void renderer_apply_weapon_bob(s16 bob_x, s16 bob_y) {
+    if (bob_x == s_bob_applied_x && bob_y == s_bob_applied_y) return;
+    s_bob_applied_x = bob_x;
+    s_bob_applied_y = bob_y;
+    VDP_setHorizontalScroll(BG_A, bob_x);
+    VDP_setVerticalScroll(BG_A, (s16)-bob_y);
+}
+
 void draw_overlay_ops(const MegalDoomOverlayRowOp *ops, u16 count) {
     u32 *base = &g_view_tiles[0][0];
 
@@ -62,4 +86,12 @@ void draw_overlay_ops(const MegalDoomOverlayRowOp *ops, u16 count) {
 
 void frame_overlay_reset(void) {
     g_last_weapon_variant = -1;
+    // Park the weapon at its neutral origin. A scene invalidate / level load /
+    // menu return may have left BG_A scrolled or had the frontend move it, so
+    // write the registers unconditionally here (and prime the cache to force the
+    // next apply to write too).
+    s_bob_applied_x = -1;
+    s_bob_applied_y = -1;
+    VDP_setHorizontalScroll(BG_A, 0);
+    VDP_setVerticalScroll(BG_A, 0);
 }

@@ -111,6 +111,11 @@ static void draw_hud_number(const HudNumberField *field, u16 value) {
     draw_hud_number_ex(field, value, FALSE);
 }
 
+// The number fields sit on the WINDOW plane, not BG_A: BG_A is whole-plane
+// scrolled for weapon bob (renderer_frame_overlay.c) and the status bar must not
+// ride along. The window covers the bottom HUD_PANEL_H rows; its other cells are
+// transparent tile 0 so the BG_B backdrop and face show through exactly as when
+// this lived on BG_A.
 static void draw_hud_number_tilemap(void) {
     const HudNumberField *fields[4] = {
         &HUD_AMMO_FIELD, &HUD_HEALTH_FIELD, &HUD_FRAGS_FIELD, &HUD_ARMOR_FIELD
@@ -121,11 +126,25 @@ static void draw_hud_number_tilemap(void) {
             for (u16 x = 0; x < field->tile_w; x++) {
                 const u16 tile_id = (u16)(HUD_NUMBER_TILE_BASE + field->vram_offset +
                                           y * field->tile_w + x);
-                VDP_setTileMapXY(BG_A, TILE_ATTR_FULL(PAL1, FALSE, FALSE, FALSE, tile_id),
+                VDP_setTileMapXY(WINDOW, TILE_ATTR_FULL(PAL1, FALSE, FALSE, FALSE, tile_id),
                                  (u16)(field->tile_x + x), (u16)(HUD_PANEL_Y + y));
             }
         }
     }
+}
+
+void renderer_hud_window_setup(void) {
+    // Clear the status-bar rows of the window nametable, pin the window over the
+    // bottom HUD_PANEL_H rows, then (re)paint the number cells into it.
+    VDP_fillTileMapRect(WINDOW, 0, 0, HUD_PANEL_Y, SCREEN_TILE_W, HUD_PANEL_H);
+    VDP_setWindowOnBottom(HUD_PANEL_H);
+    draw_hud_number_tilemap();
+}
+
+void renderer_hud_window_suspend(void) {
+    // The pause/menu panels draw a full-screen BG_A image; the window plane
+    // would otherwise keep the stale status numbers painted over their bottom.
+    VDP_setWindowOff();
 }
 
 static void draw_hud_backdrop(void) {
@@ -197,7 +216,7 @@ static u16 s_last_armor = 0xFFFF;
 
 void renderer_draw_static_screen(void) {
     draw_hud_backdrop();
-    draw_hud_number_tilemap();
+    renderer_hud_window_setup();
     s_last_face_frame = 0xFFFF;
     s_last_ammo = 0xFFFF;
     s_last_health = 0xFFFF;

@@ -48,6 +48,9 @@ static void frontend_video_init(void) {
     VDP_setHorizontalScroll(BG_B, 0);
     VDP_setVerticalScroll(BG_A, 0);
     VDP_setVerticalScroll(BG_B, 0);
+    // Gameplay parks the status bar on the window plane (BG_A is scrolled for
+    // weapon bob); the menus/cards own the whole of BG_A, so drop the window.
+    VDP_setWindowOff();
     VDP_setHInterrupt(FALSE);
     VDP_setHilightShadow(FALSE);
     clear_plane_cpu(BG_A);
@@ -751,11 +754,11 @@ DoomSkill frontend_run(void) {
 }
 
 // Centred in the 20-tile-wide (160px) view region (VIEW_TILEMAP_X 10 ..
-// VIEW_TILEMAP_X+19), well above the weapon overlay (which starts at view
-// row 10, i.e. screen tile row 15) so the prompt never fights the weapon
-// sprite for the same tiles.
+// VIEW_TILEMAP_X+19), near the top of the view (screen tile row 12 =
+// VIEW_TILEMAP_Y 9 + 3) so the prompt never fights the weapon overlay lower
+// down for the same tiles.
 #define DEATH_PROMPT_X 14
-#define DEATH_PROMPT_Y 8
+#define DEATH_PROMPT_Y 12
 
 void frontend_load_death_prompt(u16 tile_base) {
     VDP_loadTileSet(frontend_death_prompt.tileset, tile_base, DMA);

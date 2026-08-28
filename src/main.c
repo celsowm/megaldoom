@@ -379,6 +379,9 @@ int main(bool hard) {
             // The pause menu drives its own JOY_update loops; stop the ISR
             // poll so the two never race the same pad read.
             player_controller_set_poll_active(FALSE);
+            // The pause panel is a full-screen BG_A image; drop the window plane
+            // so the status numbers do not stay painted over its bottom rows.
+            renderer_hud_window_suspend();
             const FrontendPauseAction pause_action =
                 frontend_run_pause(renderer_get_menu_tile_base());
             if (pause_action == FRONTEND_PAUSE_QUIT_TO_TITLE) {
@@ -510,6 +513,12 @@ int main(bool hard) {
                 g_weapon_flash = 0;
                 renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_WEAPON);
             }
+        }
+
+        if ((control & PLAYER_CONTROL_WEAPON_BOB) != 0) {
+            // Bob advanced (or decayed to neutral) without a whole-pixel world
+            // step: a weapon-overlay frame re-applies the BG_A scroll, no cast.
+            renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_WEAPON);
         }
 
         if ((control & PLAYER_CONTROL_CHANGED) != 0) {

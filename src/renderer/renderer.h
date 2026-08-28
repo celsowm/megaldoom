@@ -35,6 +35,16 @@ void renderer_draw_static_screen(void);
 void renderer_draw_hud(const RendererHudState *state);
 u16 renderer_get_menu_tile_base(void);
 void renderer_restore_after_menu(void);
+
+// The status-bar number fields live on the WINDOW plane (bottom HUD_PANEL_H
+// rows) so BG_A carries nothing but the weapon and can be whole-plane scrolled
+// for Doom weapon bob. Sets up / tears down that window region.
+void renderer_hud_window_setup(void);
+void renderer_hud_window_suspend(void);
+// Apply the controller's momentum-derived bob offset (screen pixels) as a BG_A
+// hardware scroll. Two VDP register writes, no tile DMA; a no-op when the offset
+// is unchanged. Pass (0, 0) to park the weapon at its neutral origin.
+void renderer_apply_weapon_bob(s16 bob_x, s16 bob_y);
 void renderer_render_scene(const RayColumn *columns,
                            const PlayerState *player,
                            const RaySceneColors *scene_colors,

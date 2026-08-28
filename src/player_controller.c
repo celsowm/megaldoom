@@ -28,6 +28,44 @@
 
 #define THREE_BUTTON_AUTOMAP_CHORD (BUTTON_A | BUTTON_B | BUTTON_C)
 
+// --- Doom-style weapon bob (P_CalcBob analogue) ------------------------------
+// Doom derives bob magnitude from |momentum|^2 clamped to MAXBOB, so running
+// pins the bob and walking sits a little below it, and the weapon keeps moving
+// while friction bleeds momentum off after the stick is released. MegaLDOOM
+// reproduces the *observable* motion without the 64-bit FixedMul: the momentum
+// magnitude is approximated with the alpha-max-plus-beta-min octagonal norm
+// (no sqrt, no extra table, no __mulsi3 in the hot loop), which also makes the
+// amplitude linear in speed so walk vs run land near Doom's ~1:2 ratio.
+//
+// Phase advances once per 35 Hz movement tic (never per rendered frame). The
+// horizontal offset is amplitude*cos(phase); the vertical offset folds the
+// phase onto a half circle so it runs at twice the frequency and stays on the
+// positive lobe, matching Doom's `angle &= FINEANGLES/2 - 1` trick.
+//
+// Every constant below is a visual tuning target, not a gameplay contract:
+// gameplay momentum stays authoritative and untouched.
+#define BOB_MOMENTUM_SHIFT 12   // s_momentum_* (Q16.16) -> compact per-axis word
+#define BOB_MAG_MAX        360  // ~running speed; amplitude saturates from here
+#define BOB_X_NUM          14   // horizontal amplitude numerator
+#define BOB_Y_NUM          14   // vertical amplitude numerator
+#define BOB_TRIG_SHIFT     17   // (mag * fx_trig * NUM) >> shift -> pixels
+// Doom sways the weapon ~+/-16px horizontally and dips it ~0..16px at 320x200;
+// MegaLDOOM's view is 120px tall so the throw scales to ~+/-10 / 0..10. The
+// vertical dip only ever moves the gun DOWN (Doom's positive-lobe wave), and the
+// 3D view is parked flush against the status bar so the gun's bottom dips into
+// the WINDOW/HUD region where plane A is suppressed -- the cut-off edge is never
+// seen. Lifting the gun (negative dip) would float it, so the wave stays >= 0.
+#define BOB_MAX_X          10   // horizontal swing, +/- pixels
+#define BOB_MAX_Y          10   // vertical dip, 0..pixels (downward only)
+// One full horizontal cos cycle every 20 Doom tics, like Doom's FINEANGLES/20.
+#define BOB_TICS_PER_CYCLE 20
+#define BOB_PHASE_STEP     ((ANGLE_STEPS + BOB_TICS_PER_CYCLE / 2) / BOB_TICS_PER_CYCLE)
+// How many tics the bob keeps running after the last whole-pixel move. Bridges
+// the sub-pixel gaps of a slow walk, but short enough that shoving into a wall
+// (momentum stays high, but the player stops translating) eases the weapon back
+// to neutral instead of racing the walk cadence on the spot.
+#define BOB_MOVE_GRACE_TICS 4
+
 static u16 s_previous_joy = 0;
 static bool s_three_button_map_chord_active = FALSE;
 // Last direction the C+UP/C+DOWN weapon chord was held in (0 = not held), so
@@ -44,6 +82,10 @@ static u16 s_doom_tic_accumulator = 0;
 static s16 s_turn_speed_fp = 0; // per-vsync fixed-point turn rate
 static s16 s_turn_remainder_fp = 0;
 static s16 s_turn_dir = 0;
+static u16 s_weapon_bob_phase = 0;
+static s16 s_weapon_bob_x = 0;
+static s16 s_weapon_bob_y = 0;
+static u8 s_weapon_bob_move_grace = 0;
 
 static s32 player_muls_word(s16 left, s16 right) {
     s32 result = left;
@@ -75,6 +117,59 @@ static s32 consume_position_delta(s32 momentum, s32 *remainder) {
     *remainder = (total >= 0) ? (total & 0xFFFFL) : -((-total) & 0xFFFFL);
     return whole;
 }
+
+// Recompute the weapon bob from the momentum left after this tic's friction.
+// Runs at the 35 Hz movement rate; the renderer only ever reads the result.
+// `moved` is whether the player crossed a whole world pixel this tic.
+static void update_weapon_bob(bool moved) {
+    if (moved) {
+        s_weapon_bob_move_grace = BOB_MOVE_GRACE_TICS;
+    } else if (s_weapon_bob_move_grace > 0) {
+        s_weapon_bob_move_grace--;
+    }
+
+    s32 mx = s_momentum_x >> BOB_MOMENTUM_SHIFT;
+    s32 my = s_momentum_y >> BOB_MOMENTUM_SHIFT;
+    if (mx < 0) mx = -mx;
+    if (my < 0) my = -my;
+    const s32 hi = (mx > my) ? mx : my;
+    const s32 lo = (mx > my) ? my : mx;
+    s32 mag = hi + (lo >> 1);
+    if (mag > BOB_MAG_MAX) mag = BOB_MAG_MAX;
+
+    if (mag == 0 || s_weapon_bob_move_grace == 0) {
+        // Stopped, or pinned against a wall with the stick still held: ease the
+        // weapon back to neutral 1px/tic (holding the phase so a walk that
+        // resumes picks up mid-cycle) instead of running the cadence in place.
+        if (s_weapon_bob_x > 0) s_weapon_bob_x--;
+        else if (s_weapon_bob_x < 0) s_weapon_bob_x++;
+        if (s_weapon_bob_y > 0) s_weapon_bob_y--;
+        if (s_weapon_bob_x == 0 && s_weapon_bob_y == 0) s_weapon_bob_phase = 0;
+        return;
+    }
+
+    s_weapon_bob_phase = (u16)((s_weapon_bob_phase + BOB_PHASE_STEP) & ANGLE_MASK);
+
+    // mag and fx_* both fit a word, so keep the products muls.w-sized (like the
+    // thrust path) and let GCC lower the small *NUM into shift/add.
+    s32 bob_x = (player_muls_word((s16)mag, fx_cos(s_weapon_bob_phase)) * BOB_X_NUM)
+                >> BOB_TRIG_SHIFT;
+    if (bob_x > BOB_MAX_X) bob_x = BOB_MAX_X;
+    else if (bob_x < -BOB_MAX_X) bob_x = -BOB_MAX_X;
+
+    // Fold the phase onto a half circle: sin over [0, pi) is the positive lobe,
+    // repeated twice per horizontal cycle -> 2x frequency, offset stays >= 0.
+    s16 vwave = fx_sin((u16)(s_weapon_bob_phase & (ANGLE_STEPS / 2 - 1)));
+    if (vwave < 0) vwave = (s16)-vwave;
+    s32 bob_y = (player_muls_word((s16)mag, vwave) * BOB_Y_NUM) >> BOB_TRIG_SHIFT;
+    if (bob_y > BOB_MAX_Y) bob_y = BOB_MAX_Y;
+
+    s_weapon_bob_x = (s16)bob_x;
+    s_weapon_bob_y = (s16)bob_y;
+}
+
+s16 player_controller_weapon_bob_x(void) { return s_weapon_bob_x; }
+s16 player_controller_weapon_bob_y(void) { return s_weapon_bob_y; }
 
 static bool simulate_doom_movement_tic(PlayerState *player, s16 forward_command,
                                        s16 strafe_command) {
@@ -109,7 +204,9 @@ static bool simulate_doom_movement_tic(PlayerState *player, s16 forward_command,
         s_momentum_x = apply_doom_friction(s_momentum_x);
         s_momentum_y = apply_doom_friction(s_momentum_y);
     }
-    return player->x != old_x || player->y != old_y;
+    const bool moved = (player->x != old_x) || (player->y != old_y);
+    update_weapon_bob(moved);
+    return moved;
 }
 
 void player_controller_reset(void) {
@@ -124,6 +221,10 @@ void player_controller_reset(void) {
     s_turn_speed_fp = 0;
     s_turn_remainder_fp = 0;
     s_turn_dir = 0;
+    s_weapon_bob_phase = 0;
+    s_weapon_bob_x = 0;
+    s_weapon_bob_y = 0;
+    s_weapon_bob_move_grace = 0;
 }
 
 void player_controller_vint_poll(void) {
@@ -220,6 +321,8 @@ u16 player_controller_update(PlayerState *player, u16 elapsed_frames, u16 latche
         }
     }
 
+    const s16 bob_x_before = s_weapon_bob_x;
+    const s16 bob_y_before = s_weapon_bob_y;
     s_doom_tic_accumulator = (u16)(s_doom_tic_accumulator +
         (elapsed_frames << 5) + (elapsed_frames << 1) + elapsed_frames);
     while (s_doom_tic_accumulator >= VIDEO_VBLANKS_PER_SECOND) {
@@ -227,6 +330,12 @@ u16 player_controller_update(PlayerState *player, u16 elapsed_frames, u16 latche
         if (simulate_doom_movement_tic(player, target_forward, target_strafe)) {
             result |= PLAYER_CONTROL_CHANGED;
         }
+    }
+    // The bob can advance (or settle back to neutral during the friction tail)
+    // on a tic that moved the player less than a whole world pixel, so ask for a
+    // weapon-overlay frame whenever the offset actually changed.
+    if (s_weapon_bob_x != bob_x_before || s_weapon_bob_y != bob_y_before) {
+        result |= PLAYER_CONTROL_WEAPON_BOB;
     }
 
     if (three_button_map_chord) {

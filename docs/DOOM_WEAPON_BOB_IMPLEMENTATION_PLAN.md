@@ -4,6 +4,31 @@
 
 Proposed implementation plan for reproducing the original Doom weapon/hand bob behavior in MegaLDOOM while respecting Mega Drive VDP constraints and the project's existing 35 Hz movement simulation.
 
+## Implementation Note (2026-08-27)
+
+Phase 1 (bob simulation state in `player_controller.c`) shipped as written.
+
+Phases 2-6 (hardware-sprite weapon renderer) were **not** taken. Investigation
+found: (a) gameplay uses zero hardware sprites, so the SAT is free, but (b) the
+weapon VRAM window is only 72 tiles (`WEAPON_TILE_BASE 1368` ->
+`HUD_VRAM_SAFE_TILE_LIMIT 1440`) and the largest weapon already needs 69 with the
+tilemap path's per-cell transparent indirection and idle/fire dedup, neither of
+which a sprite-piece layout keeps — the big weapons would not fit without
+cropping the art or dropping fire-frame sprites.
+
+Instead the bob is applied as a **whole-plane BG_A hardware scroll**. The plan's
+only stated objection to "moving the tilemap" was 8-pixel snapping, which does
+not apply to the scroll registers (pixel precision, two VDP writes, no DMA). The
+one structural change: BG_A also held the four status-bar number fields, so those
+moved to the WINDOW plane (pinned over the bottom `HUD_PANEL_H` rows) and BG_A
+now carries nothing but the weapon. See `renderer_frame_overlay.c`
+(`renderer_apply_weapon_bob`), `renderer_hud.c` (`renderer_hud_window_setup`) and
+`PLAYER_CONTROL_WEAPON_BOB` in `player_controller.c` / `main.c`.
+
+The Definition of Done still holds except "the weapon no longer depends on a
+BG_A tilemap rectangle" — it does, it is just scrolled rather than repositioned
+cell-by-cell.
+
 ## Goal
 
 Implement Doom-style first-person weapon bob in MegaLDOOM so that the weapon and the Doomguy's hands move naturally while the player walks or runs, with motion driven by the same momentum used by gameplay physics rather than by raw input state.

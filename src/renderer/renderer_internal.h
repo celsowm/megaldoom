@@ -52,7 +52,13 @@ static inline u16 view_tile_index(u16 tile_x, u16 tile_y) {
 #define WEAPON_TILE_BASE (HUD_NUMBER_TILE_BASE + HUD_NUMBER_TILE_COUNT)
 #define HUD_VRAM_SAFE_TILE_LIMIT 1440
 #define VIEW_TILEMAP_X 10
-#define VIEW_TILEMAP_Y 5
+// The 3D view is parked flush against the top of the status bar (its last row is
+// the one immediately above HUD_PANEL_Y; see the static check below) so the
+// weapon bottom-anchors to the HUD edge like Doom and a downward weapon-bob
+// scroll dips the gun into the WINDOW (HUD) region, where plane A is suppressed
+// and the gun's cut-off bottom edge is never seen. The freed space is a taller
+// black border above the view.
+#define VIEW_TILEMAP_Y 9
 #define SCREEN_TILE_W 40
 #define SCREEN_TILE_H 28
 #define HUD_PANEL_X 0
@@ -84,6 +90,9 @@ static inline u16 view_tile_index(u16 tile_x, u16 tile_y) {
 #endif
 #if (HUD_NUMBER_TILE_BASE + HUD_NUMBER_TILE_COUNT) > HUD_VRAM_SAFE_TILE_LIMIT
 #error "HUD number tiles overlap the SGDK font VRAM region"
+#endif
+#if (VIEW_TILEMAP_Y + VIEW_TILE_H) != HUD_PANEL_Y
+#error "3D view must be flush with the top of the status bar (weapon-bob anchor)"
 #endif
 
 extern u32 g_view_tiles[VIEW_TILE_COUNT][8];

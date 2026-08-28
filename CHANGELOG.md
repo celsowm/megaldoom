@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+- Added Doom-style weapon bob. `player_controller.c` (`update_weapon_bob`,
+  exposed via `player_controller_weapon_bob_x/y`) derives a momentum-based,
+  35 Hz-tic-driven pixel offset (octagonal-norm magnitude, no 64-bit math) with
+  a half-circle-folded 2x vertical wave; it keeps bobbing through the friction
+  tail after input release and re-centres on an exact stop.
+- Wired that offset to the weapon as a BG_A hardware-scroll (two VDP register
+  writes/frame, zero tile DMA): the status-bar numbers moved to the WINDOW plane
+  (bottom `HUD_PANEL_H` rows) so BG_A now carries nothing but the weapon and can
+  be whole-plane scrolled without dragging the HUD. Replaces the sprite-weapon
+  route in `docs/DOOM_WEAPON_BOB_IMPLEMENTATION_PLAN.md` (see its Implementation
+  Note); no asset-generator or VRAM-map changes. `PLAYER_CONTROL_WEAPON_BOB`
+  asks for a cheap weapon-overlay frame when the bob moves without a whole-pixel
+  world step. Contracts in `tools/test-weapon-bob.py`.
+- Tuned the bob after play tests: swing widened to `+/-10 px` horizontal,
+  `0..10 px` vertical dip (downward only, Doom's positive lobe). To give the
+  vertical dip somewhere to go, the 3D view was dropped 4 tile-rows to sit flush
+  against the top of the status bar (`VIEW_TILEMAP_Y 5 -> 9`, freed space becomes
+  a taller black border above the view). The weapon now bottom-anchors to the
+  HUD edge, and a downward bob dips its base into the WINDOW/HUD region where
+  plane A is suppressed, so the gun's cut-off bottom edge is never visible.
+  Death prompt moved with the view (`DEATH_PROMPT_Y 8 -> 12`).
+- Weapon bob now eases back to neutral when the player stops translating even
+  though momentum stays high -- i.e. shoving into a wall no longer races the walk
+  cadence on the spot. `update_weapon_bob` takes the tic's real "did the player
+  move a whole pixel" result; a short grace window (`BOB_MOVE_GRACE_TICS`) bridges
+  a slow walk's sub-pixel gaps, and past it the offset decays 1px/tic (phase
+  held) instead of advancing.
 - Generated raw E1M1 THINGS into ROM and spawn a curated set of 102 gameplay
   entities: pickups, enemies, candles/lamp-style props, columns and barrels.
 - Added a generated 15-sprite billboard world atlas, functional health/armor/
