@@ -10,13 +10,16 @@ import flat_map_preview
 from flat_map_recipes import (FLAT_MATERIAL_TRANSFER_RECIPES,
                               resolve_flat_material_transfers)
 from wad_reader import WadFile
+from wad_source import EXPECTED_CAMPAIGN_WAD_SHA256 as EXPECTED_SHA256
+from e1m1_expected import (E1M1_SEG_COUNT, E1M1_EXIT_SEG_INDEX,
+                           E1M1_CERTIFICATE_STATES, E1M1_CURATED_SOURCE_LINEDEF,
+                           E1M1_CURATED_TARGET_LINEDEFS)
 import doom_map
 import world_assets
 
 
 ROOT = Path(__file__).resolve().parents[1]
 WAD_PATH = ROOT / "DOOM1.WAD"
-EXPECTED_SHA256 = "77CD3852B5F7114EC64A07A1B1EF1F734736A13BBD186477C9111A7DD8C55F82"
 EXPECTED_PALETTE = (
     (0x00, 0x00, 0x00), (0x24, 0x00, 0x00),
     (0x00, 0x00, 0x6D), (0x24, 0x24, 0x24),
@@ -104,48 +107,60 @@ def test_current_wad_contract():
     candidate = doom_map.load_map(wad, "E1M1", apply_recipes=True)
     assert baseline.wad_sha256 == EXPECTED_SHA256
     assert candidate.wad_sha256 == EXPECTED_SHA256
-    assert len(baseline.out_segs) == len(candidate.out_segs) == 394
-    assert candidate.baseline_seg_count == 394
-    assert candidate.curated_material_linedefs == [40, 41, 42, 52, 53]
-    assert candidate.curated_material_segs == 5
+    assert len(baseline.out_segs) == len(candidate.out_segs) == E1M1_SEG_COUNT
+    assert candidate.baseline_seg_count == E1M1_SEG_COUNT
+    assert candidate.curated_material_linedefs == list(E1M1_CURATED_TARGET_LINEDEFS)
+    assert candidate.curated_material_segs == len(E1M1_CURATED_TARGET_LINEDEFS)
     assert [geometry_signature(seg) for seg in baseline.out_segs] == \
         [geometry_signature(seg) for seg in candidate.out_segs]
     assert candidate.out_ssectors == baseline.out_ssectors
     assert candidate.nodes == baseline.nodes
     assert candidate.certificate == baseline.certificate
-    assert candidate.certificate["exit_index"] == 309
-    assert candidate.certificate["states"] == 164
+    assert candidate.certificate["exit_index"] == E1M1_EXIT_SEG_INDEX
+    assert candidate.certificate["states"] == E1M1_CERTIFICATE_STATES
 
     changed = [candidate_seg for baseline_seg, candidate_seg in
                zip(baseline.out_segs, candidate.out_segs)
                if baseline_seg["texture_name"] != candidate_seg["texture_name"]]
-    assert len(changed) == 5
-    assert {seg["source_linedef"] for seg in changed} == {40, 41, 42, 52, 53}
+    assert len(changed) == len(E1M1_CURATED_TARGET_LINEDEFS)
+    assert {seg["source_linedef"] for seg in changed} == set(E1M1_CURATED_TARGET_LINEDEFS)
     assert {seg["texture_name"] for seg in changed} == {"COMPUTE2"}
     assert all(seg["curated_material"] for seg in changed)
+    # The recipe matches by geometry (endpoints/heights), not by linedef id, so
+    # renumbering (a different, correctly-verified source WAD) shifts which
+    # ids these are -- see tools/wad_source.py. What must hold regardless of
+    # numbering: the erased portal source line never becomes an output wall,
+    # and every retextured target line does.
     emitted_lines = {seg["source_linedef"] for seg in candidate.out_segs}
-    assert not ({37, 48, 49, 50, 51, 54} & emitted_lines)
+    assert candidate.curated_material_reports[0]["source_linedef"] not in emitted_lines
+    assert set(E1M1_CURATED_TARGET_LINEDEFS) <= emitted_lines
     assert candidate.curated_material_reports == [{
         "name": "start-room-computer-bank",
-        "source_linedef": 50,
+        "source_linedef": E1M1_CURATED_SOURCE_LINEDEF,
         "source_linedef_hint": 50,
-        "target_linedefs": [40, 41, 42, 52, 53],
+        "target_linedefs": list(E1M1_CURATED_TARGET_LINEDEFS),
         "target_linedef_hints": [40, 41, 42, 52, 53],
         "texture": "COMPUTE2",
-        "retextured_segs": 5,
+        "retextured_segs": len(E1M1_CURATED_TARGET_LINEDEFS),
         "added_segs": 0,
     }]
 
     map_text = (ROOT / "src/bsp/generated_e1m1_map.c").read_text()
     asset_text = (ROOT / "src/bsp/generated_assets.h").read_text()
+    targets_csv = ",".join(str(v) for v in E1M1_CURATED_TARGET_LINEDEFS)
     for text in (map_text, asset_text):
         assert "// Source SHA-256: %s" % EXPECTED_SHA256 in text
-        assert ("// Flat baseline/final: 394/394 SEGs; curated material: "
-                "5 linedefs / 5 SEGs") in text
-        assert "// Certified: exit SEG 309 reachable after 164 states" in text
-    assert ("// Curated material: start-room-computer-bank source linedef 50 "
-            "(hint 50) -> targets 40,41,42,52,53, COMPUTE2, "
-            "5 retextured, +0 SEGs") in map_text
+        assert ("// Flat baseline/final: %d/%d SEGs; curated material: "
+                "%d linedefs / %d SEGs" % (
+                    E1M1_SEG_COUNT, E1M1_SEG_COUNT,
+                    len(E1M1_CURATED_TARGET_LINEDEFS), len(E1M1_CURATED_TARGET_LINEDEFS))) in text
+        assert ("// Certified: exit SEG %d reachable after %d states" %
+                (E1M1_EXIT_SEG_INDEX, E1M1_CERTIFICATE_STATES)) in text
+    assert ("// Curated material: start-room-computer-bank source linedef %d "
+            "(hint 50) -> targets %s, COMPUTE2, "
+            "%d retextured, +0 SEGs" % (
+                E1M1_CURATED_SOURCE_LINEDEF, targets_csv,
+                len(E1M1_CURATED_TARGET_LINEDEFS))) in map_text
 
 
 def test_palette_texture_window_and_preview_contract():
@@ -165,7 +180,7 @@ def test_palette_texture_window_and_preview_contract():
     with tempfile.TemporaryDirectory() as temp_dir:
         clean, candidate, paths = flat_map_preview.build_preview(
             output_dir=Path(temp_dir))
-        assert len(clean.out_segs) == len(candidate.out_segs) == 394
+        assert len(clean.out_segs) == len(candidate.out_segs) == E1M1_SEG_COUNT
         assert len(paths) == 6
         assert all(path.is_file() for path in paths)
 

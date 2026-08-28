@@ -5,6 +5,10 @@ import re
 from collections import Counter
 from pathlib import Path
 
+from e1m1_expected import (E1M1_HEADER_ROW, E1M1_SEG_COUNT,
+                           E1M1_WALL_SEG_COUNT, E1M1_DOOR_SEG_COUNT,
+                           E1M1_EXIT_SEG_COUNT, E1M1_DOOR_GROUP_COUNT)
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -36,8 +40,7 @@ def main():
     world_assets_source = (ROOT / "tools/world_assets.py").read_text()
 
     assert re.search(
-        r"const BspMapData g_e1m1_map = \{.*?"
-        r"237u, 394u, 470u, 239u, 238u, 5u, 143u, 88u, 3u,",
+        r"const BspMapData g_e1m1_map = \{.*?" + re.escape(E1M1_HEADER_ROW),
         generated, re.S)
 
     vertices = [tuple(map(int, values)) for values in re.findall(
@@ -61,19 +64,18 @@ def main():
         assert len(values) == 11, values
         rows.append(values)
     types = Counter(row[7] for row in rows)
-    assert types == {doom_map.SEG_WALL: 371,
-                     doom_map.SEG_DOOR: 20,
-                     doom_map.SEG_EXIT: 1,
-                     doom_map.SEG_TRIGGER: 2}, types
+    # This WAD's E1M1 has no remote-trigger door lines (no SEG_TRIGGER segs):
+    # every door group's own linedef carries its direct-use special.
+    assert types == {doom_map.SEG_WALL: E1M1_WALL_SEG_COUNT,
+                     doom_map.SEG_DOOR: E1M1_DOOR_SEG_COUNT,
+                     doom_map.SEG_EXIT: E1M1_EXIT_SEG_COUNT}, types
     door_rows = [row for row in rows if row[7] == doom_map.SEG_DOOR]
     assert Counter(row[8] for row in door_rows) == {
-        0: 4, 1: 4, 2: 4, 3: 4, 4: 4}
+        group: 4 for group in range(E1M1_DOOR_GROUP_COUNT)}
     assert all(row[6] != 0 for row in door_rows), "E1M1 door used fallback texture"
     assert all(row[9] == doom_map.KEY_NONE for row in door_rows)
-    assert all(not (row[10] & doom_map.SEG_FLAG_DIRECT_USE)
-               for row in door_rows if row[8] == 0)
-    assert all(row[10] & doom_map.SEG_FLAG_DIRECT_USE
-               for row in door_rows if row[8] != 0)
+    assert all(row[10] & doom_map.SEG_FLAG_DIRECT_USE for row in door_rows), (
+        "every E1M1 door group's own linedef is directly usable")
 
     forbidden = ("BspLine", "BspRenderSeg", "BspSector", "portal",
                  "floor_height", "ceiling_height", "BSP_SECTOR_RENDERER")
@@ -141,7 +143,8 @@ def main():
     assert "target_count > 0" not in main_source
     assert "billboard_consume_key" not in main_source
 
-    print("ok    flat E1M1: 394 textured segs, 5 grouped doors, persistent RGB keys")
+    print("ok    flat E1M1: %d textured segs, %d grouped doors, persistent RGB keys" %
+          (E1M1_SEG_COUNT, E1M1_DOOR_GROUP_COUNT))
 
 
 if __name__ == "__main__":

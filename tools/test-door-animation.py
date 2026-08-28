@@ -3,6 +3,8 @@
 import re
 from pathlib import Path
 
+from e1m1_expected import E1M1_DOOR_SEG_COUNT
+
 ROOT = Path(__file__).resolve().parents[1]
 MAP = (ROOT / "src/bsp/bsp_map.c").read_text()
 HEADER = (ROOT / "src/bsp/bsp_map.h").read_text()
@@ -128,7 +130,7 @@ def main():
     doors = [row for row in rows if row[7] == 1]
     doortrak = int(re.search(r"#define MEGALDOOM_TEX_DOORTRAK (\d+)", ASSETS).group(1))
     tracks = [row for row in rows if row[6] == doortrak]
-    assert len(doors) == 20 and all(row[6] != 0 for row in doors)
+    assert len(doors) == E1M1_DOOR_SEG_COUNT and all(row[6] != 0 for row in doors)
     assert tracks and all(row[7] == 0 for row in tracks)
 
     # Geometry passability changes only at the fully-open endpoint, where the

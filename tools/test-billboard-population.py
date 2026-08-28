@@ -24,9 +24,17 @@ SKILL_FLAGS = {
 NOT_SINGLE_PLAYER_FLAG = 0x0010
 MAX_RUNTIME_OBJECTS = 207
 
+# 102 -> 98: the previous WAD did not match any official IWAD checksum (see
+# tools/wad-map-extract.py); its E1M1 carried an extra multiplayer-only loot
+# cluster (3 barrels + a shotgun, DOOM_THING flag 0x10 set) near the secret
+# room that the verified Doom Registered v1.9 IWAD (md5
+# 1cd63c5ddff1bf8ce844237f580e9cf3) does not have. That cluster was always
+# excluded from every single-player population by the NOT_SINGLE_PLAYER_FLAG
+# check below, so easy/normal/hard are unchanged byte-for-byte -- only the
+# multiplayer-only THING count moves.
 EXPECTED = {
     "e1m1": {
-        "curated": 102,
+        "curated": 98,
         "easy": (62, 4, 52, 6),
         "normal": (64, 6, 52, 6),
         "hard": (88, 29, 53, 6),

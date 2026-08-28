@@ -26,6 +26,7 @@ import bsp_emit
 import doom_map
 import world_assets
 from wad_reader import WadFile
+from wad_source import EXPECTED_CAMPAIGN_WAD_SHA256
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_WAD = os.path.join(PROJECT_ROOT, "DOOM1.WAD")
@@ -33,9 +34,7 @@ DEFAULT_WAD = os.path.join(PROJECT_ROOT, "DOOM1.WAD")
 DEFAULT_ASSET_OUT = os.path.join(PROJECT_ROOT, "src", "bsp", "generated_assets.h")
 DEFAULT_MAP_OUT_DIR = os.path.join(PROJECT_ROOT, "src", "bsp")
 DEFAULT_LIMITS_OUT = os.path.join(DEFAULT_MAP_OUT_DIR, "generated_map_limits.h")
-EXPECTED_CAMPAIGN_WAD_SHA256 = (
-    "77CD3852B5F7114EC64A07A1B1EF1F734736A13BBD186477C9111A7DD8C55F82"
-)
+
 
 bsp_emit.set_wall_tex_dims(world_assets.WALL_TEX_WIDTH,
                            world_assets.WALL_TEX_HEIGHT)

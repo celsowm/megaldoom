@@ -5,9 +5,11 @@ import hashlib
 import re
 from pathlib import Path
 
+from wad_source import EXPECTED_CAMPAIGN_WAD_SHA256 as EXPECTED_SHA256
+from e1m1_expected import E1M1_HEADER_ROW
+
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_SHA256 = "77CD3852B5F7114EC64A07A1B1EF1F734736A13BBD186477C9111A7DD8C55F82"
 
 
 def generated(name):
@@ -50,7 +52,7 @@ def main():
     assert "const BspMapData g_e1m1_map" in e1m1
     assert "const BspMapData g_e1m2_map" in e1m2
     assert "961u, 942u, 448u, 447u, 12u, 262u, 200u, 6u" in e1m2
-    assert "394u, 470u, 239u, 238u, 5u, 143u, 88u, 3u" in e1m1
+    assert E1M1_HEADER_ROW in e1m1
     assert "typedef struct {" in header and "BspMapData" in header
     assert "bsp_select_map(u16 level_index)" in runtime
     assert "g_bsp_map = &g_e1m2_map" in runtime
@@ -91,7 +93,12 @@ def main():
         assert token in frontend
     assert "ensure_extracted_assets" in generator
     assert "os.replace(staged, asset_root)" in generator
-    assert EXPECTED_SHA256 in generator
+    # The pinned hash lives in one place (tools/wad_source.py), imported here
+    # and by every other tool that must verify the campaign's source WAD --
+    # not copy-pasted per file.
+    assert "from wad_source import EXPECTED_CAMPAIGN_WAD_SHA256" in generator
+    wad_source = (ROOT / "tools" / "wad_source.py").read_text()
+    assert EXPECTED_SHA256 in wad_source
     assert rom_header.count("0x003FFFFF") >= 2
     assert "static u8 g_query_seen_generation[BSP_MAX_SEGS]" in runtime
     assert "static u8 g_node_side_generation[BSP_MAX_NODES]" in bsp_render

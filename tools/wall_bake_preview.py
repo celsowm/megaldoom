@@ -17,6 +17,9 @@ from PIL import Image, ImageDraw, ImageFont
 import flat_map_preview
 from flat_map_recipes import PREVIEW_POSES
 from wad_reader import WadFile
+from wad_source import EXPECTED_CAMPAIGN_WAD_SHA256 as EXPECTED_WAD_SHA256
+from e1m1_expected import (E1M1_SEG_COUNT, E1M1_DOOR_GROUP_COUNT,
+                           E1M1_EXIT_SEG_INDEX)
 import doom_map
 import world_assets
 
@@ -24,9 +27,6 @@ import world_assets
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_WAD = ROOT / "DOOM1.WAD"
 DEFAULT_OUTPUT = ROOT / "out" / "wall-bake-preview"
-EXPECTED_WAD_SHA256 = (
-    "77CD3852B5F7114EC64A07A1B1EF1F734736A13BBD186477C9111A7DD8C55F82"
-)
 PALETTE = list(world_assets.FROZEN_WORLD_PALETTE)
 TECH_MATERIALS = tuple(world_assets.TECH_WALL_MATERIALS)
 # The preview shows what reaches the screen: convert_texture() emits one
@@ -436,11 +436,11 @@ def build_preview(wad_path=DEFAULT_WAD, output_dir=DEFAULT_OUTPUT):
     map_data = doom_map.load_map(wad, "E1M1", apply_recipes=True)
     if map_data.wad_sha256 != EXPECTED_WAD_SHA256:
         raise AssertionError("unexpected WAD SHA-256 %s" % map_data.wad_sha256)
-    if len(map_data.out_segs) != 394:
-        raise AssertionError("E1M1 must retain 394 SEGs")
-    if map_data.next_door_group != 5:
-        raise AssertionError("E1M1 must retain five door groups")
-    if map_data.certificate["exit_index"] != 309:
+    if len(map_data.out_segs) != E1M1_SEG_COUNT:
+        raise AssertionError("E1M1 must retain %d SEGs" % E1M1_SEG_COUNT)
+    if map_data.next_door_group != E1M1_DOOR_GROUP_COUNT:
+        raise AssertionError("E1M1 must retain %d door groups" % E1M1_DOOR_GROUP_COUNT)
+    if map_data.certificate["exit_index"] != E1M1_EXIT_SEG_INDEX:
         raise AssertionError("E1M1 exit certificate drifted")
 
     metrics = [texture_metrics(name) for name in TECH_MATERIALS]

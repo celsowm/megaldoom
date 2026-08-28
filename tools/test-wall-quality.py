@@ -12,6 +12,7 @@ from PIL import Image
 
 import raycast_constants
 import wall_bake_preview
+from e1m1_expected import E1M1_SEG_COUNT, E1M1_PREVIEW_PACKED_PAIR_BYTES
 
 ROOT = Path(__file__).resolve().parents[1]
 EXTRACTOR_PATH = ROOT / "tools" / "wad-map-extract.py"
@@ -449,8 +450,8 @@ def main():
         report, scene_paths = wall_bake_preview.build_preview(
             ROOT / "DOOM1.WAD", preview_root)
         assert report["wad_sha256"] == wall_bake_preview.EXPECTED_WAD_SHA256
-        assert report["segments"] == 394
-        assert report["packed_pair_bytes"] == 917504
+        assert report["segments"] == E1M1_SEG_COUNT
+        assert report["packed_pair_bytes"] == E1M1_PREVIEW_PACKED_PAIR_BYTES
         assert len(scene_paths) == 14
         assert len(list((preview_root / "atlases").glob("*.png"))) == 8
         assert len(list((preview_root / "motion").glob("*.gif"))) == 8
