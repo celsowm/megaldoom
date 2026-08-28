@@ -190,16 +190,23 @@ foreach ($spec in $BillboardWorldSpecs) {
 
 Add-Type -AssemblyName System.Drawing
 
-# The WAD generator owns the exact E1M1 wall catalog, PAL3 palette and sector
-# colors. Generate it first so weapon and billboard conversion can target the
-# same 16-color line used by the dynamic view tiles.
+# The WAD generator owns the wall catalog, PAL3 palette and sector colors.
+# Generate it first so weapon and billboard conversion can target the same
+# 16-color line used by the dynamic view tiles.
+#
+# --maps, not --map: the shipped atlas is the UNION over the campaign (53
+# textures), and generated_e1m2_map.c indexes into it. Regenerating with a
+# single map silently rebuilt a 24-texture atlas while E1M2's descriptor still
+# referenced ids up to 52, so `npm run assets` on its own left the tree
+# unbuildable and the only way back was knowing to run wad-map-extract.py by
+# hand afterwards. The campaign list belongs in one place, and this is it.
 & python (Join-Path $PSScriptRoot "wad-map-extract.py") `
     --wad (Join-Path $Root "DOOM1.WAD") `
-    --map E1M1 `
-    --out $MapOutPath `
+    --maps E1M1 E1M2 `
+    --map-out-dir (Split-Path -Parent $MapOutPath) `
     --assets-out $OutPath
 if ($LASTEXITCODE -ne 0) {
-    throw "E1M1 map/world asset generation failed."
+    throw "Campaign map/world asset generation failed."
 }
 
 $worldHeaderText = Get-Content -Raw $OutPath

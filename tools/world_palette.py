@@ -168,10 +168,14 @@ def build_palette(histogram, damage, warning):
     # previously burning 7 of 16 on grey ramps
     # (000000/242424/484848/6D6D6D/919191/B6B6B6/DADADA) while B6B6B6 and
     # DADADA have almost no source weight in E1M1 outside LITE3.
+    # Olive is no longer excluded here. It was, and the frozen palette that
+    # ships is the evidence that was wrong: the olive/khaki band is 15.1% of
+    # E1M1's wall area and had nowhere to go, so a quarter of the map rendered
+    # flat grey. The exclusion was aimed at an olive cast on neutral surfaces,
+    # which allowed_indices' low-chroma clamp is what actually prevents.
     global_candidates = [color for color in available
                          if not is_blue(color) and not is_green(color) and
-                         not is_olive(color) and not is_saturated_red(color) and
-                         not is_neutral(color)]
+                         not is_saturated_red(color) and not is_neutral(color)]
     _add_greedy_slots(selected, global_candidates,
                       _family_sources(histogram, lambda _c: True), 1)
 

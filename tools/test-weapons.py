@@ -9,7 +9,9 @@ without this test going red.
 """
 
 from pathlib import Path
+import importlib.util
 import re
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 RENDERER_ASSETS = (ROOT / "src/renderer/generated_renderer_assets.h").read_text()
@@ -117,10 +119,30 @@ assert rect_w // 8 == 8 and rect_h // 8 == 5
 # intentional, user-approved rebalance; when that happens on purpose, update
 # this constant to the new FREEDOOM_WORLD_PALETTE and re-verify the weapon/
 # billboard bake still reads correctly (visual check, not just this test).
-FROZEN_PALETTE = [
-    "000000", "240000", "00006D", "242424", "482424", "484848", "6D4824", "6D6D6D",
-    "916D48", "6D916D", "919191", "FF4848", "B6916D", "B6B6B6", "DA2424", "DAB648",
-]
+#
+# The literal 16 colours are pinned once, in tools/test-flat-map-recipes.py.
+# This check reads the same tuple from tools/world_assets.py, so what it locks
+# is that the *generated header the weapon bakes against* still matches the
+# source of truth -- a third transcription of the palette would only be a third
+# place to forget to update.
+def _load_world_assets():
+    """tools/world_assets.py holds FROZEN_WORLD_PALETTE, the single definition
+    of PAL3. Loaded by path because tools/ is not a package and the module
+    imports its own sibling world_palette."""
+    sys.path.insert(0, str(ROOT / "tools"))
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "world_assets_weapons", ROOT / "tools" / "world_assets.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        sys.path.pop(0)
+
+
+world_assets_module = _load_world_assets()
+FROZEN_PALETTE = ["%02X%02X%02X" % color
+                  for color in world_assets_module.FROZEN_WORLD_PALETTE]
 palette = re.findall(r"0x([0-9A-Fa-f]{6})", re.search(
     r"FREEDOOM_WORLD_PALETTE\[16\]\s*=\s*\{(.*?)\}", WORLD_ASSETS, re.S).group(1))
 assert [entry.upper() for entry in palette] == FROZEN_PALETTE, palette

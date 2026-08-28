@@ -134,19 +134,45 @@ def certify_compute2_facade(rows):
     dim = world_assets.COMPUTE2_FACADE_DIM
     rows = world_assets._resize_index_rows_x(
         world_assets._resize_index_rows(rows[:56], dim), dim)
-    for y0, y1 in ((0, 3), (16, 20), (34, 38), (51, 55), (62, 64)):
-        candidates = range(max(0, y0 - 1), min(64, y1 + 2))
+    for y0, y1 in world_assets.COMPUTE2_RAIL_ROWS:
+        candidates = range(max(0, y0 - 1), min(dim, y1 + 2))
         if max(sum(value == 5 for value in rows[y]) for y in candidates) < 60:
             raise AssertionError("COMPUTE2 rail %d is not continuous" % y0)
-    green_rows = {y for y, row in enumerate(rows) if 9 in row}
-    if not green_rows or not green_rows <= set(range(23, 30)):
-        raise AssertionError("COMPUTE2 green readouts escaped monitor bays")
-    for x0, x1 in ((3, 30), (34, 61)):
+    # The contract is that readouts live in the authored bays and never bleed
+    # onto the rails -- not that any particular palette index appears. Pinning
+    # this to index 9 made it a test of which colour PAL3 happened to keep in
+    # that slot, which is the composer's input, not its contract.
+    accents = world_assets.COMPUTE2_ACCENT_INDICES
+    # A readout is a *coloured* accent. The composer's accent set also carries
+    # index 13, which it uses as the metal lip, and a neutral highlight sitting
+    # on a rail is the facade working, not bleeding.
+    palette = world_assets.FROZEN_WORLD_PALETTE
+    readouts = {index for index in accents
+                if not world_assets.world_palette.is_neutral(palette[index])}
+    bays = world_assets.COMPUTE2_READOUT_BAYS
+    inside = outside = waveform = 0
+    for y, row in enumerate(rows):
+        count = sum(1 for value in row if value in readouts)
+        if any(y0 <= y < y1 for y0, y1 in bays):
+            inside += count
+        else:
+            outside += count
+        if bays[1][0] <= y < bays[1][1]:
+            waveform += count
+    if not waveform:
+        raise AssertionError("COMPUTE2 waveform monitor lost every readout")
+    # Measured 96.5% before PAL3's slot 9 became khaki and 92.6% after: the
+    # handful outside the bays comes from the panel body, not from the bays
+    # leaking. The floor is what stops a future bake from scattering readouts
+    # across the facade, which is the failure this certifies against.
+    if inside < 0.85 * (inside + outside):
+        raise AssertionError("COMPUTE2 readouts scattered outside their bays")
+    for x0, x1 in world_assets.COMPUTE2_INSTRUMENT_COLUMNS:
         upper = [rows[y][x] for y in range(4, 14) for x in range(x0, x1)]
         wave = [rows[y][x] for y in range(21, 32) for x in range(x0, x1)]
         if sum(value in (0, 5) for value in upper) < len(upper) * 0.85:
             raise AssertionError("COMPUTE2 upper instrument lost its recess")
-        if sum(value in (0, 5, 9) for value in wave) < len(wave) * 0.88:
+        if sum(value in (0, 5) or value in accents for value in wave) < len(wave) * 0.88:
             raise AssertionError("COMPUTE2 waveform monitor lost its recess")
     if any(7 in row for row in rows):
         raise AssertionError("COMPUTE2 facade must not borrow floor index 7")

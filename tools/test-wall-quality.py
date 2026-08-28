@@ -215,10 +215,18 @@ def main():
     assert len(set(palette)) == 16
     assert sum(extractor.world_palette.is_neutral(color) for color in palette) >= 4
     assert sum(extractor.world_palette.is_warm(color) for color in palette) >= 4
-    assert sum(extractor.world_palette.is_green(color) for color in palette) == 1
     assert sum(extractor.world_palette.is_blue(color) for color in palette) >= 1
-    assert not any(extractor.world_palette.is_olive(color)
-                   for color in palette[1:14])
+    # PAL3 carries exactly one olive/khaki rung and no green. These two moved
+    # together: slot 9 held the sole green, which was measurably dead (0.11% of
+    # E1M1 wall area, 0.53% of billboard pixels, 0.00% of the weapon overlay),
+    # while the olive band it now covers is 15.1% of wall area -- BROWNGRN
+    # alone is 26.8% and used to quantize 91.5% neutral. The ban this replaces
+    # was guarding against an olive *cast* on grey surfaces; the guard that
+    # actually prevents that is the low-chroma neutral clamp, and the check
+    # below is the evidence it still holds.
+    assert sum(extractor.world_palette.is_green(color) for color in palette) == 0
+    assert sum(extractor.world_palette.is_olive(color)
+               for color in palette[1:14]) == 1
     assert "BSP_FLOOR_COLOR" not in (ROOT / "src" / "bsp" / "bsp_render.c").read_text()
     ceiling_index = extractor.GLOBAL_CEILING_INDEX
     floor_index = extractor.GLOBAL_FLOOR_INDEX

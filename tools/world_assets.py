@@ -37,6 +37,15 @@ WALL_TEX_DISPLAY_WIDTH = 2 * WALL_TEX_WIDTH
 # composed there and resampled onto the bake grid, so widening the bake grid
 # cannot silently re-register the artwork.
 COMPUTE2_FACADE_DIM = 64
+# The COMPUTE2 facade's structure, named once so the bake and the preview's
+# certifier cannot drift. certify_compute2_facade used to restate the rails as
+# literals and pin the readouts to palette index 9, which quietly meant "the
+# green one" -- so the contract broke the moment PAL3's green slot changed use,
+# even though the facade itself was still correct.
+COMPUTE2_RAIL_ROWS = ((0, 3), (16, 20), (34, 38), (51, 55), (62, 64))
+COMPUTE2_INSTRUMENT_COLUMNS = ((3, 30), (34, 61))
+COMPUTE2_READOUT_BAYS = ((6, 12), (23, 30), (42, 48))
+COMPUTE2_ACCENT_INDICES = frozenset({1, 4, 6, 8, 9, 11, 12, 13, 14, 15})
 # Share of horizontally adjacent texels whose palette index differs. The prior
 # "ugly walls" investigation concluded the defect was churn, not resolution, so
 # this ceiling governs whether a material is allowed sub-texel horizontal
@@ -62,15 +71,28 @@ WEAPON_SPRITE_NAMES = ("PISGA0", "PISGB0", "PISFA0")
 # PAL3 indices are a runtime asset ABI shared by walls, flats, weapons and
 # billboards.  The adaptive search produced this user-approved palette, but
 # must not rerun when a map recipe adds one texture: GLOBAL_FLOOR_INDEX is 7,
-# so moving the sole green into slot 7 repaints the entire floor.  Keep the
-# exact checked-in order stable; palette changes now require an explicit,
-# separately reviewed update to this constant and the frozen-palette tests.
+# so moving a slot into 7 repaints the entire floor.  Keep the exact checked-in
+# order stable; palette changes now require an explicit, separately reviewed
+# update to this constant and the frozen-palette tests.
+#
+# Slot 9 is khaki (#484824), not the green it used to hold.  Measured over
+# E1M1 weighted by wall length, the green was dead weight -- 0.11% of wall
+# area, 0.53% of billboard pixels, 0.00% of the weapon overlay -- while the
+# olive/khaki hue band (105-150 deg in Oklab) covers 15.1% of wall area and
+# had no palette entry at all.  BROWNGRN alone is 26.8% of E1M1's walls and
+# was quantizing 91.5% neutral: a material named brown-green rendering as
+# plain grey.  The band was unreachable by construction, because both
+# world_palette.build_palette and the frozen-palette test excluded is_olive
+# outright.  With this slot the map's neutral share drops 61.9% -> 50.7%, and
+# the materials that should stay grey do (COMPUTE2 97.9 -> 98.8%, LITE3 /
+# SUPPORT2 / STARGR1 all 100 -> 100%), which is what says the khaki is being
+# reached by genuinely olive texels rather than leaking as a cast.
 FROZEN_WORLD_PALETTE = (
     (0x00, 0x00, 0x00), (0x24, 0x00, 0x00),
     (0x00, 0x00, 0x6D), (0x24, 0x24, 0x24),
     (0x48, 0x24, 0x24), (0x48, 0x48, 0x48),
     (0x6D, 0x48, 0x24), (0x6D, 0x6D, 0x6D),
-    (0x91, 0x6D, 0x48), (0x6D, 0x91, 0x6D),
+    (0x91, 0x6D, 0x48), (0x48, 0x48, 0x24),
     (0x91, 0x91, 0x91), (0xFF, 0x48, 0x48),
     (0xB6, 0x91, 0x6D), (0xB6, 0xB6, 0xB6),
     (0xDA, 0x24, 0x24), (0xDA, 0xB6, 0x48),
@@ -171,6 +193,25 @@ def build_world_palette(texture_names, texture_usage, sectors):
     return list(FROZEN_WORLD_PALETTE)
 
 
+def shade_family(color):
+    """The hue family a shade chain is allowed to move within.
+
+    build_shade_map's second invariant is that fog must not shift hue, so a
+    chain may only step to a darker member of its own family. Naming the
+    families once here (rather than restating the filter per branch) is what
+    makes adding one safe: khaki has no darker sibling in PAL3, so it saturates
+    on itself instead of falling into the maroon at index 4, which is the
+    cross-family fallback the docstring below calls out as the bug.
+    """
+    if world_palette.is_neutral(color):
+        return "neutral"
+    if world_palette.is_green(color):
+        return "green"
+    if world_palette.is_olive(color):
+        return "olive"
+    return "chromatic"
+
+
 def build_shade_map(palette, reserved=()):
     """One step of depth darkening, as palette indices.
 
@@ -201,14 +242,8 @@ def build_shade_map(palette, reserved=()):
         darker = [i for i, candidate in enumerate(palette)
                   if world_palette.oklab(tuple(candidate))[0] < luminance - 1e-6
                   and i not in forbidden and i < WORLD_COLOR_DAMAGE]
-        if world_palette.is_neutral(color):
-            darker = [i for i in darker if world_palette.is_neutral(palette[i])]
-        elif world_palette.is_green(color):
-            darker = [i for i in darker if world_palette.is_green(palette[i])]
-        else:
-            darker = [i for i in darker
-                      if not world_palette.is_green(palette[i])
-                      and not world_palette.is_neutral(palette[i])]
+        family = shade_family(color)
+        darker = [i for i in darker if shade_family(palette[i]) == family]
         target = tuple(channel * 3 // 4 for channel in color)
         result.append(nearest_palette_index(target, palette, darker or [index]))
     return result
@@ -635,16 +670,13 @@ def _compose_compute2_facade_indices(source):
     # Four strong horizontal masses survive both distance mip-like skipping
     # and the oblique projection.  The source's previous single-pixel rails
     # disappeared precisely in the rejected corridor view.
-    fill(0, 0, 64, 3, shadow)
-    fill(0, 16, 64, 20, shadow)
-    fill(0, 34, 64, 38, shadow)
-    fill(0, 51, 64, 55, shadow)
-    fill(0, 62, 64, 64, shadow)
+    for rail_y0, rail_y1 in COMPUTE2_RAIL_ROWS:
+        fill(0, rail_y0, dim, rail_y1, shadow)
 
     # Two large upper instrument windows and two waveform monitors.  Dark
     # recesses give the green/red source pixels a coherent object to belong to
     # instead of leaving them floating on a grey plane.
-    for x0, x1 in ((3, 30), (34, 61)):
+    for x0, x1 in COMPUTE2_INSTRUMENT_COLUMNS:
         fill(x0, 4, x1, 14, shadow)
         fill(x0 + 2, 6, x1 - 2, 12, black)
         fill(x0, 21, x1, 32, shadow)
@@ -655,8 +687,8 @@ def _compose_compute2_facade_indices(source):
     # Retain coloured readouts from the selected Doom module, but only inside
     # their corresponding devices.  Neutral source pixels cannot punch holes
     # back through the newly continuous surrounds.
-    accents = {1, 4, 6, 8, 9, 11, 12, 13, 14, 15}
-    for y0, y1 in ((6, 12), (23, 30)):
+    accents = COMPUTE2_ACCENT_INDICES
+    for y0, y1 in COMPUTE2_READOUT_BAYS[:2]:
         for y in range(y0, y1):
             for x in range(5, 59):
                 if source[y][x] in accents:
@@ -665,10 +697,10 @@ def _compose_compute2_facade_indices(source):
     # A broad lower control bay replaces scattered mid-wall pixels.  Its
     # central divider and bottom cabinet doors are copied/simplified from the
     # same source module.
-    for x0, x1 in ((3, 30), (34, 61)):
+    for x0, x1 in COMPUTE2_INSTRUMENT_COLUMNS:
         fill(x0, 40, x1, 49, shadow)
-        fill(x0 + 2, 42, x1 - 2, 48, black)
-    for y in range(42, 48):
+        fill(x0 + 2, COMPUTE2_READOUT_BAYS[2][0], x1 - 2, COMPUTE2_READOUT_BAYS[2][1], black)
+    for y in range(*COMPUTE2_READOUT_BAYS[2]):
         for x in range(5, 59):
             if source[y][x] in accents or source[y][x] == highlight:
                 result[y][x] = source[y][x]
