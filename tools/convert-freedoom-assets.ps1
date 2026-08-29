@@ -89,11 +89,14 @@ $WeaponRectH = 40
 # Flash = "" means the weapon has no muzzle-flash sprite (fist, chainsaw); its
 # fire frame is just the attack pose.
 $WeaponSet = @(
-    [pscustomobject]@{ Name = "FIST";     Idle = "PUNGA0"; Fire = "PUNGC0"; Flash = "";       Legacy = $false }
-    [pscustomobject]@{ Name = "CHAINSAW"; Idle = "SAWGC0"; Fire = "SAWGA0"; Flash = "";       Legacy = $false }
-    [pscustomobject]@{ Name = "PISTOL";   Idle = "PISGA0"; Fire = "PISGB0"; Flash = "PISFA0"; Legacy = $true  }
-    [pscustomobject]@{ Name = "SHOTGUN";  Idle = "SHTGA0"; Fire = "SHTGB0"; Flash = "SHTFA0"; Legacy = $false }
-    [pscustomobject]@{ Name = "CHAINGUN"; Idle = "CHGGA0"; Fire = "CHGGB0"; Flash = "CHGFA0"; Legacy = $false }
+    # PAL2 is the established skin/metal ramp for Doom-guy's portrait. The
+    # fist is entirely hand/forearm, so using it here fixes the PAL3 gold cast
+    # without changing the shared world palette or any other weapon.
+    [pscustomobject]@{ Name = "FIST";     Idle = "PUNGA0"; Fire = "PUNGC0"; Flash = "";       Legacy = $false; Palette = "Face" }
+    [pscustomobject]@{ Name = "CHAINSAW"; Idle = "SAWGC0"; Fire = "SAWGA0"; Flash = "";       Legacy = $false; Palette = "World" }
+    [pscustomobject]@{ Name = "PISTOL";   Idle = "PISGA0"; Fire = "PISGB0"; Flash = "PISFA0"; Legacy = $true;  Palette = "World" }
+    [pscustomobject]@{ Name = "SHOTGUN";  Idle = "SHTGA0"; Fire = "SHTGB0"; Flash = "SHTFA0"; Legacy = $false; Palette = "World" }
+    [pscustomobject]@{ Name = "CHAINGUN"; Idle = "CHGGA0"; Fire = "CHGGB0"; Flash = "CHGFA0"; Legacy = $false; Palette = "World" }
 )
 
 if (-not (Test-Path $SourcePath)) {
@@ -162,7 +165,10 @@ $BillboardWorldSpecs = @(
     @{ Name = "STIMPACK"; Path = "res\originaldoom\sprites\STIMA0.png" },
     @{ Name = "MEDIKIT"; Path = "res\originaldoom\sprites\MEDIA0.png" },
     @{ Name = "ARMOR_BONUS"; Path = "res\originaldoom\sprites\BON2A0.png" },
-    @{ Name = "GREEN_ARMOR"; Path = "res\originaldoom\sprites\ARM1A0.png" },
+    # PAL3 deliberately has no saturated green: its former green slot is now
+    # the khaki wall band used heavily by BROWNGRN. Keep ARM1 recognisably
+    # olive by selecting a no-amber subset rather than recolouring the world.
+    @{ Name = "GREEN_ARMOR"; Path = "res\originaldoom\sprites\ARM1A0.png"; Palette = "OliveArmor" },
     @{ Name = "BLUE_ARMOR"; Path = "res\originaldoom\sprites\ARM2A0.png" },
     @{ Name = "CLIP"; Path = "res\originaldoom\sprites\CLIPA0.png" },
     @{ Name = "AMMO_BOX"; Path = "res\originaldoom\sprites\AMMOA0.png" },
@@ -263,6 +269,14 @@ $palette = @(
 # knuckles). Keep the global palette ABI untouched and constrain only warm
 # weapon pixels to the existing dark-brown -> muted-flesh ramp.
 $weaponWarmPaletteIndices = @(4, 6, 8, 12)
+
+# ARM1 must keep its identity as the green armor without taking back PAL3's
+# former green slot. Index 9 (484824) is the only olive PAL3 has, so nearest-RGB
+# is useless here: it either collapses the whole vest into that one slot (flat
+# blob) or reaches for the amber endpoint. Shade it as an explicit luminance
+# ramp instead -- dark outline, a wide khaki body band, then neutral greys for
+# the highlights. Excludes PAL3's vivid red/amber endpoints, never Bayer-dithered.
+$armorOlivePaletteIndices = @(3, 7, 9, 10, 13)
 
 # Dedicated 16-colour palette for the Doom-guy portrait (rendered on PAL2). The
 # shared world palette turns skin gold; this ramp keeps proper flesh/brown/red
@@ -385,6 +399,41 @@ function Get-NearestWeaponWarmIndex([System.Drawing.Color]$Color) {
     return $bestIndex
 }
 
+function Get-FistSkinIndex([System.Drawing.Color]$Color) {
+    # PUNGA0/PUNGC0 are very bright at source (FFBB93, FFD3BB, FFE3D3), so a
+    # nearest-RGB match against the whole face palette lands on its off-white
+    # and grey slots and the hand bakes out chalky and blotchy. Walk the face
+    # palette's flesh ramp by luminance instead: indices 2..8 only, which
+    # excludes the chalk (13/14/15) and the portrait's reds (9/10) by
+    # construction. The top band stops at F0C898, so the hand also stops being
+    # blown out. Thresholds are cut against the source deciles -- PUNGA0 spans
+    # 24..239 and spreads over all seven steps; PUNGC0 is the shadowed punch
+    # pose and correctly sits lower in the ramp.
+    $luminance = [int](($Color.R * 30 + $Color.G * 59 + $Color.B * 11) / 100)
+    if ($luminance -lt 55) { return 2 }
+    if ($luminance -lt 85) { return 3 }
+    if ($luminance -lt 115) { return 4 }
+    if ($luminance -lt 150) { return 5 }
+    if ($luminance -lt 185) { return 6 }
+    if ($luminance -lt 215) { return 7 }
+    return 8
+}
+
+function Get-NearestArmorOliveIndex([System.Drawing.Color]$Color) {
+    # ARM1's opaque pixels span luminance 17..185 (deciles 38/51/51/63/89/89/
+    # 123/135/160). The bands below are cut against that distribution so index 9
+    # keeps roughly the middle 60% -- enough for the sprite to still read green --
+    # while the top three bands restore the shading a single-slot bake destroys.
+    # Every pixel goes through the ramp, including the handful of near-black
+    # greens that fail a chroma test but still belong in the shadow band.
+    $luminance = [int](($Color.R * 30 + $Color.G * 59 + $Color.B * 11) / 100)
+    if ($luminance -lt 40) { return 3 }
+    if ($luminance -lt 115) { return 9 }
+    if ($luminance -lt 150) { return 7 }
+    if ($luminance -lt 175) { return 10 }
+    return 13
+}
+
 function Get-PreservedAspectPlacement([int]$SourceWidth, [int]$SourceHeight,
                                       [int]$Width, [int]$Height,
                                       [bool]$BottomAlign = $false) {
@@ -400,7 +449,7 @@ function Get-PreservedAspectPlacement([int]$SourceWidth, [int]$SourceHeight,
 
 function Convert-Image([string]$Path, [int]$Width, [int]$Height, [bool]$UseAlphaTransparency,
                        [bool]$PreserveAspect = $false, [bool]$BottomAlign = $false,
-                       [bool]$NativeSize = $false) {
+                       [bool]$NativeSize = $false, [string]$PalettePolicy = "World") {
     # Area/box downscale: each output texel is the AVERAGE of the full source
     # rectangle it covers, then quantized to the palette. Point sampling (grabbing
     # a single source pixel) aliased high-frequency Doom textures into random-looking
@@ -490,7 +539,11 @@ function Convert-Image([string]$Path, [int]$Width, [int]$Height, [bool]$UseAlpha
                             $avg = [System.Drawing.Color]::FromArgb(
                                 [int]($sumR / $count), [int]($sumG / $count), [int]($sumB / $count))
                         }
-                        $index = Get-NearestWorldPaletteIndex $avg $false $x $y
+                        if ($PalettePolicy -eq "OliveArmor") {
+                            $index = Get-NearestArmorOliveIndex $avg
+                        } else {
+                            $index = Get-NearestWorldPaletteIndex $avg $false $x $y
+                        }
                     }
                 }
 
@@ -564,11 +617,19 @@ function Get-SpriteOffset([string]$Name) {
 }
 
 function Get-WeaponPaletteIndex([System.Drawing.Color]$Color, [bool]$FireFrame,
-                                [int]$X = -1, [int]$Y = -1) {
+                                [int]$X = -1, [int]$Y = -1,
+                                [string]$PalettePolicy = "World") {
     # Transparency is decided ONLY by alpha. Dark opaque pixels (the pistol's
     # metal/shadow) must stay solid, otherwise the gun renders see-through.
     if ($Color.A -lt 128) {
         return 0
+    }
+
+    # The fist is rendered with PAL2, whose existing portrait ramp carries the
+    # skin and shadow tones needed by the bare hand. It has no muzzle flash, so
+    # no PAL3 colour is ever interpreted through PAL2.
+    if ($PalettePolicy -eq "Face") {
+        return Get-FistSkinIndex $Color
     }
 
     # Muzzle flashes keep the unrestricted palette so their red/yellow/white
@@ -747,7 +808,8 @@ function Get-WeaponPlacement([string[]]$Names) {
 # Bake one frame: the gun sprite, optionally with a muzzle flash composited over
 # it. Returns C initialiser rows for the whole 160x120 overlay canvas
 # (0 = transparent) so the tile baker can slice the overlay rectangle out of it.
-function Convert-WeaponFrame([string]$GunName, [string]$FlashName) {
+function Convert-WeaponFrame([string]$GunName, [string]$FlashName,
+                             [string]$PalettePolicy = "World") {
     $placement = Get-WeaponPlacement @($GunName, $FlashName)
     $layers = New-Object System.Collections.Generic.List[object]
     foreach ($name in @($GunName, $FlashName)) {
@@ -786,7 +848,7 @@ function Convert-WeaponFrame([string]$GunName, [string]$FlashName) {
                                 if ($layer.IsFlash) {
                                     $index = Get-NearestWorldPaletteIndex $pixel $false $x $y
                                 } else {
-                                    $index = Get-WeaponPaletteIndex $pixel $false $x $y
+                                    $index = Get-WeaponPaletteIndex $pixel $false $x $y $PalettePolicy
                                 }
                             }
                         }
@@ -1005,8 +1067,8 @@ foreach ($weapon in $WeaponSet) {
         $idleRows = Convert-WeaponOverlay $WeaponIdleSourcePath $false
         $fireRows = Convert-WeaponOverlayFire $WeaponFireSourcePath $WeaponFlashSourcePath
     } else {
-        $idleRows = Convert-WeaponFrame $weapon.Idle ""
-        $fireRows = Convert-WeaponFrame $weapon.Fire $weapon.Flash
+        $idleRows = Convert-WeaponFrame $weapon.Idle "" $weapon.Palette
+        $fireRows = Convert-WeaponFrame $weapon.Fire $weapon.Flash $weapon.Palette
     }
     [void]$weaponIdleBlocks.Add("  {" + "`r`n" + ($idleRows -join ",`r`n") + "`r`n  }")
     [void]$weaponFireBlocks.Add("  {" + "`r`n" + ($fireRows -join ",`r`n") + "`r`n  }")
@@ -1053,7 +1115,8 @@ foreach ($spec in $BillboardWorldSpecs) {
     }
     $placement = Get-PreservedAspectPlacement $offset.width $offset.height `
         $billboardWorldW $billboardWorldH $true
-    $rows = Convert-Image (Join-Path $Root $spec.Path) $billboardWorldW $billboardWorldH $true $true $true
+    $rows = Convert-Image (Join-Path $Root $spec.Path) $billboardWorldW $billboardWorldH `
+        $true $true $true $false $spec.Palette
     $billboardWorldBlocks.Add("    {" + "`r`n" + ($rows -join ",`r`n") + "`r`n    }")
     $billboardGeometryBlocks.Add(
         "    {$($offset.width), $($offset.height), $($offset.leftOffset), $($offset.topOffset), " +

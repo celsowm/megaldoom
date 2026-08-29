@@ -96,13 +96,22 @@ assert "MEGALDOOM_WEAPON_TILEMAP[g_weapon_id][variant][i]" in OVERLAY_C
 # keep drawing with the old one's tile indices.
 assert "g_last_weapon_variant = -1;" in OVERLAY_C
 
-# Warm skin pixels must not dither against PAL3's vivid damage/warning
-# endpoints. The converter keeps those endpoints for muzzle flashes and
-# constrains only the gun/hand path to the existing muted warm ramp.
+# The fist is the only weapon rendered in PAL2. It walks the portrait palette's
+# flesh ramp by luminance, keeping skin out of PAL3's amber endpoint AND out of
+# PAL2's own chalk/red slots; every other weapon remains on PAL3 and retains its
+# established bake.
 assert "$weaponWarmPaletteIndices = @(4, 6, 8, 12)" in ASSET_CONVERTER
 assert "function Get-NearestWeaponWarmIndex" in ASSET_CONVERTER
+assert '$armorOlivePaletteIndices = @(3, 7, 9, 10, 13)' in ASSET_CONVERTER
+assert 'Name = "FIST";     Idle = "PUNGA0"; Fire = "PUNGC0"; Flash = "";       Legacy = $false; Palette = "Face"' in ASSET_CONVERTER
+assert ASSET_CONVERTER.count('Palette = "World"') == 4
+assert "function Get-FistSkinIndex" in ASSET_CONVERTER
+assert 'return Get-FistSkinIndex $Color' in ASSET_CONVERTER
+assert 'Convert-WeaponFrame $weapon.Idle "" $weapon.Palette' in ASSET_CONVERTER
 assert "if ($FireFrame)" in ASSET_CONVERTER
 assert "if ($layer.IsFlash)" in ASSET_CONVERTER
+assert 'const u16 palette = (g_weapon_id == WEAPON_FIST) ? PAL2 : PAL3;' in OVERLAY_C
+assert 'TILE_ATTR_FULL(palette, FALSE, FALSE, FALSE,' in OVERLAY_C
 
 # Every weapon bakes into the SAME 8x5 tile rectangle: the overlay draws one
 # fixed BG_A rect, so a weapon that needed a different one would be clipped.
@@ -113,6 +122,23 @@ rect_h = define(HUD_ASSETS, "FREEDOOM_WEAPON_RECT_H")
 assert (define(HUD_ASSETS, "FREEDOOM_WEAPON_RECT_X") % 8 == 0) and (rect_w % 8 == 0)
 assert (define(HUD_ASSETS, "FREEDOOM_WEAPON_RECT_Y") % 8 == 0) and (rect_h % 8 == 0)
 assert rect_w // 8 == 8 and rect_h // 8 == 5
+
+# --- The fist's baked pixels stay on the flesh ramp --------------------------
+# Asserting the converter's ramp is not enough: what ships is the header. The
+# face palette's slots 13/14/15 are near-white/grey and 9/10 are red, so a fist
+# that reaches them is either chalky and blotchy (the nearest-RGB bake) or
+# sunburnt. Reading the tiles back also catches a resprite that silently
+# reintroduces them.
+_fist_body = re.search(
+    r"MEGALDOOM_WEAPON_TILES.*?\{\s*\{(.*?)\n  \},", RENDERER_ASSETS, re.S).group(1)
+fist_indices = {(word >> shift) & 0xF
+                for word in (int(value, 16)
+                             for value in re.findall(r"0x[0-9A-Fa-f]{8}", _fist_body))
+                for shift in range(0, 32, 4)}
+assert not (fist_indices & {9, 10, 13, 14, 15}), (
+    f"FIST bake reached the face palette's red/chalk slots: {sorted(fist_indices)}")
+assert len(fist_indices - {0}) >= 5, (
+    f"FIST bake lost its shading: {sorted(fist_indices)}")
 
 # --- PAL3 is frozen ----------------------------------------------------------
 # The world palette is shared by walls, items, enemies AND the weapon overlay.

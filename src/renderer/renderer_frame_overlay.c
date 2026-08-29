@@ -29,12 +29,16 @@ void renderer_set_weapon(u8 weapon_id) {
 // rewrite this small tilemap rectangle.
 void draw_weapon_overlay(bool flash) {
     const s16 variant = flash ? 1 : 0;
+    // FIST is baked against the portrait's skin/metal ramp in PAL2. Every
+    // other weapon stays in PAL3, so their current world-compatible bake and
+    // muzzle-flash colours remain exactly as before.
+    const u16 palette = (g_weapon_id == WEAPON_FIST) ? PAL2 : PAL3;
     u16 tilemap[MEGALDOOM_WEAPON_TILE_W * MEGALDOOM_WEAPON_TILE_H];
     if (variant == g_last_weapon_variant) return;
 
     for (u16 i = 0; i < (MEGALDOOM_WEAPON_TILE_W * MEGALDOOM_WEAPON_TILE_H); i++) {
         const u16 tile = MEGALDOOM_WEAPON_TILEMAP[g_weapon_id][variant][i];
-        tilemap[i] = TILE_ATTR_FULL(PAL3, FALSE, FALSE, FALSE,
+        tilemap[i] = TILE_ATTR_FULL(palette, FALSE, FALSE, FALSE,
             (tile == 0xFFFF) ? 0 : (WEAPON_TILE_BASE + tile));
     }
     VDP_setTileMapDataRect(BG_A, tilemap,

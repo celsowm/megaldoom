@@ -8,6 +8,45 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## Fist skin palette and olive armor (2026-08-29)
+
+PAL3 deliberately has no saturated green: its former green slot is the khaki
+band that keeps BROWNGRN walls from collapsing into neutral grey. Replacing it
+to make ARM1 green would regress roughly 15% of E1M1 wall hue coverage, so the
+green armor bakes locally instead, without touching the world palette.
+
+Both halves of this went in twice. The first attempt matched each sprite
+against a *subset* of a palette by nearest RGB, and nearest RGB is the wrong
+tool in both cases:
+
+- ARM1: index 9 (484824) is the only olive PAL3 has, so a chroma test that
+  steered green pixels toward it steered *every* green pixel toward it. The
+  guard bands were luminance < 48 and > 200 against a sprite that only spans
+  17..185, so the bright branch was unreachable and the vest baked as one flat
+  monotone blob.
+- The fist: PUNGA0/PUNGC0 are very bright at source (FFBB93, FFD3BB, FFE3D3),
+  so nearest RGB over the whole face palette landed on its off-white and grey
+  slots -- 139 of ~640 opaque pixels came out pure F0E8D8. Chalky and blotchy.
+
+Both now bake through explicit luminance ramps cut against the measured source
+deciles. ARM1 walks 3 -> 9 -> 7 -> 10 -> 13, with index 9 holding the middle
+~60% so the hue still reads green while the neutral greys carry the highlights
+(122/9, 40/7, 32/3, 14/13, 10/10 in the shipped bake); it never reaches PAL3's
+amber or red endpoints and is never Bayer-dithered. The fist walks the face
+palette's flesh ramp 2..8 only, which excludes the chalk (13/14/15) and the
+portrait's reds (9/10) by construction, and tops out at F0C898 so the hand is
+no longer blown out.
+
+The first-person fist is a separate transparent BG_A layer, so it can use PAL2
+without affecting the world: `draw_weapon_overlay` selects PAL2 only for
+`WEAPON_FIST`, and the other weapons retain PAL3 including their existing
+muzzle-flash path. Neither palette itself changed.
+
+`tools/test-weapons.py` now reads the baked FIST tiles back and fails if they
+reach face slots 9/10/13/14/15, and `tools/test-billboard-layout.py` fails if
+ARM1 emits fewer than three distinct colours. Pinning the converter's constants
+was not enough to catch either regression -- what ships is the header.
+
 ## BSP renderer SRP split (2026-08-28)
 
 `src/bsp/bsp_render.c` fell from 999 to 123 lines and is now the public

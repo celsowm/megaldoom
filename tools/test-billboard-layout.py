@@ -81,6 +81,25 @@ def main() -> int:
         if not any(sprite_rows[-1]):
             raise ValueError(f"world billboard {texture} is not anchored to the floor row")
 
+    # PAL3 keeps its khaki wall band instead of a saturated green. ARM1 bakes
+    # through a no-amber olive/grey luminance ramp so it reads as the green
+    # armor while walls retain their approved BROWNGRN conversion. Index 9 is
+    # the only olive in the palette, so a bake that reaches for it alone turns
+    # the pickup into a flat monotone blob -- guard the shading too, not just
+    # the hue.
+    armor_index = EXPECTED_NAMES.index("GREEN_ARMOR")
+    armor_values = {
+        value for row in rows[armor_index * WORLD_HEIGHT:(armor_index + 1) * WORLD_HEIGHT]
+        for value in row
+    }
+    allowed_armor_values = {0, 3, 7, 9, 10, 13}
+    if 9 not in armor_values:
+        raise ValueError("GREEN_ARMOR lost its olive PAL3 body colour")
+    if not armor_values <= allowed_armor_values:
+        raise ValueError("GREEN_ARMOR emitted amber, red, or another non-olive colour")
+    if len(armor_values - {0}) < 3:
+        raise ValueError("GREEN_ARMOR collapsed into a flat, unshaded blob")
+
     geometry_body = balanced_initializer(
         geometry_text, "FREEDOOM_BILLBOARD_WORLD_GEOMETRY")
     geometry_rows = [
