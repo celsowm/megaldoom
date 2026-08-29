@@ -123,7 +123,7 @@ def main():
     assert world_assets.packed_pair_byte(darker, 0xA, 0x3) == 0x00
     assert world_assets.texture_u_scale_q12(24) > 0
     assert "FREEDOOM_WALL_TEXTURE_USCALE_Q12[tid]" in (
-        ROOT / "src/bsp/bsp_render.c").read_text()
+        ROOT / "src/bsp/bsp_render_columns.c").read_text()
 
     # Runtime and proof use the same canonical Doom collision radius.
     radius = int(re.search(

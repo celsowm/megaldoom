@@ -41,6 +41,7 @@ def main():
     generator = (ROOT / "tools" / "wad-map-extract.py").read_text()
     rom_header = (ROOT / "src" / "boot" / "rom_head.c").read_text()
     bsp_render = (ROOT / "src" / "bsp" / "bsp_render.c").read_text()
+    bsp_render_internal = (ROOT / "src" / "bsp" / "bsp_render_internal.h").read_text()
 
     for token in (
         "MEGALDOOM_MAP_COUNT 2", "MEGALDOOM_MAP_MAX_SEGS 961",
@@ -101,7 +102,8 @@ def main():
     assert EXPECTED_SHA256 in wad_source
     assert rom_header.count("0x003FFFFF") >= 2
     assert "static u8 g_query_seen_generation[BSP_MAX_SEGS]" in runtime
-    assert "static u8 g_node_side_generation[BSP_MAX_NODES]" in bsp_render
+    assert "u8 g_node_side_generation[BSP_MAX_NODES]" in bsp_render
+    assert "extern u8 g_node_side_generation[BSP_MAX_NODES]" in bsp_render_internal
     assert "DEBUG_CHECKPOINT_KEY" in main_source
     assert "DEBUG_CHECKPOINT_EXIT" in main_source
 

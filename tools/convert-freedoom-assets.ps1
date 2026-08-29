@@ -256,6 +256,14 @@ $palette = @(
     @(0x4C, 0x60, 0x28)
 )
 
+# Weapon sprites share PAL3 with the world, but the world palette's bright
+# red/amber endpoints are reserved for damage, warning and a few map materials.
+# Feeding Doom's skin tones through the unrestricted perceptual mix therefore
+# makes the hand dither against those vivid endpoints (especially the bright
+# knuckles). Keep the global palette ABI untouched and constrain only warm
+# weapon pixels to the existing dark-brown -> muted-flesh ramp.
+$weaponWarmPaletteIndices = @(4, 6, 8, 12)
+
 # Dedicated 16-colour palette for the Doom-guy portrait (rendered on PAL2). The
 # shared world palette turns skin gold; this ramp keeps proper flesh/brown/red
 # tones. Index 1 is the recessed-slot fill so the block blends into the bar.
@@ -359,6 +367,22 @@ function Get-NearestWorldPaletteIndex([System.Drawing.Color]$Color,
         })
     }
     return $(if ($coverage -ge 8) { $second } else { $first })
+}
+
+function Get-NearestWeaponWarmIndex([System.Drawing.Color]$Color) {
+    $bestIndex = $weaponWarmPaletteIndices[0]
+    $bestDistance = [int]::MaxValue
+    foreach ($index in $weaponWarmPaletteIndices) {
+        $dr = [int]$Color.R - $palette[$index][0]
+        $dg = [int]$Color.G - $palette[$index][1]
+        $db = [int]$Color.B - $palette[$index][2]
+        $distance = ($dr * $dr) + ($dg * $dg) + ($db * $db)
+        if ($distance -lt $bestDistance) {
+            $bestDistance = $distance
+            $bestIndex = $index
+        }
+    }
+    return $bestIndex
 }
 
 function Get-PreservedAspectPlacement([int]$SourceWidth, [int]$SourceHeight,
@@ -547,9 +571,18 @@ function Get-WeaponPaletteIndex([System.Drawing.Color]$Color, [bool]$FireFrame,
         return 0
     }
 
-    # Fire and weapon pixels use the same generated perceptual palette. Damage
-    # red and warning amber remain available as reserved warm endpoints.
-    $null = $FireFrame
+    # Muzzle flashes keep the unrestricted palette so their red/yellow/white
+    # burst remains vivid. The gun and hand use only the quieter warm ramp;
+    # otherwise PAL3's red/amber endpoints turn the skin into orange noise.
+    if ($FireFrame) {
+        return Get-NearestWorldPaletteIndex $Color $false $X $Y
+    }
+    $isWarm = ($Color.R -ge ($Color.G + 18)) -and
+              ($Color.G -ge $Color.B) -and
+              (($Color.R - $Color.B) -ge 24)
+    if ($isWarm) {
+        return Get-NearestWeaponWarmIndex $Color
+    }
     return Get-NearestWorldPaletteIndex $Color $false $X $Y
 }
 
@@ -637,7 +670,7 @@ function Convert-WeaponOverlayFire([string]$GunPath, [string]$FlashPath) {
                     if (($gx -ge 0) -and ($gx -lt $gunW) -and ($gy -ge 0) -and ($gy -lt $gunH)) {
                         $gp = $gunImage.GetPixel($gx, $gy)
                         if ($gp.A -ge 128) {
-                            $index = Get-NearestWorldPaletteIndex $gp $false $x $y
+                            $index = Get-WeaponPaletteIndex $gp $false $x $y
                         }
                     }
 
@@ -726,6 +759,7 @@ function Convert-WeaponFrame([string]$GunName, [string]$FlashName) {
             Image = [System.Drawing.Bitmap]::new($path)
             AX = -$offset.leftOffset
             AY = -$offset.topOffset
+            IsFlash = ($name -eq $FlashName -and -not [string]::IsNullOrEmpty($FlashName))
         })
     }
 
@@ -749,7 +783,11 @@ function Convert-WeaponFrame([string]$GunName, [string]$FlashName) {
                             ($sy -ge 0) -and ($sy -lt $layer.Image.Height)) {
                             $pixel = $layer.Image.GetPixel($sx, $sy)
                             if ($pixel.A -ge 128) {
-                                $index = Get-NearestWorldPaletteIndex $pixel $false $x $y
+                                if ($layer.IsFlash) {
+                                    $index = Get-NearestWorldPaletteIndex $pixel $false $x $y
+                                } else {
+                                    $index = Get-WeaponPaletteIndex $pixel $false $x $y
+                                }
                             }
                         }
                     }

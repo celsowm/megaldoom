@@ -20,6 +20,7 @@ WORLD_ASSETS = (ROOT / "src/bsp/generated_assets.h").read_text()
 INTERNAL = (ROOT / "src/renderer/renderer_internal.h").read_text()
 RENDERER_C = (ROOT / "src/renderer/renderer.c").read_text()
 OVERLAY_C = (ROOT / "src/renderer/renderer_frame_overlay.c").read_text()
+ASSET_CONVERTER = (ROOT / "tools/convert-freedoom-assets.ps1").read_text()
 WEAPONS_H = (ROOT / "src/weapons.h").read_text()
 WEAPONS_C = (ROOT / "src/weapons.c").read_text()
 MAIN_C = (ROOT / "src/main.c").read_text()
@@ -94,6 +95,14 @@ assert "MEGALDOOM_WEAPON_TILEMAP[g_weapon_id][variant][i]" in OVERLAY_C
 # A weapon change must invalidate the variant cache, or the new weapon would
 # keep drawing with the old one's tile indices.
 assert "g_last_weapon_variant = -1;" in OVERLAY_C
+
+# Warm skin pixels must not dither against PAL3's vivid damage/warning
+# endpoints. The converter keeps those endpoints for muzzle flashes and
+# constrains only the gun/hand path to the existing muted warm ramp.
+assert "$weaponWarmPaletteIndices = @(4, 6, 8, 12)" in ASSET_CONVERTER
+assert "function Get-NearestWeaponWarmIndex" in ASSET_CONVERTER
+assert "if ($FireFrame)" in ASSET_CONVERTER
+assert "if ($layer.IsFlash)" in ASSET_CONVERTER
 
 # Every weapon bakes into the SAME 8x5 tile rectangle: the overlay draws one
 # fixed BG_A rect, so a weapon that needed a different one would be clipped.

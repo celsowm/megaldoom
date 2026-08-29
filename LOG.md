@@ -8,6 +8,40 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## BSP renderer SRP split (2026-08-28)
+
+`src/bsp/bsp_render.c` fell from 999 to 123 lines and is now the public
+lifecycle/facade layer. The former implementation was transferred without
+algorithm changes into `bsp_render_projection.c` (fixed-point view math),
+`bsp_render_occlusion.c` (sample coverage), `bsp_render_columns.c` (SEG and
+column payloads), and `bsp_render_traversal.c` (box projection and BSP walk).
+`bsp_render_internal.h` contains the private cross-module contract and shared
+state declarations. The closed-door near-clip fix and moving-door semantics
+remain in the column module; the public BSP API is unchanged.
+
+The full Windows/native suite passed, including BSP math, successor skipping,
+doors and wall quality. Release output remains at 20,676 bytes of free work RAM
+and 3,476,362 bytes of ROM code/data. A DEBUG_PERF BlastEm checkpoint verified
+the unchanged assembly hot path against C for 50 tiles: 0 mismatches and 0
+canary failures. `renderer_hotpath.s` was not modified.
+
+## Weapon hand oversaturation against PAL3 (2026-08-28)
+
+The Doom-guy hand was being quantized through the unrestricted PAL3 perceptual
+mix used by the world. PAL3 has vivid red/amber endpoints for damage, warning
+and map materials, so warm skin pixels could select or dither against those
+colours. In the pistol idle bake this produced 32 pixels at index 11
+(`FF4848`) and 25 at index 15 (`DAB648`), which explains the red/yellow speckled
+hand in the screenshot rather than a limitation of the source sprite.
+
+The asset converter now keeps PAL3 globally unchanged and routes only warm
+weapon pixels through its existing muted warm ramp, indices 4/6/8/12
+(`482424` -> `B6916D`). Metal and neutral pixels retain the normal world
+quantizer, and muzzle flashes retain the unrestricted path so firing still
+looks bright. The regenerated pistol idle has zero pixels at the vivid 11/15
+endpoints. The weapon contracts, full native test suite, release build and ROM
+guardrails pass; work RAM remains 20,676 bytes free.
+
 ## Closed-door texture stretch at the near clip (2026-08-28)
 
 A closed door viewed at point-blank range appeared to stretch its texture over
@@ -28,9 +62,9 @@ vertical-sampling pointer, because two descriptors can share the same
 120-pixel bounds while selecting different near-wall slices. The offline
 `flat_map_preview.py` model follows the same crop formula.
 
-The door contract test covers the depth-16 52..75 slice and the generated
-641-row table; renderer quality and ROM/build checks remain to be run after the
-runtime build.
+The door contract, BSP math and renderer quality tests passed. The release
+build and ROM guardrails also passed: 20,676 bytes of work RAM remain free and
+the 3,476,362-byte ROM code/data fits within the 4 MB budget.
 
 ## E1M1 → E1M2 campaign and classic intermission (2026-08-22)
 

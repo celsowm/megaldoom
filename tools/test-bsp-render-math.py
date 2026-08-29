@@ -7,7 +7,8 @@ import raycast_constants
 
 ROOT = Path(__file__).resolve().parents[1]
 GENERATED = (ROOT / "src/bsp/generated_e1m1_map.c").read_text()
-RENDERER = (ROOT / "src/bsp/bsp_render.c").read_text()
+RENDERER = "\n".join((ROOT / "src/bsp" / name).read_text() for name in (
+    "bsp_render_projection.c", "bsp_render_traversal.c"))
 BSP_MAP = (ROOT / "src/bsp/bsp_map.c").read_text()
 
 FX_SHIFT = 8
@@ -312,7 +313,7 @@ def main():
                     assert fast_span == reference_span
                     segment_checks += 1
 
-    assert "render_mul" in RENDERER
+    assert "bsp_render_mul" in RENDERER
     assert "depth_dx_q8" in RENDERER and "lateral_dy_q8" in RENDERER
     assert "laterals[i] * depths" not in RENDERER
     # The shifted-domain cheap reject must carry its floor-slack margins.

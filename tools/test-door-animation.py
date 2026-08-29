@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MAP = (ROOT / "src/bsp/bsp_map.c").read_text()
 HEADER = (ROOT / "src/bsp/bsp_map.h").read_text()
 RAYCAST = (ROOT / "src/raycast.h").read_text()
-BSP_RENDER = (ROOT / "src/bsp/bsp_render.c").read_text()
+BSP_RENDER = (ROOT / "src/bsp/bsp_render_columns.c").read_text()
 RENDERER_ASSETS = (ROOT / "src/renderer/generated_renderer_assets.h").read_text()
 # renderer_scene.c was split by SRP into several files; door-overlay code
 # these checks look for now lives across that set.

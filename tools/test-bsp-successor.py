@@ -3,7 +3,8 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-RENDERER = (ROOT / "src/bsp/bsp_render.c").read_text()
+RENDERER = "\n".join((ROOT / "src/bsp" / name).read_text() for name in (
+    "bsp_render.c", "bsp_render_columns.c", "bsp_render_occlusion.c"))
 
 
 def find_next(parent, sample):
@@ -23,10 +24,10 @@ def close(parent, sample):
 
 def main():
     assert "g_next_open[BSP_SAMPLE_COLS + 1]" in RENDERER
-    assert "static u16 find_next_open(u16 sample)" in RENDERER
+    assert "u16 bsp_find_next_open(u16 sample)" in RENDERER
     assert "g_next_open[sample] = (u8)root;" in RENDERER
-    assert "g_next_open[sample] = (u8)find_next_open((u16)(sample + 1));" in RENDERER
-    assert "u16 sample = find_next_open(first_sample);" in RENDERER
+    assert "g_next_open[sample] = (u8)bsp_find_next_open((u16)(sample + 1));" in RENDERER
+    assert "u16 sample = bsp_find_next_open(first_sample);" in RENDERER
     assert "while (sample <= last_sample)" in RENDERER
     assert "g_next_open[BSP_SAMPLE_COLS] = BSP_SAMPLE_COLS;" in RENDERER
     assert "g_sample_solid" not in RENDERER
