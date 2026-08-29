@@ -82,19 +82,46 @@ typedef struct {
     // sparse framebuffer to pick the resident ceiling atlas tile. Zero-cost at
     // runtime: set once per cast, read by the renderer.
     u16 sector;
+    // TRUE when that sector's Doom ceiling flat is F_SKY1. The pack stage then
+    // sources its ceiling run from the baked sky bands instead of `ceiling`.
+    bool sky;
 } RaySceneColors;
 
+// The near-surface overlay: one surface composited in front of whatever the
+// BSP pass left in the column, at its own depth. Two things use it.
+//
+//   * A MOVING DOOR -- a slab whose raised lower gap reveals the scene behind.
+//   * A WINDOW -- a wall with a see-through band, revealing the scene behind
+//     between band_top and band_bottom.
+//
+// `lift` discriminates them: a door overlay is only ever written while its
+// lift is 1..255 (a closed door draws as an ordinary wall, and an open one is
+// skipped entirely), so lift == 0 means WINDOW. bsp_cast_frame clears
+// `height` for every sampled column each frame, so a stale door overlay can
+// never be misread as a window.
+//
+// Field widths are chosen to keep this struct at 10 bytes: it is embedded in
+// every one of the RAY_VIEW_COLS RayColumns, and on a 64 KB machine growing it
+// by two bytes costs 320 bytes of work RAM. `height` is clipped to
+// RAY_VIEW_ROWS and `lift` to 255 before they are stored, so both fit a byte.
 typedef struct {
-    u16 height;   // visible slab height after viewport clipping
     u16 depth;
-    u16 lift;     // Q8, 1..255 while the overlay is active
+    u8 height;      // visible slab height after viewport clipping
+    u8 lift;        // door: Q8 1..255. 0 marks a window (see above).
     u8 tex_x;
     u8 tex_y;
     u8 texture_id;
     u8 shade;
+    u8 band_top;    // window: Q8 of the slab, first see-through row
+    u8 band_bottom; // window: Q8 of the slab, first opaque row below it
 } RayDoorOverlay;
 
 #define RAY_COLUMN_FLAG_DOOR 0x01u
+
+// See the lift discriminator note on RayDoorOverlay.
+static inline bool ray_overlay_is_window(const RayDoorOverlay *overlay) {
+    return (bool)(overlay->lift == 0);
+}
 
 typedef struct {
     u16 height; // visible slab height after viewport clipping
@@ -107,6 +134,11 @@ typedef struct {
     u8 flags;
     RayDoorOverlay door;
 } RayColumn;
+
+// Guards the packing note above: this struct is instantiated RAY_VIEW_COLS
+// times, so a silent growth here is 160x the cost.
+_Static_assert(sizeof(RayDoorOverlay) == 10,
+               "RayDoorOverlay must stay 10 bytes (see the field-width note)");
 
 void player_init(PlayerState *player, u16 phase_index);
 void player_try_move(PlayerState *player, s16 forward, s16 strafe);

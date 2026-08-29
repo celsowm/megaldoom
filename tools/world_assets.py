@@ -231,6 +231,107 @@ def nearest_palette_index(rgb, palette, allowed=None):
                                        WALL_CHROMA_LOSS_WEIGHT)
 
 
+# === Sky ceiling table =====================================================
+# The ceiling run of a sky sector is sourced from a 128-entry screen-row table
+# instead of the 4-row flat pattern. Two deliberate properties:
+#
+#   * ONE index per row, replicated across all 8 pixels. That makes each row a
+#     solid horizontal band -- no Bayer dither on what is the single largest
+#     surface in the frame -- and it makes the packed word stride-independent
+#     (0xNNNNNNNN is what both pack_flat_row and pack_flat_quad produce for a
+#     solid colour), so stride 2 and stride 4 share this table verbatim.
+#   * Rows come from SKY1's own per-row colour, so the vertical structure of
+#     Doom's sky -- dark at the zenith, hazier toward the horizon, and the
+#     brown/grey mountain band at the bottom -- survives as banding. SKY1's
+#     HORIZONTAL structure (the mountain silhouette) is deliberately averaged
+#     away: this sky is screen-fixed, and a silhouette that does not slide as
+#     the player turns reads as a painted backdrop rather than as distance.
+#
+# Quantized into the existing 16 world colours; the sky adds no palette entry
+# and therefore cannot recolour walls, sprites, the weapon or items.
+# 64 rows, matching PACK_CEILING_ROW_COUNT: walls are centred on the viewport,
+# so a ceiling run never starts below row (VIEW_PIXEL_H - 1) / 2 == 59, and a
+# power of two lets the pack post mask with an immediate.
+SKY_CEILING_ROWS = 64
+# Screen row of the horizon. Walls are centred on the viewport
+# (top = (VIEW_PIXEL_H - wall_h) / 2), so the ceiling run can never extend past
+# the midline; the sky is compressed into those rows and the remainder holds
+# the horizon colour so a clipped wall never samples an undefined row.
+SKY_HORIZON_ROW = 60
+
+
+def solid_flat_row(index):
+    """Pack one screen row that is a single palette index across all 8 pixels.
+
+    Spelled as an explicit nibble fold rather than a multiply by a repunit
+    constant: tools/test-sector-map.py forbids that literal anywhere in this
+    file so a packed WALL byte can never be one index doubled instead of two
+    real texels. A flat row genuinely is one index eight times, but the
+    guardrail is a source-text check and is worth more than the shorter
+    spelling -- do not "simplify" this back.
+    """
+    nibble = index & 0xF
+    word = 0
+    for _ in range(8):
+        word = (word << 4) | nibble
+    return word
+
+
+def build_flat_ceiling_rows(sector_visuals):
+    """Return SKY_CEILING_ROWS packed words for the ordinary (indoor) ceiling.
+
+    The runtime picks a ceiling by pointing at one of two ROM tables, so the
+    indoor ceiling has to exist in the same row-indexed shape as the sky. That
+    is only representable in ROM while every sector shares one ceiling triple,
+    which is how emit_world_assets builds sector_visuals today (see
+    GLOBAL_CEILING_INDEX). Assert it instead of trusting it: a future
+    per-sector ceiling has to become a RAM table again, and that should be a
+    loud extractor failure, not a silently wrong ceiling on half the map.
+    """
+    ceilings = {tuple(visual[0:3]) for visual in sector_visuals}
+    if len(ceilings) != 1:
+        raise SystemExit(
+            "ROM ceiling table needs one level-wide ceiling, found %d distinct: %s"
+            % (len(ceilings), sorted(ceilings)))
+    primary, secondary, coverage = ceilings.pop()
+    if coverage != 0:
+        raise SystemExit(
+            "ROM ceiling table cannot express a Bayer-dithered ceiling "
+            "(primary %d, secondary %d, coverage %d)"
+            % (primary, secondary, coverage))
+    return [solid_flat_row(primary)] * SKY_CEILING_ROWS
+
+
+def build_sky_ceiling_rows(palette):
+    """Return SKY_CEILING_ROWS palette indices, one solid band per screen row."""
+    with Image.open(flat_path("F_SKY1")) as image:
+        opaque = _fill_transparent_with_average(image)
+        width, height = opaque.size
+        pixels = list(opaque.get_flattened_data())
+
+    # Deliberately NOT tone_curve'd. That lift exists to recover the sector
+    # light compensation the renderer never applies to WALL texels; the sky is
+    # not a wall and carries no sector light, so lifting it only blows the
+    # zenith out to near-white. Untouched, SKY1's lower half quantizes to
+    # index 3 -- the same colour the level-wide ceiling already uses -- so
+    # stepping outdoors reveals a gradient instead of snapping to a new hue.
+    row_index = []
+    for source_y in range(height):
+        row = pixels[source_y * width:(source_y + 1) * width]
+        average = tuple(sum(p[channel] for p in row) // len(row)
+                        for channel in range(3))
+        row_index.append(nearest_palette_index(average, palette))
+
+    indices = []
+    for y in range(SKY_CEILING_ROWS):
+        if y < SKY_HORIZON_ROW:
+            source_y = (y * height) // SKY_HORIZON_ROW
+        else:
+            source_y = height - 1
+        indices.append(row_index[min(source_y, height - 1)])
+    return indices
+
+
 def build_world_palette(texture_names, texture_usage, sectors):
     # Keep the parameters in the interface: texture conversion callers still
     # describe the active catalog, and a future intentional palette redesign
@@ -972,6 +1073,8 @@ def emit_world_assets(path, texture_usage, sectors, provenance=None,
 
     # The flats are chosen before the shade chain so distant walls cannot darken
     # into them; see build_shade_map's `reserved`.
+    sky_rows = build_sky_ceiling_rows(palette)
+    flat_ceiling_rows = build_flat_ceiling_rows(sector_visuals)
     shade_map = build_shade_map(palette, (GLOBAL_CEILING_INDEX, GLOBAL_FLOOR_INDEX))
     shade_lut = build_shade_lut(palette, WORLD_SHADE_LEVELS,
                                 (GLOBAL_CEILING_INDEX, GLOBAL_FLOOR_INDEX))
@@ -1013,6 +1116,33 @@ def emit_world_assets(path, texture_usage, sectors, provenance=None,
         "",
         "static const u32 FREEDOOM_WORLD_PALETTE[16] = {",
         "    " + ", ".join("0x%02X%02X%02X" % color for color in palette),
+        "};",
+        "",
+        "// Sky ceiling table: one packed 8-pixel row per screen row, sourced",
+        "// from SKY1's own per-row colour. One solid index per row (no dither",
+        "// on the frame's largest surface) which also makes the packed word",
+        "// identical for RAY_COL_STRIDE 2 and 4. See build_sky_ceiling_rows.",
+        "#define MEGALDOOM_SKY_CEILING_ROW_COUNT %d" % SKY_CEILING_ROWS,
+        "#define MEGALDOOM_SKY_HORIZON_ROW %d" % SKY_HORIZON_ROW,
+        "static const u32 MEGALDOOM_SKY_CEILING_ROWS[MEGALDOOM_SKY_CEILING_ROW_COUNT] = {",
+    ])
+    for i in range(0, len(sky_rows), 8):
+        lines.append("    " + " ".join(
+            "0x%08X," % solid_flat_row(index) for index in sky_rows[i:i + 8]))
+    lines.extend([
+        "};",
+        "",
+        "// The indoor counterpart, in the same row-indexed shape so the pack",
+        "// stage selects a ceiling by swapping ONE pointer between two ROM",
+        "// tables -- no per-frame table build and no work RAM. Valid only",
+        "// because every sector shares one ceiling triple; emit_world_assets",
+        "// asserts that before emitting rather than letting it drift.",
+        "static const u32 MEGALDOOM_FLAT_CEILING_ROWS[MEGALDOOM_SKY_CEILING_ROW_COUNT] = {",
+    ])
+    for i in range(0, SKY_CEILING_ROWS, 8):
+        lines.append("    " + " ".join(
+            "0x%08X," % flat_ceiling_rows[i + k] for k in range(8)))
+    lines.extend([
         "};",
         "",
         "// One level-wide ceiling and floor, repeated per sector: primary,",

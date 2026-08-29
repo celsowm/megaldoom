@@ -71,6 +71,12 @@ void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColor
     scene_colors->ceiling = (RayFlatColor){visual[0], visual[1], visual[2]};
     scene_colors->floor = (RayFlatColor){visual[3], visual[4], visual[5]};
     scene_colors->sector = sector;
+    // The sky bit is keyed off the sector the PLAYER stands in, so the ceiling
+    // becomes sky the moment you step outdoors. Looking out at an outdoor
+    // sector from indoors keeps the indoor ceiling: a per-column ceiling source
+    // would have to reach the asm pack post, which is what the window overlay
+    // in renderer_doors.c handles locally instead.
+    scene_colors->sky = bsp_sector_is_sky(sector);
 
     // Clear occlusion and seed every column with a far/empty default so columns
     // no wall covers still render (as distant, mostly sky/floor).

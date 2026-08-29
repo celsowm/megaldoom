@@ -38,9 +38,27 @@ static u8 sample_door_overlay(const WallColumnDescriptor *descriptor,
     return descriptor->shade_map[style_wall_texel(descriptor, tex_y, texel)];
 }
 
-// Moving doors are translucent only in the geometric sense: their raised
-// lower gap reveals the fully rendered BSP scene behind, while the remaining
-// slab is composited at its own depth without rescaling its texture.
+// Screen rows a window's see-through band spans, as absolute viewport rows.
+// The band arrives as Q8 fractions of the drawn slab (tools/doom_map.py's
+// window_band), because the engine has no per-sector heights to project.
+static void window_band_rows(const WallColumnDescriptor *descriptor,
+                             const RayDoorOverlay *window,
+                             u16 *band_top, u16 *band_bottom) {
+    const u16 height = (u16)(descriptor->bottom - descriptor->top);
+    u16 top = (u16)(descriptor->top + (((u32)height * window->band_top) >> 8));
+    u16 bottom = (u16)(descriptor->top + (((u32)height * window->band_bottom) >> 8));
+    if (top < descriptor->top) top = descriptor->top;
+    if (bottom > descriptor->bottom) bottom = descriptor->bottom;
+    if (bottom < top) bottom = top;
+    *band_top = top;
+    *band_bottom = bottom;
+}
+
+// Moving doors and windows are both translucent only in the geometric sense:
+// part of the near slab is omitted so the fully rendered BSP scene behind
+// shows through, while the rest is composited at its own depth without
+// rescaling its texture. A door omits a raised gap at the BOTTOM; a window
+// omits a band in the MIDDLE.
 void draw_door_overlays(const RayColumn *columns, u32 target[][8]) {
     for (u16 x = 0; x < RAY_VIEW_COLS; x += RAY_COL_STRIDE) {
         const RayColumn *column = &columns[x];
@@ -48,25 +66,59 @@ void draw_door_overlays(const RayColumn *columns, u32 target[][8]) {
         if (door->height == 0 || door->depth >= column->depth) continue;
 
         const WallColumnDescriptor descriptor = describe_door_overlay(door);
-        const u16 lift_pixels = (u16)(((u32)door->height * door->lift) >> 8);
+        const bool window = ray_overlay_is_window(door);
+        const u16 lift_pixels = window ? 0u :
+            (u16)(((u32)door->height * door->lift) >> 8);
         const u16 visible_bottom = (u16)(descriptor.bottom - lift_pixels);
         if (visible_bottom <= descriptor.top) continue;
+
+        u16 band_top = visible_bottom;
+        u16 band_bottom = visible_bottom;
+        u16 sky_bottom = 0;
+        if (window) {
+            window_band_rows(&descriptor, door, &band_top, &band_bottom);
+            // Inside the band the base pack already drew the far geometry, but
+            // its ceiling run used the PLAYER's sector -- indoors, looking out.
+            // Repaint just the ceiling part of the band with the sky. This is
+            // the only per-column ceiling in the renderer, and it stays here in
+            // C rather than reaching the asm pack post.
+            const WallColumnDescriptor behind = describe_wall_column(column);
+            sky_bottom = behind.top;
+            if (sky_bottom > band_bottom) sky_bottom = band_bottom;
+        }
 
         const u16 tile_x = (u16)(x >> 3);
 #if RAY_COL_STRIDE == 4
         const u16 shift = (u16)((x & 4) ? 0 : 16);
         const u32 keep_mask = ~((u32)0xFFFFu << shift);
+        const u16 lane = (u16)((x & 4) ? 2 : 0);
 #else
         const u16 shift = (u16)((6 - (x & 7)) * 4);
         const u32 keep_mask = ~((u32)0xFFu << shift);
+        const u16 lane = (u16)((x & 7) >> 1);
 #endif
+        const u8 *const sky_bytes = (const u8 *)MEGALDOOM_SKY_CEILING_ROWS;
+
         for (u16 y = descriptor.top; y < visible_bottom; y++) {
-            const u8 color = sample_door_overlay(&descriptor, y, lift_pixels);
+            u32 value;
+            if (window && y >= band_top && y < band_bottom) {
+                // See-through: keep the far geometry, except where it is
+                // ceiling, which becomes sky.
+                if (y >= sky_bottom) continue;
 #if RAY_COL_STRIDE == 4
-            const u32 value = (u32)REP4[color] << shift;
+                const u8 pair = sky_bytes[(((u16)(y & (PACK_CEILING_ROW_COUNT - 1))) << 2) + lane];
+                value = (u32)((pair << 8) | pair) << shift;
 #else
-            const u32 value = (u32)REP2[color] << shift;
+                value = (u32)sky_bytes[(((u16)(y & (PACK_CEILING_ROW_COUNT - 1))) << 2) + lane] << shift;
 #endif
+            } else {
+                const u8 color = sample_door_overlay(&descriptor, y, lift_pixels);
+#if RAY_COL_STRIDE == 4
+                value = (u32)REP4[color] << shift;
+#else
+                value = (u32)REP2[color] << shift;
+#endif
+            }
             u32 *row = &target[view_tile_index(tile_x, (u16)(y >> 3))][y & 7];
             *row = (*row & keep_mask) | value;
         }
@@ -82,6 +134,17 @@ bool door_overlay_blocks_pixel(const RayColumn *column,
         return FALSE;
     }
     const u16 top = (u16)((VIEW_PIXEL_H - door->height) / 2);
+    const u16 bottom = (u16)(top + door->height);
+    if (ray_overlay_is_window(door)) {
+        // Mirror draw_door_overlays: the band is see-through, so a billboard
+        // behind a window stays visible through it instead of being clipped
+        // by the frame.
+        const WallColumnDescriptor descriptor = describe_door_overlay(door);
+        u16 band_top, band_bottom;
+        window_band_rows(&descriptor, door, &band_top, &band_bottom);
+        if (y >= band_top && y < band_bottom) return FALSE;
+        return (bool)(y >= top && y < bottom);
+    }
     const u16 lift_pixels = (u16)(((u32)door->height * door->lift) >> 8);
-    return (bool)(y >= top && y < (u16)(top + door->height - lift_pixels));
+    return (bool)(y >= top && y < (u16)(bottom - lift_pixels));
 }

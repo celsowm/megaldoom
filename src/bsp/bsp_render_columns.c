@@ -22,6 +22,10 @@ void bsp_draw_seg(u16 seg_index) {
     const BspSeg *seg = &bsp_segs[seg_index];
     const u16 door_lift = bsp_seg_door_lift(seg_index);
     const bool moving_door = (bool)(seg->type == BSP_SEG_DOOR && door_lift > 0);
+    // A window writes the same near overlay a moving door does, but leaves the
+    // column OPEN so the front-to-back walk keeps filling what is behind it.
+    const bool window = (bool)(seg->type == BSP_SEG_WINDOW);
+    const bool overlay = (bool)(moving_door || window);
     const BspVertex *a = &bsp_vertices[seg->v1];
 
     // Backface / one-sided cull: draw only when the camera is on the seg's
@@ -184,19 +188,30 @@ void bsp_draw_seg(u16 seg_index) {
         // between two non-negative endpoint products, so a single MULU.W is
         // exact. Max product 32767 * 65535 still fits u32/s32.
         const s32 scaled_u = (s32)(bsp_native_mulu_word((u16)u_col, u_scale_q12) >> 12);
-        if (moving_door) {
-            RayDoorOverlay *door = &col->door;
-            if (door->height != 0 && depth_col >= door->depth) {
+        if (overlay) {
+            RayDoorOverlay *near = &col->door;
+            if (near->height != 0 && depth_col >= near->depth) {
                 sample = bsp_find_next_open((u16)(sample + 1));
                 continue;
             }
-            door->height = (u16)height;
-            door->depth = (u16)depth_col;
-            door->lift = door_lift;
-            door->tex_x = (u8)(scaled_u & WALL_TEX_WIDTH_MASK);
-            door->tex_y = seg->tex_v_offset;
-            door->texture_id = tid;
-            door->shade = shade;
+            near->height = (u8)height;
+            near->depth = (u16)depth_col;
+            // lift == 0 is the window discriminator; a moving door is always
+            // 1..255 here because bsp_draw_seg returns early on a fully open
+            // door and a closed one never takes this branch.
+            near->lift = window ? 0 : (u8)door_lift;
+            near->band_top = window ? bsp_seg_window_band_top(seg) : 0;
+            near->band_bottom = window ? bsp_seg_window_band_bottom(seg) : 0;
+            near->tex_x = (u8)(scaled_u & WALL_TEX_WIDTH_MASK);
+            near->tex_y = seg->tex_v_offset;
+            near->texture_id = tid;
+            near->shade = shade;
+            // This branch deliberately does NOT close the sample the way the
+            // wall branch below does: the column stays open so a farther wall
+            // (or the ceiling/floor seed) supplies what shows through the gap.
+            // That is the whole see-through mechanism, and
+            // tools/test-door-animation.py checks this branch for the absence
+            // of that call -- so do not name it here either.
         } else {
             col->height = (u16)height;
             col->projected_height = texture_projected_height;
@@ -212,8 +227,8 @@ void bsp_draw_seg(u16 seg_index) {
 #if CADENCE_STAGE_PROBE
         g_cadence_samples++;
 #endif
-        sample = moving_door ? bsp_find_next_open((u16)(sample + 1)) :
-                               bsp_find_next_open(sample);
+        sample = overlay ? bsp_find_next_open((u16)(sample + 1)) :
+                           bsp_find_next_open(sample);
     }
 #if CADENCE_STAGE_PROBE && CADENCE_DRAWSEG_SPLIT
     g_cadence_sample_subticks += getSubTick() - sample_loop_start;

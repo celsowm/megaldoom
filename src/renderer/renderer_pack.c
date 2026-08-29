@@ -64,6 +64,7 @@ static const u8 *packed_wall_column(const WallColumnDescriptor *descriptor) {
 }
 
 void pack_stage_reset(void) {
+    flat_rows_invalidate();
     build_shade_luts();
     s_coherence_valid = FALSE;
 }
@@ -130,11 +131,14 @@ WallColumnDescriptor describe_wall_column(const RayColumn *column) {
 }
 
 WallColumnDescriptor describe_door_overlay(const RayDoorOverlay *door) {
+    // A window is ordinary wall material -- only a door gets the framed
+    // interactive silhouette style_wall_texel() paints.
     return describe_textured_column(door->height, door->height,
                                     door->depth,
                                     door->texture_id, door->tex_x,
                                     door->tex_y, door->shade,
-                                    RAY_COLUMN_FLAG_DOOR);
+                                    ray_overlay_is_window(door) ?
+                                        0u : RAY_COLUMN_FLAG_DOOR);
 }
 
 // PACK_LANES (sampled cast columns per 8px tile column: 4 at stride 2, 2 at
@@ -142,7 +146,7 @@ WallColumnDescriptor describe_door_overlay(const RayDoorOverlay *door) {
 
 // Previous base build's per-tile-column packing inputs, for coherence skipping.
 static WallColumnDescriptor s_prev_desc[VIEW_TILE_W][PACK_LANES];
-static PackedFlatRows s_prev_flat_rows;
+static RaySceneColors s_prev_scene_flats;
 static u8 s_prev_door_active[VIEW_TILE_W];
 
 // A tile column's 15 packed tiles are a pure function of its wall descriptors
@@ -163,16 +167,6 @@ static inline bool wall_desc_equal(const WallColumnDescriptor *a,
                   a->tex_x == b->tex_x && a->tex_y == b->tex_y &&
                   a->texture_id == b->texture_id &&
                   a->shade_level == b->shade_level && a->flags == b->flags);
-}
-
-static inline bool flat_rows_equal(const PackedFlatRows *a,
-                                   const PackedFlatRows *b) {
-    for (u16 i = 0; i < 4; i++) {
-        if (a->ceiling[i] != b->ceiling[i] || a->floor[i] != b->floor[i]) {
-            return FALSE;
-        }
-    }
-    return TRUE;
 }
 
 // A column carries an active door overlay when any of its sampled columns
@@ -221,7 +215,8 @@ static __attribute__((noinline)) void write_mixed_stride4_tile(
         if (run_end > end_y) run_end = end_y;
 
         while (y < run_end) {
-            const u8 flat = ceiling_bytes[((y & 3) << 2) + (lane * 2)];
+            const u8 flat = ceiling_bytes[
+                ((y & (PACK_CEILING_ROW_COUNT - 1)) << 2) + (lane * 2)];
             dst[0] = flat;
             dst[1] = flat;
             dst += 4;
@@ -256,9 +251,9 @@ static __attribute__((noinline)) void write_mixed_stride4_tile(
 void build_bsp_tilemap(const RayColumn *columns,
                        const RaySceneColors *scene_colors,
                        u32 target[][8]) {
-    const PackedFlatRows flat_rows = build_flat_rows(scene_colors);
+    const PackedFlatRows *const flat_rows = build_flat_rows(scene_colors);
     const bool flat_changed = (bool)(!s_coherence_valid ||
-                                     !flat_rows_equal(&flat_rows, &s_prev_flat_rows));
+                                     !scene_flats_equal(scene_colors, &s_prev_scene_flats));
     const u32 overlay_columns = renderer_overlay_prev_columns();
     for (u16 tile_x = 0; tile_x < VIEW_TILE_W; tile_x++) {
         const u16 base_col = (u16)(tile_x * 8);
@@ -291,25 +286,25 @@ void build_bsp_tilemap(const RayColumn *columns,
             const u16 pixel_y = (u16)(tile_y * 8);
 
             if ((pixel_y + 7) < min_top) {
-                write_repeated_flat_tile(target[tile_index], flat_rows.ceiling);
+                write_ceiling_tile(target[tile_index], flat_rows->ceiling, pixel_y);
 #if CADENCE_STAGE_PROBE
                 g_cadence_pack_flat_tiles++;
 #endif
             } else if (pixel_y >= max_bottom) {
-                write_repeated_flat_tile(target[tile_index], flat_rows.floor);
+                write_repeated_flat_tile(target[tile_index], flat_rows->floor);
 #if CADENCE_STAGE_PROBE
                 g_cadence_pack_flat_tiles++;
 #endif
             } else {
                 write_mixed_stride4_tile(target[tile_index], pixel_y,
-                                         descriptors, packed_columns, &flat_rows);
+                                         descriptors, packed_columns, flat_rows);
 #if CADENCE_STAGE_PROBE
                 g_cadence_pack_mixed_tiles++;
 #endif
             }
         }
     }
-    s_prev_flat_rows = flat_rows;
+    s_prev_scene_flats = *scene_colors;
     s_coherence_valid = TRUE;
 }
 #else /* RAY_COL_STRIDE == 2 */
@@ -454,7 +449,7 @@ static __attribute__((noinline)) void write_mixed_stride2_tile_reference(
         if (run_end > end_y) run_end = end_y;
 
         while (y < run_end) {
-            *dst = ceiling_bytes[((y & 3) << 2) + lane];
+            *dst = ceiling_bytes[((y & (PACK_CEILING_ROW_COUNT - 1)) << 2) + lane];
             dst += 4;
             y++;
         }
@@ -507,11 +502,11 @@ static void write_mixed_stride2_span_reference(
 void build_bsp_tilemap(const RayColumn *columns,
                                   const RaySceneColors *scene_colors,
                                   u32 target[][8]) {
-    const PackedFlatRows flat_rows = build_flat_rows(scene_colors);
+    const PackedFlatRows *const flat_rows = build_flat_rows(scene_colors);
     // Ceiling/floor colour changes (e.g. lighting) invalidate every column at
     // once; otherwise coherence is decided per column below.
     const bool flat_changed = (bool)(!s_coherence_valid ||
-                                     !flat_rows_equal(&flat_rows, &s_prev_flat_rows));
+                                     !scene_flats_equal(scene_colors, &s_prev_scene_flats));
     // Columns a restorable overlay (billboard / damage-flash) baked into
     // g_view_tiles last frame must be re-packed so those pixels are erased back
     // to the wall/flat behind them: the rebuild path never runs restore_previous,
@@ -621,8 +616,8 @@ void build_bsp_tilemap(const RayColumn *columns,
 #if DEBUG_PERF
             const u32 flat_start = measure_flat ? getSubTick() : 0;
 #endif
-            write_repeated_flat_tile(target[view_tile_index(tile_x, tile_y)],
-                                     flat_rows.ceiling);
+            write_ceiling_tile(target[view_tile_index(tile_x, tile_y)],
+                               flat_rows->ceiling, (u16)(tile_y * 8));
 #if CADENCE_STAGE_PROBE
             g_cadence_pack_flat_tiles++;
 #endif
@@ -645,7 +640,7 @@ void build_bsp_tilemap(const RayColumn *columns,
             write_mixed_stride2_span(target[view_tile_index(tile_x, ceiling_tiles)],
                                      (u16)(ceiling_tiles * 8),
                                      (u16)(mixed_tiles * 8),
-                                     descriptors, packed_columns, &flat_rows);
+                                     descriptors, packed_columns, flat_rows);
 #if CADENCE_STAGE_PROBE
             g_cadence_pack_mixed_tiles += mixed_tiles;
 #endif
@@ -663,7 +658,7 @@ void build_bsp_tilemap(const RayColumn *columns,
             const u32 flat_start = measure_flat ? getSubTick() : 0;
 #endif
             write_repeated_flat_tile(target[view_tile_index(tile_x, tile_y)],
-                                     flat_rows.floor);
+                                     flat_rows->floor);
 #if CADENCE_STAGE_PROBE
             g_cadence_pack_flat_tiles++;
 #endif
@@ -677,13 +672,13 @@ void build_bsp_tilemap(const RayColumn *columns,
         }
 #if DEBUG_PERF
         compare_stride2_column_asm(tile_x, ceiling_tiles, mixed_tiles,
-                                   descriptors, packed_columns, &flat_rows);
+                                   descriptors, packed_columns, flat_rows);
 #endif
 #if CADENCE_PACK_SPLIT
         g_cadence_pack_tiles_subticks += getSubTick() - tiles_start;
 #endif
     }
-    s_prev_flat_rows = flat_rows;
+    s_prev_scene_flats = *scene_colors;
     s_coherence_valid = TRUE;
 #if DEBUG_PERF
     // SparseTileOracle: overlay columns become temporarily-dynamic tiles

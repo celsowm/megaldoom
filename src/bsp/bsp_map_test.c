@@ -73,11 +73,13 @@ static const u16 hand_grid_seg_indices[48] = {
     5,3,11,7,4,5,4,4,3,4,8,11,8,8,7,8,
 };
 static const u8 hand_secret_sector_bits[1] = {0};
+static const u8 hand_sky_sector_bits[1] = {0};
 
 const BspMapData g_hand_map = {
     hand_vertices, hand_segs, hand_seg_wall_len,
     hand_subsectors, hand_subsector_sector, hand_nodes, hand_things,
     hand_grid_cell_offsets, hand_grid_seg_indices, hand_secret_sector_bits,
+    hand_sky_sector_bits,
     0u, 12u, 8u, 2u, 1u, 1u, 2u, 1u, 0u,
     256, 256, 7u, 7u,
     256, 256, 1792, 1792,

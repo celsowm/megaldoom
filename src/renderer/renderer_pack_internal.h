@@ -68,9 +68,11 @@ WallColumnDescriptor describe_door_overlay(const RayDoorOverlay *door);
 
 // Pre-packed ceiling/floor rows for the current frame's scene colors
 // (renderer_flats.c), consumed by the pack stage.
+// Field order mirrors PACK_FLAT_OFF_* -- floor first; see the addressing note
+// in renderer_pack_abi.h before reordering these.
 typedef struct {
-    u32 ceiling[4];
     u32 floor[4];
+    const u32 *ceiling; // PACK_CEILING_ROW_COUNT rows, in ROM
 } PackedFlatRows;
 
 // Same contract as above: the asm's two flat posts index this by byte.
@@ -78,10 +80,41 @@ _Static_assert(__builtin_offsetof(PackedFlatRows, ceiling) == PACK_FLAT_OFF_CEIL
                "asm flat posts read ceiling at PACK_FLAT_OFF_CEILING");
 _Static_assert(__builtin_offsetof(PackedFlatRows, floor) == PACK_FLAT_OFF_FLOOR,
                "asm flat posts read floor at PACK_FLAT_OFF_FLOOR");
-_Static_assert(sizeof(((PackedFlatRows *)0)->ceiling) == PACK_FLAT_ROWS_BYTES,
-               "asm wraps the flat index with PACK_FLAT_INDEX_MASK");
+_Static_assert(MEGALDOOM_SKY_CEILING_ROW_COUNT == PACK_CEILING_ROW_COUNT,
+               "both ROM ceiling tables must match the asm's index mask");
+_Static_assert(sizeof(((PackedFlatRows *)0)->floor) == PACK_FLOOR_ROWS_BYTES,
+               "asm wraps the floor index with PACK_FLOOR_INDEX_MASK");
+// The ceiling table must cover every screen row a ceiling run can reach.
+// describe_wall_column clamps a column to 1 <= height <= VIEW_PIXEL_H and the
+// packer centres it (top = (VIEW_PIXEL_H - height) / 2), so the highest wall
+// top -- and therefore the last ceiling row ever written -- is at
+// (VIEW_PIXEL_H - 1) / 2. write_ceiling_tile reads eight consecutive rows
+// UNMASKED from that index, so the table must also hold the remainder of that
+// tile; both bounds are asserted here rather than trusted.
+_Static_assert(PACK_CEILING_ROW_COUNT > ((VIEW_PIXEL_H - 1) / 2),
+               "ceiling table must reach the highest centred wall top");
+_Static_assert((PACK_CEILING_ROW_COUNT & (PACK_CEILING_ROW_COUNT - 1)) == 0,
+               "asm masks the ceiling index with an immediate power of two");
 
-PackedFlatRows build_flat_rows(const RaySceneColors *scene_colors);
+// build_flat_rows is a pure function of the scene's two RayFlatColor triples
+// and its sky bit, so comparing those seven bytes proves the packed tables are
+// unchanged. Compare the INPUTS rather than the output: the ceiling table is
+// PACK_CEILING_ROW_COUNT entries, and a full-table compare every frame would
+// cost more than the invalidation it guards.
+static inline bool scene_flats_equal(const RaySceneColors *a,
+                                     const RaySceneColors *b) {
+    return (bool)(a->ceiling.primary == b->ceiling.primary &&
+                  a->ceiling.secondary == b->ceiling.secondary &&
+                  a->ceiling.secondary_coverage == b->ceiling.secondary_coverage &&
+                  a->floor.primary == b->floor.primary &&
+                  a->floor.secondary == b->floor.secondary &&
+                  a->floor.secondary_coverage == b->floor.secondary_coverage &&
+                  a->sky == b->sky);
+}
+
+// Returns a pointer into a cached static; valid until the next call.
+const PackedFlatRows *build_flat_rows(const RaySceneColors *scene_colors);
+void flat_rows_invalidate(void);
 
 // Pixel-replication table for the active stride (guarded so the unused one
 // isn't compiled): REP4[c] == c*0x1111 spreads a colour across 4px (stride 4);
@@ -100,6 +133,22 @@ static inline void write_repeated_flat_tile(u32 *target, const u32 rows[4]) {
     __asm__ volatile (
         "movem.l (%1),%%d0-%%d3\n\t"
         "movem.l %%d0-%%d3,(%0)\n\t"
+        "movem.l %%d0-%%d3,16(%0)"
+        :
+        : "a" (target), "a" (rows)
+        : "d0", "d1", "d2", "d3", "memory");
+}
+
+// Ceiling variant: the 128-row table is indexed by absolute screen row, so a
+// whole-ceiling tile copies its own eight rows rather than repeating four.
+// One extra MOVEM.L load over write_repeated_flat_tile; still no per-row loop.
+static inline void write_ceiling_tile(u32 *target, const u32 *ceiling,
+                                      u16 pixel_y) {
+    const u32 *rows = &ceiling[pixel_y];
+    __asm__ volatile (
+        "movem.l (%1),%%d0-%%d3\n\t"
+        "movem.l %%d0-%%d3,(%0)\n\t"
+        "movem.l 16(%1),%%d0-%%d3\n\t"
         "movem.l %%d0-%%d3,16(%0)"
         :
         : "a" (target), "a" (rows)

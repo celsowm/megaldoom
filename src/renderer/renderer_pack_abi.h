@@ -29,13 +29,35 @@
 #define WALL_DESC_OFF_TEX_Y 17
 #define WALL_DESC_SIZE 24
 
-// PackedFlatRows: two 4-entry u32 row tables, ceiling first. The flat pattern
-// has a 4-row period, so the byte index steps by PACK_TILE_ROW_BYTES and wraps
-// with PACK_FLAT_INDEX_MASK.
-#define PACK_FLAT_OFF_CEILING 0
-#define PACK_FLAT_OFF_FLOOR 16
-#define PACK_FLAT_ROWS_BYTES 16
-#define PACK_FLAT_INDEX_MASK (PACK_FLAT_ROWS_BYTES - 1)
+// PackedFlatRows: two u32 row tables indexed by screen row, stepping by
+// PACK_TILE_ROW_BYTES and wrapping with the table's own mask, so the asm's two
+// flat posts are the same instruction sequence at two different widths.
+//
+// The FLOOR keeps the original 4-row period: it is always a repeating flat.
+// The CEILING is 128 rows because a sky sector sources it from
+// MEGALDOOM_SKY_CEILING_ROWS, one band per screen row (see renderer_flats.c).
+// An indoor ceiling simply replicates its 4-row pattern across all 128, so
+// there is no second code path and no branch in the hot post -- the indoor
+// case executes exactly the instructions it did before, against a wider table.
+//
+// The FLOOR rows are embedded; the CEILING is a POINTER to one of two ROM
+// tables (MEGALDOOM_FLAT_CEILING_ROWS / MEGALDOOM_SKY_CEILING_ROWS), so
+// stepping outdoors swaps a pointer instead of rebuilding 64 rows of work RAM
+// every frame. The ceiling post pays one extra MOVEA.L per post -- never per
+// pixel -- to load it. Floor stays first so its `lea PACK_FLAT_OFF_FLOOR(a3,
+// d6.w),a4` keeps the 8-bit displacement the 68000 indexed mode allows.
+// 64, not the full 120-row viewport: walls are centred
+// (top = (VIEW_PIXEL_H - wall_h) / 2 with wall_h >= 1), so a ceiling run can
+// never start below row 59 and the table only has to cover the top half. Kept
+// a power of two so the asm post can keep masking with an immediate. The
+// _Static_asserts in renderer_pack_internal.h pin both facts.
+#define PACK_CEILING_ROW_COUNT 64
+#define PACK_CEILING_ROWS_BYTES (PACK_CEILING_ROW_COUNT * PACK_TILE_ROW_BYTES)
+#define PACK_FLOOR_ROWS_BYTES 16
+#define PACK_FLAT_OFF_FLOOR 0
+#define PACK_FLAT_OFF_CEILING PACK_FLOOR_ROWS_BYTES
+#define PACK_CEILING_INDEX_MASK (PACK_CEILING_ROWS_BYTES - 1)
+#define PACK_FLOOR_INDEX_MASK (PACK_FLOOR_ROWS_BYTES - 1)
 
 // Stack layout of renderer_write_mixed_stride2_span_asm after its prologue.
 // GCC's m68k ABI gives every argument a 4-byte stack slot and right-aligns a

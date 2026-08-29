@@ -8,6 +8,91 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## E1M1 sky and see-through windows (2026-08-29)
+
+Two features, both built to cost nothing in work RAM, because the 64 KB budget
+had only 188 bytes of slack over the `check-rom.ps1` threshold before this.
+
+**Sky.** F_SKY1 sectors used the same level-wide `#242424` ceiling as every
+indoor room, and since that colour is already near SKY1's average, recolouring
+alone would have changed almost nothing — sky needs a horizon, not a hue. The
+ceiling run is now sourced from a 64-row screen-row table instead of the 4-row
+flat pattern, and stepping into an F_SKY1 sector swaps which table the pack
+stage points at. Both tables are in ROM: `MEGALDOOM_SKY_CEILING_ROWS` from
+SKY1's own per-row colour, and `MEGALDOOM_FLAT_CEILING_ROWS` for the indoor
+ceiling. The indoor one is only expressible as ROM while every sector shares
+one ceiling triple, so `build_flat_ceiling_rows` asserts that rather than
+trusting it.
+
+Three things fell out of doing it this way rather than the obvious way:
+
+- Building the table in work RAM cost 496 bytes and tripped the guardrail
+  (20152 free, threshold 20480). Pointing at ROM instead costs 4 bytes. Final:
+  20656 free vs the 20668 baseline.
+- 64 rows, not 120. Walls are centred (`top = (VIEW_PIXEL_H - wall_h) / 2`), so
+  a ceiling run can never start below row 59. A power of two keeps the asm post
+  masking with an immediate.
+- Floor rows had to move to offset 0. Both flat posts address their table with
+  `lea PACK_FLAT_OFF_x(a3,d6.w),a4`, and the 68000's indexed mode carries an
+  8-bit displacement — with the ceiling first, the floor's offset was 512 and
+  the assembler rejected it outright.
+
+Each row is ONE index replicated across 8 pixels, so the sky is clean
+horizontal bands rather than dither on the frame's largest surface, and the
+packed word is identical at stride 2 and stride 4. SKY1 is NOT tone-curved: that
+lift exists to recover the sector light the renderer never applies to wall
+texels, and applying it to the sky just blew the zenith out to near-white.
+Untouched, SKY1's lower half quantizes to index 3 — the colour the ceiling
+already was — so stepping outdoors reveals a gradient instead of a hue change.
+No PAL3 entry was added or changed.
+
+**Windows.** E1M1's three window structures (7 linedefs, 15 segs) were rendering
+as blank walls: their inner lines are flagged IMPASSABLE, which is the one flag
+the flattener promotes to a solid full-height wall. They are now `BSP_SEG_WINDOW`
+— the same seg, reclassified. The caster writes the near overlay a moving door
+already uses and then does NOT close the column, so the front-to-back walk keeps
+filling what is behind it; the compositor draws the frame above and below the
+band and leaves the middle alone. Rows in the band above the far wall's top are
+repainted from the sky table, which keeps the renderer's only per-column ceiling
+in C and out of the asm pack post.
+
+This is deliberately NOT the forbidden "promote a portal band to a flat wall"
+transform, and the difference is checked rather than argued:
+`load_map(..., apply_windows=False)` is the negative control, and
+`test-sector-map.py` diffs it against the shipped map. Both E1M1 and E1M2 come
+out byte-identical except the type byte — 15 and 76 segs, zero geometry changes
+— so collision, LOS, the blockmap and the navigation certificate are untouched
+by construction. AGENTS.md now carries that distinction as a rule.
+
+`RayDoorOverlay` absorbed the band without growing: it is embedded in all 160
+RayColumns, so two more bytes would have been 320 bytes of work RAM. `height`
+and `lift` are both clipped before storage and fit bytes, which paid for
+`band_top`/`band_bottom`, and `lift == 0` discriminates a window from a door
+(a door overlay is only ever written while its lift is 1..255). A
+`_Static_assert` pins the size at 10.
+
+**Two things worth knowing.**
+
+The secret door was already there. Linedef 247 — SECRET-flagged, special 1 —
+already ships as door group 1 with DIRECT_USE, and taking connected components
+of the flattened map shows it is the *only* link between the main map and the
+walkable outdoor courtyard. Its BROWN96 face is not a fallback either: that is
+the sidedef's real texture, and the mismatch against sector 56's BROWNGRN walls
+is Doom's own visual tell. Blending it would make the game less faithful, not
+more, so it was left alone.
+
+Through a window at eye level you see the sky's *horizon* rows, which quantize
+to the same index 3 the indoor ceiling uses — so the sky reads clearly when you
+walk outdoors and is nearly invisible through a window. That is the honest
+consequence of a screen-fixed sky, not a bug; shifting it would need the yaw
+parallax that was deliberately not built.
+
+`tools/routes/e1m1-windows.txt` walks from the player start to the nukage-yard
+windows. Note that `tour-east-combat.txt` no longer reaches gameplay at all —
+its prologue presses START at frames 150/200/220, and the current frontend needs
+900/950/1050 plus A at 1120. That is unrelated to this work but it means the
+documented "(2416, 3081)" endpoint no longer reproduces.
+
 ## Fist skin palette and olive armor (2026-08-29)
 
 PAL3 deliberately has no saturated green: its former green slot is the khaki

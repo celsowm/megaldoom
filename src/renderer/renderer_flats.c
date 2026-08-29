@@ -38,23 +38,54 @@ static u32 pack_flat_row(const RayFlatColor *material, u16 x, u16 y) {
 }
 #endif
 
-PackedFlatRows build_flat_rows(const RaySceneColors *scene_colors) {
-    PackedFlatRows rows;
+// The ceiling table is PACK_CEILING_ROW_COUNT rows indexed by absolute screen
+// row, so a sky sector can give every row its own colour. An ordinary ceiling
+// has a 4-row period and simply repeats it across the table: the asm ceiling
+// post then runs the identical instruction sequence for both cases, and the
+// indoor frame cost is unchanged.
+//
+// A whole level's ceiling is ONE colour today (GLOBAL_CEILING_INDEX), so the
+// repeated case collapses to the same u32 128 times; the loop is kept general
+// because the RayFlatColor Bayer pair is still the renderer's contract.
+// Both candidates live in ROM in the same row-indexed shape, so choosing a
+// ceiling is a pointer assignment: no per-frame table build, and no work RAM.
+// See build_flat_ceiling_rows in tools/world_assets.py for the invariant that
+// makes the indoor table expressible as ROM (one ceiling triple, no dither).
+static void select_ceiling_rows(PackedFlatRows *rows,
+                                const RaySceneColors *scene_colors) {
+    rows->ceiling = scene_colors->sky ? MEGALDOOM_SKY_CEILING_ROWS
+                                      : MEGALDOOM_FLAT_CEILING_ROWS;
+}
+
+// Returned by pointer into a static, and rebuilt only when the scene's flats
+// actually change. The ceiling table is PACK_CEILING_ROW_COUNT entries; filling
+// and then returning that by value would cost ~130 stores plus a ~530-byte
+// copy on EVERY frame, in the stage that already co-dominates the frame
+// budget. Crossing a sky threshold is rare, so the steady-state cost here is
+// one comparison.
+static PackedFlatRows s_flat_rows;
+static RaySceneColors s_flat_rows_key;
+static bool s_flat_rows_valid = FALSE;
+
+void flat_rows_invalidate(void) {
+    s_flat_rows_valid = FALSE;
+}
+
+const PackedFlatRows *build_flat_rows(const RaySceneColors *scene_colors) {
+    if (s_flat_rows_valid &&
+        scene_flats_equal(scene_colors, &s_flat_rows_key)) {
+        return &s_flat_rows;
+    }
+    select_ceiling_rows(&s_flat_rows, scene_colors);
     for (u16 y = 0; y < 4; y++) {
 #if RAY_COL_STRIDE == 4
-        const u16 ceiling = pack_flat_quad(&scene_colors->ceiling, 0, y);
-        rows.ceiling[y] = ((u32)ceiling << 16) | ceiling;
         const u16 floor = pack_flat_quad(&scene_colors->floor, 0, y);
-        rows.floor[y] = ((u32)floor << 16) | floor;
+        s_flat_rows.floor[y] = ((u32)floor << 16) | floor;
 #else
-        rows.ceiling[y] = pack_flat_row(&scene_colors->ceiling, 0, y);
-        // Per-sector floor, mirroring the ceiling above: tools/wad-map-extract.py
-        // now bakes FREEDOOM_SECTOR_VISUALS[sector][3..5] from that sector's own
-        // floor flat (lit, chroma-clamped, best_mix-dithered) instead of forcing
-        // every sector to one ROM-constant grey. See tools/test-wall-quality.py
-        // for the guardrail that floor and ceiling never share an index.
-        rows.floor[y] = pack_flat_row(&scene_colors->floor, 0, y);
+        s_flat_rows.floor[y] = pack_flat_row(&scene_colors->floor, 0, y);
 #endif
     }
-    return rows;
+    s_flat_rows_key = *scene_colors;
+    s_flat_rows_valid = TRUE;
+    return &s_flat_rows;
 }

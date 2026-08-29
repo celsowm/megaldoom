@@ -31,12 +31,22 @@ E1M1_HEADER_ROW = "%du, %du, %du, %du, %du, %du, %du, %du, %du," % (
     E1M1_SUBSECTOR_COUNT, E1M1_NODE_COUNT, E1M1_DOOR_GROUP_COUNT,
     E1M1_THING_COUNT, E1M1_SECTOR_COUNT, E1M1_SECRET_SECTOR_COUNT)
 
-# Seg type breakdown (doom_map.SEG_WALL/SEG_DOOR/SEG_EXIT/SEG_TRIGGER),
-# summing to E1M1_SEG_COUNT. This WAD's E1M1 has no remote-trigger door
-# lines, so SEG_TRIGGER is absent rather than zero (see test-sector-map.py).
-E1M1_WALL_SEG_COUNT = 369
+# Seg type breakdown (doom_map.SEG_WALL/SEG_DOOR/SEG_EXIT/SEG_TRIGGER/
+# SEG_WINDOW), summing to E1M1_SEG_COUNT. This WAD's E1M1 has no
+# remote-trigger door lines, so SEG_TRIGGER is absent rather than zero (see
+# test-sector-map.py).
+E1M1_WALL_SEG_COUNT = 354
 E1M1_DOOR_SEG_COUNT = 16  # E1M1_DOOR_GROUP_COUNT * 4 faces per group
 E1M1_EXIT_SEG_COUNT = 1
+
+# Doom's three window structures on E1M1 -- the pair looking onto the nukage
+# courtyard, the three in the exit room, and the east one -- reach the ROM as
+# SEG_WINDOW. These 15 segs come from exactly 7 linedefs (26, 29, 117, 119,
+# 121, 275, 276); the BSP splits some of them. They were SEG_WALL before, and
+# the reclassification is required to be geometry-neutral, which
+# test-sector-map.py checks rather than assumes.
+E1M1_WINDOW_SEG_COUNT = 15
+E1M1_WINDOW_LINEDEF_COUNT = 7
 
 # doom_map.load_map(..., apply_recipes=True) certificate/BFS result.
 E1M1_EXIT_SEG_INDEX = 376

@@ -98,6 +98,15 @@ bool bsp_sector_is_secret(u16 sector_index) {
                    (1u << (sector_index & 7))) != 0);
 }
 
+bool bsp_sector_is_sky(u16 sector_index) {
+    if (sector_index >= g_bsp_map->sector_count ||
+        g_bsp_map->sky_sector_bits == NULL) {
+        return FALSE;
+    }
+    return (bool)((g_bsp_map->sky_sector_bits[sector_index >> 3] &
+                   (1u << (sector_index & 7))) != 0);
+}
+
 void bsp_map_reset(u16 phase_index) {
     bsp_select_map(phase_index);
     for (u16 i = 0; i < bsp_door_count && i < BSP_MAX_DOORS; i++) {

@@ -33,7 +33,21 @@ SEG_DOOR = 1
 SEG_EXIT = 2
 SEG_SWITCH = 3
 SEG_TRIGGER = 4
+SEG_WINDOW = 5
 SEG_FLAG_DIRECT_USE = 0x01
+
+# A WINDOW is a linedef this converter ALREADY emits as a solid wall -- two
+# sided, flagged impassable, no special -- whose two sectors form a real
+# vertical opening: one side's floor is higher AND its ceiling lower, i.e. a
+# recess you can see over but not walk through. Doom's E1M1 windows are exactly
+# that shape, and today they render as blank walls.
+#
+# Reclassifying one does NOT add, move or remove a SEG: the emitted geometry,
+# the blockmap and the navigation certificate are byte-identical, and the
+# runtime still treats a window as solid for collision and line of sight. Only
+# the type byte and the two band bytes below change, so this is not the
+# forbidden "promote a portal band to a flat wall" transform -- nothing that
+# was passable becomes solid, and nothing solid moves.
 
 KEY_NONE = 0
 KEY_BLUE = 1
@@ -534,7 +548,14 @@ def certify_flat_progression(vertices, segs, things, start_x, start_y):
     raise ValueError(detail)
 
 
-def load_map(wad, mapn, apply_recipes=True):
+def load_map(wad, mapn, apply_recipes=True, apply_windows=True):
+    """Flatten one Doom map.
+
+    apply_windows=False is the negative control for the window
+    reclassification: it must produce the SAME segs in the same order with the
+    same geometry, differing only in the type byte. tools/test-sector-map.py
+    relies on that to prove windows never move geometry.
+    """
     """Parse `mapn`'s lumps out of `wad` and flatten them into a MapData."""
 
     def need(member):
@@ -702,6 +723,73 @@ def load_map(wad, mapn, apply_recipes=True):
         group_required_key[group] |= LOCKED_DOOR_KEYS.get(
             linedefs[line_id]["special"], KEY_NONE)
 
+    def window_recess(line_id, ld):
+        """Return (room_sector, recess_sector) when this line is a window.
+
+        A window is a line the flattener already keeps solid (two-sided and
+        impassable, carrying no special), whose back side is a recess: floor
+        strictly higher AND ceiling strictly lower than the room's. That
+        excludes same-sector midtexture decorations -- E1M1's BRNBIG* panels in
+        sector 72 have identical heights on both sides -- and excludes ordinary
+        height transitions, which the flattener erases instead.
+        """
+        if ld["left"] == 0xFFFF or not (ld["flags"] & LINE_FLAG_IMPASSABLE):
+            return None
+        if (ld["special"] in EXIT_SPECIALS or line_id in line_door_group or
+                line_id in remote_line_group):
+            return None
+        sector_ids = line_sector_ids(ld)
+        if len(sector_ids) != 2 or sector_ids[0] == sector_ids[1]:
+            return None
+        for room_id, recess_id in (sector_ids, sector_ids[::-1]):
+            room, recess = sectors[room_id], sectors[recess_id]
+            if recess["floor"] > room["floor"] and recess["ceiling"] < room["ceiling"]:
+                return room_id, recess_id
+        return None
+
+    window_lines = {
+        line_id: recess
+        for line_id, ld in enumerate(linedefs)
+        if apply_windows and (recess := window_recess(line_id, ld)) is not None
+    }
+
+    def window_band(seg):
+        """Q8 band of the drawn slab that the opening occupies, from its top.
+
+        The runtime draws every wall as one 128-unit slab centred on the
+        viewport, so the opening cannot be projected -- it is expressed as a
+        fraction of the room's own floor-to-ceiling span and applied to the
+        slab. The fractions are computed against the seg's OWN front sector, so
+        the two faces of one window each get the band a viewer on that side
+        would see.
+        """
+        ld = linedefs[seg["ld"]]
+        _, recess_id = window_lines[seg["ld"]]
+        front_side = front_side_for(seg)
+        room_id = sidedefs[front_side]["sector"] if front_side != 0xFFFF else None
+        if room_id is None or room_id == recess_id:
+            # Viewed from inside the recess: fall back to the recorded room.
+            room_id = window_lines[seg["ld"]][0]
+        room, recess = sectors[room_id], sectors[recess_id]
+        span = room["ceiling"] - room["floor"]
+        if span <= 0:
+            return None
+        sill = recess["floor"] - room["floor"]
+        head = recess["ceiling"] - room["floor"]
+        # Clamp into the room: a recess taller than its room would otherwise
+        # produce a band outside the slab.
+        sill = max(0, min(span, sill))
+        head = max(0, min(span, head))
+        if head <= sill:
+            return None
+        band_top = ((span - head) * 256) // span
+        band_bottom = ((span - sill) * 256) // span
+        band_top = max(0, min(255, band_top))
+        band_bottom = max(0, min(255, band_bottom))
+        if band_bottom <= band_top:
+            return None
+        return band_top, band_bottom
+
     # --- Classify each linedef in the flattened world. ---------------------- #
     def line_solid_without_recipe(line_id, ld):
         if ld["left"] == 0xFFFF:
@@ -762,6 +850,15 @@ def load_map(wad, mapn, apply_recipes=True):
             required_key = group_required_key[door_group]
             if ld["special"] in DIRECT_DOOR_SPECIALS:
                 flags |= SEG_FLAG_DIRECT_USE
+        elif seg["ld"] in window_lines:
+            band = window_band(seg)
+            if band is not None:
+                # door_group / required_key are meaningless for a non-door seg,
+                # so the band rides in them rather than widening BspSeg past 16
+                # bytes -- see the note in src/bsp/bsp_map.h. A window whose
+                # band degenerates stays a plain WALL, exactly as today.
+                seg_type = SEG_WINDOW
+                door_group, required_key = band
 
         name = FALLBACK_TEXTURE
         xoff = seg["offset"]

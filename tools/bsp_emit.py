@@ -68,6 +68,8 @@ def emit_map_c(path, wad_path, map_data, texture_ids, texture_meta):
                 transfer["added_segs"]))
     lines.append("// Certified: exit SEG %d reachable after %d states" % (
         map_data.certificate["exit_index"], map_data.certificate["states"]))
+    lines.append("// Sky sectors (F_SKY1 ceiling): %d" % sum(
+        1 for sector in map_data.sectors if sector["ceiling_name"] == "F_SKY1"))
     lines.append("// Generated at: source-derived")
     lines.append("#include \"bsp_map.h\"")
     lines.append("")
@@ -191,6 +193,21 @@ def emit_map_c(path, wad_path, map_data, texture_ids, texture_meta):
     for i in range(0, len(secret_bits), 16):
         lines.append("    %s," % ",".join(str(value) for value in secret_bits[i:i + 16]))
     lines.append("};")
+
+    # Per-sector "this ceiling is the sky" bitmap, same shape as the secret
+    # bitmap above. Only the ceiling flat NAME is consulted; heights still never
+    # enter the ROM (see doom_map's contract). The renderer reads this once per
+    # frame for the player's sector to pick the sky ceiling table.
+    sky_sector_ids = [index for index, sector in enumerate(map_data.sectors)
+                      if sector["ceiling_name"] == "F_SKY1"]
+    sky_bits = [0] * ((len(map_data.sectors) + 7) // 8)
+    for sector_id in sky_sector_ids:
+        sky_bits[sector_id >> 3] |= 1 << (sector_id & 7)
+    lines.append("static const u8 %s[%d] = {" %
+                 (sym("bsp_sky_sector_bits"), len(sky_bits)))
+    for i in range(0, len(sky_bits), 16):
+        lines.append("    %s," % ",".join(str(value) for value in sky_bits[i:i + 16]))
+    lines.append("};")
     lines.append("")
 
     lines.append("const BspMapData g_%s_map = {" % prefix)
@@ -199,9 +216,9 @@ def emit_map_c(path, wad_path, map_data, texture_ids, texture_meta):
     lines.append("    %s, %s, %s, %s," %
                  (sym("bsp_subsectors"), sym("bsp_subsector_sector"),
                   sym("bsp_nodes"), sym("bsp_things")))
-    lines.append("    %s, %s, %s," %
+    lines.append("    %s, %s, %s, %s," %
                  (sym("bsp_grid_cell_offsets"), sym("bsp_grid_seg_indices"),
-                  sym("bsp_secret_sector_bits")))
+                  sym("bsp_secret_sector_bits"), sym("bsp_sky_sector_bits")))
     lines.append("    %du, %du, %du, %du, %du, %du, %du, %du, %du," %
                  (root, len(out_segs), len(vertices), len(map_data.out_ssectors),
                   len(nodes), map_data.next_door_group, len(map_data.out_things),

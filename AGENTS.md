@@ -69,6 +69,17 @@ offline material transfer onto existing solid perimeter geometry, and prove
 the recipe-on/off SEG geometry and per-column depth are identical (LOG,
 2026-08-21).
 
+**Reclassifying an already-solid line is a different thing, and is allowed.**
+The rule above is about ADDING geometry for a band the flattener erased. Giving
+a line the flattener ALREADY emits as a solid wall a new seg type -- as
+`BSP_SEG_WINDOW` does for Doom's windows (2026-08-29) -- adds nothing, moves
+nothing and keeps the line solid for collision and LOS, so none of the failure
+modes above apply. The bar for it is that the emitted seg set stays
+byte-identical: `tools/doom_map.py`'s `load_map(..., apply_windows=False)` is
+the negative control, and `tools/test-sector-map.py` diffs the two and fails on
+any change outside the type byte. Reuse that pattern rather than inventing a
+new one, and keep the geometry proof in the test.
+
 ## Dead ends — do not redo without new evidence
 
 Each is measured and written up in [LOG.md](LOG.md); the date locates the entry.

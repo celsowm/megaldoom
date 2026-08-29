@@ -101,9 +101,10 @@ renderer_write_mixed_stride2_span_asm:
     sub.w   d0,d2                  /* ceiling post length */
     subq.w  #1,d2
     move.w  d2,d5                  /* DBRA counter */
-    lea     PACK_FLAT_OFF_CEILING(a3,d6.w),a4 /* ceiling rows for this lane */
-    move.w  d0,d2                  /* flat index = (y & 3) * PACK_TILE_ROW_BYTES */
-    andi.w  #3,d2
+    movea.l PACK_FLAT_OFF_CEILING(a3),a4 /* ROM ceiling table (flat or sky) */
+    adda.w  d6,a4                  /* ...offset to this lane's byte */
+    move.w  d0,d2                  /* index = (y & 127) * PACK_TILE_ROW_BYTES */
+    andi.w  #(PACK_CEILING_ROW_COUNT - 1),d2
     lsl.w   #2,d2
     add.w   d5,d0                  /* y advances past the whole post */
     addq.w  #1,d0
@@ -111,7 +112,7 @@ renderer_write_mixed_stride2_span_asm:
     move.b  0(a4,d2.w),(a6)
     addq.l  #PACK_TILE_ROW_BYTES,a6
     addq.w  #PACK_TILE_ROW_BYTES,d2
-    andi.w  #PACK_FLAT_INDEX_MASK,d2 /* the flat pattern repeats every 4 rows */
+    andi.w  #PACK_CEILING_INDEX_MASK,d2 /* 128 screen rows: flat OR sky */
     dbra    d5,.Lceiling_loop
 
 .Lwall_setup:
@@ -153,7 +154,7 @@ renderer_write_mixed_stride2_span_asm:
     move.b  0(a4,d2.w),(a6)
     addq.l  #PACK_TILE_ROW_BYTES,a6
     addq.w  #PACK_TILE_ROW_BYTES,d2
-    andi.w  #PACK_FLAT_INDEX_MASK,d2
+    andi.w  #PACK_FLOOR_INDEX_MASK,d2
     dbra    d5,.Lfloor_loop
 
 .Lnext_lane:

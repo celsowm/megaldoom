@@ -82,20 +82,36 @@ def main():
     assert closing[0] < LIFT_MAX  # closing blocks on its first update
     assert closing[-1] == 0
 
-    # The renderer has a distinct moving-door overlay. Partial doors do not
-    # close the BSP sample, so farther walls become the base visible in the gap.
+    # The renderer has a distinct near-surface overlay shared by moving doors
+    # and windows. Neither closes the BSP sample, so farther walls become the
+    # base visible in the gap.
     assert "typedef struct {" in RAYCAST and "RayDoorOverlay" in RAYCAST
     assert "RAY_COLUMN_FLAG_DOOR" in RAYCAST
     assert "const bool moving_door" in BSP_RENDER
-    assert "if (moving_door)" in BSP_RENDER
+    assert "const bool window" in BSP_RENDER
+    assert "if (overlay)" in BSP_RENDER
     assert "#define RAY_MAX_PROJECTED_WALL_HEIGHT 640" in RAYCAST
     assert "projected_height" in BSP_RENDER
     assert "projected_wall_h" in SCENE
     assert "vertical_samples == b->vertical_samples" in SCENE
     assert "MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[641][120]" in RENDERER_ASSETS
-    moving_branch = BSP_RENDER.split("if (moving_door) {", 1)[1].split("} else {", 1)[0]
-    assert "RayDoorOverlay" in moving_branch
-    assert "mark_sample_solid" not in moving_branch
+    overlay_branch = BSP_RENDER.split("if (overlay) {", 1)[1].split("} else {", 1)[0]
+    assert "RayDoorOverlay" in overlay_branch
+    assert "mark_sample_solid" not in overlay_branch
+
+    # A window is the same overlay with the gap in the middle instead of at the
+    # bottom, discriminated by lift == 0 (a door overlay is only ever written
+    # while its lift is 1..255). The band rides in the two bytes a non-door seg
+    # has spare, so RayDoorOverlay must not grow: it is in every RayColumn.
+    assert "_Static_assert(sizeof(RayDoorOverlay) == 10" in RAYCAST
+    assert "ray_overlay_is_window" in RAYCAST
+    assert "band_top" in RAYCAST and "band_bottom" in RAYCAST
+    assert "BSP_SEG_WINDOW" in HEADER
+    assert "bsp_seg_window_band_top" in HEADER
+    assert "near->lift = window ? 0 :" in BSP_RENDER
+    assert "window_band_rows" in SCENE
+    # Still solid for collision and line of sight: only rendering differs.
+    assert "BSP_SEG_WINDOW" not in MAP
     assert "draw_door_overlays(columns, g_view_tiles)" in SCENE
 
     # A rising slab keeps the full-height vertical lookup and discards rows from

@@ -28,7 +28,11 @@ typedef enum {
     BSP_SEG_DOOR = 1,
     BSP_SEG_EXIT = 2,
     BSP_SEG_SWITCH = 3,
-    BSP_SEG_TRIGGER = 4
+    BSP_SEG_TRIGGER = 4,
+    // A wall with a see-through band: Doom's windows. Still fully solid for
+    // collision and line of sight -- only rendering differs. See
+    // window_recess() in tools/doom_map.py for how one is recognised.
+    BSP_SEG_WINDOW = 5
 } BspSegType;
 
 #define BSP_SEG_FLAG_DIRECT_USE 0x01u
@@ -46,6 +50,13 @@ typedef struct {
     u8 tex_v_offset;
     u8 texture_id; // exact generated shared-map texture ID
     u8 type;       // BspSegType
+    // For a BSP_SEG_WINDOW these two bytes instead carry the see-through band
+    // as Q8 fractions of the drawn slab, measured from its top
+    // (bsp_seg_window_band_top/_bottom below). A window is never a door and
+    // never locked, so neither field has a meaning to lose -- and keeping
+    // BspSeg at exactly 16 bytes keeps its address calculation a shift instead
+    // of the MULU.W an 18-byte record would force on the renderer's hottest
+    // array. Widen this struct only with that cost in mind.
     u8 door_group; // shared state for every face of one physical door
     u8 required_key; // BSP_KEY_* bit, or BSP_KEY_NONE
     u8 flags;      // BSP_SEG_FLAG_* interaction metadata
@@ -105,6 +116,10 @@ typedef struct {
     const u16 *grid_cell_offsets;
     const u16 *grid_seg_indices;
     const u8 *secret_sector_bits;
+    // Per-sector bit: this sector's Doom ceiling flat is F_SKY1. Baked from the
+    // flat NAME only -- no sector height ever enters the ROM. The renderer uses
+    // it to swap the flat ceiling table for the baked sky horizon.
+    const u8 *sky_sector_bits;
     u16 root_node;
     u16 seg_count;
     u16 vertex_count;
@@ -210,6 +225,16 @@ const BspMapData *bsp_current_map(void);
 #define bsp_player_start_angle (g_bsp_map->player_start_angle)
 
 bool bsp_sector_is_secret(u16 sector_index);
+bool bsp_sector_is_sky(u16 sector_index);
+
+// Window band accessors, Q8 of the drawn slab from its top. Meaningful only
+// for BSP_SEG_WINDOW; see the field-overload note on BspSeg.
+static inline u8 bsp_seg_window_band_top(const BspSeg *seg) {
+    return seg->door_group;
+}
+static inline u8 bsp_seg_window_band_bottom(const BspSeg *seg) {
+    return seg->required_key;
+}
 
 // Select the level and reset its mutable state (doors start closed).
 void bsp_map_reset(u16 phase_index);

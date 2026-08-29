@@ -7,7 +7,8 @@ from pathlib import Path
 
 from e1m1_expected import (E1M1_HEADER_ROW, E1M1_SEG_COUNT,
                            E1M1_WALL_SEG_COUNT, E1M1_DOOR_SEG_COUNT,
-                           E1M1_EXIT_SEG_COUNT, E1M1_DOOR_GROUP_COUNT)
+                           E1M1_EXIT_SEG_COUNT, E1M1_DOOR_GROUP_COUNT,
+                           E1M1_WINDOW_SEG_COUNT, E1M1_WINDOW_LINEDEF_COUNT)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -35,6 +36,8 @@ def main():
     main_source = (ROOT / "src/main.c").read_text()
     raycast = (ROOT / "src/raycast.h").read_text()
     doom_map = load_module("doom_map_sector", "tools/doom_map.py")
+    wad_reader = load_module("wad_reader_sector", "tools/wad_reader.py")
+    campaign_wad = str(ROOT / "DOOM1.WAD")
     world_assets = load_module("world_assets_sector", "tools/world_assets.py")
     bsp_emit_source = (ROOT / "tools/bsp_emit.py").read_text()
     world_assets_source = (ROOT / "tools/world_assets.py").read_text()
@@ -68,7 +71,38 @@ def main():
     # every door group's own linedef carries its direct-use special.
     assert types == {doom_map.SEG_WALL: E1M1_WALL_SEG_COUNT,
                      doom_map.SEG_DOOR: E1M1_DOOR_SEG_COUNT,
-                     doom_map.SEG_EXIT: E1M1_EXIT_SEG_COUNT}, types
+                     doom_map.SEG_EXIT: E1M1_EXIT_SEG_COUNT,
+                     doom_map.SEG_WINDOW: E1M1_WINDOW_SEG_COUNT}, types
+
+    # Windows: reclassified from SEG_WALL, never newly emitted. Re-running the
+    # converter with the window rule disabled has to produce the SAME segs in
+    # the SAME order with the same geometry -- that is what lets a window skip
+    # bsp_mark_sample_solid without touching collision, LOS, the blockmap or
+    # the navigation certificate. Proved here rather than asserted in a comment.
+    window_rows = [row for row in rows if row[7] == doom_map.SEG_WINDOW]
+    assert len(window_rows) == E1M1_WINDOW_SEG_COUNT
+    plain = doom_map.load_map(wad_reader.WadFile(campaign_wad), "E1M1",
+                              apply_windows=False)
+    assert len(plain.out_segs) == len(rows), (len(plain.out_segs), len(rows))
+    for index, (row, seg) in enumerate(zip(rows, plain.out_segs)):
+        geometry = (seg["v1"], seg["v2"], seg["nx"], seg["ny"],
+                    seg["tex_u_offset"])
+        assert tuple(row[0:5]) == geometry, (index, row[0:5], geometry)
+        if row[7] == doom_map.SEG_WINDOW:
+            assert seg["type"] == doom_map.SEG_WALL, index
+        else:
+            assert seg["type"] == row[7], (index, seg["type"], row[7])
+    assert len({seg["source_linedef"] for seg in
+                (s for s in doom_map.load_map(
+                    wad_reader.WadFile(campaign_wad), "E1M1").out_segs
+                 if s["type"] == doom_map.SEG_WINDOW)}) == E1M1_WINDOW_LINEDEF_COUNT
+
+    # The band rides in door_group/required_key (see BspSeg in bsp_map.h) and
+    # must describe a real opening strictly inside the drawn slab.
+    for row in window_rows:
+        band_top, band_bottom = row[8], row[9]
+        assert 0 <= band_top < band_bottom <= 255, (band_top, band_bottom)
+        assert row[10] == 0, "a window carries no interaction flags"
     door_rows = [row for row in rows if row[7] == doom_map.SEG_DOOR]
     assert Counter(row[8] for row in door_rows) == {
         group: 4 for group in range(E1M1_DOOR_GROUP_COUNT)}
