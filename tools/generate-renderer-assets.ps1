@@ -29,6 +29,12 @@ if ($WallTexRowsPerWall -le 0) {
     }
     $WallTexRowsPerWall = [int]$wallHeight.Groups[1].Value
 }
+$maxProjectedWallHeight = [regex]::Match(
+    $RaycastText, '(?m)^#define\s+RAY_MAX_PROJECTED_WALL_HEIGHT\s+(\d+)\s*$')
+if (-not $maxProjectedWallHeight.Success) {
+    throw "RAY_MAX_PROJECTED_WALL_HEIGHT is missing from $RaycastPath"
+}
+$MaxProjectedWallHeight = [int]$maxProjectedWallHeight.Groups[1].Value
 $HudPath = Join-Path $Root $HudHeader
 $WorldPath = Join-Path $Root $WorldHeader
 $OutPath = Join-Path $Root $OutputHeader
@@ -91,10 +97,12 @@ function New-PairTileRows {
 function New-WallSamplingRows {
     $lines = New-Object System.Collections.Generic.List[string]
     [void]$lines.Add(((Format-ByteRow (1..120 | ForEach-Object { 0 })) + ","))
-    for ($height = 1; $height -le 120; $height++) {
+    for ($height = 1; $height -le $MaxProjectedWallHeight; $height++) {
         $row = New-Object System.Collections.Generic.List[int]
+        $visibleHeight = [Math]::Min($height, 120)
+        $clipOffset = [int][Math]::Floor(($height - $visibleHeight) / 2)
         for ($relY = 0; $relY -lt 120; $relY++) {
-            $sample = [int][Math]::Floor(($relY * $WallTexRowsPerWall) / $height)
+            $sample = [int][Math]::Floor((($relY + $clipOffset) * $WallTexRowsPerWall) / $height)
             if ($height -lt ($WallTexRowsPerWall / 2)) { $sample = $sample -band 0xFE }
             [void]$row.Add($sample -band 0xFF)
         }
@@ -372,7 +380,7 @@ $lines = New-Object System.Collections.Generic.List[string]
 foreach ($line in (New-PairTileRows)) { [void]$lines.Add($line) }
 [void]$lines.Add("};")
 [void]$lines.Add("")
-[void]$lines.Add("static const u8 MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[121][120] = {")
+[void]$lines.Add("static const u8 MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[$($MaxProjectedWallHeight + 1)][120] = {")
 foreach ($line in (New-WallSamplingRows)) { [void]$lines.Add($line) }
 [void]$lines.Add("};")
 [void]$lines.Add("")

@@ -55,6 +55,11 @@
 #define WALL_TEX_WIDTH_MASK (WALL_TEX_WIDTH - 1)
 #define WALL_TEX_HEIGHT 128
 #define WALL_TEX_HEIGHT_MASK (WALL_TEX_HEIGHT - 1)
+// The near clip can project a 128-unit wall to 640 pixels (depth 16). Keep
+// this unclipped height for vertical texture lookup even though only 120 rows
+// can reach the viewport; otherwise a wall touching the camera remaps its
+// entire texture into the visible screen and appears stretched.
+#define RAY_MAX_PROJECTED_WALL_HEIGHT 640
 
 #ifndef __ASSEMBLER__
 
@@ -80,7 +85,7 @@ typedef struct {
 } RaySceneColors;
 
 typedef struct {
-    u16 height;   // full projected slab height
+    u16 height;   // visible slab height after viewport clipping
     u16 depth;
     u16 lift;     // Q8, 1..255 while the overlay is active
     u8 tex_x;
@@ -92,7 +97,8 @@ typedef struct {
 #define RAY_COLUMN_FLAG_DOOR 0x01u
 
 typedef struct {
-    u16 height;
+    u16 height; // visible slab height after viewport clipping
+    u16 projected_height; // unclipped height used for vertical texture lookup
     u16 depth;
     u8 tex_x;
     u8 tex_y;

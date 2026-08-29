@@ -60,6 +60,7 @@ static RayColumn *g_columns;
 // to the complement of the solid set.
 static void seed_column_default(RayColumn *col) {
     col->height = 1;
+    col->projected_height = 1;
     col->depth = 0x7FFF;
     col->tex_x = 0;
     col->tex_y = 0;
@@ -441,12 +442,21 @@ static void draw_seg(u16 seg_index) {
 
         // height = RAY_PROJ_Y*RAY_WORLD_WALL_HEIGHT / depth_col, but depth_col =
         // INV_SCALE/invz, so fold to a multiply+shift and skip a divide.
-        s32 height = render_mul(RAY_PROJ_Y * RAY_WORLD_WALL_HEIGHT, invz) >> 14;
-        if (height < 1) {
-            height = 1;
-        } else if (height > RAY_VIEW_ROWS) {
-            height = RAY_VIEW_ROWS;
+        // Keep the real projected height for the vertical texture lookup. The
+        // visible slab is clipped to the viewport, but using the clipped 120px
+        // height as the texture scale remaps a whole door texture into the
+        // screen when the player is pressed against it (depth 16 can project
+        // a 128-unit wall to 640px).
+        s32 projected_height =
+            render_mul(RAY_PROJ_Y * RAY_WORLD_WALL_HEIGHT, invz) >> 14;
+        if (projected_height < 1) {
+            projected_height = 1;
         }
+        const u16 texture_projected_height =
+            (projected_height > RAY_MAX_PROJECTED_WALL_HEIGHT) ?
+                RAY_MAX_PROJECTED_WALL_HEIGHT : (u16)projected_height;
+        const u16 height = (projected_height > RAY_VIEW_ROWS) ?
+            RAY_VIEW_ROWS : (u16)projected_height;
 
         // u_col is a DIVS.W quotient (fits s16 by the same map-bounds contract
         // perspective_divide relies on) and is non-negative: uz interpolates
@@ -468,6 +478,7 @@ static void draw_seg(u16 seg_index) {
             door->shade = shade;
         } else {
             col->height = (u16)height;
+            col->projected_height = texture_projected_height;
             col->depth = (u16)depth_col;
             col->tex_x = (u8)(scaled_u & WALL_TEX_WIDTH_MASK);
             col->tex_y = seg->tex_v_offset;

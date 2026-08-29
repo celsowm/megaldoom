@@ -69,6 +69,7 @@ void pack_stage_reset(void) {
 }
 
 static WallColumnDescriptor describe_textured_column(u16 wall_h,
+                                                     u16 projected_wall_h,
                                                      u16 depth,
                                                      u8 texture_id,
                                                      u8 tex_x_value,
@@ -98,7 +99,14 @@ static WallColumnDescriptor describe_textured_column(u16 wall_h,
     const u16 fog_level = 0u;
 #endif
     const u8 *shade_map = g_shade_luts[fog_level];
-    const u8 *ty_table = MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[wall_h];
+    // wall_h is the visible span after viewport clipping. The texture lookup
+    // must use the unclipped projected span, otherwise a near wall/closed door
+    // remaps its entire 128-row texture into the 120 visible rows.
+    const u16 sample_height =
+        (projected_wall_h > RAY_MAX_PROJECTED_WALL_HEIGHT) ?
+            RAY_MAX_PROJECTED_WALL_HEIGHT :
+        (projected_wall_h < 1 ? 1 : projected_wall_h);
+    const u8 *ty_table = MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[sample_height];
     const u8 tex_x = (u8)(tex_x_value & WALL_TEX_WIDTH_MASK);
     const u8 texture_height = (u8)FREEDOOM_WALL_TEXTURE_HEIGHT[tid];
     const u16 v_scale_q12 = FREEDOOM_WALL_TEXTURE_VSCALE_Q12[tid];
@@ -115,13 +123,15 @@ static WallColumnDescriptor describe_textured_column(u16 wall_h,
 }
 
 WallColumnDescriptor describe_wall_column(const RayColumn *column) {
-    return describe_textured_column(column->height, column->depth,
+    return describe_textured_column(column->height, column->projected_height,
+                                    column->depth,
                                     column->texture_id, column->tex_x,
                                     column->tex_y, column->shade, column->flags);
 }
 
 WallColumnDescriptor describe_door_overlay(const RayDoorOverlay *door) {
-    return describe_textured_column(door->height, door->depth,
+    return describe_textured_column(door->height, door->height,
+                                    door->depth,
                                     door->texture_id, door->tex_x,
                                     door->tex_y, door->shade,
                                     RAY_COLUMN_FLAG_DOOR);
@@ -141,14 +151,15 @@ static u8 s_prev_door_active[VIEW_TILE_W];
 // rather than memcmp so the struct's padding byte cannot spuriously force a
 // repack.)
 //
-// `texture`, `shade_map`, and `vertical_samples` are omitted: each is a pure
-// function of a field already compared below (describe_textured_column sets
-// texture = FREEDOOM_WALL_TEXTURES[texture_id], shade_map = g_shade_luts[shade_level],
-// vertical_samples = MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[bottom-top]), so equality
-// of texture_id/shade_level/(top,bottom) already implies their equality.
+// `texture` and `shade_map` are pure functions of fields already compared
+// below. `vertical_samples` is also generated data, but it depends on the
+// unclipped projected height, which is intentionally not present in the ABI
+// descriptor; compare the pointer so a near wall cannot reuse a cache entry
+// with the same visible 120px bounds but a different texture slice.
 static inline bool wall_desc_equal(const WallColumnDescriptor *a,
                                    const WallColumnDescriptor *b) {
     return (bool)(a->top == b->top && a->bottom == b->bottom &&
+                  a->vertical_samples == b->vertical_samples &&
                   a->tex_x == b->tex_x && a->tex_y == b->tex_y &&
                   a->texture_id == b->texture_id &&
                   a->shade_level == b->shade_level && a->flags == b->flags);

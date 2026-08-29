@@ -262,10 +262,12 @@ def render_profile(profile, pose, textures, u_scales, palette, shade_lut):
             scaled_u = (u * u_scales[seg.texture_name]) >> 12
             prior = columns[sample]
             if prior is None or depth < prior[0]:
-                height = max(1, min(VIEW_H,
-                    (PROJ_Y * WALL_HEIGHT * invz) >> 14))
+                projected_height = max(1,
+                    (PROJ_Y * WALL_HEIGHT * invz) >> 14)
+                height = min(VIEW_H, projected_height)
                 columns[sample] = (
-                    depth, height, scaled_u & (world_assets.WALL_TEX_WIDTH - 1),
+                    depth, height, projected_height,
+                    scaled_u & (world_assets.WALL_TEX_WIDTH - 1),
                     seg, seg_id)
 
     pixels = [[CEILING_INDEX if y < VIEW_H // 2 else FLOOR_INDEX
@@ -276,9 +278,10 @@ def render_profile(profile, pose, textures, u_scales, palette, shade_lut):
     for sample, column in enumerate(columns):
         if column is None:
             continue
-        depth, height, tex_x, seg, _ = column
+        depth, height, projected_height, tex_x, seg, _ = column
         top = (VIEW_H - height) // 2
         bottom = top + height
+        clip_offset = (projected_height - height) // 2
         level = _shade_level(depth, seg.ny)
         texture = textures[seg.texture_name]
         with Image.open(world_assets.texture_path(seg.texture_name)) as image:
@@ -286,7 +289,8 @@ def render_profile(profile, pose, textures, u_scales, palette, shade_lut):
                 seg.texture_name, image.width, image.height)
         v_scale = world_assets.texture_v_scale_q12(source_height)
         for y in range(top, bottom):
-            canonical_y = ((y - top) * world_assets.WALL_TEX_HEIGHT) // height
+            canonical_y = ((y - top + clip_offset) *
+                           world_assets.WALL_TEX_HEIGHT) // projected_height
             tex_y = ((canonical_y * v_scale) >> 12) + seg.tex_v
             if tex_y >= source_height:
                 tex_y -= source_height

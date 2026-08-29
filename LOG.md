@@ -8,6 +8,30 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## Closed-door texture stretch at the near clip (2026-08-28)
+
+A closed door viewed at point-blank range appeared to stretch its texture over
+the whole screen. The cause was in the shared wall projection path, not in the
+door art or the M68k packer: `bsp_render.c` projected a 128-unit wall to 640 px
+at the near clip (`depth=16`), then clamped that value to the 120-pixel view
+before `renderer_pack.c` selected `MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[height]`.
+That made the visible 120 rows remap the complete 128-row texture. The correct
+near-clip slice is canonical rows 52..75, calculated from the unclipped 640 px
+span while the visible span remains 120 px.
+
+The fix carries a separate unclipped projected height in static `RayColumn`
+records, extends the generated sampling table through height 640, and uses the
+visible height only for screen bounds. The existing moving-door overlay keeps
+its established lift semantics. The descriptor ABI and `renderer_hotpath.s`
+are unchanged. Coherence comparison now includes the generated
+vertical-sampling pointer, because two descriptors can share the same
+120-pixel bounds while selecting different near-wall slices. The offline
+`flat_map_preview.py` model follows the same crop formula.
+
+The door contract test covers the depth-16 52..75 slice and the generated
+641-row table; renderer quality and ROM/build checks remain to be run after the
+runtime build.
+
 ## E1M1 → E1M2 campaign and classic intermission (2026-08-22)
 
 The official input is `DOOM1.WAD` SHA-256

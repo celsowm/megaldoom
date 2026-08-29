@@ -10,6 +10,7 @@ MAP = (ROOT / "src/bsp/bsp_map.c").read_text()
 HEADER = (ROOT / "src/bsp/bsp_map.h").read_text()
 RAYCAST = (ROOT / "src/raycast.h").read_text()
 BSP_RENDER = (ROOT / "src/bsp/bsp_render.c").read_text()
+RENDERER_ASSETS = (ROOT / "src/renderer/generated_renderer_assets.h").read_text()
 # renderer_scene.c was split by SRP into several files; door-overlay code
 # these checks look for now lives across that set.
 SCENE = "\n".join((ROOT / "src/renderer" / n).read_text() for n in (
@@ -87,6 +88,11 @@ def main():
     assert "RAY_COLUMN_FLAG_DOOR" in RAYCAST
     assert "const bool moving_door" in BSP_RENDER
     assert "if (moving_door)" in BSP_RENDER
+    assert "#define RAY_MAX_PROJECTED_WALL_HEIGHT 640" in RAYCAST
+    assert "projected_height" in BSP_RENDER
+    assert "projected_wall_h" in SCENE
+    assert "vertical_samples == b->vertical_samples" in SCENE
+    assert "MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[641][120]" in RENDERER_ASSETS
     moving_branch = BSP_RENDER.split("if (moving_door) {", 1)[1].split("} else {", 1)[0]
     assert "RayDoorOverlay" in moving_branch
     assert "mark_sample_solid" not in moving_branch
@@ -104,6 +110,15 @@ def main():
         previous_visible = visible
     assert "y - descriptor->top + lift_pixels" in SCENE
     assert "door->height * door->lift" in SCENE
+
+    # A wall at the near clip projects to 640 pixels. Only its central 120
+    # rows are visible, so the first/last visible rows must sample the middle
+    # of the 128-row texture instead of stretching the whole texture.
+    projected = 640
+    visible = min(120, projected)
+    clip_offset = (projected - visible) // 2
+    assert ((0 + clip_offset) * 128) // projected == 52
+    assert ((119 + clip_offset) * 128) // projected == 75
 
     # Door-only framing and vertical billboard occlusion: a farther object is
     # hidden in the remaining slab but visible in the lower opening; a nearer
