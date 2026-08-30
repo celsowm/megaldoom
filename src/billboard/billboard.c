@@ -443,7 +443,19 @@ BillboardPickupResult billboard_collect_near(s32 x, s32 y) {
         if (!object->active || !type->collectible) continue;
         const s32 dx = object->x - x;
         const s32 dy = object->y - y;
-        if ((dx * dx) + (dy * dy) > BILLBOARD_COLLECT_RADIUS_SQ) continue;
+        // Reject on the bounding box before the circle test: almost every
+        // active pickup is nowhere near the player. This also proves dx/dy fit
+        // s16 for the survivors (BILLBOARD_COLLECT_RADIUS is 128), which is
+        // what makes the word-sized multiply below safe rather than merely
+        // plausible -- see billboard_position_blocked for the same shape.
+        if (dx > BILLBOARD_COLLECT_RADIUS || dx < -BILLBOARD_COLLECT_RADIUS ||
+            dy > BILLBOARD_COLLECT_RADIUS || dy < -BILLBOARD_COLLECT_RADIUS) {
+            continue;
+        }
+        if ((billboard_muls_word((s16)dx, (s16)dx) +
+             billboard_muls_word((s16)dy, (s16)dy)) > BILLBOARD_COLLECT_RADIUS_SQ) {
+            continue;
+        }
         billboard_registry_deactivate(i);
         result.collected = TRUE;
         result.effect = type->effect;
@@ -510,7 +522,20 @@ bool billboard_position_blocked(s32 x, s32 y, s32 radius) {
         const s32 dx = object->x - x;
         const s32 dy = object->y - y;
         const s32 limit = radius + type->radius;
-        if ((dx * dx) + (dy * dy) < limit * limit) return TRUE;
+        // Reject on the bounding box before paying for the circle test: almost
+        // every blocking prop is nowhere near a moving actor, and this was
+        // previously three raw 32-bit multiplies (__mulsi3 calls) per prop with
+        // no early out at all. The reject also proves dx/dy/limit fit s16 for
+        // the survivors -- every caller passes radius <=24 (ENEMY_RADIUS /
+        // PLAYER_COLLISION_RADIUS) and the largest blocking prop is the tree at
+        // 48, so limit is always <=72 -- which is what makes the muls.w below
+        // safe rather than merely plausible.
+        if (dx > limit || dx < -limit || dy > limit || dy < -limit) continue;
+        if ((billboard_muls_word((s16)dx, (s16)dx) +
+             billboard_muls_word((s16)dy, (s16)dy)) <
+            billboard_muls_word((s16)limit, (s16)limit)) {
+            return TRUE;
+        }
     }
     return FALSE;
 }

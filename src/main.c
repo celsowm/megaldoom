@@ -704,8 +704,15 @@ int main(bool hard) {
         }
 
         if (!level_cleared) {
+            // player_controller_update (and so the tic count it tracks) only
+            // runs while the player is alive -- while dead there is no fresh
+            // player-clock progress to report, so charging 0 here (rather than
+            // replaying the stale count from the instant of death on every
+            // iteration of the death lockout) is what keeps AI cadence frozen
+            // instead of running at a rate detached from real time.
+            const u16 enemy_tics = player_dead ? 0 : player_controller_tics_last_update();
             const BillboardEnemyUpdate enemy_update = billboard_update_enemies(
-                &g_player, renderer_redraw_is_pending(&redraw), elapsed_vblanks);
+                &g_player, renderer_redraw_is_pending(&redraw), enemy_tics);
 
             if (enemy_update.moved) {
                 if (enemy_update.position_changed) {

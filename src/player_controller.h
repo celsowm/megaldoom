@@ -33,6 +33,13 @@
 void player_controller_reset(void);
 u16 player_controller_update(PlayerState *player, u16 elapsed_frames, u16 latched_pressed);
 
+// How many 35 Hz movement tics the last player_controller_update() call
+// actually ran through simulate_doom_movement_tic. Enemy AI cadence is charged
+// this count (not elapsed_vblanks) so it stays in lockstep with the player's
+// own simulation instead of degrading further on a heavy render frame -- see
+// docs/ENEMY_AI_IMPROVEMENT_PLAN.md Phase 1.
+u16 player_controller_tics_last_update(void);
+
 // Doom-style weapon bob, in screen pixels, recomputed on the 35 Hz movement
 // simulation from player momentum (never from raw D-pad state). The renderer
 // applies these as an offset from the weapon's neutral origin; a stationary

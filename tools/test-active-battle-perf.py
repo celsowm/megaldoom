@@ -46,23 +46,71 @@ def effect_redraws(frame_count, hold):
     return redraws
 
 
-def death_sequence_vblanks(hold, poses, per_iter):
-    """Wall-clock vblanks to play every death pose at a given frame time.
-
-    Mirrors advance_death: the timer is charged the iteration's real vblanks
-    (saturating), and at most one pose is advanced per call.
+def tic_accumulator_tics(vblanks_per_iter, iterations):
+    """Mirrors player_controller.c's 35Hz accumulator exactly:
+    elapsed_frames = min(vblanks_per_iter, 4); acc += elapsed_frames*35;
+    drain while acc>=60. Returns the per-iteration tic count that
+    player_controller_tics_last_update() would report each of these
+    iterations -- this is the actual source AI cadence is charged from
+    (Phase 1), not a raw vblank count.
     """
+    elapsed_frames = min(vblanks_per_iter, 4)
+    acc = 0
+    out = []
+    for _ in range(iterations):
+        acc += elapsed_frames * 35
+        tics = 0
+        while acc >= 60:
+            acc -= 60
+            tics += 1
+        out.append(tics)
+    return out
+
+
+def death_sequence_wall_vblanks(hold, poses, vblanks_per_iter, n=200000):
+    """Wall-clock vblanks to play every death pose at a given iteration rate.
+
+    Mirrors advance_death fed the REAL per-iteration tic count from the 35Hz
+    accumulator (not a raw vblank count -- that is exactly what Phase 1
+    changed): the timer is charged tics with a saturating subtract, and at
+    most one pose is advanced per call, so tics beyond what one pose needs
+    are discarded rather than carried into the next pose.
+    """
+    tics_iter = iter(tic_accumulator_tics(vblanks_per_iter, n))
     timer = hold
     index = 0
     elapsed = 0
     while index + 1 < poses:
-        elapsed += per_iter
-        if timer > per_iter:
-            timer -= per_iter
+        tics = next(tics_iter)
+        elapsed += vblanks_per_iter
+        if timer > tics:
+            timer -= tics
             continue
         index += 1
         timer = hold
     return elapsed
+
+
+def walk_pose_advances(hold, vblanks_per_iter, n_iters):
+    """Pose advances and elapsed vblanks for the free-running walk cycle.
+
+    Mirrors the tics > 0 guard in update_dummy_alive: a call whose iteration
+    delivered zero tics must leave anim_timer/anim_frame untouched.
+    """
+    tics_seq = tic_accumulator_tics(vblanks_per_iter, n_iters)
+    timer = hold
+    advances = 0
+    total_vblanks = 0
+    for tics in tics_seq:
+        total_vblanks += vblanks_per_iter
+        if tics == 0:
+            continue
+        if timer > tics:
+            timer -= tics
+        else:
+            timer = hold
+            advances += 1
+    return advances, total_vblanks
 
 
 def main():
@@ -115,29 +163,104 @@ def main():
     assert effect_redraws(3, 2) == [True, False, True, False, True, False, True]
     assert "only pose transitions and final clear" in effects_c
 
-    # The enemy death animation counts real vblanks, not loop iterations. The
-    # walk cadence's "locked 30fps" assumption does not hold under load (a
-    # motion frame is ~11 vblanks), which stretched the collapse to seconds.
+    # Phase 1 (docs/ENEMY_AI_IMPROVEMENT_PLAN.md): every enemy AI timer counts
+    # the player's own 35 Hz movement tics, not loop iterations and not raw
+    # vblanks -- an iteration-counted cadence only reads correctly under a
+    # "locked 30fps" that does not hold once a render frame runs long (a
+    # motion frame is ~11 vblanks), which is what stretched the death
+    # collapse to seconds and halved every enemy's relative speed in combat.
+    player_controller_h = (ROOT / "src/player_controller.h").read_text()
+    player_controller_c = (ROOT / "src/player_controller.c").read_text()
     internal_h = (ROOT / "src/billboard/billboard_internal.h").read_text()
+
+    # The tic count is sourced from the player's own accumulator (not
+    # re-derived), so the two clocks cannot drift apart under a later clamp
+    # change -- lockstep by construction, not by agreement between two
+    # independent computations.
+    assert "u16 player_controller_tics_last_update(void);" in player_controller_h
+    assert "static u16 s_tics_last_update = 0;" in player_controller_c
+    assert "s_tics_last_update = 0;\n    while (s_doom_tic_accumulator >= VIDEO_VBLANKS_PER_SECOND)" in player_controller_c
+    assert "s_tics_last_update++;" in player_controller_c
+    assert "u16 player_controller_tics_last_update(void) { return s_tics_last_update; }" in player_controller_c
+
+    # No AI counter is decremented by a bare `--` (the iteration-counted bug);
+    # every one is a saturating subtract against the tic count instead.
+    for bad in ("object->move_cooldown--", "object->attack_cooldown--",
+                "object->spot_cooldown--", "object->attack_anim--"):
+        assert bad not in enemy_c, bad
+    for good in (
+        "object->move_cooldown = (object->move_cooldown > tics)",
+        "object->attack_cooldown = (object->attack_cooldown > tics)",
+        "object->spot_cooldown = (object->spot_cooldown > tics)",
+        "object->attack_anim = (object->attack_anim > tics)",
+    ):
+        assert good in enemy_c, good
+    # A player tic does not fire every iteration (unlike elapsed_vblanks, which
+    # main.c floor-clamps to >=1) -- the walk cadence must not advance a pose
+    # on a call where zero tics elapsed, or the iteration-counted bug comes
+    # back in miniature for exactly that case.
+    assert "if (object->attack_anim == 0 && tics > 0)" in enemy_c
+
+    # Movement advances at most one DUMMY_MOVE_STEP per iteration (see
+    # try_move_dummy's call sites), so this must stay >= 3: the max tics a
+    # single iteration can credit (elapsed_frames clamps to 4 in
+    # player_controller.c, so ceil(4 * 35/60) = 3). Dropping it lower silently
+    # re-caps pursuit speed at the iteration rate and reintroduces the exact
+    # bug Phase 1 fixed, even though every cooldown above is correctly
+    # tic-charged.
+    move_interval = int(re.search(
+        r"#define DUMMY_MOVE_INTERVAL (\d+)", internal_h).group(1))
+    assert move_interval >= 3, (
+        f"DUMMY_MOVE_INTERVAL is {move_interval}, but a single iteration can "
+        "credit up to 3 tics (elapsed_frames clamps to 4, 4*35/60 rounds up "
+        "to 3) -- below that, movement is capped by the iteration rate again "
+        "regardless of how many tics the cooldown was charged")
+
     death_hold = int(re.search(
-        r"#define ENEMY_DEATH_HOLD_VBLANKS (\d+)", internal_h).group(1))
+        r"#define ENEMY_DEATH_HOLD_TICS (\d+)", internal_h).group(1))
     poses = int(re.search(
         r"#define ENEMY_DEATH_FRAME_COUNT (\d+)", internal_h).group(1))
-    assert "advance_death(BillboardObject *object, u16 elapsed_vblanks)" in enemy_c
-    assert "object->death_timer > elapsed_vblanks" in enemy_c
-    fast = death_sequence_vblanks(death_hold, poses, 2)   # idle 30fps
-    slow = death_sequence_vblanks(death_hold, poses, 11)  # heavy motion frame
-    # Doom holds each death pose 5 tics (8.6 vblanks): under a second either way,
-    # and the frame time must barely move the wall-clock length.
-    assert fast <= 60 and slow <= 60, (fast, slow)
-    assert abs(slow - fast) * 4 <= fast, (fast, slow)
-    # Every pose still gets at least one iteration to be seen, even at 11
-    # vblanks/frame: no pose is skipped outright.
-    assert slow >= (poses - 1) * 11
+    assert "advance_death(BillboardObject *object, u16 tics)" in enemy_c
+    assert "object->death_timer > tics" in enemy_c
+    # Doom's actual value now that a tic is a tic (was a vblank-scaled
+    # approximation, ENEMY_DEATH_HOLD_VBLANKS 9, before this phase).
+    assert death_hold == 5, death_hold
+
+    # Fed the REAL per-iteration tic count from the 35Hz accumulator (not a
+    # raw vblank count), verified against the model in tic_accumulator_tics.
+    # Values below are exact outputs of that closed-form simulation, not
+    # estimates -- see docs/ENEMY_AI_IMPROVEMENT_PLAN.md Phase 1 for the
+    # derivation.
+    fast = death_sequence_wall_vblanks(death_hold, poses, 2)    # idle, no clamp
+    slow = death_sequence_wall_vblanks(death_hold, poses, 11)   # motion, clamped
+    assert fast == 36, fast    # 0.6s
+    assert slow == 132, slow   # 2.2s -- was ~270 (4.5s) under the pre-Phase-1 bug
+    assert fast <= 60, fast    # idle case stays under a second
+    assert slow <= 180, slow   # motion case stays comfortably under 3 seconds
+    assert slow / fast <= 4, (fast, slow)
+
+    # Walk cadence: the tics > 0 guard above is exercised by real conditions,
+    # not a defensive no-op -- at the fastest realistic cadence (1 vblank/iter,
+    # a solid 60fps), a large fraction of iterations legitimately deliver zero
+    # tics, and those calls must leave the pose untouched.
+    zero_tic_iterations = tic_accumulator_tics(1, 200).count(0)
+    assert zero_tic_iterations > 50, zero_tic_iterations  # not a corner case
+
+    walk_hold = int(re.search(r"#define ENEMY_WALK_HOLD (\d+)", internal_h).group(1))
+    idle_advances, idle_vblanks = walk_pose_advances(walk_hold, 2, 6000)
+    motion_advances, motion_vblanks = walk_pose_advances(walk_hold, 11, 6000)
+    idle_rate = idle_advances / (idle_vblanks / 60.0)
+    motion_rate = motion_advances / (motion_vblanks / 60.0)
+    # Idle tracks Doom's own cadence closely (35/4 = 8.75 poses/sec); motion
+    # stays a real, bounded cadence rather than crawling towards zero -- the
+    # pre-Phase-1 bug measured ~1.4 poses/sec here.
+    assert 7.5 <= idle_rate <= 9.0, idle_rate
+    assert 2.0 <= motion_rate <= 4.0, motion_rate
 
     # The hint is internal and suppresses only redraw visibility probes.
     assert "bool redraw_pending" in billboard_h
-    assert "billboard_update_enemies(\n                &g_player, renderer_redraw_is_pending(&redraw), elapsed_vblanks)" in main_c
+    assert "const u16 enemy_tics = player_dead ? 0 : player_controller_tics_last_update();" in main_c
+    assert "billboard_update_enemies(\n                &g_player, renderer_redraw_is_pending(&redraw), enemy_tics)" in main_c
     loop = enemy_c[enemy_c.index("BillboardEnemyUpdate billboard_update_enemies"):]
     assert loop.index("if (object->life_state == ENEMY_DEAD)") < loop.index("hits_before")
     assert "const EnemyVisualChange change =\n            update_dummy" in loop

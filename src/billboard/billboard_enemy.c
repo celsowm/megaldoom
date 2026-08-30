@@ -10,6 +10,19 @@ static u16 s_simulated_enemy_count;
 #define SEPARATION_MOVED 0x02u
 #define SEPARATION_MOVED_LEFT 0x01u
 #define SEPARATION_MOVED_RIGHT 0x02u
+// Same word-sized-multiply idiom as billboard_muls_word / bsp_muls_word: one
+// static copy per translation unit rather than a shared header, matching the
+// established pattern in billboard.c and bsp_map.c.
+static s32 enemy_muls_word(s16 left, s16 right) {
+    s32 result = left;
+    __asm__ volatile (
+        "muls.w %1,%0"
+        : "+d" (result)
+        : "d" (right)
+        : "cc");
+    return result;
+}
+
 #if DEBUG_PERF
 static u16 s_debug_pair_tests;
 static u16 s_debug_close_pairs;
@@ -85,7 +98,11 @@ static bool dummies_need_separation(const BillboardObject *left,
         return FALSE;
     }
 
-    return (bool)(((dx * dx) + (dy * dy)) <= DUMMY_SEPARATION_RANGE_SQ);
+    // dx/dy are already box-rejected to +-DUMMY_SEPARATION_RANGE (128) above,
+    // so they provably fit s16 here -- safe to route through the word-sized
+    // multiply instead of two raw 32-bit __mulsi3 calls.
+    return (bool)((enemy_muls_word((s16)dx, (s16)dx) +
+                   enemy_muls_word((s16)dy, (s16)dy)) <= DUMMY_SEPARATION_RANGE_SQ);
 }
 
 static u8 separate_dummies(u16 left_index, BillboardObject *left,
@@ -120,7 +137,8 @@ static u8 separate_dummies(u16 left_index, BillboardObject *left,
     return moved;
 }
 
-static bool update_dummy_alive(u16 index, BillboardObject *object, const PlayerState *player, u16 *hits) {
+static bool update_dummy_alive(u16 index, BillboardObject *object, const PlayerState *player,
+                               u16 *hits, u16 tics) {
     const s32 player_dx = player->x - object->x;
     const s32 player_dy = player->y - object->y;
     const s32 abs_player_dx = (player_dx < 0) ? -player_dx : player_dx;
@@ -153,29 +171,37 @@ static bool update_dummy_alive(u16 index, BillboardObject *object, const PlayerS
         return FALSE;
     }
 
-    if (object->move_cooldown > 0) {
-        object->move_cooldown--;
-    }
-    if (object->attack_cooldown > 0) {
-        object->attack_cooldown--;
-    }
-    if (object->spot_cooldown > 0) {
-        object->spot_cooldown--;
-    }
-    if (object->attack_anim > 0) {
-        object->attack_anim--;
-    }
+    // Every cooldown here is charged the player's own 35 Hz tic count for this
+    // iteration (saturating subtract, the shot-cooldown/weapon-flash pattern),
+    // not decremented once per loop iteration -- see the block comment above
+    // DUMMY_MOVE_STEP in billboard_internal.h. That keeps AI cadence in
+    // lockstep with the player's clock instead of degrading further on a slow
+    // render frame.
+    object->move_cooldown = (object->move_cooldown > tics)
+        ? (u8)(object->move_cooldown - tics) : 0;
+    object->attack_cooldown = (object->attack_cooldown > tics)
+        ? (u8)(object->attack_cooldown - tics) : 0;
+    object->spot_cooldown = (object->spot_cooldown > tics)
+        ? (u8)(object->spot_cooldown - tics) : 0;
+    object->attack_anim = (object->attack_anim > tics)
+        ? (u8)(object->attack_anim - tics) : 0;
 
     // Walk cadence: free-run the leg cycle while engaged (independent of the
     // discrete move_cooldown steps so it looks smooth, not once-per-hop). The
     // attack pose overrides the walk pose while attack_anim is active. Idle/asleep
-    // enemies hold the rest pose.
-    if (object->attack_anim == 0) {
-        if (object->anim_timer == 0) {
+    // enemies hold the rest pose. Advances at most one pose per call even if
+    // `tics` covers more than a hold's worth, so a slow frame costs the walk
+    // cycle a little time rather than skipping a pose outright (mirrors
+    // advance_death below). Gated on tics > 0: unlike elapsed_vblanks (floor-
+    // clamped to >=1 in main.c), a player tic does not fire every iteration --
+    // without this gate a call where no tic fired could still advance a pose
+    // sitting at anim_timer == 0, which is the same bug this phase fixes.
+    if (object->attack_anim == 0 && tics > 0) {
+        if (object->anim_timer > tics) {
+            object->anim_timer = (u8)(object->anim_timer - tics);
+        } else {
             object->anim_frame = (u8)((object->anim_frame + 1) & (ENEMY_WALK_FRAME_COUNT - 1));
             object->anim_timer = ENEMY_WALK_HOLD;
-        } else {
-            object->anim_timer--;
         }
     }
 
@@ -270,22 +296,26 @@ static bool enemy_affects_view(u16 index, const BillboardObject *object,
 }
 
 // Step the death sequence; holds on the final pose (corpse) once done. The
-// timer is charged the real vblanks the iteration took (saturating subtract,
-// the weapon-flash pattern), so the collapse runs at wall-clock speed instead
-// of stretching with the frame time. At most one pose per call: a slow frame
-// then costs the sequence a little time rather than skipping poses outright,
-// which keeps every death frame visible when the framerate is worst.
-static void advance_death(BillboardObject *object, u16 elapsed_vblanks) {
+// timer is charged the player's 35 Hz tic count for this iteration (saturating
+// subtract, the shot-cooldown/weapon-flash pattern), so the collapse runs at
+// wall-clock speed instead of stretching with the frame time. At most one pose
+// per call: a slow frame then costs the sequence a little time rather than
+// skipping poses outright, which keeps every death frame visible when the
+// framerate is worst. death_timer is always seeded nonzero (ENEMY_DEATH_HOLD_
+// TICS) at the moment life_state becomes ENEMY_DYING, so unlike the walk
+// cadence above this needs no explicit tics > 0 guard: a tics == 0 call always
+// takes the saturating-subtract branch here, never the advance branch.
+static void advance_death(BillboardObject *object, u16 tics) {
     if (object->life_state == ENEMY_DEAD) {
         return;
     }
-    if (object->death_timer > elapsed_vblanks) {
-        object->death_timer = (u8)(object->death_timer - elapsed_vblanks);
+    if (object->death_timer > tics) {
+        object->death_timer = (u8)(object->death_timer - tics);
         return;
     }
     if ((object->death_index + 1) < ENEMY_DEATH_FRAME_COUNT) {
         object->death_index++;
-        object->death_timer = ENEMY_DEATH_HOLD_VBLANKS;
+        object->death_timer = ENEMY_DEATH_HOLD_TICS;
     } else {
         object->death_timer = 0;
         object->life_state = ENEMY_DEAD;
@@ -296,14 +326,14 @@ static void advance_death(BillboardObject *object, u16 elapsed_vblanks) {
 // distinct so the caller can attribute redraws without re-running simulation.
 static EnemyVisualChange update_dummy(u16 index, BillboardObject *object,
                                       const PlayerState *player, u16 *hits,
-                                      u16 elapsed_vblanks) {
+                                      u16 tics) {
     const u8 prev_frame = billboard_get_object_frame(object);
     EnemyVisualChange change = {FALSE, FALSE};
 
     if (object->life_state != ENEMY_ALIVE) {
-        advance_death(object, elapsed_vblanks);
+        advance_death(object, tics);
     } else {
-        change.position_changed = update_dummy_alive(index, object, player, hits);
+        change.position_changed = update_dummy_alive(index, object, player, hits, tics);
     }
 
     if (billboard_get_object_frame(object) != prev_frame) {
@@ -315,7 +345,7 @@ static EnemyVisualChange update_dummy(u16 index, BillboardObject *object,
 
 BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player,
                                               bool redraw_pending,
-                                              u16 elapsed_vblanks) {
+                                              u16 tics) {
     BillboardEnemyUpdate update = {FALSE, FALSE, FALSE, 0, 0, 0};
     s32 best_hit_dist = 0x7FFFFFFF;
     s16 cos_a = 0;
@@ -355,7 +385,7 @@ BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player,
         const bool was_visible = redraw_pending ? FALSE :
             enemy_affects_view(i, object, player, cos_a, sin_a);
         const EnemyVisualChange change =
-            update_dummy(i, object, player, &update.hits, elapsed_vblanks);
+            update_dummy(i, object, player, &update.hits, tics);
         const bool changed = change.position_changed || change.pose_changed;
         const bool now_visible = (!redraw_pending && changed) ?
             enemy_affects_view(i, object, player, cos_a, sin_a) : was_visible;

@@ -141,11 +141,15 @@ u16 billboard_get_target_health(void);
 // Multi-pellet weapons call this once per pellet and merge the results.
 BillboardFireResult billboard_fire_center(const PlayerState *player, u16 wall_depth,
                                           s16 aim_col, u16 damage);
-// `elapsed_vblanks` is the real vblank delta for this iteration; the death
-// animation is charged in that unit so it does not stretch on a slow frame.
+// `tics` is the count of 35 Hz movement tics the player simulation actually
+// ran this iteration (player_controller_tics_last_update()), not a vblank
+// count: enemy cooldowns, attack animation, walk cadence and the death
+// animation are all charged in that unit, so they stay in lockstep with the
+// player's own clock instead of degrading further on a slow render frame. See
+// docs/ENEMY_AI_IMPROVEMENT_PLAN.md Phase 1.
 BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player,
                                                bool redraw_pending,
-                                               u16 elapsed_vblanks);
+                                               u16 tics);
 BillboardEnemyUpdate billboard_update_barrels(const PlayerState *player);
 bool billboard_update_effects(void);
 bool billboard_position_blocked(s32 x, s32 y, s32 radius);

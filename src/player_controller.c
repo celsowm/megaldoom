@@ -79,6 +79,7 @@ static s32 s_momentum_y = 0;
 static s32 s_position_remainder_x = 0;
 static s32 s_position_remainder_y = 0;
 static u16 s_doom_tic_accumulator = 0;
+static u16 s_tics_last_update = 0;
 static s16 s_turn_speed_fp = 0; // per-vsync fixed-point turn rate
 static s16 s_turn_remainder_fp = 0;
 static s16 s_turn_dir = 0;
@@ -170,6 +171,7 @@ static void update_weapon_bob(bool moved) {
 
 s16 player_controller_weapon_bob_x(void) { return s_weapon_bob_x; }
 s16 player_controller_weapon_bob_y(void) { return s_weapon_bob_y; }
+u16 player_controller_tics_last_update(void) { return s_tics_last_update; }
 
 static bool simulate_doom_movement_tic(PlayerState *player, s16 forward_command,
                                        s16 strafe_command) {
@@ -218,6 +220,7 @@ void player_controller_reset(void) {
     s_position_remainder_x = 0;
     s_position_remainder_y = 0;
     s_doom_tic_accumulator = 0;
+    s_tics_last_update = 0;
     s_turn_speed_fp = 0;
     s_turn_remainder_fp = 0;
     s_turn_dir = 0;
@@ -325,11 +328,13 @@ u16 player_controller_update(PlayerState *player, u16 elapsed_frames, u16 latche
     const s16 bob_y_before = s_weapon_bob_y;
     s_doom_tic_accumulator = (u16)(s_doom_tic_accumulator +
         (elapsed_frames << 5) + (elapsed_frames << 1) + elapsed_frames);
+    s_tics_last_update = 0;
     while (s_doom_tic_accumulator >= VIDEO_VBLANKS_PER_SECOND) {
         s_doom_tic_accumulator -= VIDEO_VBLANKS_PER_SECOND;
         if (simulate_doom_movement_tic(player, target_forward, target_strafe)) {
             result |= PLAYER_CONTROL_CHANGED;
         }
+        s_tics_last_update++;
     }
     // The bob can advance (or settle back to neutral during the friction tail)
     // on a tic that moved the player less than a whole world pixel, so ask for a

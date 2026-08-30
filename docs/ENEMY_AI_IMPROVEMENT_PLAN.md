@@ -2,11 +2,43 @@
 
 ## Status
 
-Proposed. Nothing in this document has been implemented. It is the result of
-reading our live AI (`src/billboard/billboard_enemy.c`, `billboard_combat.c`,
+**Phase 0 and Phase 1 shipped 2026-08-30** (§5 and §6). Phases 2-5 (§7-§10) and
+the deferred facing cone (§9) remain proposed only. This document is the result
+of reading our live AI (`src/billboard/billboard_enemy.c`, `billboard_combat.c`,
 `billboard_internal.h`) against id Software's original monster thinker
 (`.externals/DOOM/linuxdoom-1.10/p_enemy.c`) and against the constraints this
 project has already committed to elsewhere.
+
+### Phase 0 + Phase 1 verification results (2026-08-30)
+
+- `npm run test`: full suite green, including the extended
+  `test-active-battle-perf.py` (saturating-subtract wiring, the
+  `DUMMY_MOVE_INTERVAL >= 3` invariant, the `tics > 0` walk-cadence guard
+  exercised at 1 vblank/iteration, and the death-sequence/walk-cadence timing
+  bounds computed from an exact simulation of the real 35 Hz accumulator, not
+  estimated).
+- `npm run check`: work RAM unchanged (44880/65536 used, 20656 free — neither
+  phase adds a struct field), ROM code/data *shrank* ~768 bytes (Phase 0's box
+  rejects removing more code than they add).
+- Cadence probe on `checkpoints` (`CADENCE_STAGE_PROBE`, release-cadence build,
+  not `DEBUG_PERF` — see §4.2's note on why that distinction matters): baseline
+  vs. Phase 0 + Phase 1 combined, both reaching all required checkpoints.
+  `rebuild_frames`, `nodes_visited`, `boxes_projected`, `segs_tested`,
+  `segs_drawn`, `samples_drawn` and `box_calls` were bit-for-bit identical
+  between the two runs — proof both builds reached the same player pose on this
+  route, the precondition §3.4's measurement-hazard rule requires. Result:
+  **avg vblanks/iteration 8.00 → 7.81** (a ~2.4% improvement, not a
+  regression); missed-deadline count unchanged (14/21). Phase 0's fix paid for
+  Phase 1's deliberately increased movement churn with room to spare on this
+  route.
+- **Gap, stated plainly:** this was a 2-way comparison (baseline vs. combined),
+  not the full 3-way §12.2 specifies. There is no isolated measurement of
+  Phase 0's contribution alone on this route — only the combined result, which
+  came out ahead.
+- **Not yet done:** an in-game play test. Per standing project feedback, a
+  static/simulated result does not settle a *feel* question — the definition of
+  done in §13 is not met until the user has played it and confirms enemies now
+  behave the same standing still or running.
 
 `.externals/cpp-doom` was also checked and is **not** a useful reference here: it
 carries renderer, level and menu scaffolding but no monster AI thinker at all.

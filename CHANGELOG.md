@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Enemy AI: every cooldown, the attack animation, walk cadence and the death
+  animation now count the player's own 35 Hz movement tics
+  (`player_controller_tics_last_update()`), not raw main-loop iterations. An
+  iteration is not a unit of time -- a heavy render frame runs up to ~11
+  vblanks against an idle frame's ~2, so the previous iteration-counted AI ran
+  at roughly half the player's own relative speed on exactly the frames where
+  you're moving and fighting: enemies chased, reacted and attacked fastest
+  when you stood still, and got relatively slower the more you moved. The tic
+  count is sourced directly from the player's own accumulator rather than
+  recomputed, so the two clocks stay in lockstep by construction. Also fixed:
+  `billboard_position_blocked` and the pickup-collect scan did three raw
+  32-bit multiplies per candidate prop with no bounding-box reject; both now
+  reject on the box first (which also proves the survivors fit a 16-bit
+  multiply) before routing through the same `muls.w` idiom already used
+  elsewhere in the file. See `docs/ENEMY_AI_IMPROVEMENT_PLAN.md` for the full
+  comparison against id's original monster AI and the phases not yet taken
+  (chase-direction fallback pathing, noise alerting, pain pose, damage
+  variance).
 - Added Doom-style weapon bob. `player_controller.c` (`update_weapon_bob`,
   exposed via `player_controller_weapon_bob_x/y`) derives a momentum-based,
   35 Hz-tic-driven pixel offset (octagonal-norm magnitude, no 64-bit math) with

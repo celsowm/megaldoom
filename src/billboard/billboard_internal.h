@@ -74,7 +74,22 @@
 // NOT scaled by this constant.
 #define BILLBOARD_BARREL_VISUAL_SCALE 2
 
+// Every *_FRAMES / *_COOLDOWN / *_INTERVAL / *_DELAY constant below is in 35 Hz
+// movement tics (player_controller_tics_last_update()), the same clock as the
+// player's own simulation -- NOT loop iterations and NOT vblanks. Before the
+// Phase 1 fix in docs/ENEMY_AI_IMPROVEMENT_PLAN.md these were iteration-counted
+// under an assumed "locked 30fps" that does not hold once a render frame runs
+// long (motion frames are ~11 vblanks), which made every one of these run up to
+// 2x slower, relative to the player, on exactly the frames where you are
+// moving and fighting. No numeric retuning was needed: at 35 Hz these land
+// within ~15% of what the idle case (the case that was originally tuned) was
+// already delivering.
 #define DUMMY_MOVE_STEP (FX_ONE / 8)
+// Movement advances at most one DUMMY_MOVE_STEP per main-loop iteration
+// (see update_dummy_alive), so this must stay >= 3 -- the max tics a single
+// iteration can credit (elapsed_frames clamps to 4, so ceil(4 * 35/60) = 3).
+// Dropping it below that silently re-caps pursuit speed at the iteration rate
+// and reintroduces the exact bug Phase 1 fixed.
 #define DUMMY_MOVE_INTERVAL 5
 #define DUMMY_STOP_RANGE (FX_ONE / 2)
 #define DUMMY_STOP_RANGE_SQ (DUMMY_STOP_RANGE * DUMMY_STOP_RANGE)
@@ -162,15 +177,15 @@ static const s16 ENEMY_FRAME_GEOMETRY[ENEMY_FRAME_GEOMETRY_COUNT][4] = {
     { 62,  33, 31,  33},  // 9 POSSL0 corpse 47x17 ty12  (top_offset == source_h
 };                        //                              => flat on the floor)
 
-// Animation cadence (frames at the locked 30fps): ~4 tics/pose like Doom.
+// Animation cadence: 4 tics/pose, matching Doom's own POSS walk-state hold.
 #define ENEMY_WALK_HOLD 4
-// The death sequence counts REAL VBLANKS, not loop iterations -- the "locked
-// 30fps" the walk cadence assumes does not hold: a motion frame runs ~11
-// vblanks, so an iteration-counted death pose stretched from 2 to 11 vblanks
-// and the whole collapse crawled for ~4.5s instead of ~0.6s. Same unit and
-// same reason as the shot cooldown / weapon flash in main.c. Doom holds each
-// death pose 5 tics at 35 Hz, which is 8.6 vblanks at 60 Hz.
-#define ENEMY_DEATH_HOLD_VBLANKS 9
+// The death sequence, like every other AI timer in this file (see the block
+// comment above DUMMY_MOVE_STEP), is charged in 35 Hz player tics, not loop
+// iterations -- so this is Doom's own value: 5 tics/pose. Before Phase 1 this
+// was ENEMY_DEATH_HOLD_VBLANKS 9, iteration-counted under the same wrong
+// "locked 30fps" assumption, which stretched the collapse from ~0.6s to ~4.5s
+// during combat. See docs/ENEMY_AI_IMPROVEMENT_PLAN.md.
+#define ENEMY_DEATH_HOLD_TICS 5
 #define ENEMY_ATTACK_ANIM_FRAMES 10
 
 typedef struct {
