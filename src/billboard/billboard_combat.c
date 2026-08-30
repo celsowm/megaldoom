@@ -185,12 +185,19 @@ BillboardFireResult billboard_fire_center(const PlayerState *player, u16 wall_de
         return result;
     }
 
+    // Knock back BEFORE spawning the decal: push_dummy_on_hit can move a DUMMY
+    // up to DUMMY_HIT_PUSH_STEP (64u) on each axis, and the blood/puff impact
+    // is a static-position pooled effect that never tracks its target after
+    // spawning (see spawn_impact in billboard_effects.c). Spawning first at
+    // the pre-knockback position left the decal visibly stranded behind the
+    // (now-shoved) body. push_dummy_on_hit no-ops for non-DUMMY types, so this
+    // ordering is a no-op change for the barrel/puff path.
+    push_dummy_on_hit(best_index, best_object, player);
     if (best_object->type_id == BILLBOARD_TYPE_DUMMY) {
         billboard_effects_spawn_blood(best_object->x, best_object->y);
     } else {
         billboard_effects_spawn_puff(best_object->x, best_object->y);
     }
-    push_dummy_on_hit(best_index, best_object, player);
 
     if (best_object->hp > damage) {
         best_object->hp = (u8)(best_object->hp - damage);

@@ -35,10 +35,30 @@ project has already committed to elsewhere.
   not the full 3-way §12.2 specifies. There is no isolated measurement of
   Phase 0's contribution alone on this route — only the combined result, which
   came out ahead.
-- **Not yet done:** an in-game play test. Per standing project feedback, a
-  static/simulated result does not settle a *feel* question — the definition of
-  done in §13 is not met until the user has played it and confirms enemies now
-  behave the same standing still or running.
+- **Play test happened, and it found two real issues** (2026-08-30): the death
+  collapse still read as slow in combat, and blood/puff impacts sometimes
+  looked detached from the enemy. §13's definition of done was correctly
+  withheld pending a play test — this is exactly why.
+  - **Death collapse:** `advance_death`'s "at most one pose per call" design
+    (§6.2 point 4) discarded the excess tics beyond what the current pose
+    needed, resetting to a flat `ENEMY_DEATH_HOLD_TICS` every transition. That
+    discard, not a bug in the tic-lockstep fix itself, was the residual
+    slowness: ~2.2s measured for the 4-pose collapse under heavy motion
+    against a ~1.57s theoretical floor at that framerate. Fixed by carrying
+    the excess into the next pose's hold instead of discarding it — still at
+    most one pose per call, still never skips a frame, now measuring ~1.65s.
+  - **Blood/puff drift:** unrelated to Phase 0/1 — a pre-existing ordering bug.
+    `billboard_fire_center` spawned the (static-position, non-tracking) blood/
+    puff decal *before* `push_dummy_on_hit`'s knockback (up to 64 world units
+    per axis), so a hit that pushed the enemy left the decal stranded at the
+    pre-knockback position. Reordered to spawn after the push.
+  - Both fixed in `src/billboard/billboard_enemy.c` / `billboard_combat.c`,
+    with new assertions in `tools/test-active-battle-perf.py` (the
+    carry-forward source pattern, the `death_hold >= 3` bound the carry
+    depends on, and the source-order assertion for the spawn reorder).
+    `npm run test`/`check` green; work RAM unchanged, ROM +256 bytes.
+- **Still not done:** confirmation from a second play test that these two
+  fixes actually land. §13's definition of done remains open until then.
 
 `.externals/cpp-doom` was also checked and is **not** a useful reference here: it
 carries renderer, level and menu scaffolding but no monster AI thinker at all.

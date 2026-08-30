@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Two play-test follow-ups on the enemy-AI tic fix below: the death collapse
+  still read as slow under combat, and blood/puff impacts sometimes looked
+  detached from the enemy.
+  - `advance_death` reset `death_timer` to a flat hold on every pose
+    transition, discarding whatever tics that call delivered beyond what the
+    pose needed. Under heavy motion that discard was the majority of the
+    perceived slowness (measured ~2.2s for the 4-pose collapse). It now
+    carries the excess into the next pose's hold instead -- still at most one
+    pose per call, still never skips a frame -- landing at ~1.65s, close to
+    the ~1.57s theoretical floor at that framerate.
+  - The blood/puff impact is a static-position pooled effect that never
+    tracks its target after spawning, but `billboard_fire_center` spawned it
+    *before* `push_dummy_on_hit`'s knockback (up to 64 world units per axis).
+    A hit that pushed the enemy left the decal stranded at the pre-knockback
+    position. Reordered so the effect spawns after the push, using the
+    enemy's final position; `push_dummy_on_hit` already no-ops for non-DUMMY
+    targets, so barrel puffs are unaffected.
 - Enemy AI: every cooldown, the attack animation, walk cadence and the death
   animation now count the player's own 35 Hz movement tics
   (`player_controller_tics_last_update()`), not raw main-loop iterations. An

@@ -305,6 +305,18 @@ static bool enemy_affects_view(u16 index, const BillboardObject *object,
 // TICS) at the moment life_state becomes ENEMY_DYING, so unlike the walk
 // cadence above this needs no explicit tics > 0 guard: a tics == 0 call always
 // takes the saturating-subtract branch here, never the advance branch.
+//
+// The excess tics this call delivered beyond what the *current* pose needed
+// carry into the *next* pose's hold instead of being discarded (reset to a
+// flat ENEMY_DEATH_HOLD_TICS every time). Discarding them was measured to
+// stretch the collapse to ~2.2s under heavy motion versus a ~1.57s ideal --
+// visibly slower than it needs to be, which is what "still a bit slow" was
+// catching. This still cannot advance more than one pose per call: a single
+// iteration credits at most 3 tics (elapsed_frames clamps to 4, ceil(4*35/60)
+// = 3 -- see the DUMMY_MOVE_INTERVAL comment), which is always well under
+// ENEMY_DEATH_HOLD_TICS, so the carried timer never goes non-positive in
+// practice. Clamped to >=1 defensively in case a future retune shrinks the
+// hold below that per-iteration cap.
 static void advance_death(BillboardObject *object, u16 tics) {
     if (object->life_state == ENEMY_DEAD) {
         return;
@@ -314,8 +326,10 @@ static void advance_death(BillboardObject *object, u16 tics) {
         return;
     }
     if ((object->death_index + 1) < ENEMY_DEATH_FRAME_COUNT) {
+        const u16 excess = tics - object->death_timer;
         object->death_index++;
-        object->death_timer = ENEMY_DEATH_HOLD_TICS;
+        object->death_timer = (excess < ENEMY_DEATH_HOLD_TICS)
+            ? (u8)(ENEMY_DEATH_HOLD_TICS - excess) : 1;
     } else {
         object->death_timer = 0;
         object->life_state = ENEMY_DEAD;

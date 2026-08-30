@@ -73,8 +73,10 @@ def death_sequence_wall_vblanks(hold, poses, vblanks_per_iter, n=200000):
     Mirrors advance_death fed the REAL per-iteration tic count from the 35Hz
     accumulator (not a raw vblank count -- that is exactly what Phase 1
     changed): the timer is charged tics with a saturating subtract, and at
-    most one pose is advanced per call, so tics beyond what one pose needs
-    are discarded rather than carried into the next pose.
+    most one pose is advanced per call. The excess tics beyond what the
+    current pose needed carry into the next pose's hold instead of being
+    discarded (the "still a bit slow" follow-up fix) -- discarding them
+    measured ~40% slower under heavy motion than this carry-forward version.
     """
     tics_iter = iter(tic_accumulator_tics(vblanks_per_iter, n))
     timer = hold
@@ -87,7 +89,8 @@ def death_sequence_wall_vblanks(hold, poses, vblanks_per_iter, n=200000):
             timer -= tics
             continue
         index += 1
-        timer = hold
+        excess = tics - timer
+        timer = (hold - excess) if excess < hold else 1
     return elapsed
 
 
@@ -116,6 +119,7 @@ def walk_pose_advances(hold, vblanks_per_iter, n_iters):
 def main():
     main_c = (ROOT / "src/main.c").read_text()
     enemy_c = (ROOT / "src/billboard/billboard_enemy.c").read_text()
+    combat_c = (ROOT / "src/billboard/billboard_combat.c").read_text()
     barrel_c = (ROOT / "src/billboard/billboard_barrel.c").read_text()
     billboard_h = (ROOT / "src/billboard/billboard.h").read_text()
     effects_c = (ROOT / "src/billboard/billboard_effects.c").read_text()
@@ -162,6 +166,18 @@ def main():
     assert effect_redraws(4, 2) == [True, False, True, False, True, False, True, False, True]
     assert effect_redraws(3, 2) == [True, False, True, False, True, False, True]
     assert "only pose transitions and final clear" in effects_c
+
+    # The blood/puff impact is a static-position pooled effect that never
+    # tracks its target after spawning, so it must be spawned AFTER
+    # push_dummy_on_hit's knockback (up to 64u/axis), not before -- spawning
+    # first left the decal visibly stranded behind the shoved body. Assert the
+    # source order directly rather than just the presence of both calls.
+    hit_block = combat_c[combat_c.index("if (best_object == NULL)"):
+                         combat_c.index("if (best_object->hp > damage)")]
+    assert hit_block.index("push_dummy_on_hit(") < hit_block.index(
+        "billboard_effects_spawn_blood("), (
+        "blood/puff must spawn after push_dummy_on_hit's knockback, or the "
+        "decal is left behind the enemy's post-hit position")
 
     # Phase 1 (docs/ENEMY_AI_IMPROVEMENT_PLAN.md): every enemy AI timer counts
     # the player's own 35 Hz movement tics, not loop iterations and not raw
@@ -225,6 +241,21 @@ def main():
     # Doom's actual value now that a tic is a tic (was a vblank-scaled
     # approximation, ENEMY_DEATH_HOLD_VBLANKS 9, before this phase).
     assert death_hold == 5, death_hold
+    # The carry-forward fix (see below) assumes a single iteration can never
+    # deliver more tics than one pose's hold -- max tics/iteration is 3 (the
+    # DUMMY_MOVE_INTERVAL invariant above), so the hold must stay >= 3 or the
+    # defensive `excess >= hold -> 1` clamp in advance_death starts firing in
+    # normal play instead of only as a future-proofing guard.
+    assert death_hold >= 3, death_hold
+
+    # "Still a bit slow" follow-up: advance_death used to reset death_timer to
+    # a flat ENEMY_DEATH_HOLD_TICS on every pose transition, discarding
+    # whatever tics that call delivered beyond what the pose needed. Under
+    # heavy motion that discard was the majority of the wasted time. It now
+    # carries the excess into the next pose's hold instead.
+    assert "object->death_timer = ENEMY_DEATH_HOLD_TICS;" not in enemy_c
+    assert "const u16 excess = tics - object->death_timer;" in enemy_c
+    assert "(excess < ENEMY_DEATH_HOLD_TICS)" in enemy_c
 
     # Fed the REAL per-iteration tic count from the 35Hz accumulator (not a
     # raw vblank count), verified against the model in tic_accumulator_tics.
@@ -233,11 +264,12 @@ def main():
     # derivation.
     fast = death_sequence_wall_vblanks(death_hold, poses, 2)    # idle, no clamp
     slow = death_sequence_wall_vblanks(death_hold, poses, 11)   # motion, clamped
-    assert fast == 36, fast    # 0.6s
-    assert slow == 132, slow   # 2.2s -- was ~270 (4.5s) under the pre-Phase-1 bug
+    assert fast == 36, fast   # 0.6s
+    assert slow == 99, slow  # 1.65s -- was 132 (2.2s) before the carry-forward fix,
+                              # ~270 (4.5s) under the original pre-Phase-1 bug
     assert fast <= 60, fast    # idle case stays under a second
-    assert slow <= 180, slow   # motion case stays comfortably under 3 seconds
-    assert slow / fast <= 4, (fast, slow)
+    assert slow <= 120, slow   # motion case now stays comfortably under 2 seconds
+    assert slow / fast <= 3, (fast, slow)
 
     # Walk cadence: the tics > 0 guard above is exercised by real conditions,
     # not a defensive no-op -- at the fastest realistic cadence (1 vblank/iter,
