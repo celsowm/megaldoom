@@ -3,6 +3,41 @@
 
 #include <genesis.h>
 
+/* Pose-locked perf harness (OFF by default; opt in with
+ * EXTRA_FLAGS="... -DPERF_FIXED_POSE=1"). Route-based A/B comparisons are only
+ * valid when both builds end at the same player pose, and they routinely do
+ * not: the game loop is vblank-paced, so a faster build gets MORE iterations
+ * inside the same frame budget and walks somewhere else. AGENTS.md states the
+ * rule; this is the instrument that removes the hazard instead of testing for
+ * it afterwards.
+ *
+ * When enabled, every gameplay frame: pins g_player to a compile-time pose so
+ * input cannot move it, drops the pack coherence cache and the billboard
+ * measure cache (both key on pose and would otherwise report a static scene as
+ * free -- motion repacks every column, which is the case worth measuring), and
+ * forces a base rebuild. Every iteration then rasterizes the SAME scene, so
+ * cast/pack/projection subticks are directly comparable between two builds
+ * with no route drift at all.
+ *
+ * Override the pose to aim the camera at whatever is under test:
+ *   -DPERF_FIXED_POSE=1 -DPERF_POSE_X=1300 -DPERF_POSE_Y=3300 -DPERF_POSE_ANGLE=0
+ * Angles are 256 steps/circle (0=+x). Run with tools/routes/fixed-pose.txt,
+ * which only presses START through the frontend and then holds still. */
+#ifndef PERF_FIXED_POSE
+#define PERF_FIXED_POSE 0
+#endif
+#if PERF_FIXED_POSE
+#ifndef PERF_POSE_X
+#define PERF_POSE_X 1300
+#endif
+#ifndef PERF_POSE_Y
+#define PERF_POSE_Y 3300
+#endif
+#ifndef PERF_POSE_ANGLE
+#define PERF_POSE_ANGLE 0
+#endif
+#endif
+
 #if DEBUG_BLASTEM_CHECKPOINT
 #define DEBUG_CHECKPOINT_TITLE    0x01
 #define DEBUG_CHECKPOINT_MENU     0x02

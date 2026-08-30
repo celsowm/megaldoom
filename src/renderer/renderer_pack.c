@@ -63,6 +63,17 @@ const u8 *packed_wall_column(const WallColumnDescriptor *descriptor) {
         descriptor->shade_level][descriptor->texture_id][descriptor->tex_x];
 }
 
+#if PERF_FIXED_POSE
+// Pose-locked harness only (see debug_checkpoint.h). A pinned camera would make
+// the coherence check skip all 20 tile columns and report pack as free; motion
+// repacks every column, so drop the cache each frame to measure that instead.
+// Deliberately NOT pack_stage_reset(): rebuilding the shade LUTs and the flat
+// rows would time work a real motion frame does not do.
+void pack_stage_invalidate_coherence(void) {
+    s_coherence_valid = FALSE;
+}
+#endif
+
 void pack_stage_reset(void) {
     flat_rows_invalidate();
     build_shade_luts();

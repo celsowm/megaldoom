@@ -154,6 +154,25 @@ static void wait_scene_upload_complete(void) {
 }
 
 static void render_current_view(u16 player_health, bool base_dirty, bool player_dead) {
+#if PERF_FIXED_POSE
+    // Pose-locked perf harness (see debug_checkpoint.h). Pin the camera before
+    // the cast reads it, drop the two pose-keyed caches so a static scene still
+    // costs what a motion frame costs, and force the rebuild path. Every
+    // iteration then rasterizes an identical scene, which is what makes an A/B
+    // between two builds mean anything: the routes themselves cannot hold pose,
+    // because the loop is vblank-paced, so the faster build gets more
+    // iterations per route frame and walks somewhere else.
+    g_player.x = PERF_POSE_X;
+    g_player.y = PERF_POSE_Y;
+    g_player.angle = PERF_POSE_ANGLE;
+    bsp_invalidate_node_cache();
+    pack_stage_invalidate_coherence();
+    billboard_projection_invalidate_cache();
+    // base_dirty is NOT forced here: redraw policy has exactly one owner
+    // (renderer_redraw_request_base), and tools/test-active-battle-perf.py
+    // enforces that main.c never sets the flag directly. The harness asks for
+    // the rebuild through that owner, in the main loop below.
+#endif
 #if DEBUG_PERF || CADENCE_STAGE_PROBE
     const u32 cast_start = getSubTick();
 #endif
@@ -777,6 +796,13 @@ int main(bool hard) {
         renderer_perf_overlay_sample_host(frame);
 #endif
 
+#if PERF_FIXED_POSE
+        // The harness pins the camera, so nothing ever marks the base dirty and
+        // the render would be skipped entirely (494 of 495 iterations idled at 2
+        // vblanks on the first attempt). Request it unconditionally: the point is
+        // to time a rebuild frame, repeatedly, on one unchanging scene.
+        renderer_redraw_request_base(&redraw, RENDERER_REDRAW_OTHER);
+#endif
         if (renderer_redraw_is_pending(&redraw)) {
 #if DEBUG_PERF
             renderer_debug_set_redraw_reasons(renderer_redraw_reasons(&redraw));

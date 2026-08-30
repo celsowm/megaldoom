@@ -45,6 +45,14 @@ void renderer_hud_window_suspend(void);
 // hardware scroll. Two VDP register writes, no tile DMA; a no-op when the offset
 // is unchanged. Pass (0, 0) to park the weapon at its neutral origin.
 void renderer_apply_weapon_bob(s16 bob_x, s16 bob_y);
+#if PERF_FIXED_POSE
+// Pose-locked perf harness (debug_checkpoint.h): drops ONLY the pack stage's
+// tile-column coherence cache, so a pinned camera still pays a motion frame's
+// full 20-column repack instead of reporting a static scene as free. Defined in
+// renderer_pack.c; called once per frame from render_current_view.
+void pack_stage_invalidate_coherence(void);
+#endif
+
 void renderer_render_scene(const RayColumn *columns,
                            const PlayerState *player,
                            const RaySceneColors *scene_colors,

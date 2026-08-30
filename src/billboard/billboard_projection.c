@@ -141,6 +141,17 @@ static u16 billboard_geometry_key(const BillboardObject *object) {
                  ((u16)(geometry_frame & 0x0Fu) << 10));
 }
 
+#if PERF_FIXED_POSE
+// Pose-locked harness only (see debug_checkpoint.h). The measure cache keys on
+// the exact pose, so a pinned camera would serve every object from cache and
+// report projection as nearly free -- the opposite of the motion case, where it
+// misses on every object every frame. Dropping the context each frame measures
+// that miss path.
+void billboard_projection_invalidate_cache(void) {
+    s_cache_context_valid = FALSE;
+}
+#endif
+
 static void billboard_projection_cache_begin(const PlayerState *player) {
     if (s_cache_context_valid &&
         s_cache_player_x == player->x &&

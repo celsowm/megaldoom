@@ -27,6 +27,23 @@ walks somewhere else and rasterizes a different scene. `stationary-combat`,
 `barrel-pointblank` do not. Confirm by checking that the mixed/flat tile counts
 (or billboard byte counts) are identical on both sides before believing a delta.
 
+**A route cannot hold pose; use the pose-locked harness instead.** The rule above
+says to check a route's workload counters before believing a delta -- they
+routinely fail that check, because the loop is vblank-paced, so a faster build
+gets more iterations inside the same route frame and walks somewhere else. Build
+with `EXTRA_FLAGS="-DDEBUG_BLASTEM_CHECKPOINT=1 -DPERF_FIXED_POSE=1
+-DPERF_POSE_X=1300 -DPERF_POSE_Y=3300 -DPERF_POSE_ANGLE=0"` and run
+`tools/routes/fixed-pose.txt` with `-b 3200`. That pins the camera, drops the
+pack coherence and billboard measure caches (both key on pose, and would
+otherwise report a static scene as free), and asks redraw policy for a rebuild
+every frame -- so every iteration rasterizes ONE identical scene and the
+workload counters come back as exact integers. Confirm they are identical on
+both sides; if they are, the subtick delta is real. The harness compiles to
+nothing when `PERF_FIXED_POSE` is unset (byte-identical ROM). Note the frame is
+~18 vblanks at that pose, so proportionally more vblank/DMA steal lands inside
+each stage timer than on a route -- deltas are valid, absolute shares read a
+little compressed.
+
 **The view tilemap is column-major**, `view_tile_index(tile_x, tile_y) =
 tile_x * VIEW_TILE_H + tile_y`. A column's tiles are contiguous, and screen row
 `y` of byte lane `L` sits at `(y>>3)*32 + (y&7)*4 + L`, which is identically
