@@ -19,6 +19,7 @@ SCENE = "\n".join((ROOT / "src/renderer" / n).read_text() for n in (
     "renderer_upload.c", "renderer_sparse.c",
     "renderer_flats.c",
 ))
+DOORS = (ROOT / "src/renderer/renderer_doors.c").read_text()
 MAIN = (ROOT / "src/main.c").read_text()
 GENERATED = (ROOT / "src/bsp/generated_e1m1_map.c").read_text()
 ASSETS = (ROOT / "src/bsp/generated_assets.h").read_text()
@@ -110,6 +111,14 @@ def main():
     assert "bsp_seg_window_band_top" in HEADER
     assert "near->lift = window ? 0 :" in BSP_RENDER
     assert "window_band_rows" in SCENE
+    # The band is resolved to ABSOLUTE viewport rows once per sampled column in
+    # the caster, not re-derived from Q8 by each consumer. That is what keeps
+    # door_overlay_blocks_pixel -- called per byte per sprite row -- free of
+    # multiplies and of a WallColumnDescriptor build.
+    assert "near->band_top = window ? (u8)(slab_top +" in BSP_RENDER
+    assert "(RAY_VIEW_ROWS - height) / 2" in BSP_RENDER
+    assert "describe_door_overlay(door)" not in DOORS.split(
+        "bool door_overlay_blocks_pixel", 1)[1]
     # Still solid for collision and line of sight: only rendering differs.
     assert "BSP_SEG_WINDOW" not in MAP
     # scene_colors carries sky_offset, which the window band needs so the sky it
@@ -126,7 +135,7 @@ def main():
         assert 1 <= visible <= previous_visible
         assert (visible - 1) + lift_pixels == height - 1
         previous_visible = visible
-    assert "y - descriptor->top + lift_pixels" in SCENE
+    assert "y_start - descriptor->top + lift_pixels" in SCENE
     assert "door->height * door->lift" in SCENE
 
     # A wall at the near clip projects to 640 pixels. Only its central 120
@@ -141,10 +150,18 @@ def main():
     # Door-only framing and vertical billboard occlusion: a farther object is
     # hidden in the remaining slab but visible in the lower opening; a nearer
     # object remains visible over the door.
-    assert "style_wall_texel" in SCENE
-    assert "MEGALDOOM_WORLD_COLOR_WARNING" in SCENE
-    assert "descriptor->tex_x < DOOR_FRAME_TEXELS" in SCENE
-    assert "tex_y >= (descriptor->texture_height - safety)" in SCENE
+    # The framing itself is no longer re-derived per pixel in C: the overlay
+    # reads FREEDOOM_WALL_DOOR_PACKED_PAIRS through the same packed_wall_column()
+    # the wall post uses, and that table's bake carries the frame/safety rules.
+    # Check them where they now live, and check the C side selects the door
+    # table -- otherwise a door would composite as plain wall art.
+    bake = (ROOT / "tools" / "world_assets.py").read_text()
+    assert "FREEDOOM_WALL_DOOR_PACKED_PAIRS" in bake
+    assert "WORLD_COLOR_WARNING" in bake
+    assert "border = WALL_TEX_WIDTH // 16" in bake
+    assert "source_y >= source_height - safety" in bake
+    assert "RAY_COLUMN_FLAG_DOOR" in SCENE and "FREEDOOM_WALL_DOOR_TEXTURE_INDEX" in SCENE
+    assert "packed_wall_column(&descriptor)" in SCENE
     assert "door_overlay_blocks_pixel" in SCENE
     door_top = 0
     visible_bottom = height - ((height * 128) >> 8)

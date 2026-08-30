@@ -204,8 +204,17 @@ def main():
         raycast_constants.wall_tex_dims()
     assert "FREEDOOM_WALL_PACKED_PAIRS" in assets
     assert "FREEDOOM_WALL_PACKED_PAIRS[" in renderer
-    assert "DOOR_FRAME_TEXELS (WALL_TEX_WIDTH / 16)" in renderer
-    assert "texture_height / 8" in renderer
+    # The door's frame/safety-stripe silhouette used to be re-derived per pixel
+    # by style_wall_texel() in renderer_doors.c; it is now baked into
+    # FREEDOOM_WALL_DOOR_PACKED_PAIRS, which the overlay reads through the same
+    # packed_wall_column() the wall post uses. So the rule is checked where it
+    # now lives -- in the bake -- and the C side is checked for reading the
+    # baked table rather than for carrying its own copy of the rule.
+    bake = (ROOT / "tools" / "world_assets.py").read_text()
+    assert "border = WALL_TEX_WIDTH // 16" in bake
+    assert 'safety = texture_meta[name]["height"] // 8' in bake
+    assert "FREEDOOM_WALL_DOOR_PACKED_PAIRS" in assets
+    assert "packed_wall_column(&descriptor)" in renderer
 
     palette = generated_palette(assets)
     assert tuple(palette) == extractor.FROZEN_WORLD_PALETTE

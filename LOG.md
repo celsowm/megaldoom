@@ -8,6 +8,103 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## Windows: the overlay compositor stops re-deriving what ROM already holds (2026-08-30)
+
+The follow-up the previous window entry named. The branch-hoisting split left
+`draw_door_overlays` as a plain per-pixel C loop; this replaces the loop bodies.
+
+**Three costs, all paid per pixel, all removable without touching the structure.**
+
+1. `sample_door_overlay` re-derived a texel that `FREEDOOM_WALL_PACKED_PAIRS`
+   already holds. `wall_source_y` does two `u32 * v_scale_q12` multiplies and the
+   68000 has no 32x32 MULU, so each was a `__mulsi3` software loop -- then a 2-D
+   texture index, a style branch, a shade-LUT lookup and a `REP2[]` lookup, to
+   reproduce a byte the base pack's wall post gets with one add, one mask and one
+   indexed load (`packed_wall_column` + `wall_packed_y`). The overlay simply never
+   used the table.
+2. Both posts composed that byte into a u32 with a VARIABLE shift and a
+   read-modify-write. At stride 2 that provably resolves to a single byte store:
+   x is even, so `shift` is one of {24,16,8,0} and `keep_mask` is exactly the
+   complement of byte `(x&7)>>1`. `lsl.l #24` alone is 56 cycles.
+3. `view_tile_index()` -- a multiply -- was recomputed every row, for a
+   destination that steps by a constant 4 bytes (the column-major identity the
+   asm hot path already rests on).
+
+And one outside the pack stage: `door_overlay_blocks_pixel` built a whole
+20-byte `WallColumnDescriptor` (a `[641][120]` table index, a fog level, a
+struct returned by value) plus two multiplies -- **per byte per row** of every
+sprite overlapping an overlay column, from three call sites in
+`renderer_billboard_draw.c`. Its own local `top`/`bottom` were already
+bit-identical to the descriptor's, so it was rebuilding a struct to read back
+two u16s it had. The band is now resolved to absolute viewport rows once per
+sampled column in `bsp_draw_seg`; `RayDoorOverlay` stays 10 bytes because the
+Q8 fractions it stored were the same two bytes.
+
+### Numbers (pose-locked, DEBUG_PERF checkpoint build, spawn pinned to 1300,3300)
+
+Heading-only A/B, the same one the 2026-08-29 diagnosis used -- angle 0 faces a
+nukage-yard window, angle 128 faces an ordinary wall:
+
+| subticks    | window before | window after |  wall before | wall after |
+|-------------|--------------:|-------------:|-------------:|-----------:|
+| pack        |     34445     |    **21200** |    14855     |   14760    |
+| cast        |     10775     |     10920    |    10810     |   10820    |
+| billboard   |      1110     |       940    |      725     |     660    |
+| projection  |      3970     |      3975    |     3990     |    3985    |
+
+Pack **-38%** at the window; the plain-wall control moves -0.6%, i.e. noise. The
+window's *penalty over a plain wall* -- which is the thing the player feels when
+a window enters frame -- goes 19590 -> 6440 subticks, **-67%**. Whole frame at
+that vantage: ~50300 -> ~37035, -26%.
+
+### Pixels
+
+Same pose, same frame index, 3D-view band only:
+
+- Angle 128 (no overlay in frame): **0 pixels differ.**
+- Angle 0 (window): 174 pixels, all inside the view, all on the window's frame
+  above and below the band. The see-through band -- sky, mountains, the far
+  wall, the armour pickup, the enemy -- is untouched.
+- A moving door, pose-locked in front of E1M1's group-0 door at x=1536 with a
+  Use press: 251 gameplay frames, **0 differing pixels**, with the door
+  demonstrably animating.
+
+The door result is not luck, and the audit that explains it is the real proof.
+Evaluating both paths over every shade level, texture, column and row:
+
+- **Even pixel: 0 mismatches** out of 458,752 door texels and 1,736,704 wall
+  texels. The baked tables reproduce the old C output exactly -- including the
+  entire door frame / safety-stripe silhouette, which now lives only in
+  `tools/world_assets.py`.
+- The only change is the odd pixel of each pair. It used to be a duplicate of
+  the even one (`FREEDOOM_WALL_TEXTURES` stores only even texels -- see
+  `pair_column_texels`); it now carries its true texel. That differs on 7.6% of
+  door texels and 5.5% of wall texels, which is why 92-95% of door pixels came
+  out identical. User-approved: it gives an overlay the same horizontal
+  resolution every other wall already had.
+
+### A real out-of-bounds read, fixed as a side effect
+
+`wall_source_y` returns EARLY and UNMASKED for a full-height texture, so it
+could yield `tex_y` up to `127 + tex_v_offset`. `sample_door_overlay` then
+indexed `FREEDOOM_WALL_TEXTURES[tid][tex_y]` past that texture's 128 rows and
+into the next texture in the array. `wall_packed_y` masks with
+`WALL_TEX_HEIGHT_MASK` -- what every ordinary wall has always done. Reachable on
+exactly four segs, the only overlay segs in either map with a nonzero
+`tex_v_offset`: E1M1 seg 261 (BROWN96, offset 72) and E1M2 segs 48/52/933
+(offsets 112/56/8). All four are moving doors, so the corruption only showed
+while one was in motion, which is presumably why it was never reported.
+
+Guardrails: work RAM **unchanged** at 20656 free (no new statics, `RayDoorOverlay`
+still 10 bytes), ROM 3498122 (-1024). Full suite green. The door-style
+assertions in `test-door-animation.py` and `test-wall-quality.py` were retargeted
+at `tools/world_assets.py`, where the rule now lives, rather than deleted.
+
+**Still on the table:** the two posts are now tight C, not asm. The remaining
+6440-subtick window penalty is what an asm port of the frame/sky posts would
+attack -- but per the standing rule that needs its own differential harness with
+a proven-to-fail negative control, so it stays a separate piece of work.
+
 ## Re-centring the viewport without giving up the weapon-bob clip (2026-08-29)
 
 The overlay rebuild earlier today left the real complaint standing: the 3D view

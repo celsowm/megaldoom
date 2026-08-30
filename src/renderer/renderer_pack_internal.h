@@ -66,6 +66,15 @@ static inline u16 wall_packed_y(const WallColumnDescriptor *descriptor,
 WallColumnDescriptor describe_wall_column(const RayColumn *column);
 WallColumnDescriptor describe_door_overlay(const RayDoorOverlay *door);
 
+// The ROM-resident, pre-shaded, pre-vscaled pair column this descriptor samples:
+// WALL_TEX_HEIGHT bytes indexed by wall_packed_y(), each byte carrying both
+// horizontal pixels of one stride-2 sample as nibbles. Doors resolve to the
+// second table, whose bake already applies style_wall_texel()'s frame and
+// safety stripe. The pack stage's wall post and the door/window overlay
+// compositor both read it, so the overlay renders a texture exactly as a wall
+// two pixels to its left would.
+const u8 *packed_wall_column(const WallColumnDescriptor *descriptor);
+
 // Pre-packed ceiling/floor rows for the current frame's scene colors
 // (renderer_flats.c), consumed by the pack stage.
 // Field order mirrors PACK_FLAT_OFF_* -- floor first; see the addressing note

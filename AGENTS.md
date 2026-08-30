@@ -80,6 +80,19 @@ the negative control, and `tools/test-sector-map.py` diffs the two and fails on
 any change outside the type byte. Reuse that pattern rather than inventing a
 new one, and keep the geometry proof in the test.
 
+**Anything that writes a wall texel reads the baked pair table.**
+`packed_wall_column()` + `wall_packed_y()` is the only sanctioned path: the pair
+byte in `FREEDOOM_WALL_PACKED_PAIRS` / `FREEDOOM_WALL_DOOR_PACKED_PAIRS` already
+carries the v-scale, the shade level, the door frame/safety silhouette and BOTH
+horizontal texels. The door/window overlay spent years re-deriving that per pixel
+through `wall_source_y` (two `__mulsi3` calls, since the 68000 has no 32x32
+MULU), and it was ~38% of the pack stage with a window on screen (LOG,
+2026-08-30). `wall_source_y` and `FREEDOOM_WALL_TEXTURES` serve the offline bake,
+not the frame -- note that `wall_source_y` returns EARLY and UNMASKED for a
+full-height texture and will index past a texture's 128 rows for any nonzero
+`tex_v_offset`. Likewise, a stride-2 write into `g_view_tiles` is a byte store at
+`4*y + lane`, never a 32-bit read-modify-write with a variable shift.
+
 ## Dead ends — do not redo without new evidence
 
 Each is measured and written up in [LOG.md](LOG.md); the date locates the entry.

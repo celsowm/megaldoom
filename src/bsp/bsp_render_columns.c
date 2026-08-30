@@ -220,8 +220,18 @@ void bsp_draw_seg(u16 seg_index) {
             // 1..255 here because bsp_draw_seg returns early on a fully open
             // door and a closed one never takes this branch.
             near->lift = window ? 0 : (u8)door_lift;
-            near->band_top = window ? bsp_seg_window_band_top(seg) : 0;
-            near->band_bottom = window ? bsp_seg_window_band_bottom(seg) : 0;
+            // Resolve the seg's Q8 band against the slab HERE, once per sampled
+            // column, and store absolute viewport rows. Both consumers used to
+            // redo this multiply -- and the billboard clip redid it per byte per
+            // sprite row. The slab top is the same centring the pack stage
+            // applies (describe_textured_column: (VIEW_PIXEL_H - height) / 2),
+            // and height <= RAY_VIEW_ROWS, so both rows fit the byte that
+            // RayDoorOverlay's 10-byte budget allows.
+            const u16 slab_top = (u16)((RAY_VIEW_ROWS - height) / 2);
+            near->band_top = window ? (u8)(slab_top +
+                (((u16)height * bsp_seg_window_band_top(seg)) >> 8)) : 0;
+            near->band_bottom = window ? (u8)(slab_top +
+                (((u16)height * bsp_seg_window_band_bottom(seg)) >> 8)) : 0;
             near->tex_x = (u8)(scaled_u & WALL_TEX_WIDTH_MASK);
             near->tex_y = seg->tex_v_offset;
             near->texture_id = tid;

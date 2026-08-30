@@ -119,8 +119,11 @@ typedef struct {
     u8 tex_y;
     u8 texture_id;
     u8 shade;
-    u8 band_top;    // window: Q8 of the slab, first see-through row
-    u8 band_bottom; // window: Q8 of the slab, first opaque row below it
+    // Absolute viewport rows, not Q8 fractions: bsp_draw_seg resolves the seg's
+    // Q8 band against the slab it just projected, so neither the compositor nor
+    // the billboard clip has to multiply. Both are <= RAY_VIEW_ROWS.
+    u8 band_top;    // window: first see-through row
+    u8 band_bottom; // window: first opaque row below the band
 } RayDoorOverlay;
 
 #define RAY_COLUMN_FLAG_DOOR 0x01u

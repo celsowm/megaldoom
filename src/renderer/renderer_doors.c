@@ -1,97 +1,107 @@
 #include "renderer_pack_internal.h"
 #include "generated_assets.h"
 
-#define DOOR_FRAME_TEXELS (WALL_TEX_WIDTH / 16)
-
-// Preserve a stable interactive silhouette around the original BIGDOOR art: a
-// dark metal frame plus a yellow/black moving safety edge, with the real WAD
-// texture in the centre. This is stride-independent -- it works in texel space,
-// not in sampled-column space -- so it is one function, not one per stride.
-static u8 style_wall_texel(const WallColumnDescriptor *descriptor,
-                           u8 tex_y,
-                           u8 texel) {
-    if ((descriptor->flags & RAY_COLUMN_FLAG_DOOR) == 0) return texel;
-
-    const u8 frame_height = (u8)(descriptor->texture_height / 16);
-    const u8 safety = (u8)(descriptor->texture_height / 8);
-    if (descriptor->tex_x < DOOR_FRAME_TEXELS ||
-        descriptor->tex_x >= (WALL_TEX_WIDTH - DOOR_FRAME_TEXELS) ||
-        tex_y < frame_height) {
-        return 0;
-    }
-    if (tex_y >= (descriptor->texture_height - safety)) {
-        return (descriptor->tex_x & safety) ?
-                   MEGALDOOM_WORLD_COLOR_WARNING : 0;
-    }
-    return texel;
-}
-
-static u8 sample_door_overlay(const WallColumnDescriptor *descriptor,
-                              u16 y,
-                              u16 lift_pixels) {
-    u16 source_y = (u16)(y - descriptor->top + lift_pixels);
-    const u16 full_height = (u16)(descriptor->bottom - descriptor->top);
-    if (source_y >= full_height) source_y = (u16)(full_height - 1);
-    const u8 tex_y = (u8)wall_source_y(descriptor, source_y);
-    const u8 texel = descriptor->texture[(tex_y * WALL_TEX_WIDTH) +
-                                          descriptor->tex_x] & 0x0F;
-    return descriptor->shade_map[style_wall_texel(descriptor, tex_y, texel)];
-}
+// The door's interactive silhouette -- a dark metal frame plus a yellow/black
+// moving safety edge around the real WAD texture -- used to be re-derived here
+// per pixel by a style_wall_texel() helper. It is not gone, it moved: the same
+// rules are baked into FREEDOOM_WALL_DOOR_PACKED_PAIRS by tools/world_assets.py,
+// which packed_wall_column() selects for a RAY_COLUMN_FLAG_DOOR descriptor. The
+// overlay now reads that table, so the frame costs one indexed byte load instead
+// of two software 32-bit multiplies, a 2-D texture index and a branch chain.
 
 // Screen rows a window's see-through band spans, as absolute viewport rows.
-// The band arrives as Q8 fractions of the drawn slab (tools/doom_map.py's
-// window_band), because the engine has no per-sector heights to project.
-static void window_band_rows(const WallColumnDescriptor *descriptor,
+// bsp_draw_seg resolves the seg's Q8 band against the slab it just projected and
+// stores absolute rows, so this is two clamps against the slab -- no multiply.
+// Both consumers (this file's compositor and the billboard clip below) go
+// through it so they can never disagree about which rows see through.
+static void window_band_rows(u16 slab_top, u16 slab_bottom,
                              const RayDoorOverlay *window,
                              u16 *band_top, u16 *band_bottom) {
-    const u16 height = (u16)(descriptor->bottom - descriptor->top);
-    u16 top = (u16)(descriptor->top + (((u32)height * window->band_top) >> 8));
-    u16 bottom = (u16)(descriptor->top + (((u32)height * window->band_bottom) >> 8));
-    if (top < descriptor->top) top = descriptor->top;
-    if (bottom > descriptor->bottom) bottom = descriptor->bottom;
+    u16 top = window->band_top;
+    u16 bottom = window->band_bottom;
+    if (top < slab_top) top = slab_top;
+    if (bottom > slab_bottom) bottom = slab_bottom;
     if (bottom < top) bottom = top;
     *band_top = top;
     *band_bottom = bottom;
 }
 
-// One frame post: texture-sampled, same as the whole column used to be
-// before this was split. Pulled out so both the pre-band and post-band frame
-// ranges share one body instead of two copies of a per-pixel loop.
-static void paint_frame_rows(const WallColumnDescriptor *descriptor, u16 lift_pixels,
-                             u16 y_start, u16 y_end, u16 tile_x,
-                             u16 shift, u32 keep_mask, u32 target[][8]) {
+// Both posts below write ONE BYTE per screen row, to a pointer that steps by a
+// constant PACK_TILE_ROW_BYTES. That is the same addressing renderer_hotpath.s
+// uses and it rests on the same fact (AGENTS.md): the view tilemap is
+// column-major, so a tile column's tiles are contiguous and screen row y of
+// byte lane L sits at (y>>3)*32 + (y&7)*4 + L == 4*y + L from the top of the
+// column. The old form recomputed view_tile_index() (a multiply) every row and
+// composed the byte into a u32 with a VARIABLE 32-bit shift plus a
+// read-modify-write -- and at stride 2 that whole dance provably resolves to
+// this single byte store, because x is even, so shift is one of {24,16,8,0} and
+// keep_mask is exactly the complement of byte (x&7)>>1. `lsl.l #24` alone is 56
+// cycles on a 68000. See draw_door_overlays() for how the caller derives the
+// starting pointer.
+
+// One frame post: the near slab's own texture. It reads the SAME ROM table the
+// base pack's wall post reads (packed_wall_column + wall_packed_y, one add and
+// one mask), rather than re-deriving the texel from FREEDOOM_WALL_TEXTURES with
+// wall_source_y()'s two 32-bit multiplies, a shade-LUT lookup and a REP2[]
+// lookup. The 68000 has no 32x32 multiply, so each of those was a __mulsi3
+// software loop, per pixel. Sharing the table also means an overlay renders a
+// texture identically to the same texture drawn as an ordinary wall.
+//
+// It also fixes a real out-of-bounds read. wall_source_y() returns EARLY,
+// unmasked, for a full-height texture, so it could yield tex_y up to
+// 127 + tex_v_offset; sample_door_overlay then indexed
+// FREEDOOM_WALL_TEXTURES[tid][tex_y] past that texture's 128 rows and into the
+// next texture in the array. wall_packed_y() masks with WALL_TEX_HEIGHT_MASK,
+// which is what every ordinary wall has always done. Reachable on four moving
+// doors -- the only overlay segs with a nonzero tex_v_offset: E1M1 seg 261
+// (BROWN96, offset 72) and E1M2 segs 48/52/933 (offsets 112/56/8).
+static void paint_frame_rows(const WallColumnDescriptor *descriptor,
+                             const u8 *packed, u16 lift_pixels,
+                             u16 y_start, u16 y_end, u8 *col_base) {
+    if (y_start >= y_end) return;
+    // rel_y indexes the descriptor's vertical-sample DDA. It cannot run off the
+    // end: y < y_end <= visible_bottom == bottom - lift_pixels, so
+    // rel_y == y - top + lift_pixels < bottom - top. The old code carried a
+    // runtime clamp for this; it was dead.
+    u16 rel_y = (u16)(y_start - descriptor->top + lift_pixels);
+    u8 *dst = col_base + ((u32)y_start * PACK_TILE_ROW_BYTES);
     for (u16 y = y_start; y < y_end; y++) {
-        const u8 color = sample_door_overlay(descriptor, y, lift_pixels);
+        const u8 pair = packed[wall_packed_y(descriptor, rel_y)];
 #if RAY_COL_STRIDE == 4
-        const u32 value = (u32)REP4[color] << shift;
+        // One sampled column owns two adjacent byte lanes at this stride; the
+        // packed byte is already 2px, so storing it to both spreads it over 4.
+        dst[0] = pair;
+        dst[1] = pair;
 #else
-        const u32 value = (u32)REP2[color] << shift;
+        dst[0] = pair;
 #endif
-        u32 *row = &target[view_tile_index(tile_x, (u16)(y >> 3))][y & 7];
-        *row = (*row & keep_mask) | value;
+        dst += PACK_TILE_ROW_BYTES;
+        rel_y++;
     }
 }
 
-// The window sky post: a plain per-row table lookup with no per-pixel branch,
-// sharing its table layout (4 bytes per row, PACK_CEILING_ROW_COUNT wrap)
-// with the ceiling post the base pack's asm hot path already runs -- see the
-// LOG.md entry on the window pack-cost diagnosis (2026-08-29) for why this
-// was split out of the frame loop: a same-pose, heading-only A/B showed this
-// loop alone was ~91% of a window's extra pack-stage cost over a plain wall,
-// because it used to re-decide "frame or sky" every row instead of once per
-// post. Isolated here so it can become the asm hot path's next post without
-// reshaping this function again.
+// The window sky post: the base pack's ceiling loop, in C. Same table layout
+// (PACK_TILE_ROW_BYTES per row, PACK_CEILING_ROW_COUNT rows), same wrap by
+// mask, same +4 walk -- this is renderer_hotpath.s's .Lceiling_loop with the
+// destination lane fixed by the caller. See the LOG.md entry on the window
+// pack-cost diagnosis (2026-08-29) for why the sky was split out of the frame
+// loop in the first place.
 static void paint_sky_rows(const u8 *sky_bytes, u16 lane, u16 y_start, u16 y_end,
-                           u16 tile_x, u16 shift, u32 keep_mask, u32 target[][8]) {
+                           u8 *col_base) {
+    if (y_start >= y_end) return;
+    u16 index = (u16)((((u16)(y_start & (PACK_CEILING_ROW_COUNT - 1)))
+                       * PACK_TILE_ROW_BYTES) + lane);
+    u8 *dst = col_base + ((u32)y_start * PACK_TILE_ROW_BYTES);
     for (u16 y = y_start; y < y_end; y++) {
+        const u8 pair = sky_bytes[index];
 #if RAY_COL_STRIDE == 4
-        const u8 pair = sky_bytes[(((u16)(y & (PACK_CEILING_ROW_COUNT - 1))) << 2) + lane];
-        const u32 value = (u32)((pair << 8) | pair) << shift;
+        dst[0] = pair;
+        dst[1] = pair;
 #else
-        const u32 value = (u32)sky_bytes[(((u16)(y & (PACK_CEILING_ROW_COUNT - 1))) << 2) + lane] << shift;
+        dst[0] = pair;
 #endif
-        u32 *row = &target[view_tile_index(tile_x, (u16)(y >> 3))][y & 7];
-        *row = (*row & keep_mask) | value;
+        dst += PACK_TILE_ROW_BYTES;
+        index = (u16)((index + PACK_TILE_ROW_BYTES) & PACK_CEILING_INDEX_MASK);
     }
 }
 
@@ -119,7 +129,8 @@ void draw_door_overlays(const RayColumn *columns,
         u16 band_bottom = visible_bottom;
         u16 sky_bottom = 0;
         if (window) {
-            window_band_rows(&descriptor, door, &band_top, &band_bottom);
+            window_band_rows(descriptor.top, descriptor.bottom, door,
+                             &band_top, &band_bottom);
             // Inside the band the base pack already drew the far geometry, but
             // its ceiling run used the PLAYER's sector -- indoors, looking out.
             // Repaint just the ceiling part of the band with the sky. This is
@@ -132,14 +143,18 @@ void draw_door_overlays(const RayColumn *columns,
 
         const u16 tile_x = (u16)(x >> 3);
 #if RAY_COL_STRIDE == 4
-        const u16 shift = (u16)((x & 4) ? 0 : 16);
-        const u32 keep_mask = ~((u32)0xFFFFu << shift);
         const u16 lane = (u16)((x & 4) ? 2 : 0);
 #else
-        const u16 shift = (u16)((6 - (x & 7)) * 4);
-        const u32 keep_mask = ~((u32)0xFFu << shift);
         const u16 lane = (u16)((x & 7) >> 1);
 #endif
+        // Byte address of screen row 0 in this sampled column's lane. Both posts
+        // step it by PACK_TILE_ROW_BYTES per row; see the note above them for
+        // why the tile boundary is invisible to that walk.
+        u8 *const col_base =
+            (u8 *)&target[view_tile_index(tile_x, 0)][0] + lane;
+        // The ROM pair column this slab samples -- the same table, and the same
+        // door/wall selection, the base pack's wall post uses.
+        const u8 *const packed = packed_wall_column(&descriptor);
         // The same sky column the pack stage would use for this tile if the
         // player were standing outside. Looking out through a window and then
         // walking out there has to show the same piece of horizon, so both
@@ -173,12 +188,11 @@ void draw_door_overlays(const RayColumn *columns,
         if (frame_resume < sky_end) frame_resume = sky_end;
         if (frame_resume > visible_bottom) frame_resume = visible_bottom;
 
-        paint_frame_rows(&descriptor, lift_pixels, descriptor.top, sky_start,
-                         tile_x, shift, keep_mask, target);
-        paint_sky_rows(sky_bytes, lane, sky_start, sky_end, tile_x, shift,
-                       keep_mask, target);
-        paint_frame_rows(&descriptor, lift_pixels, frame_resume, visible_bottom,
-                         tile_x, shift, keep_mask, target);
+        paint_frame_rows(&descriptor, packed, lift_pixels,
+                         descriptor.top, sky_start, col_base);
+        paint_sky_rows(sky_bytes, lane, sky_start, sky_end, col_base);
+        paint_frame_rows(&descriptor, packed, lift_pixels,
+                         frame_resume, visible_bottom, col_base);
     }
 }
 
@@ -196,9 +210,18 @@ bool door_overlay_blocks_pixel(const RayColumn *column,
         // Mirror draw_door_overlays: the band is see-through, so a billboard
         // behind a window stays visible through it instead of being clipped
         // by the frame.
-        const WallColumnDescriptor descriptor = describe_door_overlay(door);
+        //
+        // `top`/`bottom` above are bit-identical to the descriptor
+        // describe_door_overlay() would build -- describe_textured_column()
+        // computes exactly (VIEW_PIXEL_H - wall_h) / 2 from the same
+        // door->height -- so the slab bounds are passed straight in. That
+        // matters: the three billboard raster sites call this once PER BYTE PER
+        // ROW of every sprite overlapping an overlay column, and building a
+        // 20-byte WallColumnDescriptor there (a [641][120] table index, a fog
+        // level, a struct returned by value) to read back two u16s it already
+        // has was the whole cost.
         u16 band_top, band_bottom;
-        window_band_rows(&descriptor, door, &band_top, &band_bottom);
+        window_band_rows(top, bottom, door, &band_top, &band_bottom);
         if (y >= band_top && y < band_bottom) return FALSE;
         return (bool)(y >= top && y < bottom);
     }

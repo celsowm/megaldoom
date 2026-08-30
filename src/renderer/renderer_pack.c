@@ -50,7 +50,7 @@ static void build_shade_luts(void) {
 // never skip against stale cached descriptors. See build_bsp_tilemap().
 static bool s_coherence_valid = FALSE;
 
-static const u8 *packed_wall_column(const WallColumnDescriptor *descriptor) {
+const u8 *packed_wall_column(const WallColumnDescriptor *descriptor) {
     if (descriptor->flags & RAY_COLUMN_FLAG_DOOR) {
         const u8 door_index = FREEDOOM_WALL_DOOR_TEXTURE_INDEX[
             descriptor->texture_id];
