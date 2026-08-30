@@ -8,6 +8,54 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## Two dead pointers in WallColumnDescriptor were pinning 384 KB of ROM (2026-08-30)
+
+Chasing the double-pack skip (previous entry) needed one spare per-lane field in
+`WallColumnDescriptor`, so the struct got audited first. `texture` and
+`shade_map` -- a raw `FREEDOOM_WALL_TEXTURES` row pointer and a `g_shade_luts`
+row pointer -- have **no readers anywhere**. They date from before the pack
+stage moved to the pre-shaded `FREEDOOM_WALL_PACKED_PAIRS` table; the last
+consumer was the door overlay, and the 2026-08-30 rewrite took that to the
+packed table too. Nothing has read either field since.
+
+They were still being *written*: two long stores per column build, 80 columns a
+frame, and 8 bytes carried through every lane step of the asm's descriptor walk.
+
+Removing them takes the struct **24 -> 16 bytes**, which also turns every
+`descriptors[i]` index from a multiply into a shift. The asm needed no change
+beyond the three offsets it reads, and those are `_Static_assert`ed against the
+C struct in renderer_pack_internal.h -- a wrong offset here is a build failure,
+not the silent texture corruption that motivated renderer_pack_abi.h.
+
+The surprise was the ROM. `renderer_pack.c:95` computed the `texture` field from
+`FREEDOOM_WALL_TEXTURES[tid]` and was the **last C reference to that array**.
+With the field gone the local is dead, the array is unreachable, and LTO drops
+it: **ROM 3456 KB -> 3072 KB, -384 KB**. That table has been dead cartridge
+weight since the overlay stopped sampling it; the field was the only thing
+keeping it alive. It stays in generated_assets.h because tools/test-wall-
+quality.py parses it as the bake's reference -- it simply no longer ships.
+
+Pose-locked at **(-192, 3456) angle 192** (the sergeants-at-the-glass pose from
+the billboard investigation below), identical workload on both sides -- 68 mixed
++ 232 flat tiles, 120 samples, 61 nodes:
+
+| | before | after | |
+|---|---:|---:|---|
+| pack | 5238 | **5044** | **-3.7%** |
+| cast (control) | 5743 | 5749 | noise |
+| billboard (control) | 4667 | 4674 | noise |
+| frame | 14.51 vb | 14.38 vb | |
+
+Work RAM free 20656 -> **21300** (+644). Pixels: **0 differing pixels** below
+capture row 2 across every common capture frame (rows 0-1 are beam-blanking
+garbage, 4 pixels, as always). Pack asm differential clean (checked=76,
+mismatches=0, canary_failures=0) -- though the pixel identity over 69 frames of
+68 mixed tiles is the stronger evidence here, and the `_Static_assert`s are
+stronger still.
+
+**Audit a hot struct's fields before adding one to it.** The field this was
+clearing room for has not been added yet.
+
 ## Window overlay posts go to assembly; two compiler-flag dead ends (2026-08-30)
 
 Follow-up to the entry above, which cut the window overlay's per-pixel cost by

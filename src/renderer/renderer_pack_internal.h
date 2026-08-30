@@ -16,8 +16,13 @@
 typedef struct {
     u16 top;
     u16 bottom;
-    const u8 *texture;
-    const u8 *shade_map;
+    // No `texture`/`shade_map` here. Both were raw pointers into
+    // FREEDOOM_WALL_TEXTURES and g_shade_luts, kept from before the pack stage
+    // moved to the pre-shaded FREEDOOM_WALL_PACKED_PAIRS table; nothing has
+    // read either since. Dropping them takes this struct 24 -> 16 bytes, which
+    // is one shift instead of a multiply everywhere a lane is indexed, two
+    // fewer long stores per column build (80 columns/frame) and 128 fewer
+    // bytes touched per tile column in the asm's descriptor walk.
     const u8 *vertical_samples;
     u8 tex_x;
     u8 tex_y;

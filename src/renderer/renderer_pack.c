@@ -92,7 +92,6 @@ static WallColumnDescriptor describe_textured_column(u16 wall_h,
     const u16 bottom = (u16)(top + wall_h);
     const u8 tid = (u8)((texture_id < FREEDOOM_WALL_TEXTURE_COUNT) ?
                             texture_id : MEGALDOOM_TEX_FALLBACK);
-    const u8 (*tex)[WALL_TEX_WIDTH] = FREEDOOM_WALL_TEXTURES[tid];
     // Distance fog + side shading fold into one LUT selection per column: the fog
     // level grows with depth, and N/S ("shade") walls add one extra darkening step.
     // g_shade_luts[0] is the identity, so near front walls are unshaded; every level
@@ -110,7 +109,6 @@ static WallColumnDescriptor describe_textured_column(u16 wall_h,
     (void)side_shade;
     const u16 fog_level = 0u;
 #endif
-    const u8 *shade_map = g_shade_luts[fog_level];
     // wall_h is the visible span after viewport clipping. The texture lookup
     // must use the unclipped projected span, otherwise a near wall/closed door
     // remaps its entire 128-row texture into the 120 visible rows.
@@ -123,15 +121,9 @@ static WallColumnDescriptor describe_textured_column(u16 wall_h,
     const u8 texture_height = (u8)FREEDOOM_WALL_TEXTURE_HEIGHT[tid];
     const u16 v_scale_q12 = FREEDOOM_WALL_TEXTURE_VSCALE_Q12[tid];
 
-#if RAY_COL_STRIDE == 4
-    return (WallColumnDescriptor){top, bottom, (const u8 *)tex, shade_map, ty_table,
+    return (WallColumnDescriptor){top, bottom, ty_table,
                                   tex_x, tex_y_value, tid, (u8)fog_level, flags,
                                   texture_height, v_scale_q12};
-#else
-    return (WallColumnDescriptor){top, bottom, (const u8 *)tex, shade_map, ty_table,
-                                  tex_x, tex_y_value, tid, (u8)fog_level, flags,
-                                  texture_height, v_scale_q12};
-#endif
 }
 
 WallColumnDescriptor describe_wall_column(const RayColumn *column) {

@@ -25,9 +25,9 @@
 // WallColumnDescriptor field offsets and size, as indexed by the asm.
 #define WALL_DESC_OFF_TOP 0
 #define WALL_DESC_OFF_BOTTOM 2
-#define WALL_DESC_OFF_VERTICAL_SAMPLES 12
-#define WALL_DESC_OFF_TEX_Y 17
-#define WALL_DESC_SIZE 24
+#define WALL_DESC_OFF_VERTICAL_SAMPLES 4
+#define WALL_DESC_OFF_TEX_Y 9
+#define WALL_DESC_SIZE 16
 
 // PackedFlatRows: two u32 row tables indexed by screen row, stepping by
 // PACK_TILE_ROW_BYTES and wrapping with the table's own mask, so the asm's two
