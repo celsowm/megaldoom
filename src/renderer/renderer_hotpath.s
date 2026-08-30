@@ -166,4 +166,82 @@ renderer_write_mixed_stride2_span_asm:
     movem.l (sp)+,d2-d7/a2-a6
     rts
 
+
+/*
+ * void renderer_write_overlay_frame_post_asm(
+ *     u8 *dst, u16 row_count, const u8 *dda, const u8 *packed, u16 tex_y);
+ *
+ * The door/window overlay's textured post. Body is character-for-character
+ * .Lwall_loop above, and deliberately so: draw_door_overlays composites a near
+ * slab into ONE byte lane of one tile column, and every texel it writes has to
+ * be the byte an ordinary wall two pixels to its left would have produced. It
+ * already reads the same FREEDOOM_WALL_PACKED_PAIRS column (2026-08-30); this
+ * makes it the same instructions as well, so the two cannot drift.
+ *
+ * `dst` is the byte address of the post's FIRST row -- col_base + 4*y_start,
+ * which is exact because the view tilemap is column-major (see the note on the
+ * mixed packer above) -- and `dda` is the vertical-sample entry that row reads,
+ * i.e. descriptor->vertical_samples + (y_start - top + lift_pixels). Resolving
+ * both in the caller is what lets this loop carry no bounds, no post boundary
+ * and no descriptor: row_count is exact and must be >= 1.
+ *
+ * `moveq #0,d1` is loop-invariant for the same non-obvious reason it is in
+ * .Lwall_loop: andi.w #WALL_TEX_HEIGHT_MASK leaves bits 7-15 clear, move.b
+ * writes only bits 0-7, and add.b discards its carry, so d1's high byte is
+ * still zero at the top of the next iteration.
+ *
+ * 56 cycles per row against ~100 for the C loop it replaces, whose index
+ * arithmetic GCC could not keep in registers across the store.
+ */
+    .align  2
+    .globl  renderer_write_overlay_frame_post_asm
+renderer_write_overlay_frame_post_asm:
+    movem.l d2/a2,-(sp)            /* OVL_ASM_SAVED_REGS registers */
+    movea.l OVL_ARG_DST(sp),a0
+    move.w  OVL_ARG_ROWS(sp),d0
+    movea.l OVL_ARG_DDA(sp),a1
+    movea.l OVL_ARG_PACKED(sp),a2
+    move.w  OVL_ARG_TEX_Y(sp),d2
+    subq.w  #1,d0                  /* DBRA counter; row_count >= 1 */
+    moveq   #0,d1                  /* high byte stays clear across iterations */
+.Lovl_frame_loop:
+    move.b  (a1)+,d1
+    add.b   d2,d1
+    andi.w  #WALL_TEX_HEIGHT_MASK,d1
+    move.b  0(a2,d1.w),(a0)
+    addq.l  #PACK_TILE_ROW_BYTES,a0
+    dbra    d0,.Lovl_frame_loop
+    movem.l (sp)+,d2/a2
+    rts
+
+/*
+ * void renderer_write_overlay_sky_post_asm(
+ *     u8 *dst, u16 row_count, const u8 *sky_bytes, u16 index);
+ *
+ * The sky a window band shows while the player is still indoors. Body is
+ * .Lceiling_loop above, against the same PACK_CEILING_INDEX_MASK table, so the
+ * horizon seen through a window and the horizon seen after walking out there
+ * are produced by identical code as well as identical data.
+ *
+ * `index` is ((y_start & (PACK_CEILING_ROW_COUNT - 1)) * PACK_TILE_ROW_BYTES)
+ * + lane; the caller folds the lane in once so the loop never re-derives it.
+ * Every register touched is call-clobbered under the m68k ABI, so unlike the
+ * frame post this needs no movem at all.
+ */
+    .align  2
+    .globl  renderer_write_overlay_sky_post_asm
+renderer_write_overlay_sky_post_asm:
+    movea.l SKY_ARG_DST(sp),a0
+    move.w  SKY_ARG_ROWS(sp),d0
+    movea.l SKY_ARG_BYTES(sp),a1
+    move.w  SKY_ARG_INDEX(sp),d1
+    subq.w  #1,d0                  /* DBRA counter; row_count >= 1 */
+.Lovl_sky_loop:
+    move.b  0(a1,d1.w),(a0)
+    addq.l  #PACK_TILE_ROW_BYTES,a0
+    addq.w  #PACK_TILE_ROW_BYTES,d1
+    andi.w  #PACK_CEILING_INDEX_MASK,d1
+    dbra    d0,.Lovl_sky_loop
+    rts
+
 #endif /* RAY_COL_STRIDE == 2 */

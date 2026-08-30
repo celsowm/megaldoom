@@ -138,6 +138,38 @@ def main():
     assert "y_start - descriptor->top + lift_pixels" in SCENE
     assert "door->height * door->lift" in SCENE
 
+    # The two overlay posts are hand-written 68000 (renderer_hotpath.s), and the
+    # standing rule for that is a differential harness that is PROVEN able to
+    # fail. Pin the three properties that keep it one:
+    #   1. both implementations exist and are held to one signature,
+    #   2. the harness replays the production emitter (paint_overlay_column)
+    #      rather than a second copy of the argument resolution, and
+    #   3. it computes BOTH sides locally, so whichever one ships cannot
+    #      silently turn the check into asm-vs-asm (LOG, 2026-08-04).
+    HOTPATH = (ROOT / "src/renderer/renderer_hotpath.s").read_text()
+    assert "renderer_write_overlay_frame_post_asm" in HOTPATH
+    assert "renderer_write_overlay_sky_post_asm" in HOTPATH
+    assert "write_overlay_frame_post_reference" in DOORS
+    assert "write_overlay_sky_post_reference" in DOORS
+    assert "RENDERER_OVERLAY_C_REFERENCE" in DOORS
+    harness = DOORS.split("static void compare_overlay_posts_asm", 1)[1]
+    harness = harness.split("void draw_door_overlays", 1)[0]
+    assert harness.count("paint_overlay_column(") == 2
+    assert "s_overlay_use_reference = FALSE;" in harness
+    assert "s_overlay_use_reference = TRUE;" in harness
+    assert "renderer_perf_record_asm_compare" in harness
+    assert "overlay_probe_broken" in harness
+    # The overlay frame post must wrap with the SAME mask the wall post uses:
+    # MEGALDOOM_WALL_TEX_Y_BY_HEIGHT reaches 252, so the mask is load-bearing
+    # even when tex_y is 0 (which it is for every window -- only four moving
+    # doors in the shipped maps carry a nonzero tex_v_offset).
+    frame_post = HOTPATH.split(".Lovl_frame_loop:", 1)[1]
+    assert "andi.w  #WALL_TEX_HEIGHT_MASK,d1" in frame_post
+    # Both posts close with DBRA, which would run 65536 times on a zero count,
+    # so the empty-post drop has to stay in the caller.
+    assert "dbra" in frame_post
+    assert "if (y_start >= y_end) return;" in DOORS
+
     # A wall at the near clip projects to 640 pixels. Only its central 120
     # rows are visible, so the first/last visible rows must sample the middle
     # of the 128-row texture instead of stretching the whole texture.

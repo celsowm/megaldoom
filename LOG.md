@@ -8,6 +8,150 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## Window overlay posts go to assembly; two compiler-flag dead ends (2026-08-30)
+
+Follow-up to the entry above, which cut the window overlay's per-pixel cost by
+making it read the baked pair table and deferred the assembly port "to a
+separate piece of work with its own differential harness". This is that work,
+plus the measurement infrastructure it needed.
+
+### The routes could not measure it, so build a harness that can
+
+Every A/B here was going to be a few percent, and route-based A/B on this
+renderer is unreliable in a way the existing rule only catches after the fact:
+the loop is vblank-paced, so a faster build gets more iterations inside the same
+route frame budget and walks somewhere else. The first experiment of the day
+(below) came back "cast 5991 -> 6241" while `nodes visited` moved 60.4 -> 61.9
+and `rebuild frames` 23 -> 22. That measures the scene, not the change.
+
+`PERF_FIXED_POSE` (debug_checkpoint.h, off by default, byte-identical ROM when
+off) pins `g_player` before the cast reads it, drops the pack coherence cache
+and the billboard measure cache -- both key on pose, and would otherwise serve a
+static scene from cache and report it as free, the opposite of the motion case
+worth measuring -- and asks `renderer_redraw_request_base` for a rebuild every
+frame. Every iteration then rasterizes ONE identical scene. The counters come
+back as exact integers (nodes 117.0, boxes 130.0, segs 55.0, samples 153.0 over
+55 frames), which is the check that the comparison is sound.
+
+Pose used throughout: **(1300, 3300) angle 0**, the E1M1 nukage-yard window wall
+that the 2026-08-29 diagnosis used, run with `tools/routes/fixed-pose.txt`.
+
+### Where the frame goes at that pose
+
+| stage | subticks/rebuild | share |
+|---|---:|---:|
+| cast | 10378 | 47% |
+| pack | 9032 | 41% |
+| projection | 1581 | 7% |
+| billboard | 982 | 4% |
+
+18.13 vblanks, 3.3 fps. Stubbing `draw_door_overlays` to a no-op puts pack at
+**4424**, so the overlay compositor alone was **4608 subticks -- 21% of the whole
+frame**, still the largest single item after cast even after the 2026-08-30 fix.
+The DEBUG_PERF harness counts **72 of the 80 sampled columns** carrying an
+overlay here, at ~93 painted rows each: a window wall at close range covers most
+of the viewport, and its see-through band is a horizontal strip inside it.
+
+### The change
+
+Two new entry points in `renderer_hotpath.s`,
+`renderer_write_overlay_frame_post_asm` and
+`renderer_write_overlay_sky_post_asm`. Their bodies are character-for-character
+`.Lwall_loop` and `.Lceiling_loop` from the mixed-tile packer, which is the
+point: an overlay texel and a wall texel two pixels to its left were already
+reading the same ROM table, and now they are produced by the same instructions
+too. 56 cycles/row against ~100 for the C loop, whose index arithmetic GCC could
+not keep in registers across the store.
+
+The caller resolves the destination byte, the exact row count and the DDA entry
+the first row reads, so the loops carry no bounds, no post boundary and no
+descriptor. Empty posts are dropped in the caller, because DBRA on a zero count
+runs 65536 times.
+
+Also dropped: `describe_wall_column(column)` inside the window branch, which
+built a whole 24-byte descriptor -- a [641][120] table index, a fog level, a
+struct returned by value -- to read one `u16` back out of it, once per overlay
+column. Only the wall-behind's `top` was wanted and that is centring, not a
+texture lookup: `(VIEW_PIXEL_H - column->height) / 2`, which is the expression
+`describe_textured_column` computes from the same field.
+
+Pose-locked, identical workload on both sides, cast unchanged as a control:
+
+| | before | after | |
+|---|---:|---:|---|
+| pack | 9032 | **8167** | **-9.6%** |
+| ...overlay alone (pack minus the 4424 stub control) | 4608 | **3743** | **-18.8%** |
+| cast (control) | 10378 | 10380 | noise |
+| frame | 18.13 vb | **17.46 vb** | -3.7% |
+
+Work RAM unchanged (20656 free), ROM -256 bytes.
+
+**The canned routes show none of this** -- `e1m1-windows` 4432 -> 4419,
+`checkpoints` 3696 -> 3693, `stationary-combat` 3414 -> 3416, all within noise
+on identical counters. They barely leave the player start and rarely have an
+overlay column on screen. The win is specifically the window-filled view, which
+is the case that was reported from play; do not look for it on a route.
+
+### Verification
+
+`compare_overlay_posts_asm` (DEBUG_PERF) is built in the shape
+`compare_stride2_column_asm` established, and reshaped the same way for the same
+reason: BOTH sides are computed here, into canary-guarded scratch, so whichever
+implementation ships cannot quietly turn the check into asm-vs-asm. It replays
+`paint_overlay_column`, the production emitter, with only the destination and a
+`s_overlay_use_reference` flag changed -- so the argument resolution stays
+single-sourced with the shipped path instead of being reimplemented in the
+harness. Every overlay column is checked, not one per frame: overlay columns are
+sparse and their boundaries depend on the band, the lift and the wall behind.
+
+Clean: **checked=2300, mismatches=0, canary_failures=0.**
+
+Negative controls, each built and run (the standing rule exists because this
+harness's predecessor reported success for months while comparing asm to asm):
+
+| injected fault | mismatches |
+|---|---:|
+| frame post `andi.w #WALL_TEX_HEIGHT_MASK` -> `#63` | 1800 of 1800 |
+| sky post `addq.w #PACK_TILE_ROW_BYTES` -> `#8` | 1275 of 1800 |
+
+The sky fault flagging fewer is the expected signature -- it can only differ on
+columns that actually have a non-empty sky post.
+
+Pixels, from the fixed pose (deterministic, so captures are directly
+comparable): **0 differing pixels across 10 captured frames** from capture row 2
+down. The 17 pixels that differ in rows 0-1 of every frame are beam-blanking
+garbage; the two builds end a frame at different raster positions.
+
+### Dead ends measured today
+
+- **Dropping `volatile` from the eight pure `muls.w`/`mulu.w` asm helpers**
+  (`bsp_native_muls_word` and its per-TU copies). `volatile` blocks CSE, DCE and
+  scheduling, and `bsp_project_box_range` visibly computes
+  `bsp_render_mul(RAY_PROJ_X, l0)` twice. Measured **zero** change on all three
+  routes, to within 0.1%, on identical counters. SGDK compiles with `-fno-gcse`,
+  so the pass that would have exploited it is not running in the first place.
+- **Enabling it: `#pragma GCC optimize("O3","gcse","web","gcse-after-reload",
+  "rename-registers")` on the five BSP translation units.** Pose-locked,
+  identical workload: cast **10378 -> 10600, +2.1% worse**. GCSE raises register
+  pressure and spills on a 68000 with eight data registers. SGDK's
+  `-fno-web -fno-gcse` is correct for this code; do not "fix" it.
+- **A `tex_y == 0` fast path for the frame post**, which would drop `add.b` and
+  `andi.w` (12 of 56 cycles/row) and would apply to every window, since only
+  four moving doors in the shipped maps carry a nonzero `tex_v_offset`.
+  Impossible: `MEGALDOOM_WALL_TEX_Y_BY_HEIGHT` reaches **252**, not 127, so the
+  mask is load-bearing whatever `tex_y` is. The 56-cycle body is the floor for
+  this shape.
+
+### The next structural step, identified but not taken
+
+At this pose the base pack writes all 300 tiles and the overlay then overwrites
+~70% of the viewport on top of it. Those rows are packed twice. The spans the
+overlay will cover are known before packing -- they are already in
+`RayColumn.door` -- so `build_bsp_tilemap` could shorten its own posts and skip
+them, which is worth more than this entry's asm did. It needs
+`renderer_write_mixed_stride2_span_asm` to carry up to five posts per lane
+instead of three, so it is its own piece of work with its own harness pass.
+
 ## Windows: the overlay compositor stops re-deriving what ROM already holds (2026-08-30)
 
 The follow-up the previous window entry named. The branch-hoisting split left

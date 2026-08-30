@@ -78,4 +78,33 @@
 #define PACK_ARG_PACKED_COLUMNS PACK_ASM_FRAME + 16
 #define PACK_ARG_FLAT_ROWS PACK_ASM_FRAME + 20
 
+// Stack layout of the two door/window overlay posts (renderer_hotpath.s), by
+// the same GCC m68k rule as the block above: every argument gets a 4-byte slot
+// and a u16 sits 2 bytes into its own. Written without enclosing parentheses
+// for the same reason.
+//
+// The overlay compositor writes ONE byte lane of ONE tile column, so unlike the
+// mixed-tile packer these take a byte pointer already resolved to their first
+// row and never look at the descriptor: the caller hands over the exact DDA
+// entry the post starts at. That keeps the frame post's body identical to
+// .Lwall_loop and the sky post's to .Lceiling_loop, which is the whole point --
+// an overlay texel and a wall texel two pixels to its left are now produced by
+// the same instructions, not merely the same table.
+//
+// The frame post saves d2/a2; the sky post needs no callee-saved register at
+// all, so its frame is just the return address.
+#define OVL_ASM_SAVED_REGS 2
+#define OVL_ASM_FRAME 4 + OVL_ASM_SAVED_REGS * 4
+#define OVL_ARG_DST OVL_ASM_FRAME + 0
+#define OVL_ARG_ROWS OVL_ASM_FRAME + 6
+#define OVL_ARG_DDA OVL_ASM_FRAME + 8
+#define OVL_ARG_PACKED OVL_ASM_FRAME + 12
+#define OVL_ARG_TEX_Y OVL_ASM_FRAME + 18
+
+#define SKY_ASM_FRAME 4
+#define SKY_ARG_DST SKY_ASM_FRAME + 0
+#define SKY_ARG_ROWS SKY_ASM_FRAME + 6
+#define SKY_ARG_BYTES SKY_ASM_FRAME + 8
+#define SKY_ARG_INDEX SKY_ASM_FRAME + 14
+
 #endif

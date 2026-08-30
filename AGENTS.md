@@ -11,14 +11,20 @@ work, it does not need a line in this file.
 
 ## Standing rules
 
-**Verify assembly against C, and prove the check can fail.** `renderer_pack.c`'s
-`compare_stride2_column_asm` (DEBUG_PERF) runs the asm span and the per-tile C
-reference into two canary-guarded scratch blocks and compares. Read back
-`asm_mismatches`, `asm_canary_failures` and `asm_checked_tiles` after any change
-to `src/renderer/renderer_hotpath.s`. If you touch the harness itself, also inject a
-deliberate fault and confirm it reports non-zero before reverting — this harness
-spent months silently comparing asm against asm and reporting success (LOG,
-2026-08-04).
+**Verify assembly against C, and prove the check can fail.** Two DEBUG_PERF
+harnesses cover `src/renderer/renderer_hotpath.s`, and both run the asm and a C
+reference into canary-guarded scratch and compare: `renderer_pack.c`'s
+`compare_stride2_column_asm` for the mixed-tile span, and `renderer_doors.c`'s
+`compare_overlay_posts_asm` for the two door/window overlay posts. They feed one
+set of counters — read back `asm_mismatches`, `asm_canary_failures` and
+`asm_checked_tiles` after any change to the asm, and isolate which side a
+mismatch came from with `-DRENDERER_OVERLAY_C_REFERENCE=1` or
+`-DRENDERER_HOTPATH_C_REFERENCE=1`. If you touch a harness, also inject a
+deliberate fault and confirm it reports non-zero before reverting — the first
+one spent months silently comparing asm against asm and reporting success (LOG,
+2026-08-04). Keep both sides computed inside the harness, and have it replay the
+production emitter rather than a copy of it; those are the two properties that
+kept that from happening again (LOG, 2026-08-30).
 
 **Not every route is valid for an A/B comparison.** Only routes that end at the
 same player pose in both builds can be compared by run average; a faster build
@@ -129,6 +135,13 @@ Each is measured and written up in [LOG.md](LOG.md); the date locates the entry.
   buy ~1% for +736 KB (2026-08-04).
 - **Applying the billboard gather/apply row cache unconditionally** — +44% on
   `stationary-combat`. It is gated on magnification for a reason (2026-08-04).
+- **Turning GCSE back on** — SGDK compiles with `-fno-web -fno-gcse`, and that is
+  correct for this code: `#pragma GCC optimize("gcse","web",...)` on the five BSP
+  translation units made cast **2.1% worse** on identical pose-locked workload.
+  GCSE raises register pressure and spills on a 68000's eight data registers.
+  Dropping `volatile` from the pure `muls.w`/`mulu.w` helpers to let it CSE them
+  is the same dead end from the other side, and measured exactly zero
+  (2026-08-30).
 
 ## How to measure renderer frame cost (headless, no BlastEm UI needed)
 
