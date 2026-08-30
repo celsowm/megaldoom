@@ -23,6 +23,15 @@
   HUD edge, and a downward bob dips its base into the WINDOW/HUD region where
   plane A is suppressed, so the gun's cut-off bottom edge is never visible.
   Death prompt moved with the view (`DEATH_PROMPT_Y 8 -> 12`).
+- Re-centred the 3D view (`VIEW_TILEMAP_Y 9 -> 5`, death prompt back to 8) after
+  the drop above left all 72px of letterbox piled on top of it. The bob keeps
+  its clip: the window plane is now pinned from `VIEW_WINDOW_TOP_Y` (the row
+  right below the view) instead of from the status bar, so plane A is still
+  suppressed from the view's bottom edge down and the dipping gun is cut on
+  exactly the same line -- the view no longer has to sit flush on the HUD for
+  that to hold. The window's gutter cells are transparent, so the band still
+  reads as plain black letterbox. The DEBUG_PERF overlay follows the split
+  letterbox: 5 rows on BG_B above the view, 4 on the window plane below it.
 - Weapon bob now eases back to neutral when the player stops translating even
   though momentum stays high -- i.e. shoving into a wall no longer races the walk
   cadence on the spot. `update_weapon_bob` takes the tic's real "did the player

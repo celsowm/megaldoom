@@ -60,9 +60,11 @@ void renderer_draw_weapon_flash(void) {
 //
 // SGDK plane-scroll convention: +H shifts the plane right (so +bob_x tracks the
 // weapon right), +V shifts the plane up. bob_y is Doom's always-positive lobe
-// and only ever DIPS the gun down (-V): the 3D view is parked flush against the
-// status bar (VIEW_TILEMAP_Y), so the gun's bottom rows dip into the WINDOW/HUD
-// region where plane A is suppressed and the cut-off edge is never seen. A
+// and only ever DIPS the gun down (-V): the window plane is pinned from
+// VIEW_WINDOW_TOP_Y, the row immediately below the (centred) 3D view, so the
+// gun's bottom rows dip into a region where plane A is suppressed and the
+// cut-off edge is never seen -- the view itself no longer has to sit flush on
+// the status bar for that to hold, which is what lets it be centred. A
 // downward dip also reveals a sliver of scene above the hands, exactly like
 // Doom. Lifting the gun (+V) would float its base over the floor, so bob_y is
 // never negative.

@@ -754,11 +754,11 @@ DoomSkill frontend_run(void) {
 }
 
 // Centred in the 20-tile-wide (160px) view region (VIEW_TILEMAP_X 10 ..
-// VIEW_TILEMAP_X+19), near the top of the view (screen tile row 12 =
-// VIEW_TILEMAP_Y 9 + 3) so the prompt never fights the weapon overlay lower
-// down for the same tiles.
+// VIEW_TILEMAP_X+19), near the top of the view (screen tile row 8 =
+// VIEW_TILEMAP_Y 5 + 3) so the prompt never fights the weapon overlay lower
+// down for the same tiles. Moves with the view.
 #define DEATH_PROMPT_X 14
-#define DEATH_PROMPT_Y 12
+#define DEATH_PROMPT_Y 8
 
 void frontend_load_death_prompt(u16 tile_base) {
     VDP_loadTileSet(frontend_death_prompt.tileset, tile_base, DMA);

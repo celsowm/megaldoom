@@ -230,7 +230,7 @@ def main():
     num_fn = re.search(r"static void draw_hud_number_tilemap\(void\) \{.*?\n\}", hud, re.S).group(0)
     assert "VDP_setTileMapXY(WINDOW," in num_fn, "status numbers must ride the window plane"
     assert "VDP_setTileMapXY(BG_A," not in num_fn, "status numbers must not stay on BG_A"
-    assert "VDP_setWindowOnBottom(HUD_PANEL_H)" in hud
+    assert "VDP_setWindowOnBottom(VIEW_WINDOW_TILE_H)" in hud
 
     mainc = (ROOT / "src/main.c").read_text()
     assert "renderer_hud_window_suspend();" in mainc, "pause must drop the window plane"
@@ -247,18 +247,27 @@ def main():
     assert all(0 <= v <= BOB_MAX_Y for v in wy)
     assert max(wx) > 0 and min(wx) < 0, "horizontal bob must swing both ways"
     # The vertical dip is downward-only (Doom's positive lobe): >= 0 always, and
-    # it does move the gun. The renderer parks the 3D view flush against the
-    # status bar so the dip runs into the WINDOW/HUD region (plane A suppressed),
-    # never past a visible frame edge.
+    # it does move the gun. The window plane (plane A suppressed) is pinned from
+    # the row right below the view, so the dip is clipped exactly at the view's
+    # bottom edge and never shows a cut-off gun against the letterbox.
     assert min(wy) >= 0, "vertical dip must never lift the gun (would float it)"
     assert max(wy) > 0, "vertical bob must dip the weapon"
-    view_y = int(re.search(r"#define VIEW_TILEMAP_Y (\d+)",
-                           (ROOT / "src/renderer/renderer_internal.h").read_text()).group(1))
+    internal = (ROOT / "src/renderer/renderer_internal.h").read_text()
+    view_y = int(re.search(r"#define VIEW_TILEMAP_Y (\d+)", internal).group(1))
     hud_h = int(re.search(r"#define FREEDOOM_HUD_TILE_H (\d+)",
                           (ROOT / "src/renderer/generated_hud_assets.h").read_text()).group(1))
     ray_h = int(re.search(r"#define RAY_VIEW_TILE_H (\d+)",
                           (ROOT / "src/raycast.h").read_text()).group(1))
-    assert view_y + ray_h == 28 - hud_h, "3D view must sit flush on the status bar"
+    # The view is vertically centred in the play area above the status bar, with
+    # the odd row of slack on top.
+    assert 2 * view_y == (28 - hud_h) - ray_h + 1, "3D view must be centred"
+    # Everything from the view's bottom edge down is window (plane A suppressed),
+    # and that mask is deeper than the largest dip, so the gun is always clipped
+    # on the view edge rather than drawn over the letterbox.
+    window_top = view_y + ray_h
+    assert "#define VIEW_WINDOW_TOP_Y (VIEW_TILEMAP_Y + VIEW_TILE_H)" in internal
+    assert (28 - window_top) * 8 >= BOB_MAX_Y, "dip must stay inside the window mask"
+    assert window_top < 28 - hud_h, "a centred view needs a gutter below it"
 
     # Periodicity: with settled momentum the phase steps by BOB_PHASE_STEP mod
     # ANGLE_STEPS each tic, so the exact repeat period is ANGLE_STEPS/gcd.

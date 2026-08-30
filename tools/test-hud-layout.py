@@ -92,7 +92,10 @@ def main() -> int:
     # stay put. The window is pinned over the bottom HUD_PANEL_H rows.
     assert "VDP_setTileMapXY(WINDOW" in hud
     assert "VDP_setTileMapXY(BG_A" not in hud
-    assert "VDP_setWindowOnBottom(HUD_PANEL_H)" in hud
+    # The window covers the black gutter under the centred view as well as the
+    # status bar: plane A is suppressed there, which clips the weapon-bob dip.
+    assert "VDP_setWindowOnBottom(VIEW_WINDOW_TILE_H)" in hud
+    assert "#define VIEW_WINDOW_TILE_H (SCREEN_TILE_H - VIEW_WINDOW_TOP_Y)" in internal
     assert "VDP_drawText" not in hud and "VDP_setTextPalette" not in hud
     assert "FREEDOOM_HUD_DIGIT_PALETTE" in renderer
     assert "HUD number tiles overlap the SGDK font VRAM region" in internal

@@ -114,6 +114,11 @@ typedef struct {
     u32 visible_subsector_cullable_objects_sum;
 } RendererPerfSnapshot;
 
+// Samples SYS_getFPS/SYS_getCPULoad for the perf overlay. Must be called once
+// per game iteration: SYS_getFPS reports how many times it was called in the
+// last second, so a sparser cadence under-reports the framerate.
+void renderer_perf_overlay_sample_host(u32 frame);
+
 void renderer_debug_set_cast_subticks(u32 subticks);
 void renderer_debug_set_gameplay_subticks(u32 subticks);
 void renderer_debug_set_redraw_reasons(u16 reasons);

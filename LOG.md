@@ -8,6 +8,144 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## Re-centring the viewport without giving up the weapon-bob clip (2026-08-29)
+
+The overlay rebuild earlier today left the real complaint standing: the 3D view
+sat flush on the status bar with all 72px of letterbox stacked above it. That
+was not an accident -- `VIEW_TILEMAP_Y` had been moved `5 -> 9` on purpose when
+the bob was tuned, and a `#error` enforced it: "3D view must be flush with the
+top of the status bar (weapon-bob anchor)".
+
+The reason given was that a downward bob dip has to push the gun's bottom into
+the WINDOW region, where plane A is suppressed, so its cut-off edge is never
+seen. That reason is sound, but the conclusion did not follow. It assumed the
+window must BE the status bar. The window is just a screen band with plane A
+suppressed, and `VDP_setWindowOnBottom` takes a row count -- nothing requires it
+to stop at `HUD_PANEL_Y`.
+
+So the fix is to move the window, not the view:
+
+    VIEW_WINDOW_TOP_Y  = VIEW_TILEMAP_Y + VIEW_TILE_H   (20)
+    VIEW_WINDOW_TILE_H = SCREEN_TILE_H - VIEW_WINDOW_TOP_Y  (8)
+    VDP_setWindowOnBottom(VIEW_WINDOW_TILE_H)
+
+The window now spans rows 20..27: the 4-row black gutter under the view plus the
+4-row status bar. Plane A is suppressed across that whole band regardless of
+tile content, so the dipping gun is clipped on exactly the line it was before --
+the view's own bottom edge -- while the view moves back to row 5 and the
+letterbox splits 5 rows above / 4 below. The gutter's window cells stay
+transparent tile 0, so BG_B's black shows through and the band is
+indistinguishable from ordinary letterbox. Zero per-frame cost: it is the same
+single register write at setup.
+
+`VIEW_TILEMAP_Y 5` is not a magic number any more; the static check derives it,
+`2*Y == (HUD_PANEL_Y - VIEW_TILE_H + 1)`, i.e. centred with the odd row of slack
+on top (where it balances the visual weight of the status bar). Two more
+`#error`s pin the window to the view's bottom edge and require a gutter to exist.
+`DEATH_PROMPT_Y` moved back `12 -> 8` with the view.
+
+The DEBUG_PERF overlay had been sized against the old one-sided letterbox
+(`PERF_OVERLAY_H <= VIEW_TILEMAP_Y`), which a centred view breaks: only 5 rows
+remain on top. It now splits to match the letterbox -- rows 0..4 to BG_B above
+the view, rows 5..8 to the window plane in the gutter below it. Both surfaces
+are unscrolled, so the text is still bob-immune, and the window text sits over
+the region where the gun is invisible anyway, so the two never interact.
+
+### Verification
+
+Release build, 144 captured frames of a synthetic hold-forward route (the canned
+routes barely move; see the standing note on that), sampled every 2 frames:
+
+  * Tile-row occupancy on a walking frame is exactly the intended layout: rows
+    0..4 black, rows 5..19 full view (1280 non-black px/row = 160px x 8), rows
+    20..23 black, rows 24..27 status bar.
+  * **0 non-black pixels** in the letterbox rows 0..4 or the gutter rows 20..23,
+    on every one of the 144 frames. The dip never leaks past the view edge.
+  * The bob was genuinely running during that: up to 873 px/frame of change in
+    the weapon band, 2798 px/frame in the view band, and the gun's top edge
+    swept scanlines 136..140.
+
+Guardrails: 44880/65536 work RAM (unchanged), ROM 3499146 bytes (+256). Full
+suite green, including the rewritten layout invariants in `test-weapon-bob.py`,
+`test-hud-layout.py` and `test-active-battle-perf.py`.
+
+Standing lesson: a `#error` records a constraint someone believed, not
+necessarily a constraint the hardware imposes. This one had cost a visible
+64px of vertical composition for two years of commits because the comment
+above it explained the mechanism convincingly enough that nobody re-derived it.
+
+## Debug overlay rebuilt: off the bobbing plane, out of the viewport, actually visible (2026-08-29)
+
+The DEBUG_PERF on-screen overlay was unusable, and it was three independent
+bugs stacked, not one:
+
+**It swung with the gun.** The overlay committed to `BG_A`, and `BG_A` is
+whole-plane scrolled for weapon bob (`renderer_apply_weapon_bob`: +-10px
+horizontally, 0..10px vertically). Every line rode the bob. `VDP_showFPS` and
+`VDP_showCPULoad` draw on the text plane, which is also `BG_A`, so they bobbed
+too.
+
+**It was black on black.** SGDK's stock font paints colour index 15 (checked
+`font_default.png`'s PLTE: fifteen black entries, white at 15).
+`load_game_palettes` writes only `PAL0[0..9]`, so `PAL0[15]` kept whatever the
+last frontend image left there -- `0x000000` in every frontend PNG. The glyphs
+were literally black. This also explains why exactly three lines were visible
+in the user's screenshot: rows 1..8 sat on the black backdrop and vanished, and
+only the rows overlapping the bright viewport read out at all, clipped to the
+viewport's columns -- which is why the visible text was `00/010/000 Db=0970`
+and not `RR=1F Ov=000/010/000 Db=0970`.
+
+**It painted over the viewport.** 11 rows drawn at y=1 spans screen rows 1..11;
+the 3D view is rows 9..23. Three overlay rows sat on top of the view, hiding
+24px of its 120px.
+
+**Fix.** The overlay moved to `BG_B` rows 0..8 -- the 72px black letterbox
+above the view. `BG_B` is never scrolled during gameplay (the only
+`VDP_set*Scroll(BG_B)` calls are the frontend's, both zero), and rows 0..8 are
+empty apart from `renderer.c`'s one-time `VDP_clearPlane`. So the bob cannot
+reach it and it cannot reach the viewport. `PERF_OVERLAY_H <= VIEW_TILEMAP_Y`
+is now a `#error` in the overlay source and an assert in
+`test-active-battle-perf.py`, so it can never grow back over the view.
+`PAL_setColor(15, white)` was added to `load_game_palettes` under
+`#if DEBUG_PERF` -- no shipped tile uses PAL0 index 15 (the status bar stops at
+8, the view is PAL3, the face PAL2, the numbers PAL1), so the release palette
+upload is untouched, and the same write also makes `SYS_showFrameLoad`'s
+scanline cursor visible. `VDP_showFPS`/`VDP_showCPULoad` are gone; FPS and CPU
+load are sampled once per iteration into the overlay's own row 0.
+
+Only 9 rows fit above the view, so the 11 lines were repacked. The `=` signs
+went -- roughly 40 of them, about one full row's worth -- which was enough to
+keep every counter plus the two new host fields. A legend mapping every
+mnemonic to its accessor now sits above `renderer_draw_perf_overlay`; there was
+none before, and the compaction made one necessary. Remaining headroom, if a
+counter is ever added: rows 9..23 of `BG_B` columns 0..9 and 30..39 are also
+black gutters either side of the view, 300 more characters. Use one of those
+rather than compacting these lines further.
+
+**Verification.** Release build unchanged: 44880/65536 work RAM, 3498890-byte
+ROM, identical to the previous commit -- every edit is inside `#if DEBUG_PERF`.
+For the debug build, the canned routes are too degenerate to bob (see the
+standing note that all three barely leave the player start), so the jitter test
+used a synthetic route holding forward from frame 1250, captured every 2 frames
+via `--md-capture-dir`. Note the PPM origin: BlastEm emits 347x240 with borders
+and the 320x224 active area starts at (13, 11) -- getting that wrong silently
+shifts every band by 5 rows.
+
+- White (font) pixels inside the viewport band, rows 72..191: **0**, on every
+  frame sampled. The view is completely uncovered.
+- Text band holds ~5900 white pixels, so it is rendered and legible.
+- Over 345 consecutive captured pairs, 8 had heavy view motion (view diff
+  >2000px, max 3087 -- the scene and weapon visibly moving). The text band
+  differed by **0 pixels on every one of them**. A bob-coupled block would have
+  shifted by up to 20px and differed in thousands.
+- The text band changed at all on 17 of 345 pairs, by 300-677px out of 23040 --
+  that is the 30-iteration refresh cadence changing digits, not a shift.
+
+Note `FPS03`/`CPU944` in a debug capture are correct, not broken: DEBUG_PERF
+runs ~21 vblanks per frame (`V21`), so ~3 fps, and `CPU` is SGDK's raw
+`SYS_getCPULoad` percentage, which exceeds 100 whenever a frame overruns a
+vblank. It saturates at 999 in three digits.
+
 ## Sky palette bug, invisible sky-boundary walls, window pack-cost diagnosis (2026-08-29)
 
 The shipped sky (previous entry, same day) still looked wrong in play: a

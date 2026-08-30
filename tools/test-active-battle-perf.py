@@ -125,9 +125,41 @@ def main():
         assert symbol in projection_c + enemy_c + (ROOT / "src/billboard/billboard.c").read_text()
     assert "sprintf" not in perf_c
     assert "PERF_OVERLAY_REFRESH_FRAMES 30" in perf_c
-    assert "VDP_setTileMapDataRect" in perf_c
-    for label in ('TXT("RR=")', 'TXT("Qc=")', 'TXT("Es=")', 'TXT(" P95=")'):
-        assert label in perf_c
+    for label in ('TXT(" RR")', 'TXT(" Qc")', 'TXT(" Es")', 'TXT(" P95")',
+                  'TXT(" FPS")', 'TXT(" CPU")'):
+        assert label in perf_c, label
+
+    # The overlay never touches BG_A (whole-plane scrolled for weapon bob, so
+    # text there swings with the gun) and never touches the 3D view's rows. The
+    # view is centred, so the letterbox is split: PERF_OVERLAY_TOP_H rows on BG_B
+    # above it, the rest on the window plane in the gutter below it.
+    assert "VDP_setTileMapDataRect(BG_B, s_perf_tilemap, 0, 0," in perf_c
+    assert "VDP_setTileMapDataRect(WINDOW, &s_perf_tilemap[PERF_OVERLAY_TOP_H" in perf_c
+    assert "VDP_setTileMapDataRect(BG_A" not in perf_c
+    internal = (ROOT / "src/renderer/renderer_internal.h").read_text()
+    overlay_h = int(re.search(r"#define PERF_OVERLAY_H (\d+)", perf_c).group(1))
+    view_y = int(re.search(r"#define VIEW_TILEMAP_Y (\d+)", internal).group(1))
+    hud_h = int(re.search(r"#define FREEDOOM_HUD_TILE_H (\d+)",
+                          (ROOT / "src/renderer/generated_hud_assets.h").read_text()).group(1))
+    ray_h = int(re.search(r"#define RAY_VIEW_TILE_H (\d+)",
+                          (ROOT / "src/raycast.h").read_text()).group(1))
+    # Top band + bottom gutter is exactly the letterbox the centred view leaves.
+    gutter_h = (28 - hud_h) - (view_y + ray_h)
+    assert overlay_h <= view_y + gutter_h, (
+        f"perf overlay is {overlay_h} rows tall but the view leaves only "
+        f"{view_y} rows above and {gutter_h} below: it would cover the viewport")
+    assert "#define PERF_OVERLAY_TOP_H VIEW_TILEMAP_Y" in perf_c
+
+    # The FPS/CPU fields moved into that same overlay. VDP_showFPS and
+    # VDP_showCPULoad draw on the text plane, which is BG_A -- they bobbed too.
+    assert "VDP_showFPS(" not in main_c
+    assert "VDP_showCPULoad(" not in main_c
+    assert "renderer_perf_overlay_sample_host(frame);" in main_c
+
+    # SGDK's stock font paints colour index 15; gameplay never writes PAL0[15],
+    # so without this the whole overlay renders black on black.
+    renderer_c = (ROOT / "src/renderer/renderer.c").read_text()
+    assert "PAL_setColor(15, RGB24_TO_VDPCOLOR(0xFFFFFF));" in renderer_c
 
     # SRP boundaries: main requests redraws through one policy owner, renderer
     # scene records metrics without owning aggregation, and barrels animate in

@@ -52,8 +52,8 @@
 // Doom sways the weapon ~+/-16px horizontally and dips it ~0..16px at 320x200;
 // MegaLDOOM's view is 120px tall so the throw scales to ~+/-10 / 0..10. The
 // vertical dip only ever moves the gun DOWN (Doom's positive-lobe wave), and the
-// 3D view is parked flush against the status bar so the gun's bottom dips into
-// the WINDOW/HUD region where plane A is suppressed -- the cut-off edge is never
+// window plane starts on the row right below the 3D view so the gun's bottom
+// dips into a region where plane A is suppressed -- the cut-off edge is never
 // seen. Lifting the gun (negative dip) would float it, so the wave stays >= 0.
 #define BOB_MAX_X          10   // horizontal swing, +/- pixels
 #define BOB_MAX_Y          10   // vertical dip, 0..pixels (downward only)

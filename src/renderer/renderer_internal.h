@@ -52,19 +52,32 @@ static inline u16 view_tile_index(u16 tile_x, u16 tile_y) {
 #define WEAPON_TILE_BASE (HUD_NUMBER_TILE_BASE + HUD_NUMBER_TILE_COUNT)
 #define HUD_VRAM_SAFE_TILE_LIMIT 1440
 #define VIEW_TILEMAP_X 10
-// The 3D view is parked flush against the top of the status bar (its last row is
-// the one immediately above HUD_PANEL_Y; see the static check below) so the
-// weapon bottom-anchors to the HUD edge like Doom and a downward weapon-bob
-// scroll dips the gun into the WINDOW (HUD) region, where plane A is suppressed
-// and the gun's cut-off bottom edge is never seen. The freed space is a taller
-// black border above the view.
-#define VIEW_TILEMAP_Y 9
+// The 3D view is vertically CENTRED in the play area above the status bar:
+// HUD_PANEL_Y (24) rows hold a VIEW_TILE_H (15) row view, so the 9 rows of slack
+// split 5 above / 4 below (the odd row goes on top, where it balances the visual
+// weight of the status bar). See the static check below.
+//
+// The weapon bob used to require the view be parked flush on the status bar, so
+// that a downward dip pushed the gun into the WINDOW region where plane A is
+// suppressed and its cut-off bottom edge was never seen. That is why centring it
+// costs nothing: the window does not have to BE the status bar. It is pinned
+// from VIEW_WINDOW_TOP_Y (the row right below the view) instead, so the
+// plane-A-suppressed region still starts exactly at the view's bottom edge and
+// the dip is clipped on the same line it always was -- just 32px higher up.
+#define VIEW_TILEMAP_Y 5
 #define SCREEN_TILE_W 40
 #define SCREEN_TILE_H 28
 #define HUD_PANEL_X 0
 #define HUD_PANEL_W SCREEN_TILE_W
 #define HUD_PANEL_H FREEDOOM_HUD_TILE_H
 #define HUD_PANEL_Y (SCREEN_TILE_H - HUD_PANEL_H)
+// The window plane spans the black gutter under the view plus the status bar.
+// Its gutter rows are transparent tile 0, so BG_B's black shows through and the
+// band reads as plain letterbox -- but plane A is suppressed across the whole
+// window region regardless of tile content, which is what clips the weapon dip.
+#define VIEW_WINDOW_TOP_Y (VIEW_TILEMAP_Y + VIEW_TILE_H)
+#define VIEW_WINDOW_TILE_H (SCREEN_TILE_H - VIEW_WINDOW_TOP_Y)
+#define VIEW_GUTTER_TILE_H (HUD_PANEL_Y - VIEW_WINDOW_TOP_Y)
 
 // Doom-guy portrait sits in the recessed face slot at the centre of the status
 // bar. The generated 4-tile block matches the 32px recess and centres the
@@ -91,8 +104,18 @@ static inline u16 view_tile_index(u16 tile_x, u16 tile_y) {
 #if (HUD_NUMBER_TILE_BASE + HUD_NUMBER_TILE_COUNT) > HUD_VRAM_SAFE_TILE_LIMIT
 #error "HUD number tiles overlap the SGDK font VRAM region"
 #endif
-#if (VIEW_TILEMAP_Y + VIEW_TILE_H) != HUD_PANEL_Y
-#error "3D view must be flush with the top of the status bar (weapon-bob anchor)"
+// Centred, with the odd row of slack on top: 2*Y == (play area - view + 1).
+#if (2 * VIEW_TILEMAP_Y) != (HUD_PANEL_Y - VIEW_TILE_H + 1)
+#error "3D view must be vertically centred in the play area above the status bar"
+#endif
+// The weapon-bob anchor: the window (plane A suppressed) must start on the row
+// immediately below the view, or a downward dip shows the gun's cut-off bottom
+// edge against the letterbox. A gutter is what makes centring possible at all.
+#if VIEW_WINDOW_TOP_Y != (VIEW_TILEMAP_Y + VIEW_TILE_H)
+#error "Window must start at the view's bottom edge (weapon-bob dip clip)"
+#endif
+#if VIEW_GUTTER_TILE_H < 1
+#error "Centred view needs at least one gutter row between it and the status bar"
 #endif
 
 extern u32 g_view_tiles[VIEW_TILE_COUNT][8];

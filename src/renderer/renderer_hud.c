@@ -134,10 +134,15 @@ static void draw_hud_number_tilemap(void) {
 }
 
 void renderer_hud_window_setup(void) {
-    // Clear the status-bar rows of the window nametable, pin the window over the
-    // bottom HUD_PANEL_H rows, then (re)paint the number cells into it.
-    VDP_fillTileMapRect(WINDOW, 0, 0, HUD_PANEL_Y, SCREEN_TILE_W, HUD_PANEL_H);
-    VDP_setWindowOnBottom(HUD_PANEL_H);
+    // The window spans the black gutter under the centred view AND the status
+    // bar (VIEW_WINDOW_TILE_H rows), not just the status bar. Plane A is
+    // suppressed over that whole region, which is what clips the weapon's
+    // downward bob dip at the view's bottom edge -- the job the view being
+    // parked flush on the status bar used to do. The gutter cells stay
+    // transparent tile 0 so BG_B's black letterbox shows through unchanged.
+    VDP_fillTileMapRect(WINDOW, 0, 0, VIEW_WINDOW_TOP_Y, SCREEN_TILE_W,
+                        VIEW_WINDOW_TILE_H);
+    VDP_setWindowOnBottom(VIEW_WINDOW_TILE_H);
     draw_hud_number_tilemap();
 }
 

@@ -762,14 +762,12 @@ int main(bool hard) {
         renderer_draw_hud(&g_hud);
 
 #if DEBUG_PERF
-        // Once per iteration (SYS_getFPS counts calls/sec). Row 0 of BG_A is free.
-        // Clear first so a shrinking number (e.g. "426%" -> "25%") leaves no junk.
-        // SYS_getFPS counts calls, so keep the FPS call once per game frame.
-        // The larger CPU-load field can update less often.
-        VDP_showFPS(FALSE, 1, 0);
-        if ((frame & 7) == 0) {
-            VDP_showCPULoad(10, 0);
-        }
+        // Once per iteration (SYS_getFPS counts calls/sec). The old
+        // VDP_showFPS/VDP_showCPULoad drew straight onto BG_A, which is
+        // whole-plane scrolled for weapon bob, so both fields swung with the
+        // gun. They are now sampled here and rendered by the perf overlay on
+        // the unscrolled BG_B band above the viewport.
+        renderer_perf_overlay_sample_host(frame);
 #endif
 
         if (renderer_redraw_is_pending(&redraw)) {
