@@ -164,7 +164,13 @@ static const s16 ENEMY_FRAME_GEOMETRY[ENEMY_FRAME_GEOMETRY_COUNT][4] = {
 
 // Animation cadence (frames at the locked 30fps): ~4 tics/pose like Doom.
 #define ENEMY_WALK_HOLD 4
-#define ENEMY_DEATH_HOLD 5
+// The death sequence counts REAL VBLANKS, not loop iterations -- the "locked
+// 30fps" the walk cadence assumes does not hold: a motion frame runs ~11
+// vblanks, so an iteration-counted death pose stretched from 2 to 11 vblanks
+// and the whole collapse crawled for ~4.5s instead of ~0.6s. Same unit and
+// same reason as the shot cooldown / weapon flash in main.c. Doom holds each
+// death pose 5 tics at 35 Hz, which is 8.6 vblanks at 60 Hz.
+#define ENEMY_DEATH_HOLD_VBLANKS 9
 #define ENEMY_ATTACK_ANIM_FRAMES 10
 
 typedef struct {

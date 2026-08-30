@@ -46,6 +46,25 @@ def effect_redraws(frame_count, hold):
     return redraws
 
 
+def death_sequence_vblanks(hold, poses, per_iter):
+    """Wall-clock vblanks to play every death pose at a given frame time.
+
+    Mirrors advance_death: the timer is charged the iteration's real vblanks
+    (saturating), and at most one pose is advanced per call.
+    """
+    timer = hold
+    index = 0
+    elapsed = 0
+    while index + 1 < poses:
+        elapsed += per_iter
+        if timer > per_iter:
+            timer -= per_iter
+            continue
+        index += 1
+        timer = hold
+    return elapsed
+
+
 def main():
     main_c = (ROOT / "src/main.c").read_text()
     enemy_c = (ROOT / "src/billboard/billboard_enemy.c").read_text()
@@ -96,12 +115,32 @@ def main():
     assert effect_redraws(3, 2) == [True, False, True, False, True, False, True]
     assert "only pose transitions and final clear" in effects_c
 
+    # The enemy death animation counts real vblanks, not loop iterations. The
+    # walk cadence's "locked 30fps" assumption does not hold under load (a
+    # motion frame is ~11 vblanks), which stretched the collapse to seconds.
+    internal_h = (ROOT / "src/billboard/billboard_internal.h").read_text()
+    death_hold = int(re.search(
+        r"#define ENEMY_DEATH_HOLD_VBLANKS (\d+)", internal_h).group(1))
+    poses = int(re.search(
+        r"#define ENEMY_DEATH_FRAME_COUNT (\d+)", internal_h).group(1))
+    assert "advance_death(BillboardObject *object, u16 elapsed_vblanks)" in enemy_c
+    assert "object->death_timer > elapsed_vblanks" in enemy_c
+    fast = death_sequence_vblanks(death_hold, poses, 2)   # idle 30fps
+    slow = death_sequence_vblanks(death_hold, poses, 11)  # heavy motion frame
+    # Doom holds each death pose 5 tics (8.6 vblanks): under a second either way,
+    # and the frame time must barely move the wall-clock length.
+    assert fast <= 60 and slow <= 60, (fast, slow)
+    assert abs(slow - fast) * 4 <= fast, (fast, slow)
+    # Every pose still gets at least one iteration to be seen, even at 11
+    # vblanks/frame: no pose is skipped outright.
+    assert slow >= (poses - 1) * 11
+
     # The hint is internal and suppresses only redraw visibility probes.
     assert "bool redraw_pending" in billboard_h
-    assert "billboard_update_enemies(\n                &g_player, renderer_redraw_is_pending(&redraw))" in main_c
+    assert "billboard_update_enemies(\n                &g_player, renderer_redraw_is_pending(&redraw), elapsed_vblanks)" in main_c
     loop = enemy_c[enemy_c.index("BillboardEnemyUpdate billboard_update_enemies"):]
     assert loop.index("if (object->life_state == ENEMY_DEAD)") < loop.index("hits_before")
-    assert "const EnemyVisualChange change = update_dummy" in loop
+    assert "const EnemyVisualChange change =\n            update_dummy" in loop
     assert "const bool was_visible = redraw_pending ? FALSE" in loop
     assert "const bool now_visible = (!redraw_pending && changed)" in loop
     assert "if (!redraw_pending && changed" in loop

@@ -269,19 +269,25 @@ static bool enemy_affects_view(u16 index, const BillboardObject *object,
     return billboard_has_line_of_sight(index, player);
 }
 
-// Step the death sequence one frame; holds on the final pose (corpse) once done.
-static void advance_death(BillboardObject *object) {
+// Step the death sequence; holds on the final pose (corpse) once done. The
+// timer is charged the real vblanks the iteration took (saturating subtract,
+// the weapon-flash pattern), so the collapse runs at wall-clock speed instead
+// of stretching with the frame time. At most one pose per call: a slow frame
+// then costs the sequence a little time rather than skipping poses outright,
+// which keeps every death frame visible when the framerate is worst.
+static void advance_death(BillboardObject *object, u16 elapsed_vblanks) {
     if (object->life_state == ENEMY_DEAD) {
         return;
     }
-    if (object->death_timer > 0) {
-        object->death_timer--;
+    if (object->death_timer > elapsed_vblanks) {
+        object->death_timer = (u8)(object->death_timer - elapsed_vblanks);
         return;
     }
     if ((object->death_index + 1) < ENEMY_DEATH_FRAME_COUNT) {
         object->death_index++;
-        object->death_timer = ENEMY_DEATH_HOLD;
+        object->death_timer = ENEMY_DEATH_HOLD_VBLANKS;
     } else {
+        object->death_timer = 0;
         object->life_state = ENEMY_DEAD;
     }
 }
@@ -289,12 +295,13 @@ static void advance_death(BillboardObject *object) {
 // Wrapper over the live AI / death animation. Keep position and pose changes
 // distinct so the caller can attribute redraws without re-running simulation.
 static EnemyVisualChange update_dummy(u16 index, BillboardObject *object,
-                                      const PlayerState *player, u16 *hits) {
+                                      const PlayerState *player, u16 *hits,
+                                      u16 elapsed_vblanks) {
     const u8 prev_frame = billboard_get_object_frame(object);
     EnemyVisualChange change = {FALSE, FALSE};
 
     if (object->life_state != ENEMY_ALIVE) {
-        advance_death(object);
+        advance_death(object, elapsed_vblanks);
     } else {
         change.position_changed = update_dummy_alive(index, object, player, hits);
     }
@@ -307,7 +314,8 @@ static EnemyVisualChange update_dummy(u16 index, BillboardObject *object,
 }
 
 BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player,
-                                              bool redraw_pending) {
+                                              bool redraw_pending,
+                                              u16 elapsed_vblanks) {
     BillboardEnemyUpdate update = {FALSE, FALSE, FALSE, 0, 0, 0};
     s32 best_hit_dist = 0x7FFFFFFF;
     s16 cos_a = 0;
@@ -346,7 +354,8 @@ BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player,
         const u16 hits_before = update.hits;
         const bool was_visible = redraw_pending ? FALSE :
             enemy_affects_view(i, object, player, cos_a, sin_a);
-        const EnemyVisualChange change = update_dummy(i, object, player, &update.hits);
+        const EnemyVisualChange change =
+            update_dummy(i, object, player, &update.hits, elapsed_vblanks);
         const bool changed = change.position_changed || change.pose_changed;
         const bool now_visible = (!redraw_pending && changed) ?
             enemy_affects_view(i, object, player, cos_a, sin_a) : was_visible;

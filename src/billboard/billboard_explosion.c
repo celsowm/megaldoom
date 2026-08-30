@@ -82,7 +82,7 @@ static void process_blast(s32 bx, s32 by,
             }
         } else {
             billboard_registry_enemy_died(pending[p].index);
-            object->death_timer = ENEMY_DEATH_HOLD;
+            object->death_timer = ENEMY_DEATH_HOLD_VBLANKS;
         }
     }
 }

@@ -204,7 +204,7 @@ BillboardFireResult billboard_fire_center(const PlayerState *player, u16 wall_de
         best_object->hp = 0;
         billboard_registry_enemy_died(best_index);
         best_object->death_index = 0;
-        best_object->death_timer = ENEMY_DEATH_HOLD;
+        best_object->death_timer = ENEMY_DEATH_HOLD_VBLANKS;
         result.status = BILLBOARD_SHOT_KILL;
         return result;
     }

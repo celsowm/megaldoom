@@ -705,7 +705,7 @@ int main(bool hard) {
 
         if (!level_cleared) {
             const BillboardEnemyUpdate enemy_update = billboard_update_enemies(
-                &g_player, renderer_redraw_is_pending(&redraw));
+                &g_player, renderer_redraw_is_pending(&redraw), elapsed_vblanks);
 
             if (enemy_update.moved) {
                 if (enemy_update.position_changed) {

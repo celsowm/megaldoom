@@ -38,6 +38,16 @@
   move a whole pixel" result; a short grace window (`BOB_MOVE_GRACE_TICS`) bridges
   a slow walk's sub-pixel gaps, and past it the offset decays 1px/tic (phase
   held) instead of advancing.
+- Fixed the enemy death animation playing in slow motion. `advance_death` was
+  counting loop iterations (`ENEMY_DEATH_HOLD 5`), which only reads as a cadence
+  under the "locked 30fps" the walk animation assumes; a motion frame is ~11
+  vblanks, so each death pose stretched from 2 to ~55 vblanks and the collapse
+  crawled for ~3.7s instead of ~0.7s -- worst exactly when it shows, since you
+  are usually moving and shooting when something dies. The timer now counts real
+  vblanks (`ENEMY_DEATH_HOLD_VBLANKS 9`, Doom's 5 tics at 35 Hz), charged with
+  the same saturating subtract as the shot cooldown and weapon flash. At most
+  one pose advances per update, so a slow frame costs the sequence a little time
+  rather than skipping death frames outright.
 - Generated raw E1M1 THINGS into ROM and spawn a curated set of 102 gameplay
   entities: pickups, enemies, candles/lamp-style props, columns and barrels.
 - Added a generated 15-sprite billboard world atlas, functional health/armor/

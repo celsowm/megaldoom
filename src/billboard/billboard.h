@@ -141,8 +141,11 @@ u16 billboard_get_target_health(void);
 // Multi-pellet weapons call this once per pellet and merge the results.
 BillboardFireResult billboard_fire_center(const PlayerState *player, u16 wall_depth,
                                           s16 aim_col, u16 damage);
+// `elapsed_vblanks` is the real vblank delta for this iteration; the death
+// animation is charged in that unit so it does not stretch on a slow frame.
 BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player,
-                                               bool redraw_pending);
+                                               bool redraw_pending,
+                                               u16 elapsed_vblanks);
 BillboardEnemyUpdate billboard_update_barrels(const PlayerState *player);
 bool billboard_update_effects(void);
 bool billboard_position_blocked(s32 x, s32 y, s32 radius);
