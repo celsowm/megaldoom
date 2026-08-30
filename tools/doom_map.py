@@ -34,6 +34,7 @@ SEG_EXIT = 2
 SEG_SWITCH = 3
 SEG_TRIGGER = 4
 SEG_WINDOW = 5
+SEG_SKY_WALL = 6
 SEG_FLAG_DIRECT_USE = 0x01
 
 # A WINDOW is a linedef this converter ALREADY emits as a solid wall -- two
@@ -548,13 +549,19 @@ def certify_flat_progression(vertices, segs, things, start_x, start_y):
     raise ValueError(detail)
 
 
-def load_map(wad, mapn, apply_recipes=True, apply_windows=True):
+def load_map(wad, mapn, apply_recipes=True, apply_windows=True,
+             apply_sky_walls=True):
     """Flatten one Doom map.
 
     apply_windows=False is the negative control for the window
     reclassification: it must produce the SAME segs in the same order with the
     same geometry, differing only in the type byte. tools/test-sector-map.py
     relies on that to prove windows never move geometry.
+
+    apply_sky_walls=False is the same negative control for the sky-wall
+    reclassification below: a one-sided line is already forced solid by
+    line_solid_without_recipe unconditionally, so this can only ever change a
+    seg's type byte, never its geometry.
     """
     """Parse `mapn`'s lumps out of `wad` and flatten them into a MapData."""
 
@@ -753,6 +760,31 @@ def load_map(wad, mapn, apply_recipes=True, apply_windows=True):
         if apply_windows and (recess := window_recess(line_id, ld)) is not None
     }
 
+    def sky_wall_sector(line_id, ld):
+        """One-sided line whose only side faces an F_SKY1-ceilinged sector.
+
+        This engine has no per-wall height (every solid wall projects from one
+        constant, RAY_WORLD_WALL_HEIGHT), so a real Doom low parapet with sky
+        visible above it cannot be represented -- these lines would otherwise
+        render as a full-height opaque wall and leave almost no sky visible
+        from inside the sector they bound. A one-sided line is already forced
+        solid unconditionally (see line_solid_without_recipe), so recognising
+        it here only changes how it is drawn, never the geometry.
+        """
+        if ld["left"] != 0xFFFF or ld["right"] == 0xFFFF:
+            return None
+        sector_id = sidedefs[ld["right"]]["sector"]
+        if sectors[sector_id]["ceiling_name"] == "F_SKY1":
+            return sector_id
+        return None
+
+    sky_wall_lines = {
+        line_id: sector_id
+        for line_id, ld in enumerate(linedefs)
+        if apply_sky_walls and
+        (sector_id := sky_wall_sector(line_id, ld)) is not None
+    }
+
     def window_band(seg):
         """Q8 band of the drawn slab that the opening occupies, from its top.
 
@@ -859,6 +891,8 @@ def load_map(wad, mapn, apply_recipes=True, apply_windows=True):
                 # band degenerates stays a plain WALL, exactly as today.
                 seg_type = SEG_WINDOW
                 door_group, required_key = band
+        elif seg["ld"] in sky_wall_lines:
+            seg_type = SEG_SKY_WALL
 
         name = FALLBACK_TEXTURE
         xoff = seg["offset"]

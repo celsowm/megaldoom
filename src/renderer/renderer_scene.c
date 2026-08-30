@@ -60,7 +60,7 @@ void renderer_render_scene(const RayColumn *columns,
         stage_start = getSubTick();
 #endif
         build_bsp_tilemap(columns, scene_colors, g_view_tiles);
-        draw_door_overlays(columns, g_view_tiles);
+        draw_door_overlays(columns, scene_colors, g_view_tiles);
 #if DEBUG_PERF
         renderer_perf_set_pack_subticks(getSubTick() - stage_start);
         stage_start = getSubTick();

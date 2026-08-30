@@ -77,6 +77,12 @@ void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColor
     // would have to reach the asm pack post, which is what the window overlay
     // in renderer_doors.c handles locally instead.
     scene_colors->sky = bsp_sector_is_sky(sector);
+    // Heading -> sky tile column. ANGLE_STEPS (256) headings map onto
+    // MEGALDOOM_SKY_TILE_COLUMNS (80) columns, i.e. * 80/256 == * 5 >> 4, which
+    // is exact in integers and needs no LUT. The result is 0..79 for every
+    // heading, so the wrap in sky_column_rows is a single compare.
+    scene_colors->sky_offset =
+        (u8)((((u16)player->angle & ANGLE_MASK) * 5u) >> 4);
 
     // Clear occlusion and seed every column with a far/empty default so columns
     // no wall covers still render (as distant, mostly sky/floor).

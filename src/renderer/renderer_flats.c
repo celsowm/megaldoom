@@ -38,6 +38,24 @@ static u32 pack_flat_row(const RayFlatColor *material, u16 x, u16 y) {
 }
 #endif
 
+// Which column of the baked sky belongs at viewport tile column `tile_x`, for
+// the heading in `sky_offset` (see RaySceneColors). Returns a pointer to that
+// column's PACK_CEILING_ROW_COUNT contiguous rows -- which is exactly the shape
+// every ceiling consumer already expects, so the 2D table never reaches the asm
+// pack post or changes a single instruction in it.
+//
+// tile_x < VIEW_TILE_W (20) and sky_offset < MEGALDOOM_SKY_TILE_COLUMNS (80),
+// so the sum is under 100 and one conditional subtract is a complete wrap. No
+// modulo, and no requirement that the column count be a power of two -- which
+// is what lets the table be 80 wide and track the world at exactly 1:1.
+const u32 *sky_column_rows(u16 tile_x, u8 sky_offset) {
+    u16 column = (u16)(tile_x + sky_offset);
+    if (column >= MEGALDOOM_SKY_TILE_COLUMNS) {
+        column = (u16)(column - MEGALDOOM_SKY_TILE_COLUMNS);
+    }
+    return &MEGALDOOM_SKY_CEILING_ROWS[column * MEGALDOOM_SKY_CEILING_ROW_COUNT];
+}
+
 // The ceiling table is PACK_CEILING_ROW_COUNT rows indexed by absolute screen
 // row, so a sky sector can give every row its own colour. An ordinary ceiling
 // has a 4-row period and simply repeats it across the table: the asm ceiling
@@ -45,16 +63,22 @@ static u32 pack_flat_row(const RayFlatColor *material, u16 x, u16 y) {
 // indoor frame cost is unchanged.
 //
 // A whole level's ceiling is ONE colour today (GLOBAL_CEILING_INDEX), so the
-// repeated case collapses to the same u32 128 times; the loop is kept general
+// repeated case collapses to the same u32 64 times; the loop is kept general
 // because the RayFlatColor Bayer pair is still the renderer's contract.
 // Both candidates live in ROM in the same row-indexed shape, so choosing a
 // ceiling is a pointer assignment: no per-frame table build, and no work RAM.
 // See build_flat_ceiling_rows in tools/world_assets.py for the invariant that
 // makes the indoor table expressible as ROM (one ceiling triple, no dither).
+//
+// The sky case seeds column 0 only. build_bsp_tilemap re-points `ceiling` at
+// the right column before packing each tile, so this value is always
+// overwritten before it is read -- it is here so that the field is never left
+// dangling at a stale column from an earlier frame's heading.
 static void select_ceiling_rows(PackedFlatRows *rows,
                                 const RaySceneColors *scene_colors) {
-    rows->ceiling = scene_colors->sky ? MEGALDOOM_SKY_CEILING_ROWS
-                                      : MEGALDOOM_FLAT_CEILING_ROWS;
+    rows->ceiling = scene_colors->sky ?
+        sky_column_rows(0, scene_colors->sky_offset) :
+        MEGALDOOM_FLAT_CEILING_ROWS;
 }
 
 // Returned by pointer into a static, and rebuilt only when the scene's flats
@@ -71,7 +95,9 @@ void flat_rows_invalidate(void) {
     s_flat_rows_valid = FALSE;
 }
 
-const PackedFlatRows *build_flat_rows(const RaySceneColors *scene_colors) {
+// Returns non-const: the caller re-points `ceiling` per tile column for a sky
+// sector. Everything else in the struct is owned here.
+PackedFlatRows *build_flat_rows(const RaySceneColors *scene_colors) {
     if (s_flat_rows_valid &&
         scene_flats_equal(scene_colors, &s_flat_rows_key)) {
         return &s_flat_rows;

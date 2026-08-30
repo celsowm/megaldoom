@@ -8,6 +8,98 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## Sky palette bug, invisible sky-boundary walls, window pack-cost diagnosis (2026-08-29)
+
+The shipped sky (previous entry, same day) still looked wrong in play: a
+screenshot from the courtyard next to a real-Doom shot showed a maroon,
+structureless block instead of grey mountains, and the courtyard's own
+boundary walls were eating almost the whole horizon.
+
+**The maroon was a second, separate quantizer bug.** `build_sky_ceiling_rows`
+quantized every SKY1 texel via `nearest_palette_index` with no candidate
+restriction. SKY1 is confirmed pure greyscale (32768 px sampled, 1383
+non-neutral, all anti-aliasing noise, max channel 203).
+`world_palette.distance_sq`'s `chroma_loss_weight` only penalises a candidate
+for having LESS chroma than the source, so for an exactly-grey source (chroma
+0) it can never fire, and the nearest-index search ran over all 16 colours by
+raw Oklab distance. Dark greys that dominate the mountain silhouette (11,11,11
+and 19,19,19, far more common in SKY1 than mid-tones) quantized to index 1,
+PAL3's dark red `(0x24,0,0)`, because that red sits closer in the
+`1.25*dL^2 + da^2 + db^2` metric than any true neutral at that lightness — a
+systematic mis-map across the darkest third of the image, not a fringe case.
+Fixed by restricting the sky's quantizer to PAL3's six true neutral indices
+(`SKY_NEUTRAL_INDICES`); since the source has no chroma at all, this needs no
+chroma reasoning, only a candidate-list restriction. Verified directly against
+the real palette before touching the renderer: grey 11/19/27 now quantize to
+index 3, not 1.
+
+**The boundary walls were a real engine limitation, not a bug.** This engine
+has no per-wall height — every solid wall projects from one constant,
+`RAY_WORLD_WALL_HEIGHT` — so a real Doom low parapet with sky visible above it
+cannot be represented. E1M1's outdoor sky sectors are bounded by 35 one-sided
+linedefs (39 segs after BSP splitting) that rendered as full-height opaque
+STARTAN3/BROWN144/BROWN1 walls, leaving almost no sky visible from inside the
+courtyard. These are now `BSP_SEG_SKY_WALL`, reclassified the same way windows
+were: a one-sided line is already forced solid unconditionally
+(`line_solid_without_recipe`), so this can only ever change the type byte,
+never geometry, collision or the blockmap — proved with the same
+`apply_sky_walls=False` negative-control diff `test-sector-map.py` already
+runs for windows. `bsp_draw_seg` renders a sky wall as the cheapest branch in
+the function: it still marks the sample solid (identical occlusion, identical
+collision) but seeds the column exactly as `bsp_seed_column_default` already
+does for genuinely unclaimed samples, skipping depth/u interpolation entirely
+since nothing is sampled and nothing real is ever behind a map-edge line. Zero
+new work-RAM state, zero new ROM table.
+
+Verified together at the pose-locked courtyard spawn (`2112, 3560, 0`) across
+a full turn sweep: every heading now shows a real grey mountain silhouette
+with visible banding, no maroon, no walls blocking it. `npm run test` and
+`npm run check` both pass; work RAM is unchanged (20656 free) and ROM grew
+only from the new enum branch (no new table).
+
+**Window performance: diagnosed, and the plan's own hypothesis was wrong.**
+The working theory going in was that a window column, left open in
+front-to-back BSP traversal, could walk arbitrarily deep into the outdoor BSP
+with no early-out. A pose-locked, heading-only A/B (same `(1300, 3300)` spot,
+angle 0 facing a nukage-yard window vs angle 128 facing an ordinary wall,
+DEBUG_PERF checkpoint build) disproves that cleanly: `cast_subticks` is
+*identical* between the two (10775 vs 10810) — traversal cost does not move at
+all. `pack_subticks` nearly triples instead (41385 vs 14780). Splitting that
+further (temporarily stubbing `draw_door_overlays` to a no-op and re-measuring
+at the same window-facing pose) isolates the overlay compositor as the cause:
+pack drops from 41385 to 17080 with it disabled — `draw_door_overlays` alone
+accounts for ~24300 of the ~26600 subtick delta between the two headings,
+about 91% of it. It is a plain per-pixel C loop (no asm hot path), and its
+cost scales with the overlay's on-screen area: a farther test at `(1000,
+3300)` showed almost no window-vs-wall difference at all, because a window far
+away is small on screen. The mechanism is identical to what a door already
+pays — it is not new in kind, only bigger, because a window is visible far
+more of the time than a door and this particular recess opens across ~85% of
+its wall's height.
+
+**Shipped: branch-hoisting split, a real but partial fix.** `draw_door_overlays`
+used to decide "frame texel or sky texel" with a branch on every row of every
+overlay column. It is now three explicit monotonic posts per column — frame,
+sky, frame-resume, with the pass-through gap between sky and the resumed frame
+getting no post at all rather than an empty one — mirroring the three-post
+shape `renderer_hotpath.s` already uses for the wall/flat pack posts. Derived
+by hand against every case (door, a window with a real sky gap, a window whose
+band degenerates to no gap at all because the far geometry's own top sits
+above the band) to confirm the three posts collapse to byte-identical output,
+then confirmed with the full test suite and a same-pose re-measurement at
+`(1300, 3300)`: pack drops from 41385 to 34405 subticks, a real ~17% cut in
+pack cost and ~12% off the whole frame at this worst-tested vantage. Zero
+behaviour change — same pixels, same collision, same everything except how
+many cycles it costs to draw them.
+
+That is not the whole win available, though: the remaining ~34K subticks are
+still a plain per-pixel C loop with C's per-iteration overhead (bounds-checked
+array indexing, a function call per row, no DBRA-closed loop). The bigger
+remedy is porting the now-isolated `paint_sky_rows`/`paint_frame_rows` posts to
+asm proper, the same way the wall/flat pack posts already are — a bigger,
+separate undertaking than either the diagnosis or this split, left for
+follow-up.
+
 ## E1M1 sky and see-through windows (2026-08-29)
 
 Two features, both built to cost nothing in work RAM, because the 64 KB budget
@@ -37,14 +129,43 @@ Three things fell out of doing it this way rather than the obvious way:
   8-bit displacement — with the ceiling first, the floor's offset was 512 and
   the assembler rejected it outright.
 
-Each row is ONE index replicated across 8 pixels, so the sky is clean
-horizontal bands rather than dither on the frame's largest surface, and the
-packed word is identical at stride 2 and stride 4. SKY1 is NOT tone-curved: that
-lift exists to recover the sector light the renderer never applies to wall
-texels, and applying it to the sky just blew the zenith out to near-white.
-Untouched, SKY1's lower half quantizes to index 3 — the colour the ceiling
-already was — so stepping outdoors reveals a gradient instead of a hue change.
-No PAL3 entry was added or changed.
+SKY1 is NOT tone-curved: that lift exists to recover the sector light the
+renderer never applies to wall texels, and applying it to the sky just blew the
+zenith out to near-white. No PAL3 entry was added or changed.
+
+**The first version of this table was wrong, and shipped.** Each row was ONE
+index averaged across SKY1's full width and replicated over 8 pixels, argued for
+as clean banding rather than dither, and as a screen-fixed silhouette reading
+like paint. Put next to Doom the result was indefensible: averaging each row
+destroys the mountains, which are the only thing that makes SKY1 legible as sky,
+and because SKY1's lower half averages to a mid grey it quantized 27 of the 64
+rows to `GLOBAL_CEILING_INDEX` — byte-identical to the indoor ceiling. A third
+of the "sky" was the ceiling the player had just walked out from under.
+
+The table is now 2D: `MEGALDOOM_SKY_TILE_COLUMNS` (80) columns of 64 packed
+rows, stored COLUMN-MAJOR so one column's rows stay contiguous. That layout is
+the whole trick — a column is still a plain row-indexed ceiling table, so the
+asm pack post is untouched and `build_bsp_tilemap` only re-points `ceiling` once
+per tile column. 80 columns is one full revolution: the viewport is 20 tiles
+across a 90° FOV, so 360° sweeps 80 tiles, and `sky_offset = (angle * 5) >> 4`
+maps the 256 headings onto them exactly. Not rounded up to a power of two on
+purpose — a wider table drifts slower than the world and a narrower one faster,
+and faster than the world is the one thing that cannot read as distance. The
+wrap is one conditional subtract per tile column, not a modulo per pixel.
+ROM grew ~20 KB; work RAM is unchanged, because the table stays in ROM and
+selecting a column is still a pointer.
+
+**The yaw coupling is free, and the reason is worth keeping.** Cadence probe,
+spawn-locked in sector 5, holding a turn for 600 frames: pack 3.23 vs 3.24
+vblanks/rebuild and cast 4.60 vs 4.63 against a control with `sky_offset` forced
+to 0, with identical tile counts. Turning already repacks all 20 of 20 columns
+because every wall descriptor changes, so the sky rides along on an invalidation
+that was happening anyway. Standing still it costs nothing either: `sky_offset`
+is constant, `scene_flats_equal` holds, and idle stays at 1 rebuild in 600
+frames. The gate in `scene_flats_equal` is what protects the common case —
+`sky_offset` is only part of the coherence key while `sky` is set, so turning
+INDOORS cannot invalidate 20 columns for a ceiling that does not depend on
+heading.
 
 **Windows.** E1M1's three window structures (7 linedefs, 15 segs) were rendering
 as blank walls: their inner lines are flagged IMPASSABLE, which is the one flag
@@ -81,14 +202,44 @@ the sidedef's real texture, and the mismatch against sector 56's BROWNGRN walls
 is Doom's own visual tell. Blending it would make the game less faithful, not
 more, so it was left alone.
 
-Through a window at eye level you see the sky's *horizon* rows, which quantize
-to the same index 3 the indoor ceiling uses — so the sky reads clearly when you
-walk outdoors and is nearly invisible through a window. That is the honest
-consequence of a screen-fixed sky, not a bug; shifting it would need the yaw
-parallax that was deliberately not built.
+A window's band paints sky through the same `sky_column_rows(tile_x,
+sky_offset)` the pack stage uses, so the piece of horizon framed by a window is
+the piece you actually find there after walking out through the secret door,
+rather than an unrelated slice that happens to be the same colour.
+
+**Screenshot verification proved the wrong thing for a whole session.** The
+check was: does the ceiling run come from the sky table or the flat table,
+answered by decoding a centre-column profile back to PAL3 indices. That test
+passed on a sky made of grey bands, and it could only ever have failed if a
+pointer assignment were broken — it had no way to express "this does not look
+like sky". Rate and direction now get measured instead: `skyshift.py` spawns in
+sector 5, holds a turn for a set number of frames, reads the final heading from
+the pose mailbox, and cross-correlates the sky band against a reference frame.
+Across six headings spanning most of a revolution the measured shift matches
+`((angle * 5 >> 4) - (angle0 * 5 >> 4)) * 8` pixels exactly, at a correlation
+score of 1.000 — every pixel in the band. Note the correlation must be scored,
+not trusted: at headings where the courtyard's walls rotate into the band the
+score collapses to ~0.6 and the winning shift is geometry, not sky.
 
 `tools/routes/e1m1-windows.txt` walks from the player start to the nukage-yard
-windows. Note that `tour-east-combat.txt` no longer reaches gameplay at all —
+windows. `tools/routes/e1m1-secret-courtyard.txt` is the end-to-end proof: it
+runs from the player start through the group-0 door, opens the secret door with
+C, crosses secret sector 68 and the trench behind it, and climbs the steps into
+sector 5. It needs a frame budget of ~8400; below that the run is cut off
+indoors and the sky never appears, which is what made the first three capture
+attempts read as a failure.
+
+Verifying it needs pixels, not a pose, and the pixels need decoding: BlastEm
+expands the MD's 3-bit channels with its own scaling, so a captured grey never
+equals the palette's RGB and the sky's darkest band is byte-identical to the
+indoor ceiling anyway. Matching each pixel back to a PAL3 index and reading the
+centre column's index profile is what actually separates them — indoors it is a
+flat run of index 3, and in sector 5 it is `D → 7 → 5 → 4 → 3`, exactly
+`MEGALDOOM_SKY_CEILING_ROWS`. Both readings come out of one run of the route, so
+the A/B is internal to it. A forced spawn inside sector 5 was used as the
+control to prove the reader before trusting it on the route.
+
+Note that `tour-east-combat.txt` no longer reaches gameplay at all —
 its prologue presses START at frames 150/200/220, and the current frontend needs
 900/950/1050 plus A at 1120. That is unrelated to this work but it means the
 documented "(2416, 3081)" endpoint no longer reproduces.

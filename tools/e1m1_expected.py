@@ -32,10 +32,10 @@ E1M1_HEADER_ROW = "%du, %du, %du, %du, %du, %du, %du, %du, %du," % (
     E1M1_THING_COUNT, E1M1_SECTOR_COUNT, E1M1_SECRET_SECTOR_COUNT)
 
 # Seg type breakdown (doom_map.SEG_WALL/SEG_DOOR/SEG_EXIT/SEG_TRIGGER/
-# SEG_WINDOW), summing to E1M1_SEG_COUNT. This WAD's E1M1 has no
+# SEG_WINDOW/SEG_SKY_WALL), summing to E1M1_SEG_COUNT. This WAD's E1M1 has no
 # remote-trigger door lines, so SEG_TRIGGER is absent rather than zero (see
 # test-sector-map.py).
-E1M1_WALL_SEG_COUNT = 354
+E1M1_WALL_SEG_COUNT = 315
 E1M1_DOOR_SEG_COUNT = 16  # E1M1_DOOR_GROUP_COUNT * 4 faces per group
 E1M1_EXIT_SEG_COUNT = 1
 
@@ -47,6 +47,15 @@ E1M1_EXIT_SEG_COUNT = 1
 # test-sector-map.py checks rather than assumes.
 E1M1_WINDOW_SEG_COUNT = 15
 E1M1_WINDOW_LINEDEF_COUNT = 7
+
+# One-sided map-edge walls in front of an F_SKY1 sector (sectors 5, 13, 20,
+# 22, 28, 30, 47) reach the ROM as SEG_SKY_WALL instead of SEG_WALL, so the
+# renderer can leave the sky visible above them (this engine has no per-wall
+# height, so a textured full-height wall here would otherwise hide almost all
+# of the sky). 39 segs come from exactly 35 linedefs; the BSP splits some of
+# them. Reclassified from SEG_WALL, same geometry-neutral proof as windows.
+E1M1_SKY_WALL_SEG_COUNT = 39
+E1M1_SKY_WALL_LINEDEF_COUNT = 35
 
 # doom_map.load_map(..., apply_recipes=True) certificate/BFS result.
 E1M1_EXIT_SEG_INDEX = 376

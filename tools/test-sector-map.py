@@ -8,7 +8,8 @@ from pathlib import Path
 from e1m1_expected import (E1M1_HEADER_ROW, E1M1_SEG_COUNT,
                            E1M1_WALL_SEG_COUNT, E1M1_DOOR_SEG_COUNT,
                            E1M1_EXIT_SEG_COUNT, E1M1_DOOR_GROUP_COUNT,
-                           E1M1_WINDOW_SEG_COUNT, E1M1_WINDOW_LINEDEF_COUNT)
+                           E1M1_WINDOW_SEG_COUNT, E1M1_WINDOW_LINEDEF_COUNT,
+                           E1M1_SKY_WALL_SEG_COUNT, E1M1_SKY_WALL_LINEDEF_COUNT)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -72,7 +73,8 @@ def main():
     assert types == {doom_map.SEG_WALL: E1M1_WALL_SEG_COUNT,
                      doom_map.SEG_DOOR: E1M1_DOOR_SEG_COUNT,
                      doom_map.SEG_EXIT: E1M1_EXIT_SEG_COUNT,
-                     doom_map.SEG_WINDOW: E1M1_WINDOW_SEG_COUNT}, types
+                     doom_map.SEG_WINDOW: E1M1_WINDOW_SEG_COUNT,
+                     doom_map.SEG_SKY_WALL: E1M1_SKY_WALL_SEG_COUNT}, types
 
     # Windows: reclassified from SEG_WALL, never newly emitted. Re-running the
     # converter with the window rule disabled has to produce the SAME segs in
@@ -96,6 +98,32 @@ def main():
                 (s for s in doom_map.load_map(
                     wad_reader.WadFile(campaign_wad), "E1M1").out_segs
                  if s["type"] == doom_map.SEG_WINDOW)}) == E1M1_WINDOW_LINEDEF_COUNT
+
+    # Sky walls: same proof, same reason -- a one-sided line is already forced
+    # solid unconditionally (line_solid_without_recipe), so this reclassification
+    # can only ever change the type byte, never geometry, collision or the
+    # blockmap.
+    sky_wall_rows = [row for row in rows if row[7] == doom_map.SEG_SKY_WALL]
+    assert len(sky_wall_rows) == E1M1_SKY_WALL_SEG_COUNT
+    plain_sky = doom_map.load_map(wad_reader.WadFile(campaign_wad), "E1M1",
+                                  apply_sky_walls=False)
+    assert len(plain_sky.out_segs) == len(rows), (len(plain_sky.out_segs), len(rows))
+    for index, (row, seg) in enumerate(zip(rows, plain_sky.out_segs)):
+        geometry = (seg["v1"], seg["v2"], seg["nx"], seg["ny"],
+                    seg["tex_u_offset"])
+        assert tuple(row[0:5]) == geometry, (index, row[0:5], geometry)
+        if row[7] == doom_map.SEG_SKY_WALL:
+            assert seg["type"] == doom_map.SEG_WALL, index
+        else:
+            assert seg["type"] == row[7], (index, seg["type"], row[7])
+    assert len({seg["source_linedef"] for seg in
+                (s for s in doom_map.load_map(
+                    wad_reader.WadFile(campaign_wad), "E1M1").out_segs
+                 if s["type"] == doom_map.SEG_SKY_WALL)}) == E1M1_SKY_WALL_LINEDEF_COUNT
+    assert all(row[8] == doom_map.DOOR_GROUP_NONE for row in sky_wall_rows)
+    assert all(row[9] == doom_map.KEY_NONE for row in sky_wall_rows)
+    assert all(row[10] == 0 for row in sky_wall_rows), (
+        "a sky wall carries no door_group/required_key/interaction flags")
 
     # The band rides in door_group/required_key (see BspSeg in bsp_map.h) and
     # must describe a real opening strictly inside the drawn slab.

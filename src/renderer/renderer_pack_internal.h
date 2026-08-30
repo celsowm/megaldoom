@@ -82,6 +82,16 @@ _Static_assert(__builtin_offsetof(PackedFlatRows, floor) == PACK_FLAT_OFF_FLOOR,
                "asm flat posts read floor at PACK_FLAT_OFF_FLOOR");
 _Static_assert(MEGALDOOM_SKY_CEILING_ROW_COUNT == PACK_CEILING_ROW_COUNT,
                "both ROM ceiling tables must match the asm's index mask");
+// The sky table is 2D and column-major; a column handed to the pack stage is
+// only a valid row-indexed ceiling if the emitter really laid it out that way.
+_Static_assert(sizeof(MEGALDOOM_SKY_CEILING_ROWS) ==
+                   (MEGALDOOM_SKY_TILE_COLUMNS * MEGALDOOM_SKY_CEILING_ROW_COUNT *
+                    sizeof(u32)),
+               "sky table must be TILE_COLUMNS contiguous columns of ROW_COUNT rows");
+// sky_column_rows wraps with one conditional subtract rather than a modulo,
+// which is only correct while a viewport's worth of tiles cannot lap the table.
+_Static_assert(RAY_VIEW_TILE_W <= MEGALDOOM_SKY_TILE_COLUMNS,
+               "sky column wrap assumes tile_x + offset < 2 * TILE_COLUMNS");
 _Static_assert(sizeof(((PackedFlatRows *)0)->floor) == PACK_FLOOR_ROWS_BYTES,
                "asm wraps the floor index with PACK_FLOOR_INDEX_MASK");
 // The ceiling table must cover every screen row a ceiling run can reach.
@@ -101,6 +111,15 @@ _Static_assert((PACK_CEILING_ROW_COUNT & (PACK_CEILING_ROW_COUNT - 1)) == 0,
 // unchanged. Compare the INPUTS rather than the output: the ceiling table is
 // PACK_CEILING_ROW_COUNT entries, and a full-table compare every frame would
 // cost more than the invalidation it guards.
+//
+// sky_offset is part of the key ONLY while the sky is actually the ceiling.
+// Outdoors that is exactly right and load-bearing: turning changes which sky
+// column each tile shows, so every column must repack or the horizon would
+// freeze to the screen. Indoors the ceiling does not depend on heading at all,
+// and folding sky_offset in unconditionally would invalidate all 20 columns on
+// every frame the player turns -- a large regression in the common case, for a
+// table that cannot have changed. build_bsp_tilemap uses this same predicate as
+// its whole-frame `flat_changed`, which is why the gate lives here.
 static inline bool scene_flats_equal(const RaySceneColors *a,
                                      const RaySceneColors *b) {
     return (bool)(a->ceiling.primary == b->ceiling.primary &&
@@ -109,11 +128,17 @@ static inline bool scene_flats_equal(const RaySceneColors *a,
                   a->floor.primary == b->floor.primary &&
                   a->floor.secondary == b->floor.secondary &&
                   a->floor.secondary_coverage == b->floor.secondary_coverage &&
-                  a->sky == b->sky);
+                  a->sky == b->sky &&
+                  (!a->sky || a->sky_offset == b->sky_offset));
 }
 
 // Returns a pointer into a cached static; valid until the next call.
-const PackedFlatRows *build_flat_rows(const RaySceneColors *scene_colors);
+PackedFlatRows *build_flat_rows(const RaySceneColors *scene_colors);
+
+// The sky column for one viewport tile column at the current heading; see
+// renderer_flats.c. Also used by the window overlay, which paints sky inside a
+// window band while the player is still indoors.
+const u32 *sky_column_rows(u16 tile_x, u8 sky_offset);
 void flat_rows_invalidate(void);
 
 // Pixel-replication table for the active stride (guarded so the unused one
@@ -165,7 +190,9 @@ void build_bsp_tilemap(const RayColumn *columns,
 void pack_stage_reset(void);
 
 // Door overlay compositing (renderer_doors.c).
-void draw_door_overlays(const RayColumn *columns, u32 target[][8]);
+void draw_door_overlays(const RayColumn *columns,
+                        const RaySceneColors *scene_colors,
+                        u32 target[][8]);
 bool door_overlay_blocks_pixel(const RayColumn *column, u16 object_depth, u16 y);
 
 // Billboard rasterization into g_view_tiles (renderer_billboard_draw.c).

@@ -232,23 +232,45 @@ def nearest_palette_index(rgb, palette, allowed=None):
 
 
 # === Sky ceiling table =====================================================
-# The ceiling run of a sky sector is sourced from a 128-entry screen-row table
-# instead of the 4-row flat pattern. Two deliberate properties:
+# The ceiling run of a sky sector is sourced from a 2D table instead of the
+# 4-row flat pattern: SKY_TILE_COLUMNS tile columns of SKY_CEILING_ROWS packed
+# rows each, stored COLUMN-MAJOR so that one tile column's rows are contiguous.
+# That layout is the whole trick -- it means the pack hot path never learns the
+# table is 2D. renderer_hotpath.s still loads a plain row-indexed ceiling
+# pointer once per lane; build_bsp_tilemap just points it at a different column
+# per tile, so the asm is untouched and the indoor path is bit-identical.
 #
-#   * ONE index per row, replicated across all 8 pixels. That makes each row a
-#     solid horizontal band -- no Bayer dither on what is the single largest
-#     surface in the frame -- and it makes the packed word stride-independent
-#     (0xNNNNNNNN is what both pack_flat_row and pack_flat_quad produce for a
-#     solid colour), so stride 2 and stride 4 share this table verbatim.
-#   * Rows come from SKY1's own per-row colour, so the vertical structure of
-#     Doom's sky -- dark at the zenith, hazier toward the horizon, and the
-#     brown/grey mountain band at the bottom -- survives as banding. SKY1's
-#     HORIZONTAL structure (the mountain silhouette) is deliberately averaged
-#     away: this sky is screen-fixed, and a silhouette that does not slide as
-#     the player turns reads as a painted backdrop rather than as distance.
+# An earlier version of this table averaged each SKY1 row across its full width
+# down to ONE index, on the theory that a silhouette which cannot slide reads as
+# paint rather than as distance. That was wrong twice over. It destroyed the
+# mountains, which are the only thing that makes SKY1 legible as sky at all; and
+# because SKY1's lower half averages to a mid grey, it quantized 27 of the 64
+# rows to GLOBAL_CEILING_INDEX -- byte-identical to the indoor ceiling, so a
+# third of the "sky" was literally the ceiling the player had just walked out
+# from under. The silhouette is kept now, and it DOES slide: see
+# sky_column_rows in renderer_flats.c.
 #
+# Still no dither. Every pixel is SKY1's own nearest palette index, so the
+# banding that remains is the texture's own, not a Bayer pattern laid over it.
 # Quantized into the existing 16 world colours; the sky adds no palette entry
 # and therefore cannot recolour walls, sprites, the weapon or items.
+#
+# The SECOND version of this table was also wrong: it quantized through
+# nearest_palette_index with no candidate restriction, and SKY1 is confirmed
+# pure greyscale (32768 px sampled, 1383 non-neutral, all anti-aliasing noise,
+# max channel 203). WALL_CHROMA_LOSS_WEIGHT only penalises a candidate for
+# having LESS chroma than the source -- for an exactly-grey source (chroma 0)
+# that can never fire, so the search ran over all 16 colours by raw Oklab
+# distance. Dark greys common in the mountain silhouette (11,11,11 and
+# 19,19,19, both far more frequent than mid-tones in SKY1) quantized to index
+# 1, PAL3's dark red (0x24,0,0), because that red sits closer in the
+# `1.25*dL^2 + da^2 + db^2` metric than any true neutral at that lightness --
+# not a fringe case, a systematic mis-map across the darkest third of the
+# image. That produced the maroon, structureless block the mountains actually
+# looked like on screen. The sky is now restricted to PAL3's true neutral
+# entries only (SKY_NEUTRAL_INDICES below); it needs no chroma reasoning at
+# all because the source has none.
+#
 # 64 rows, matching PACK_CEILING_ROW_COUNT: walls are centred on the viewport,
 # so a ceiling run never starts below row (VIEW_PIXEL_H - 1) / 2 == 59, and a
 # power of two lets the pack post mask with an immediate.
@@ -258,6 +280,16 @@ SKY_CEILING_ROWS = 64
 # the midline; the sky is compressed into those rows and the remainder holds
 # the horizon colour so a clipped wall never samples an undefined row.
 SKY_HORIZON_ROW = 60
+# Tile columns spanning one full revolution. The viewport is RAY_VIEW_TILE_W==20
+# tiles across a 90-degree FOV (RAY_PROJ_X == RAY_VIEW_CENTER_X, so
+# tan(halfFOV) == 1), so a 360-degree turn sweeps 20 * 360/90 == 80 tiles.
+# Sizing the table to exactly that gives true 1:1 parallax and wraps the sky
+# once per revolution. Deliberately not rounded to a power of two: a wider table
+# would drift SLOWER than the world and a narrower one FASTER, and faster than
+# the world is the one behaviour that cannot read as distance. The index wraps
+# once per tile column (20 per frame), not per pixel, so a compare-and-subtract
+# costs nothing measurable and buys the correct rate.
+SKY_TILE_COLUMNS = 80
 
 
 def solid_flat_row(index):
@@ -302,8 +334,34 @@ def build_flat_ceiling_rows(sector_visuals):
     return [solid_flat_row(primary)] * SKY_CEILING_ROWS
 
 
+def pack_flat_row_pixels(indices):
+    """Pack eight palette indices into one 4bpp screen row, MSB-first.
+
+    The nibble fold is spelled out for the same reason solid_flat_row's is:
+    tools/test-sector-map.py forbids the repunit-multiply shorthand anywhere in
+    this file, so that a packed WALL byte can never be one index doubled instead
+    of two real texels. Do not "simplify" this either.
+    """
+    word = 0
+    for index in indices:
+        word = (word << 4) | (index & 0xF)
+    return word
+
+
+# SKY1 is pure greyscale, so it only ever needs PAL3's true neutral entries --
+# restricting to them sidesteps chroma reasoning entirely instead of relying on
+# a penalty that cannot fire for a zero-chroma source (see the bug note above).
+SKY_NEUTRAL_INDICES = [index for index, color in enumerate(FROZEN_WORLD_PALETTE)
+                        if color[0] == color[1] == color[2]]
+
+
 def build_sky_ceiling_rows(palette):
-    """Return SKY_CEILING_ROWS palette indices, one solid band per screen row."""
+    """Return SKY_TILE_COLUMNS * SKY_CEILING_ROWS packed words, column-major.
+
+    Index as [column * SKY_CEILING_ROWS + row]. The runtime hands the pack stage
+    &table[column * SKY_CEILING_ROWS] and every consumer downstream keeps
+    treating it as the plain row-indexed table it was before this became 2D.
+    """
     with Image.open(flat_path("F_SKY1")) as image:
         opaque = _fill_transparent_with_average(image)
         width, height = opaque.size
@@ -312,24 +370,44 @@ def build_sky_ceiling_rows(palette):
     # Deliberately NOT tone_curve'd. That lift exists to recover the sector
     # light compensation the renderer never applies to WALL texels; the sky is
     # not a wall and carries no sector light, so lifting it only blows the
-    # zenith out to near-white. Untouched, SKY1's lower half quantizes to
-    # index 3 -- the same colour the level-wide ceiling already uses -- so
-    # stepping outdoors reveals a gradient instead of snapping to a new hue.
-    row_index = []
-    for source_y in range(height):
-        row = pixels[source_y * width:(source_y + 1) * width]
-        average = tuple(sum(p[channel] for p in row) // len(row)
-                        for channel in range(3))
-        row_index.append(nearest_palette_index(average, palette))
+    # zenith out to near-white.
+    #
+    # Quantizing is the expensive part (nearest_palette_index over 16 colours
+    # with a chroma penalty), and the table asks for 80*64*8 == 40960 pixels
+    # while SKY1 itself has far fewer distinct source texels than that, so
+    # memoize per source pixel rather than per emitted one.
+    quantized = {}
 
-    indices = []
-    for y in range(SKY_CEILING_ROWS):
-        if y < SKY_HORIZON_ROW:
-            source_y = (y * height) // SKY_HORIZON_ROW
-        else:
-            source_y = height - 1
-        indices.append(row_index[min(source_y, height - 1)])
-    return indices
+    def sample(source_x, source_y):
+        key = (source_x, source_y)
+        cached = quantized.get(key)
+        if cached is None:
+            pixel = pixels[(source_y * width) + source_x]
+            cached = nearest_palette_index(tuple(pixel[0:3]), palette,
+                                            SKY_NEUTRAL_INDICES)
+            quantized[key] = cached
+        return cached
+
+    # SKY1 is one full revolution wide and the table is one full revolution
+    # wide, so screen pixel -> texture column is a straight proportional map.
+    screen_width = SKY_TILE_COLUMNS * 8
+    words = []
+    for column in range(SKY_TILE_COLUMNS):
+        for y in range(SKY_CEILING_ROWS):
+            if y < SKY_HORIZON_ROW:
+                source_y = min((y * height) // SKY_HORIZON_ROW, height - 1)
+            else:
+                # Below the horizon a wall always covers the ceiling, but the
+                # pack post reads eight rows unmasked past a tile boundary, so
+                # these have to hold something defined; SKY1's bottom row is the
+                # continuation that cannot seam.
+                source_y = height - 1
+            row = []
+            for pixel in range(8):
+                source_x = (((column * 8) + pixel) * width) // screen_width
+                row.append(sample(min(source_x, width - 1), source_y))
+            words.append(pack_flat_row_pixels(row))
+    return words
 
 
 def build_world_palette(texture_names, texture_usage, sectors):
@@ -1118,17 +1196,24 @@ def emit_world_assets(path, texture_usage, sectors, provenance=None,
         "    " + ", ".join("0x%02X%02X%02X" % color for color in palette),
         "};",
         "",
-        "// Sky ceiling table: one packed 8-pixel row per screen row, sourced",
-        "// from SKY1's own per-row colour. One solid index per row (no dither",
-        "// on the frame's largest surface) which also makes the packed word",
-        "// identical for RAY_COL_STRIDE 2 and 4. See build_sky_ceiling_rows.",
+        "// Sky ceiling table: SKY1 sampled into packed 8-pixel screen rows,",
+        "// COLUMN-MAJOR -- [column * ROW_COUNT + row], so one tile column's",
+        "// rows are contiguous and the pack stage can keep treating a column",
+        "// as the flat row-indexed table it always was. TILE_COLUMNS spans one",
+        "// full revolution, so the sky wraps once per turn at 1:1 parallax.",
+        "// See build_sky_ceiling_rows in tools/world_assets.py.",
         "#define MEGALDOOM_SKY_CEILING_ROW_COUNT %d" % SKY_CEILING_ROWS,
         "#define MEGALDOOM_SKY_HORIZON_ROW %d" % SKY_HORIZON_ROW,
-        "static const u32 MEGALDOOM_SKY_CEILING_ROWS[MEGALDOOM_SKY_CEILING_ROW_COUNT] = {",
+        "#define MEGALDOOM_SKY_TILE_COLUMNS %d" % SKY_TILE_COLUMNS,
+        "static const u32 MEGALDOOM_SKY_CEILING_ROWS[MEGALDOOM_SKY_TILE_COLUMNS *",
+        "                                           MEGALDOOM_SKY_CEILING_ROW_COUNT] = {",
     ])
-    for i in range(0, len(sky_rows), 8):
-        lines.append("    " + " ".join(
-            "0x%08X," % solid_flat_row(index) for index in sky_rows[i:i + 8]))
+    for column in range(SKY_TILE_COLUMNS):
+        base = column * SKY_CEILING_ROWS
+        lines.append("    // tile column %d" % column)
+        for i in range(0, SKY_CEILING_ROWS, 8):
+            lines.append("    " + " ".join(
+                "0x%08X," % word for word in sky_rows[base + i:base + i + 8]))
     lines.extend([
         "};",
         "",

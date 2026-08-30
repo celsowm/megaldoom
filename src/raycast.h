@@ -85,6 +85,13 @@ typedef struct {
     // TRUE when that sector's Doom ceiling flat is F_SKY1. The pack stage then
     // sources its ceiling run from the baked sky bands instead of `ceiling`.
     bool sky;
+    // Heading as a sky tile-column offset (0..MEGALDOOM_SKY_TILE_COLUMNS-1):
+    // which column of the baked sky sits at the left edge of the viewport. This
+    // is what makes the horizon slide when the player turns, and it is set on
+    // EVERY frame, not just sky ones -- a window looked through from an indoor
+    // sector paints sky inside its band and needs the same offset to agree with
+    // the courtyard you see when you walk out there.
+    u8 sky_offset;
 } RaySceneColors;
 
 // The near-surface overlay: one surface composited in front of whatever the

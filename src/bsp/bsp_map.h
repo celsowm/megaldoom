@@ -32,7 +32,14 @@ typedef enum {
     // A wall with a see-through band: Doom's windows. Still fully solid for
     // collision and line of sight -- only rendering differs. See
     // window_recess() in tools/doom_map.py for how one is recognised.
-    BSP_SEG_WINDOW = 5
+    BSP_SEG_WINDOW = 5,
+    // A one-sided map-edge wall in front of an F_SKY1 sector. This engine has
+    // no per-wall height, so these would otherwise render as a full-height
+    // opaque wall and leave almost no sky visible from inside the sector they
+    // bound. Fully solid for collision and line of sight, same as a plain
+    // WALL -- only rendering differs (see bsp_draw_seg). See
+    // sky_wall_sector() in tools/doom_map.py for how one is recognised.
+    BSP_SEG_SKY_WALL = 6
 } BspSegType;
 
 #define BSP_SEG_FLAG_DIRECT_USE 0x01u

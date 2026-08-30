@@ -112,7 +112,9 @@ def main():
     assert "window_band_rows" in SCENE
     # Still solid for collision and line of sight: only rendering differs.
     assert "BSP_SEG_WINDOW" not in MAP
-    assert "draw_door_overlays(columns, g_view_tiles)" in SCENE
+    # scene_colors carries sky_offset, which the window band needs so the sky it
+    # paints matches the sky the pack stage draws once you walk outside.
+    assert "draw_door_overlays(columns, scene_colors, g_view_tiles)" in SCENE
 
     # A rising slab keeps the full-height vertical lookup and discards rows from
     # the top. It never stretches the remaining texture over the shrinking area.

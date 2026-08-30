@@ -26,6 +26,13 @@ void bsp_draw_seg(u16 seg_index) {
     // column OPEN so the front-to-back walk keeps filling what is behind it.
     const bool window = (bool)(seg->type == BSP_SEG_WINDOW);
     const bool overlay = (bool)(moving_door || window);
+    // A sky wall claims its samples like a normal solid wall (same collision,
+    // same occlusion) but is never textured or depth-tested: nothing real is
+    // behind a map-edge line, so the column is seeded exactly like one no seg
+    // ever claimed (see bsp_seed_unclaimed_columns) and left for the sky
+    // ceiling / floor fill to cover. See sky_wall_sector() in
+    // tools/doom_map.py for how one is recognised.
+    const bool sky_wall = (bool)(seg->type == BSP_SEG_SKY_WALL);
     const BspVertex *a = &bsp_vertices[seg->v1];
 
     // Backface / one-sided cull: draw only when the camera is on the seg's
@@ -133,6 +140,19 @@ void bsp_draw_seg(u16 seg_index) {
         const s32 sfix = (span == 1) ? 0 :
             (s32)(bsp_native_mulu_word((u16)(x - xL), (u16)inv_span) >> FX_SHIFT);
         RayColumn *col = &g_columns[x];
+
+        if (sky_wall) {
+            // No depth/u interpolation: nothing is sampled and nothing behind
+            // a map-edge line ever needs to be occlusion-tested against it.
+            bsp_seed_column_default(col);
+            bsp_mark_sample_solid(sample);
+            drew_any = TRUE;
+#if CADENCE_STAGE_PROBE
+            g_cadence_samples++;
+#endif
+            sample = bsp_find_next_open(sample);
+            continue;
+        }
 
         const s32 invz = invzL + (bsp_render_mul(invzR - invzL, sfix) >> FX_SHIFT);
         if (invz <= 0) {

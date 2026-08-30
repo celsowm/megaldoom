@@ -251,7 +251,7 @@ static __attribute__((noinline)) void write_mixed_stride4_tile(
 void build_bsp_tilemap(const RayColumn *columns,
                        const RaySceneColors *scene_colors,
                        u32 target[][8]) {
-    const PackedFlatRows *const flat_rows = build_flat_rows(scene_colors);
+    PackedFlatRows *const flat_rows = build_flat_rows(scene_colors);
     const bool flat_changed = (bool)(!s_coherence_valid ||
                                      !scene_flats_equal(scene_colors, &s_prev_scene_flats));
     const u32 overlay_columns = renderer_overlay_prev_columns();
@@ -271,6 +271,15 @@ void build_bsp_tilemap(const RayColumn *columns,
         s_prev_desc[tile_x][0] = descriptors[0];
         s_prev_desc[tile_x][1] = descriptors[1];
         s_prev_door_active[tile_x] = (u8)column_door_active(columns, base_col);
+
+        // See the stride-2 packer below: under a sky, each tile column reads its
+        // own column of the 2D sky table. At this stride a mixed tile only
+        // samples lanes 0 and 2 and doubles them, so the sky is half as detailed
+        // horizontally inside wall tiles as in whole-ceiling ones; stride 2 is
+        // what ships, and this keeps the two paths behaviourally the same.
+        if (scene_colors->sky) {
+            flat_rows->ceiling = sky_column_rows(tile_x, scene_colors->sky_offset);
+        }
 
         u16 min_top = descriptors[0].top;
         if (descriptors[1].top < min_top) min_top = descriptors[1].top;
@@ -502,9 +511,11 @@ static void write_mixed_stride2_span_reference(
 void build_bsp_tilemap(const RayColumn *columns,
                                   const RaySceneColors *scene_colors,
                                   u32 target[][8]) {
-    const PackedFlatRows *const flat_rows = build_flat_rows(scene_colors);
+    PackedFlatRows *const flat_rows = build_flat_rows(scene_colors);
     // Ceiling/floor colour changes (e.g. lighting) invalidate every column at
-    // once; otherwise coherence is decided per column below.
+    // once; otherwise coherence is decided per column below. Under a sky that
+    // includes a heading change, because scene_flats_equal folds sky_offset in
+    // whenever `sky` is set -- see the note there.
     const bool flat_changed = (bool)(!s_coherence_valid ||
                                      !scene_flats_equal(scene_colors, &s_prev_scene_flats));
     // Columns a restorable overlay (billboard / damage-flash) baked into
@@ -577,6 +588,16 @@ void build_bsp_tilemap(const RayColumn *columns,
         s_prev_desc[tile_x][2] = descriptors[2];
         s_prev_desc[tile_x][3] = descriptors[3];
         s_prev_door_active[tile_x] = (u8)column_door_active(columns, base_col);
+
+        // Under a sky the ceiling is 2D: point the (row-indexed) ceiling table
+        // at this tile's own sky column, so the horizon has horizontal
+        // structure and slides with the heading. One pointer store per repacked
+        // column -- the ceiling post and the asm are unchanged, they just read a
+        // different base. Indoors the table is heading-invariant and this is
+        // skipped entirely.
+        if (scene_colors->sky) {
+            flat_rows->ceiling = sky_column_rows(tile_x, scene_colors->sky_offset);
+        }
 
         // Column-invariant bounds, hoisted out of the 15-tile loop below: a
         // tile is whole-ceiling iff it lies above every descriptor's top
