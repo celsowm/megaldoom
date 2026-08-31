@@ -188,8 +188,13 @@ def build_texture_bank(profiles, palette, use_wall_bake_recipe=True):
         with Image.open(path) as image:
             sampled_width, _ = world_assets.sampled_texture_dimensions(
                 name, image.width, image.height)
-        bank[name] = world_assets.convert_texture(
-            path, palette, use_wall_bake_recipe=use_wall_bake_recipe)
+        # The planes, not just level 0: shading is baked per level now
+        # (world_assets.build_shade_planes), so there is no LUT to apply.
+        planes = []
+        world_assets.convert_texture(
+            path, palette, use_wall_bake_recipe=use_wall_bake_recipe,
+            planes_out=planes)
+        bank[name] = planes
         scales[name] = world_assets.texture_u_scale_q12(sampled_width)
     return bank, scales
 
@@ -206,7 +211,7 @@ def _shade_level(depth, ny):
     return min(3, (depth >> 9) + (1 if ny != 0 else 0))
 
 
-def render_profile(profile, pose, textures, u_scales, palette, shade_lut):
+def render_profile(profile, pose, textures, u_scales, palette):
     """Render one wall-only frame and preserve per-column provenance."""
     _, px, py, angle = pose
     fwx, fwy = fcos(angle), fsin(angle)
@@ -307,7 +312,7 @@ def render_profile(profile, pose, textures, u_scales, palette, shade_lut):
             tex_y = ((canonical_y * v_scale) >> 12) + seg.tex_v
             if tex_y >= source_height:
                 tex_y -= source_height
-            color = shade_lut[level][texture[tex_y][tex_x] & 0x0F]
+            color = texture[level][tex_y][tex_x] & 0x0F
             x = sample * STRIDE
             pixels[y][x] = color
             pixels[y][x + 1] = color
@@ -454,15 +459,13 @@ def build_preview(wad_path=DEFAULT_WAD, mapn="E1M1",
 
     palette = list(world_assets.FROZEN_WORLD_PALETTE)
     textures, u_scales = build_texture_bank(profiles, palette)
-    shade_lut = world_assets.build_shade_lut(
-        palette, 4, (CEILING_INDEX, FLOOR_INDEX))
     poses = PREVIEW_POSES[mapn]
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     output_paths = []
     for pose in poses:
         rendered = [render_profile(profile, pose, textures, u_scales,
-                                   palette, shade_lut)
+                                   palette)
                     for profile in profiles]
         assert_candidate_is_geometry_neutral(rendered[1], rendered[2], pose[0])
         comparison = make_comparison(list(zip(

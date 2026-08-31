@@ -70,29 +70,6 @@ def generated_wall_textures(source):
     return result
 
 
-def generated_shade_lut(source):
-    """Rebuild the shade chain exactly the way the renderer does.
-
-    There is no FREEDOOM_WORLD_SHADE_LUT in the header any more: chaining
-    FREEDOOM_WORLD_SHADE_MAP is the one definition of the chain, and
-    renderer_pack.c's build_shade_luts() does precisely this at scene init.
-    Deriving it here means the test checks the table that is actually drawn
-    rather than a parallel copy that could silently disagree with it.
-    """
-    levels = re.search(r"#define\s+FREEDOOM_WORLD_SHADE_LEVELS\s+(\d+)", source)
-    assert levels, "shade level count"
-    body = re.search(r"FREEDOOM_WORLD_SHADE_MAP\[16\]\s*=\s*\{(.*?)\};",
-                     source, re.S)
-    assert body, "shade map declaration"
-    shade_map = [int(value) for value in re.findall(r"\d+", body.group(1))]
-    assert len(shade_map) == 16, "shade map must cover the 16 palette entries"
-
-    lut = [list(range(16))]
-    for _ in range(1, int(levels.group(1))):
-        lut.append([shade_map[value & 0x0F] for value in lut[-1]])
-    return lut
-
-
 def _tone_curved_source(extractor, path):
     """Resize to the wall grid and apply the same tone curve, per-texture
     contrast normalization AND spatial smoothing convert_texture() applies
@@ -240,25 +217,14 @@ def main():
     assert "BSP_FLOOR_COLOR" not in (ROOT / "src" / "bsp" / "bsp_render.c").read_text()
     ceiling_index = extractor.GLOBAL_CEILING_INDEX
     floor_index = extractor.GLOBAL_FLOOR_INDEX
-    shade_lut = extractor.build_shade_lut(palette, 4, (ceiling_index, floor_index))
-    assert generated_shade_lut(assets) == shade_lut, "emitted shade LUT drifted"
-    for index, color in enumerate(palette):
-        for level in shade_lut:
-            shaded = palette[level[index]]
-            if color[0] == color[1] == color[2]:
-                assert shaded[0] == shaded[1] == shaded[2], (color, shaded)
-            if color[1] <= max(color[0], color[2]):
-                assert shaded[1] <= max(shaded[0], shaded[2]), (color, shaded)
-    # Depth shading is ON (WALL_SHADE_MODE 2), so these two are load-bearing:
-    # a chain that reaches black turns distant walls into holes, and one that
-    # reaches a flat index turns them into the ceiling or the floor.
-    for level_index, level in enumerate(shade_lut):
-        for index in range(1, len(palette)):
-            assert level[index] != 0, (level_index, index)
-            if index not in (ceiling_index, floor_index):
-                assert level[index] not in (ceiling_index, floor_index), \
-                    ("shading darkened a wall into a flat colour",
-                     level_index, index, level[index])
+    assert "FREEDOOM_WORLD_SHADE_MAP" not in assets,         "shading is baked per plane now; a remap table would be a second copy"
+    # Depth shading is ON (WALL_SHADE_MODE 2), and these two properties -- a
+    # wall must never darken to black, nor to either flat colour -- used to be
+    # asserted of the shade CHAIN. The planes are quantized independently now
+    # (world_assets.build_shade_planes), so the chain no longer decides them.
+    # They are asserted below of the emitted planes themselves, which is what
+    # actually reaches the screen: see the black check in the per-plane loop
+    # and certify_flat_wall_contrast for the two flats.
     for texture_name in ("BROWN1", "GRAY7", "METAL1", "STONE2", "STARTAN3"):
         assert_no_spurious_green(extractor, palette, texture_name)
         perceptual, baseline = spatial_palette_error(extractor, palette, texture_name)
@@ -278,10 +244,13 @@ def main():
     # what FREEDOOM_WALL_PACKED_PAIRS carries. Every quality contract below is
     # measured on this, and emit_world_assets certifies the very same grids, so
     # the test and the generator cannot be fed different pictures.
-    display_textures = {
-        name: extractor.convert_texture(extractor.texture_path(name), palette)
-        for name in wall_textures
-    }
+    display_planes = {}
+    display_textures = {}
+    for name in wall_textures:
+        planes = []
+        display_textures[name] = extractor.convert_texture(
+            extractor.texture_path(name), palette, planes_out=planes)
+        display_planes[name] = planes
     assert set(extractor.WALL_BAKE_RECIPES) == set(extractor.CURATED_WALL_MATERIALS)
     assert tuple(extractor.TECH_WALL_MATERIALS) == (
         "COMPTILE", "COMPUTE2", "LITE3", "STARG3",
@@ -410,8 +379,59 @@ def main():
     # in Oklab, so this is enforced perceptually. Reuses the same function the
     # bake fails on, so the test and the generator cannot disagree.
     solid = extractor.certify_flat_wall_contrast(
-        palette, display_textures, shade_lut, ceiling_index, floor_index)
+        palette, display_planes, ceiling_index, floor_index)
     assert solid, "expected some near-solid wall materials to guard against"
+
+    # What the shade planes must hold on their own, now that no chain derives
+    # them. A distant wall may not go black (it would read as a hole), and it
+    # may not lose its last tonal step -- a plane down to ONE index is the
+    # "almost two simple colours" defect that motivated build_shade_planes,
+    # and the old chain produced exactly that for every neutral material from
+    # shade 2 onward. Dark materials whose level 0 is already mostly the
+    # bottom rung have nowhere left to go, so they are named rather than
+    # silently tolerated.
+    BOTTOMED_OUT = {"METAL1", "DOORTRAK", "STONE3"}
+    lightness = lambda color: extractor.world_palette.oklab(tuple(color))[0]
+    for texture_name, planes in sorted(display_planes.items()):
+        assert len(planes) == extractor.WORLD_SHADE_LEVELS, texture_name
+        base_counts = Counter(v for row in planes[0] for v in row)
+        for level, rows in enumerate(planes):
+            counts = Counter(v for row in rows for v in row)
+            # Shading may not INTRODUCE black or a flat colour. Texels that
+            # already carry one at level 0 keep it: build_shade_planes is
+            # monotonic, so it never brightens them away, and a black recess
+            # or a texel that legitimately quantized to a flat rung up close
+            # is not something distance should repaint.
+            introduced = set(counts) - set(base_counts)
+            assert 0 not in introduced, (
+                "shading darkened a wall into black", texture_name, level)
+            entered = {ceiling_index, floor_index} & introduced
+            assert not entered, (
+                "shading darkened a wall into a flat colour",
+                texture_name, level, entered)
+            # A plane down to ONE index is the flatness this whole
+            # mechanism exists to prevent: the old index chain produced
+            # exactly that for every neutral material from shade 2 on.
+            # Materials whose level 0 already sits on the bottom rung have
+            # nowhere left to go, so they are named, not silently allowed.
+            minimum = 1 if texture_name in BOTTOMED_OUT else 2
+            assert len(counts) >= minimum, (
+                "shade plane collapsed to one colour", texture_name, level)
+            # Fog must not shift hue and must not brighten. Asserted per
+            # texel against level 0: that is what the old chain's family
+            # filter and its darker-only rule bought, and it has to survive
+            # each level being quantized independently.
+            for y, row in enumerate(rows):
+                for x, value in enumerate(row):
+                    base = planes[0][y][x]
+                    family = extractor.shade_family
+                    assert family(palette[value]) == family(palette[base]), (
+                        "shading shifted hue", texture_name, level,
+                        base, value)
+                    assert lightness(palette[value]) <= lightness(
+                        palette[base]) + 1e-6, (
+                        "shading brightened a texel", texture_name, level,
+                        base, value)
 
     sector_visuals = re.search(
         r"FREEDOOM_SECTOR_VISUALS\[.*?\]\[6\]\s*=\s*\{(.*?)\};", assets, re.S)

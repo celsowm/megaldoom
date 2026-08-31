@@ -28,20 +28,6 @@
 #ifndef WALL_SHADE_MODE
 #define WALL_SHADE_MODE 2
 #endif
-static u8 g_shade_luts[SHADE_LEVELS][16];
-
-static void build_shade_luts(void) {
-    for (u16 c = 0; c < 16; c++) {
-        g_shade_luts[0][c] = (u8)c; // level 0 == identity (WALL_IDENT_MAP)
-    }
-    for (u16 level = 1; level < SHADE_LEVELS; level++) {
-        for (u16 c = 0; c < 16; c++) {
-            g_shade_luts[level][c] =
-                FREEDOOM_WORLD_SHADE_MAP[g_shade_luts[level - 1][c] & 0x0F];
-        }
-    }
-}
-
 // Pack-stage tile-column coherence: when the four wall descriptors feeding a
 // tile column are byte-identical to the previous base build, its 15 packed
 // tiles are unchanged and re-packing them is pure waste. FALSE forces a full
@@ -76,7 +62,6 @@ void pack_stage_invalidate_coherence(void) {
 
 void pack_stage_reset(void) {
     flat_rows_invalidate();
-    build_shade_luts();
     s_coherence_valid = FALSE;
 }
 
@@ -92,10 +77,11 @@ static WallColumnDescriptor describe_textured_column(u16 wall_h,
     const u16 bottom = (u16)(top + wall_h);
     const u8 tid = (u8)((texture_id < FREEDOOM_WALL_TEXTURE_COUNT) ?
                             texture_id : MEGALDOOM_TEX_FALLBACK);
-    // Distance fog + side shading fold into one LUT selection per column: the fog
-    // level grows with depth, and N/S ("shade") walls add one extra darkening step.
-    // g_shade_luts[0] is the identity, so near front walls are unshaded; every level
-    // maps 0 -> 0, preserving transparency, and the inner loop stays branch-free.
+    // Distance fog + side shading fold into one plane selection per column: the
+    // fog level grows with depth, and N/S ("shade") walls add one extra
+    // darkening step. Level 0 is the unshaded bake, so near front walls are
+    // untouched; the planes are pre-shaded at bake time (see
+    // world_assets.build_shade_planes), so the inner loop stays branch-free.
 #if WALL_SHADE_MODE == 2
     u16 fog_level = (u16)(depth >> FOG_SHIFT) + (side_shade ? 1u : 0u);
     if (fog_level > (SHADE_LEVELS - 1)) {

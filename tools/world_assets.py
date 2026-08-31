@@ -125,7 +125,7 @@ def md_color(rgb):
 # side only, never by the source sector's light field, which is discarded
 # outright. So some lift is genuinely required; the question is only how much.
 #
-# Sized against the shade chain rather than by eye. One FREEDOOM_WORLD_SHADE_MAP
+# Sized against the shade ramp rather than by eye. One WALL_SHADE_RAMP
 # step is about -0.125 Oklab L (7->5 is -0.133, 8->6 -0.126, 6->4 -0.127), and
 # with FOG_SHIFT 9 against E1M1/E1M2 room depths of ~500-1500 units the modal
 # on-screen wall sits at fog level 0-1 -- the near wall filling the screen is at
@@ -811,7 +811,121 @@ def _is_earth_material(columns):
     return inside >= EARTH_MIN_SHARE * width * height
 
 
-def _relieve_dominant_indices(rows, smoothed, palette, allowed):
+# Brightness each shade plane is quantized at, as a fraction of the material's
+# own level-0 colours.
+#
+# NOT comparable to the 3/4 per-step factor build_shade_map targeted. Chaining
+# palette indices lands on whatever rung is nearest and darker, and for PAL3's
+# neutrals that means index 10 (#919191) drops straight to index 5 (#484848) --
+# a 0.50 step, because the rung between them is GLOBAL_FLOOR_INDEX and
+# reserved. The chain's effective ramp was 1.00 / 0.50 / 0.50 / 0.50: all the
+# darkening happened in one jump and then stopped, which is exactly why shade 2
+# and 3 were a single flat tone. Quantizing per level lets these numbers mean
+# what they say.
+#
+# Gentle at the near end and only lightly steeper after, and that is a tradeoff
+# rather than a free win. Once both flat colours are reserved out of it a
+# wall's neutral ladder is just indices 5, 10 and 13 (L 0.402 / 0.657 / 0.776),
+# so there is nothing below #484848 to darken into: fog strength and tonal
+# structure are one knob pulled in opposite directions. Past roughly 0.60 at
+# the far end the grey materials go solid again -- measured, 1.00/0.88/0.74/
+# 0.60 puts STARGR1 back to 94% one colour at level 3 -- so this stops short.
+#
+# Level 1 matters more than its distance suggests: renderer_pack.c adds a whole
+# level for N/S walls (Doom's fake contrast), so a wall filling the screen is
+# already at level 1. Keeping that first step small is what stops a near grey
+# wall reading as two flat tones, which is the defect this ramp exists for.
+WALL_SHADE_RAMP = (1.00, 0.90, 0.80, 0.70)
+
+# The shade planes are now pre-shaded per level by build_shade_planes, so the
+# packed_pair_byte remap that used to carry the shading is the identity.
+WALL_IDENTITY_MAP = list(range(16))
+
+
+def build_shade_planes(rows, smoothed, palette, allowed, levels):
+    """Bake each shade level from the material's colours, not from level 0.
+
+    The planes used to be one index remap chained N times (build_shade_map),
+    and for anything neutral that is lossy to the point of being flat. PAL3's
+    neutral ladder is 3/5/7/10/13, but 3 is GLOBAL_CEILING_INDEX and 7 is
+    GLOBAL_FLOOR_INDEX, so the chain may only move between 5, 10 and 13 -- and
+    with nothing between 5 and 10, every one of 5, 7 and 10 collapses onto 5 in
+    a single step. Measured on the shipped header, that made EVERY 100%-neutral
+    material two colours at shade 1 and one flat colour at shade 2 and beyond:
+    STARGR1 4 -> 2 -> 1, SUPPORT2 4 -> 2 -> 1, DOORSTOP 4 -> 2 -> 1. The
+    chromatic materials were fine (BROWNGRN 9 -> 7 -> 6) because the earth ramp
+    has no reserved holes, which is exactly why grey walls read as two flat
+    tones on screen while green and brown ones did not.
+
+    Quantizing the scaled source colour instead fixes it without a new rung: at
+    level 1 a texel near #919191 still rounds to index 10 while one near
+    #6D6D6D rounds to index 5, so the plane keeps both where chaining forced
+    all of them to 5.
+
+    Two restrictions carry over from build_shade_map, for the same reasons:
+
+    * A texel may only move within its own shade_family, so fog still cannot
+      shift hue.
+    * Both flat indices stay out, and both were tried. GLOBAL_FLOOR_INDEX is
+      the missing middle rung and lifts grey walls to four tones, but it lands
+      44-51% of a mid-distance grey wall on exactly the floor's own colour --
+      the "wall is almost the floor colour" defect the global flats exist to
+      prevent. GLOBAL_CEILING_INDEX looked safer, since walls meet the floor
+      along a shared edge while the ceiling is a separate surface overhead,
+      and it extends the ramp at the dark end where the fog wants room. It is
+      not safe either: certify_flat_wall_contrast rejects it outright, because
+      at the deep levels COMPUTE2 goes 75% index 3 and DOORTRAK, METAL1,
+      STONE2 and STONE3 all cross 50%. So the neutral ladder available to a
+      wall really is just 5, 10 and 13, and that is the ceiling on how much
+      tonal structure a grey material can carry -- see WALL_SHADE_RAMP, which
+      is tuned against exactly that limit.
+
+    Level 0 is returned unchanged -- it is the certified bake every other
+    contract in this file is written against.
+    """
+    planes = [rows]
+    width = len(smoothed)
+    height = len(smoothed[0])
+    blocked = {0, GLOBAL_FLOOR_INDEX, GLOBAL_CEILING_INDEX}
+    luminance = [world_palette.oklab(tuple(color))[0] for color in palette]
+    candidates = {}
+    for index in set(allowed) - blocked:
+        candidates.setdefault(shade_family(palette[index]), []).append(index)
+    for level in range(1, levels):
+        factor = WALL_SHADE_RAMP[level]
+        scaled = [[tuple(int(round(channel * factor)) for channel in smoothed[x][y])
+                   for y in range(height)] for x in range(width)]
+        plane = []
+        for y, row in enumerate(rows):
+            out = []
+            for x, base in enumerate(row):
+                # Darkening must never brighten a texel. Without this a black
+                # detail texel -- index 0 is excluded as a shade TARGET, so it
+                # is not in `candidates` -- would be re-quantized to the
+                # nearest neutral rung and a recess would get LIGHTER with
+                # distance. The same guard keeps every other texel monotonic,
+                # so a plane can only ever be darker than the one before it.
+                family = [index for index in candidates.get(
+                    shade_family(palette[base]), ())
+                    if luminance[index] <= luminance[base] + 1e-6]
+                if not family:
+                    out.append(base)
+                    continue
+                out.append(nearest_palette_index(
+                    scaled[min(x, width - 1)][y % height], palette, family))
+            plane.append(out)
+        # Relieved per plane, not just at level 0: darkening is what collapsed
+        # distinct indices together in the first place, so the ceiling that
+        # keeps a material from reading as a solid field has to hold at every
+        # level it is drawn at. This is also what solid_wall_colors measures.
+        planes.append(_relieve_dominant_indices(
+            plane, scaled, palette, sorted(set(allowed) - blocked),
+            darker_only=True))
+    return planes
+
+
+def _relieve_dominant_indices(rows, smoothed, palette, allowed,
+                              darker_only=False):
     """Break up any index covering more than FLAT_AVOIDING_MAX_SHARE of a bake.
 
     Ranks the texels sitting on an over-represented index by what it costs to
@@ -850,6 +964,18 @@ def _relieve_dominant_indices(rows, smoothed, palette, allowed):
             alternatives = [candidate for candidate in allowed
                             if candidate != index
                             and shade_family(palette[candidate]) == family]
+            if darker_only:
+                # On a shade plane relief must not undo the darkening. Each
+                # texel there already sits at or below its level-0 rung, so
+                # restricting replacements to rungs no brighter than the one
+                # being relieved keeps the whole plane monotonic against level
+                # 0 transitively. Level 0 itself passes darker_only=False --
+                # there is no earlier plane for it to contradict.
+                ceiling_l = world_palette.oklab(tuple(palette[index]))[0]
+                alternatives = [
+                    candidate for candidate in alternatives
+                    if world_palette.oklab(tuple(palette[candidate]))[0]
+                    <= ceiling_l + 1e-6]
             if not alternatives:
                 continue
             candidates = []
@@ -872,7 +998,7 @@ def _relieve_dominant_indices(rows, smoothed, palette, allowed):
 
 
 def convert_texture(path, palette, use_wall_bake_recipe=True,
-                    diagnostics=None):
+                    diagnostics=None, planes_out=None):
     """Bake at display resolution, but only where the material can carry it.
 
     Doubling the horizontal texel count is free at runtime, and for most
@@ -886,7 +1012,8 @@ def convert_texture(path, palette, use_wall_bake_recipe=True,
     The decision is measured per material rather than listed by name, so a WAD
     or recipe change cannot leave a stale exemption behind.
     """
-    rows = _convert_texture(path, palette, use_wall_bake_recipe, diagnostics)
+    rows = _convert_texture(path, palette, use_wall_bake_recipe, diagnostics,
+                            planes_out=planes_out)
     if len(rows[0]) != WALL_TEX_DISPLAY_WIDTH:
         return rows
     with Image.open(path) as image:
@@ -901,14 +1028,22 @@ def convert_texture(path, palette, use_wall_bake_recipe=True,
     if (pair_column_churn(rows, active_height) <= WALL_CHURN_LIMIT and
             horizontal_churn(rows, active_height) <= WALL_CHURN_LIMIT):
         return rows
-    return _resize_index_rows_x(
-        _convert_texture(path, palette, use_wall_bake_recipe, diagnostics,
-                         bake_width_override=WALL_TEX_WIDTH),
-        WALL_TEX_DISPLAY_WIDTH)
+    # The churn fallback re-bakes narrow and stretches back, so every shade
+    # plane has to make the same trip -- otherwise the planes would describe a
+    # different grid from the level 0 the rest of the header is built on.
+    fallback_planes = [] if planes_out is not None else None
+    narrow = _convert_texture(path, palette, use_wall_bake_recipe, diagnostics,
+                              bake_width_override=WALL_TEX_WIDTH,
+                              planes_out=fallback_planes)
+    if planes_out is not None:
+        planes_out[:] = [_resize_index_rows_x(plane, WALL_TEX_DISPLAY_WIDTH)
+                         for plane in fallback_planes]
+    return _resize_index_rows_x(narrow, WALL_TEX_DISPLAY_WIDTH)
 
 
 def _convert_texture(path, palette, use_wall_bake_recipe=True,
-                     diagnostics=None, bake_width_override=None):
+                     diagnostics=None, bake_width_override=None,
+                     planes_out=None):
     """Convert one wall source into the fixed runtime index grid.
 
     ``use_wall_bake_recipe=False`` reproduces the pre-curation conversion while
@@ -1113,10 +1248,16 @@ def _convert_texture(path, palette, use_wall_bake_recipe=True,
                 normalized_columns=pad_columns(normalized),
                 filtered_columns=pad_columns(smoothed),
             )
+        # Built here, at the end, so the planes are derived from exactly the
+        # grid that ships: after the facade compose, the isolated-texel
+        # cleanup and the widening onto the display lattice.
+        if planes_out is not None:
+            planes_out[:] = build_shade_planes(
+                rows, smoothed, palette, allowed, WORLD_SHADE_LEVELS)
     return rows
 
 
-def solid_wall_colors(textures, shade_lut):
+def solid_wall_colors(textures):
     """Indices that a wall material can present as an unbroken field of colour.
 
     A textured wall with real spread never reads as a solid block, so only
@@ -1125,14 +1266,18 @@ def solid_wall_colors(textures, shade_lut):
     darkening collapses distinct indices together, so a material that is varied
     up close can still turn solid in the distance.
 
-    `textures` maps name -> the [y][x] index grid convert_texture() returns.
+    `textures` maps name -> the list of per-level [y][x] index grids that
+    build_shade_planes produced, i.e. exactly what gets emitted. It used to
+    take the level-0 grid plus a shade LUT and derive the rest; the planes are
+    quantized independently now, so there is nothing to derive and measuring
+    the real thing is both simpler and honest.
     Returns {index: [(name, level, share), ...]}.
     """
     result = {}
-    for name, rows in sorted(textures.items()):
-        texels = [value for row in rows for value in row]
-        for level, shade in enumerate(shade_lut):
-            counts = Counter(shade[value & 0x0F] for value in texels)
+    for name, planes in sorted(textures.items()):
+        for level, rows in enumerate(planes):
+            texels = [value for row in rows for value in row]
+            counts = Counter(value & 0x0F for value in texels)
             index, hits = counts.most_common(1)[0]
             share = hits / len(texels)
             if share >= WALL_SOLID_SHARE:
@@ -1140,7 +1285,7 @@ def solid_wall_colors(textures, shade_lut):
     return result
 
 
-def certify_flat_wall_contrast(palette, textures, shade_lut, ceiling, floor):
+def certify_flat_wall_contrast(palette, textures, ceiling, floor):
     """Fail the bake if a wall could read as the flat colour of one of the two.
 
     This is the contract behind the whole global-flat change: a near-solid wall
@@ -1159,7 +1304,7 @@ def certify_flat_wall_contrast(palette, textures, shade_lut, ceiling, floor):
     time, so a violation requires both. Verified against the pre-global-flat
     bake, where it still catches the original defect (see test-wall-quality.py).
     """
-    solid = solid_wall_colors(textures, shade_lut)
+    solid = solid_wall_colors(textures)
     violations = []
     for flat_name, flat_index in (("ceiling", ceiling), ("floor", floor)):
         flat_lab = world_palette.oklab(tuple(palette[flat_index]))
@@ -1239,6 +1384,7 @@ def emit_world_assets(path, texture_usage, sectors, provenance=None,
     }
     texture_meta = {}
     converted = []
+    converted_planes = []
     for name in texture_names:
         source = texture_path(name)
         with Image.open(source) as image:
@@ -1253,7 +1399,9 @@ def emit_world_assets(path, texture_usage, sectors, provenance=None,
             u_scale_q12=texture_u_scale_q12(width),
             v_scale_q12=texture_v_scale_q12(height),
         )
-        converted.append(convert_texture(source, palette))
+        planes = []
+        converted.append(convert_texture(source, palette, planes_out=planes))
+        converted_planes.append(planes)
 
     ceiling = (GLOBAL_CEILING_INDEX, GLOBAL_CEILING_INDEX, 0)
     floor = (GLOBAL_FLOOR_INDEX, GLOBAL_FLOOR_INDEX, 0)
@@ -1268,15 +1416,13 @@ def emit_world_assets(path, texture_usage, sectors, provenance=None,
     # frame -- that reads as fixed dirt on the monitor rather than as texture.
     sector_visuals = [ceiling + floor for _ in sectors]
 
-    # The flats are chosen before the shade chain so distant walls cannot darken
-    # into them; see build_shade_map's `reserved`.
+    # The flats are chosen before the shade planes so distant walls cannot
+    # darken into them; see build_shade_planes, which excludes both.
     sky_rows = build_sky_ceiling_rows(palette)
     flat_ceiling_rows = build_flat_ceiling_rows(sector_visuals)
-    shade_map = build_shade_map(palette, (GLOBAL_CEILING_INDEX, GLOBAL_FLOOR_INDEX))
-    shade_lut = build_shade_lut(palette, WORLD_SHADE_LEVELS,
-                                (GLOBAL_CEILING_INDEX, GLOBAL_FLOOR_INDEX))
-    certify_flat_wall_contrast(palette, dict(zip(texture_names, converted)),
-                               shade_lut, GLOBAL_CEILING_INDEX, GLOBAL_FLOOR_INDEX)
+    certify_flat_wall_contrast(palette,
+                               dict(zip(texture_names, converted_planes)),
+                               GLOBAL_CEILING_INDEX, GLOBAL_FLOOR_INDEX)
 
     lines = [
         "#ifndef MEGALDOOM_GENERATED_ASSETS_H",
@@ -1359,13 +1505,15 @@ def emit_world_assets(path, texture_usage, sectors, provenance=None,
     lines.extend([
         "};",
         "",
-        "static const u8 FREEDOOM_WORLD_SHADE_MAP[16] = {",
-        "    " + ", ".join(str(value) for value in shade_map),
-        "};",
-        "",
-        "// The shade chain itself is NOT emitted: renderer_pack.c derives it by",
-        "// chaining FREEDOOM_WORLD_SHADE_MAP FREEDOOM_WORLD_SHADE_LEVELS times,",
-        "// so a second ROM copy could only ever disagree with what is drawn.",
+        "// No shade map or shade chain is emitted. Shading is not an index",
+        "// remap any more: each level of FREEDOOM_WALL_PACKED_PAIRS is",
+        "// quantized from the material's own colours at that level's",
+        "// brightness (world_assets.build_shade_planes), because remapping",
+        "// indices collapsed every neutral material to one flat tone by",
+        "// shade 2 -- PAL3's neutral ladder has both flat colours reserved",
+        "// out of it, leaving nothing between #484848 and #919191 to step",
+        "// through. The planes below ARE the shading; there is no second",
+        "// copy that could disagree with what is drawn.",
         "#define FREEDOOM_WORLD_SHADE_LEVELS %d" % WORLD_SHADE_LEVELS,
         "",
         "static const u16 FREEDOOM_WALL_TEXTURE_USCALE_Q12[FREEDOOM_WALL_TEXTURE_COUNT] = {",
@@ -1412,9 +1560,11 @@ def emit_world_assets(path, texture_usage, sectors, provenance=None,
         "    [FREEDOOM_WORLD_SHADE_LEVELS][FREEDOOM_WALL_TEXTURE_COUNT]",
         "    [WALL_TEX_WIDTH][WALL_TEX_HEIGHT] = {",
     ])
-    for level_index, level in enumerate(shade_lut):
+    for level_index in range(WORLD_SHADE_LEVELS):
         lines.append("    { // shade %d" % level_index)
-        for texture_index, rows in enumerate(converted):
+        for texture_index, planes in enumerate(converted_planes):
+            rows = planes[level_index]
+            level = WALL_IDENTITY_MAP
             lines.append("        { // %d: %s" %
                          (texture_index, texture_names[texture_index]))
             for tex_x in range(WALL_TEX_WIDTH):
@@ -1441,11 +1591,12 @@ def emit_world_assets(path, texture_usage, sectors, provenance=None,
         "    [FREEDOOM_WORLD_SHADE_LEVELS][FREEDOOM_WALL_DOOR_TEXTURE_COUNT]",
         "    [WALL_TEX_WIDTH][WALL_TEX_HEIGHT] = {",
     ])
-    for level_index, level in enumerate(shade_lut):
+    for level_index in range(WORLD_SHADE_LEVELS):
         lines.append("    { // shade %d" % level_index)
         for door_index, name in enumerate(door_texture_names):
             texture_index = texture_ids[name]
-            rows = converted[texture_index]
+            rows = converted_planes[texture_index][level_index]
+            level = WALL_IDENTITY_MAP
             lines.append("        { // %d: %s" % (texture_index, name))
             for tex_x in range(WALL_TEX_WIDTH):
                 colors = []

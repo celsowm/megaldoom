@@ -120,8 +120,10 @@ def texture_metrics(name):
     path = world_assets.texture_path(name)
     shipped_current = world_assets.convert_texture(
         path, PALETTE, use_wall_bake_recipe=False)
+    candidate_planes = []
     shipped_candidate = world_assets.convert_texture(
-        path, PALETTE, use_wall_bake_recipe=True)
+        path, PALETTE, use_wall_bake_recipe=True,
+        planes_out=candidate_planes)
     current = world_assets._convert_texture(
         path, PALETTE, use_wall_bake_recipe=False)
     candidate = world_assets._convert_texture(
@@ -155,6 +157,7 @@ def texture_metrics(name):
         # absolute contract (churn ceiling, COMPUTE2 facade).
         "current": shipped_current,
         "candidate": shipped_candidate,
+        "candidate_planes": candidate_planes,
         "diagnostics": diagnostics,
         "changed_texels": sum(
             shipped_current[y][x] != shipped_candidate[y][x]
@@ -298,11 +301,13 @@ def _edge_image(mask):
     return image
 
 
-def _shade_panel(rows, shade_lut):
+def _shade_panel(planes):
+    """The four emitted shade planes. They are quantized independently
+    (world_assets.build_shade_planes), so this shows what actually ships
+    rather than replaying a remap that no longer exists."""
     panel = Image.new("RGB", (WIDTH * 2, HEIGHT * 2), "black")
-    for level, lut in enumerate(shade_lut):
-        shaded = [[lut[value] for value in row] for row in rows]
-        image = _index_image(shaded, PALETTE)
+    for level, rows in enumerate(planes):
+        image = _index_image(rows, PALETTE)
         panel.paste(image, ((level & 1) * WIDTH, (level >> 1) * HEIGHT))
     return panel.resize((256, 256), Image.Resampling.NEAREST)
 
@@ -314,7 +319,7 @@ def _label(panel, text):
     return result
 
 
-def make_atlas(result, shade_lut):
+def make_atlas(result):
     debug_indices = [
         ((index * 97) & 255, (index * 53 + 64) & 255,
          (index * 193 + 32) & 255)
@@ -324,7 +329,7 @@ def make_atlas(result, shade_lut):
         _label(_fit_panel(_source_crop(result["name"])), "selected Doom source"),
         _label(_fit_panel(_index_image(result["current"], PALETTE)), "current 64x128"),
         _label(_fit_panel(_index_image(result["candidate"], PALETTE)), "candidate 64x128"),
-        _label(_shade_panel(result["candidate"], shade_lut), "candidate shades 0..3"),
+        _label(_shade_panel(result["candidate_planes"]), "candidate shades 0..3"),
         _label(_fit_panel(_index_image(result["candidate"], debug_indices)), "PAL3 index mask"),
         _label(_fit_panel(_edge_image(result["diagnostics"]["edge_mask"])), "preserved edges"),
     ]
@@ -374,7 +379,7 @@ def _pose_is_clear(profile, px, py, ignored_seg):
     return True
 
 
-def auto_pose_for_material(profile, name, textures, scales, shade_lut):
+def auto_pose_for_material(profile, name, textures, scales):
     """Choose the valid front-side pose exposing most sampled columns."""
     best = None
     for seg_id, seg in enumerate(profile.segs):
@@ -399,7 +404,7 @@ def auto_pose_for_material(profile, name, textures, scales, shade_lut):
                 angle = _angle_toward(target_x - px, target_y - py)
                 pose = ("auto-%s" % name.lower(), px, py, angle)
                 rendered = flat_map_preview.render_profile(
-                    profile, pose, textures, scales, PALETTE, shade_lut)
+                    profile, pose, textures, scales, PALETTE)
                 visible = sum(source == seg.source_linedef
                               for source in rendered.source_linedefs)
                 score = (visible, -distance, -abs(along))
@@ -423,11 +428,11 @@ def _scene_comparison(current, candidate, label):
 
 
 def render_pair(profile, pose, current_textures, candidate_textures,
-                scales, shade_lut):
+                scales):
     current = flat_map_preview.render_profile(
-        profile, pose, current_textures, scales, PALETTE, shade_lut)
+        profile, pose, current_textures, scales, PALETTE)
     candidate = flat_map_preview.render_profile(
-        profile, pose, candidate_textures, scales, PALETTE, shade_lut)
+        profile, pose, candidate_textures, scales, PALETTE)
     if current.source_linedefs != candidate.source_linedefs:
         raise AssertionError("wall bake changed winning geometry at %s" % pose[0])
     if current.depths != candidate.depths:
@@ -492,9 +497,6 @@ def build_preview(wad_path=DEFAULT_WAD, output_dir=DEFAULT_OUTPUT):
         if name not in TECH_MATERIALS and current_textures[name] != candidate_textures[name]:
             raise AssertionError("non-target texture changed: %s" % name)
 
-    shade_lut = world_assets.build_shade_lut(
-        PALETTE, 4, (world_assets.GLOBAL_CEILING_INDEX,
-                     world_assets.GLOBAL_FLOOR_INDEX))
     output_dir = Path(output_dir)
     atlas_dir = output_dir / "atlases"
     scene_dir = output_dir / "scenes"
@@ -503,14 +505,14 @@ def build_preview(wad_path=DEFAULT_WAD, output_dir=DEFAULT_OUTPUT):
         directory.mkdir(parents=True, exist_ok=True)
 
     for result in metrics:
-        make_atlas(result, shade_lut).save(
+        make_atlas(result).save(
             atlas_dir / (result["name"].lower() + ".png"))
 
     scene_paths = []
     for pose in tuple(PREVIEW_POSES["E1M1"]) + (COMPUTE2_OBLIQUE_POSE,):
         current, candidate = render_pair(
             profile, pose, current_textures, candidate_textures,
-            scales, shade_lut)
+            scales)
         path = scene_dir / (pose[0] + ".png")
         _scene_comparison(current, candidate, pose[0]).save(path)
         scene_paths.append(path)
@@ -518,11 +520,11 @@ def build_preview(wad_path=DEFAULT_WAD, output_dir=DEFAULT_OUTPUT):
     auto_poses = {}
     for name in TECH_MATERIALS:
         pose, target, normal = auto_pose_for_material(
-            profile, name, current_textures, scales, shade_lut)
+            profile, name, current_textures, scales)
         auto_poses[name] = pose
         current, candidate = render_pair(
             profile, pose, current_textures, candidate_textures,
-            scales, shade_lut)
+            scales)
         path = scene_dir / ("auto-" + name.lower() + ".png")
         _scene_comparison(current, candidate, pose[0]).save(path)
         scene_paths.append(path)
@@ -530,7 +532,7 @@ def build_preview(wad_path=DEFAULT_WAD, output_dir=DEFAULT_OUTPUT):
         frames = []
         for moving_pose in motion_poses(name.lower(), pose, target, normal):
             a, b = render_pair(profile, moving_pose, current_textures,
-                               candidate_textures, scales, shade_lut)
+                               candidate_textures, scales)
             frames.append(_scene_comparison(a, b, moving_pose[0]))
         gif_path = motion_dir / (name.lower() + ".gif")
         frames[0].save(gif_path, save_all=True, append_images=frames[1:],
