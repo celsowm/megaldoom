@@ -119,16 +119,44 @@ def md_color(rgb):
     return world_palette.md_color(rgb)
 
 
-# Tuned so E1M1's dominant wall/flat median luminance (~39/255, see
-# tools/test-wall-quality.py dark-brown checks) lands near the middle of
-# PAL3's ramp instead of the bottom two rungs. This is a display-space
-# "levels lift", not a physically accurate linear-light gamma: it exists to
-# recover the light-level compensation the renderer does NOT apply to wall
-# texels (see WALL_SHADE_MODE in renderer_pack.c, which only shades by depth
-# and N/S side, never by the source sector's light field). Applied uniformly
-# to every wall/flat pixel, so relative differences between materials (a lit
-# STARTAN3 corridor vs a dark BROWN144 one) are preserved, not equalized.
-WALL_TONE_GAMMA = 0.55
+# A display-space "levels lift", not a physically accurate linear-light gamma.
+# It exists to recover the light-level compensation the renderer does NOT apply
+# to wall texels: WALL_SHADE_MODE in renderer_pack.c shades by depth and N/S
+# side only, never by the source sector's light field, which is discarded
+# outright. So some lift is genuinely required; the question is only how much.
+#
+# Sized against the shade chain rather than by eye. One FREEDOOM_WORLD_SHADE_MAP
+# step is about -0.125 Oklab L (7->5 is -0.133, 8->6 -0.126, 6->4 -0.127), and
+# with FOG_SHIFT 9 against E1M1/E1M2 room depths of ~500-1500 units the modal
+# on-screen wall sits at fog level 0-1 -- the near wall filling the screen is at
+# level 0 and receives the whole lift uncompensated. The target is therefore
+# well under one step. Measured seg-weighted across both maps: 0.55 lifts
+# +0.152 (1.2 steps, i.e. every wall sat over a full PAL3 rung too bright, and
+# the rungs are only ~0.13 apart), 0.65 lifts +0.115, 0.72 lifts +0.089.
+#
+# The ceiling on how far this can go is a HUE failure, not greying, and it is
+# why 0.72 was measured and rejected rather than taken. PAL3 has exactly one
+# olive rung (9, #484824) and no darker one, so as the lift comes down an olive
+# source texel eventually falls below index 9 in lightness -- and the next
+# candidate down is the maroon at index 4 (#482424), which distance_sq is happy
+# to pick because its chroma-loss term charges only for LOSING chroma, never for
+# gaining it in the wrong hue. BROWNGRN is where that bites, and it is the
+# most-used material in E1M1 at 26.8% of wall area: its share of index 4 runs
+# 10% at 0.65, 13% at 0.68 and 37% at 0.72, where the wall visibly stops being
+# a green vine wall and becomes a red-brown one. 0.65 keeps 58% of it on the
+# olive rung while still removing a quarter of the over-lift.
+#
+# So this constant is bounded above by the tone the eye reads as too bright and
+# below by PAL3's missing dark-olive rung. Widening that band needs a palette
+# slot, which is a separate and much larger decision -- see FROZEN_WORLD_PALETTE.
+#
+# NOTE: a power curve cannot preserve inter-material contrast, and this comment
+# used to claim it did. It lifts shadows hardest -- measured against source,
+# LITE3 gained +0.032 where STONE2 gained +0.204. That compression is why the
+# same constant reads as three separate defects (too bright, detail gone, hue
+# gone), and it is why the relief pass in _relieve_dominant_indices is a
+# companion to this constant rather than an independent fix.
+WALL_TONE_GAMMA = 0.65
 
 
 def tone_curve(rgb):
@@ -582,11 +610,32 @@ WALL_CHROMA_THRESHOLD = 0.02
 WALL_PAIR_MAX_DELTA = 40
 
 
-# E1M2's three broad stone panels quantize mostly to the global floor rung.
-# Retain that best match where possible, but sparsely move the least-cost
-# texels to their next-best rung so the wall never becomes a flat solid field.
-FLAT_AVOIDING_NEUTRAL_MATERIALS = ("STONE2", "STONE3", "SW1STON1")
+# A material that puts most of its texels on one index stops reading as a
+# textured surface: E1M2's broad stone panels collapsed onto the global floor
+# rung, and BROWNGRN -- 26.8% of E1M1's wall area -- put 56% of itself on the
+# khaki at index 9, which shade_family gives no darker sibling, so that majority
+# was byte-identical across all four shade planes as well as flat in itself.
+# Retain the best match where possible, but sparsely move the least-cost texels
+# to their next-best rung so the wall never becomes a solid field.
+#
+# The share ceiling is WALL_SOLID_SHARE's definition of "near-solid" rather than
+# a threshold discovered in the data: unlike EARTH_MIN_SHARE, which sits in a
+# measured 0.161-wide gap, dominance is a smooth continuum from 0.86 down with
+# no gap wider than 0.05, so there is nothing to find and the number has to be
+# derived instead.
 FLAT_AVOIDING_MAX_SHARE = 0.49
+# Relief may only move a texel that was nearly on the boundary anyway. One
+# neutral rung step costs 1.25 * 0.133**2 = 0.0221 under distance_sq, so this is
+# half a step. The ceiling is what separates collapse from genuine uniformity,
+# and no measured predicate does: LITE3 (dominance 0.65) ranks as MORE
+# relievable than GRAYTALL (0.86) on both move-penalty percentile and
+# dominant-population spread. Under the ceiling LITE3's whites sit dead centre
+# on index 13 and simply do not move, while STONE2's are 43% movable and do.
+# Uncapped, LITE3 flattens 0.65 -> 0.49 and its vertical churn reaches 0.407,
+# straight through WALL_CHURN_LIMIT -- which is _contrast_normalize's docstring
+# warning that COMPUTE2/BIGDOOR2/LITE3/DOORTRAK uniformity is real, arriving as
+# a measurement.
+RELIEF_MAX_PENALTY = 0.0111
 
 # PAL3 carries a 5-rung earth ramp -- 1 #240000, 4 #482424, 6 #6D4824,
 # 8 #916D48, 12 #B6916D -- as evenly spread in Oklab L (0.163..0.682) as the
@@ -762,6 +811,66 @@ def _is_earth_material(columns):
     return inside >= EARTH_MIN_SHARE * width * height
 
 
+def _relieve_dominant_indices(rows, smoothed, palette, allowed):
+    """Break up any index covering more than FLAT_AVOIDING_MAX_SHARE of a bake.
+
+    Ranks the texels sitting on an over-represented index by what it costs to
+    move each to its next-best rung and moves exactly the excess, cheapest
+    first. That is deterministic and spatially coherent -- the cheapest texels
+    are the ones nearest the decision boundary, so structure the quantizer
+    rounded away comes back where it existed, rather than as noise sprinkled
+    where it did not. It is emphatically NOT a dither: nothing is randomised,
+    nothing alternates on a lattice, and gain_ratio stays 0.
+
+    Two gates bound it, and both are load-bearing (see RELIEF_MAX_PENALTY, and
+    shade_family below).
+
+    Relieving one index can leave another over the ceiling, so this iterates;
+    three passes is well past the point where E1M1 and E1M2 stop changing.
+    """
+    width = len(smoothed)
+    height = len(smoothed[0])
+    maximum = int(width * height * FLAT_AVOIDING_MAX_SHARE)
+    for _ in range(3):
+        counts = Counter(value for row in rows for value in row)
+        crowded = sorted(((count, index) for index, count in counts.items()
+                          if count > maximum), reverse=True)
+        if not crowded:
+            break
+        for count, index in crowded:
+            # Relief must not shift hue, which is build_shade_map's second
+            # invariant applied to the one other place that repaints a texel
+            # the quantizer already chose for. Without this the widened
+            # `allowed` set is free to answer "what else is near this grey?"
+            # with PAL3's tan: measured on GRAYTALL, 37% of a grey wall
+            # repainted #B6916D -- the brown-cast regression this file warns
+            # about in several places, arriving through relief rather than
+            # through the quantizer.
+            family = shade_family(palette[index])
+            alternatives = [candidate for candidate in allowed
+                            if candidate != index
+                            and shade_family(palette[candidate]) == family]
+            if not alternatives:
+                continue
+            candidates = []
+            for y in range(height):
+                for x in range(width):
+                    if rows[y][x] != index:
+                        continue
+                    color = smoothed[x][y]
+                    replacement = nearest_palette_index(
+                        color, palette, alternatives)
+                    penalty = (world_palette.distance_sq(
+                        color, palette[replacement]) -
+                        world_palette.distance_sq(color, palette[index]))
+                    if penalty <= RELIEF_MAX_PENALTY:
+                        candidates.append((penalty, y, x, replacement))
+            candidates.sort()
+            for _penalty, y, x, replacement in candidates[:count - maximum]:
+                rows[y][x] = replacement
+    return rows
+
+
 def convert_texture(path, palette, use_wall_bake_recipe=True,
                     diagnostics=None):
     """Bake at display resolution, but only where the material can carry it.
@@ -869,7 +978,24 @@ def _convert_texture(path, palette, use_wall_bake_recipe=True,
                 recipe.edge_colour_threshold)
             smoothed = _edge_aware_spatial_smooth(
                 structural, edge_mask, recipe.smooth_weight)
-        is_neutral_material = material_name.startswith(("GRAY", "METAL", "STONE"))
+        # Two prefixes, three materials, and the last name-based classification
+        # left in the pipeline. It survives because both remaining families
+        # measure at most 0.05 max chroma, i.e. right in the band where a cast
+        # leaks rather than a colour arrives: STONE2 is exactly neutral at p99
+        # so the rule is free, STONE3's 33% chromatic share is olive at hue
+        # 121-123 (moss, which wants a measured olive predicate and its own
+        # review, not this rule's removal), and METAL1 leaks 13% of itself to
+        # the khaki at index 9 without it -- which is why it already carries a
+        # 2.5x error budget in test-wall-quality.py.
+        #
+        # GRAY came out. GRAYTALL's source is 10.2% chromatic and every one of
+        # those texels is its red stripe (#4F0000, chroma 0.110, hue 29); the
+        # rule was deleting a deliberate marking outright. GRAY7, the fallback
+        # source, is 0.0% chromatic, so the rule was a no-op there. Removing it
+        # widens `allowed`, which also widens what _relieve_dominant_indices may
+        # paint with -- that is why relief's shade_family gate is not optional
+        # and why the two changes belong together.
+        is_neutral_material = material_name.startswith(("METAL", "STONE"))
         chroma_threshold = WALL_CHROMA_THRESHOLD
         # gain_ratio 0 disables dithering outright, for every wall. The Bayer
         # pattern is defined in texture space but the runtime samples each
@@ -915,29 +1041,22 @@ def _convert_texture(path, palette, use_wall_bake_recipe=True,
                                             pair_max_delta, gain_ratio,
                                             WALL_CHROMA_LOSS_WEIGHT)
                  for x in range(bake_width)] for y in range(bake_height)]
-        if material_name in FLAT_AVOIDING_NEUTRAL_MATERIALS:
-            floor_texels = sum(value == GLOBAL_FLOOR_INDEX
-                               for row in rows for value in row)
-            maximum = int(bake_width * bake_height *
-                          FLAT_AVOIDING_MAX_SHARE)
-            if floor_texels > maximum:
-                alternatives = [index for index in allowed
-                                if index != GLOBAL_FLOOR_INDEX]
-                candidates = []
-                for y in range(bake_height):
-                    for x in range(bake_width):
-                        if rows[y][x] != GLOBAL_FLOOR_INDEX:
-                            continue
-                        replacement = nearest_palette_index(
-                            smoothed[x][y], palette, alternatives)
-                        penalty = (world_palette.distance_sq(
-                            smoothed[x][y], palette[replacement]) -
-                            world_palette.distance_sq(
-                                smoothed[x][y], palette[GLOBAL_FLOOR_INDEX]))
-                        candidates.append((penalty, y, x, replacement))
-                candidates.sort()
-                for _, y, x, replacement in candidates[:floor_texels - maximum]:
-                    rows[y][x] = replacement
+        # Skipped for a facade: _compose_compute2_facade_indices below discards
+        # this grid and repaints from its own hand-authored layout, reading
+        # `rows` only as an accent source, so relieving it is meaningless.
+        #
+        # Applying this to every material rather than to a named list is also
+        # what makes certify_flat_wall_contrast structurally unfailable instead
+        # of merely satisfied. No PAL3 index sits within FLAT_WALL_MIN_LIGHTNESS
+        # of GLOBAL_CEILING_INDEX or GLOBAL_FLOOR_INDEX except those indices
+        # themselves (the nearest other rung clears by 0.122 against a 0.09
+        # threshold), and the shade chain never enters either. So the whole
+        # certificate reduces to "no material may put WALL_SOLID_SHARE of its
+        # level-0 texels on index 3 or index 7" -- which is a special case of
+        # the ceiling enforced here.
+        if recipe is None or recipe.facade_window is None:
+            rows = _relieve_dominant_indices(rows, smoothed, palette,
+                                             list(allowed))
         if recipe is not None and recipe.facade_window is not None:
             rows = _compose_compute2_facade_indices(
                 _resize_index_rows(rows, COMPUTE2_FACADE_DIM))

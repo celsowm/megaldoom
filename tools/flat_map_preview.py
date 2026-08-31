@@ -30,7 +30,7 @@ import world_assets
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_WAD = ROOT / "DOOM1.WAD"
-DEFAULT_MAP_SOURCE = ROOT / "src" / "bsp" / "generated_e1m1_map.c"
+DEFAULT_MAP_DIR = ROOT / "src" / "bsp"
 DEFAULT_ASSET_SOURCE = ROOT / "src" / "bsp" / "generated_assets.h"
 DEFAULT_OUTPUT = ROOT / "out" / "flat-map-preview"
 
@@ -111,6 +111,16 @@ def fcos(angle):
     return fsin((angle + 64) & 255)
 
 
+def map_source_for(mapn):
+    """The generated descriptor bsp_emit wrote for one map.
+
+    bsp_emit prefixes every symbol AND the filename with the map name (see its
+    `sym` helper), so both the path and the symbols this module parses have to
+    be derived from the map rather than pinned to E1M1.
+    """
+    return DEFAULT_MAP_DIR / ("generated_%s_map.c" % mapn.lower())
+
+
 def _declaration(text, typename, symbol):
     match = re.search(
         rf"const\s+{typename}\s+{symbol}\[\d+\]\s*=\s*\{{(.*?)\n\}};",
@@ -131,9 +141,12 @@ def _rows(text, typename, symbol, count):
     return result
 
 
-def load_versioned_profile(map_source=DEFAULT_MAP_SOURCE,
+def load_versioned_profile(mapn="E1M1", map_source=None,
                            asset_source=DEFAULT_ASSET_SOURCE):
     """Parse the checked-in C artifact without regenerating it."""
+    if map_source is None:
+        map_source = map_source_for(mapn)
+    prefix = mapn.lower()
     map_text = Path(map_source).read_text(encoding="utf-8")
     asset_text = Path(asset_source).read_text(encoding="utf-8")
     texture_names = {}
@@ -143,9 +156,9 @@ def load_versioned_profile(map_source=DEFAULT_MAP_SOURCE,
         texture_names[int(value)] = (world_assets.FALLBACK_TEXTURE
                                      if macro == "FALLBACK" else macro)
     vertices = [tuple(row) for row in _rows(
-        map_text, "BspVertex", "bsp_vertices", 2)]
+        map_text, "BspVertex", prefix + "_bsp_vertices", 2)]
     segs = []
-    for row in _rows(map_text, "BspSeg", "bsp_segs", 11):
+    for row in _rows(map_text, "BspSeg", prefix + "_bsp_segs", 11):
         v1, v2, nx, ny, tex_u, tex_v, texture_id = row[:7]
         segs.append(PreviewSeg(
             v1, v2, nx, ny, texture_names[texture_id], tex_u, tex_v))
@@ -419,12 +432,18 @@ def make_plan_view(clean_profile, candidate_profile, poses):
 
 def build_preview(wad_path=DEFAULT_WAD, mapn="E1M1",
                   output_dir=DEFAULT_OUTPUT,
-                  versioned_map=DEFAULT_MAP_SOURCE,
+                  versioned_map=None,
                   versioned_assets=DEFAULT_ASSET_SOURCE):
+    if mapn not in PREVIEW_POSES:
+        raise SystemExit(
+            "No preview poses defined for %s. PREVIEW_POSES in "
+            "tools/flat_map_recipes.py carries hand-placed camera poses, and "
+            "only %s has them; add poses there to preview another map."
+            % (mapn, ", ".join(sorted(PREVIEW_POSES))))
     wad = WadFile(str(wad_path))
     clean_data = doom_map.load_map(wad, mapn, apply_recipes=False)
     candidate_data = doom_map.load_map(wad, mapn, apply_recipes=True)
-    versioned = load_versioned_profile(versioned_map, versioned_assets)
+    versioned = load_versioned_profile(mapn, versioned_map, versioned_assets)
     clean = profile_from_map("current WAD / no recipe", clean_data)
     candidate = profile_from_map("current WAD / perimeter material transfer",
                                  candidate_data)
@@ -464,7 +483,9 @@ def main():
     parser.add_argument("--wad", type=Path, default=DEFAULT_WAD)
     parser.add_argument("--map", default="E1M1")
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUTPUT)
-    parser.add_argument("--versioned-map", type=Path, default=DEFAULT_MAP_SOURCE)
+    parser.add_argument("--versioned-map", type=Path, default=None,
+                        help="generated map descriptor to parse "
+                             "(default: derived from --map)")
     parser.add_argument("--versioned-assets", type=Path, default=DEFAULT_ASSET_SOURCE)
     args = parser.parse_args()
     clean, candidate, paths = build_preview(

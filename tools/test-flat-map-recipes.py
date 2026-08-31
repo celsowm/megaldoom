@@ -146,16 +146,19 @@ def test_current_wad_contract():
     }]
 
     map_text = (ROOT / "src/bsp/generated_e1m1_map.c").read_text()
-    asset_text = (ROOT / "src/bsp/generated_assets.h").read_text()
     targets_csv = ",".join(str(v) for v in E1M1_CURATED_TARGET_LINEDEFS)
-    for text in (map_text, asset_text):
-        assert "// Source SHA-256: %s" % EXPECTED_SHA256 in text
-        assert ("// Flat baseline/final: %d/%d SEGs; curated material: "
-                "%d linedefs / %d SEGs" % (
-                    E1M1_SEG_COUNT, E1M1_SEG_COUNT,
-                    len(E1M1_CURATED_TARGET_LINEDEFS), len(E1M1_CURATED_TARGET_LINEDEFS))) in text
-        assert ("// Certified: exit SEG %d reachable after %d states" %
-                (E1M1_EXIT_SEG_INDEX, E1M1_CERTIFICATE_STATES)) in text
+    # Per-map provenance lives in the map descriptor alone. It used to be
+    # asserted of generated_assets.h too, from when that header was emitted per
+    # map; the atlas is now shared across E1M1 and E1M2 (one 53-texture catalog
+    # for both, see world_assets.emit_world_assets), so it cannot carry any one
+    # map's SHA, SEG counts or reachability certificate.
+    assert "// Source SHA-256: %s" % EXPECTED_SHA256 in map_text
+    assert ("// Flat baseline/final: %d/%d SEGs; curated material: "
+            "%d linedefs / %d SEGs" % (
+                E1M1_SEG_COUNT, E1M1_SEG_COUNT,
+                len(E1M1_CURATED_TARGET_LINEDEFS), len(E1M1_CURATED_TARGET_LINEDEFS))) in map_text
+    assert ("// Certified: exit SEG %d reachable after %d states" %
+            (E1M1_EXIT_SEG_INDEX, E1M1_CERTIFICATE_STATES)) in map_text
     assert ("// Curated material: start-room-computer-bank source linedef %d "
             "(hint 50) -> targets %s, COMPUTE2, "
             "%d retextured, +0 SEGs" % (

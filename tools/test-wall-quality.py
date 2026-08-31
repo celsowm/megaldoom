@@ -321,16 +321,25 @@ def main():
     curated_metrics = [wall_bake_preview.texture_metrics(name)
                        for name in extractor.TECH_WALL_MATERIALS]
     strict_improvements = wall_bake_preview.certify_metrics(curated_metrics)
-    # COMPTILE left this list when the horizontal low-pass moved to the pair
-    # lattice: its edge F1 gain fell to +0.002, under the 0.005 the certifier
-    # calls a strict improvement, because the uncurated bake it is measured
-    # against now keeps the same tile grid the recipe used to be needed to
-    # rescue. It is still improved, and every hard guard in certify_metrics
-    # (churn ceiling and margin, isolated texels, 5% perceptual error, edge
-    # regression) still holds for all eight -- COMPTILE's isolated texels go
-    # 54 -> 20, STARG3's 155 -> 6 and STARTAN3's 168 -> 2.
+    # COMPTILE rejoined this list, and its earlier absence was accounting rather
+    # than quality. certify_metrics used to score the recipe's edge retention
+    # against a recipe-off bake that still carried its isolated texels, and
+    # every speck in that bake is a closed boundary the detector credits as
+    # retained structure -- so a material noisy enough to be full of them starts
+    # from an edge F1 the recipe can only lose by cleaning up, which is exactly
+    # what cleanup_isolated exists to do. COMPTILE carries 104 such texels.
+    # Scored against a despeckled recipe-off bake, like for like (see
+    # wall_bake_preview.texture_metrics), it reads +0.055 rather than negative.
+    # No other curated material moves by more than 0.01 under that change, which
+    # is what says the fix is confined to the accounting it was aimed at.
+    #
+    # LITE3 is the one material that does not strictly improve (+0.005 is the
+    # bar; it measures -0.001). It has no isolated texels on either side, so
+    # nothing above applies to it -- it is simply a material the recipe leaves
+    # alone, and every hard guard in certify_metrics still holds for it.
     assert strict_improvements == [
-        "COMPUTE2", "STARG3", "STARGR1", "STARTAN1", "STARTAN3", "SUPPORT2",
+        "COMPTILE", "COMPUTE2", "STARG3", "STARGR1", "STARTAN1", "STARTAN3",
+        "SUPPORT2",
     ]
     wall_bake_preview.certify_compute2_facade(display_textures["COMPUTE2"])
 

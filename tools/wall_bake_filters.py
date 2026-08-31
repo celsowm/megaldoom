@@ -127,9 +127,13 @@ def _contrast_normalize(columns):
             # Clamped at 0: expanding around the median drives luminance
             # negative for texels far enough below it, and a negative base
             # under ** 1.25 silently returns a COMPLEX number in Python, which
-            # then dies in round() several frames of stack later. Only
-            # world_assets.WALL_TONE_GAMMA's lift keeps the expression positive
-            # today, so any darker tone curve trips it.
+            # then dies in round() several frames of stack later. The clamp is
+            # what makes that unreachable, not world_assets.WALL_TONE_GAMMA's
+            # lift -- measured over all 53 materials, the count of texels
+            # reaching target <= 0 is zero at gamma 0.55, 0.72 and 0.80 alike,
+            # and the first hits appear only near gamma 1.0 (68 of 420864).
+            # An earlier note here claimed any darker tone curve would trip it;
+            # that was the historical hazard, not the behaviour.
             target = max(0.0, median + (value - median) * gain)
             if target <= 0.0:
                 result[x][y] = (0, 0, 0)
