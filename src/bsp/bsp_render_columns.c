@@ -28,9 +28,9 @@ void bsp_draw_seg(u16 seg_index) {
     const bool overlay = (bool)(moving_door || window);
     // A sky wall claims its samples like a normal solid wall (same collision,
     // same occlusion) but is never textured or depth-tested: nothing real is
-    // behind a map-edge line, so the column is seeded exactly like one no seg
-    // ever claimed (see bsp_seed_unclaimed_columns) and left for the sky
-    // ceiling / floor fill to cover. See sky_wall_sector() in
+    // behind a low parapet at the map edge, so the column is seeded exactly
+    // like one no seg ever claimed (see bsp_seed_unclaimed_columns) and left
+    // for the sky ceiling / floor fill to cover. See sky_wall_sector() in
     // tools/doom_map.py for how one is recognised.
     const bool sky_wall = (bool)(seg->type == BSP_SEG_SKY_WALL);
     const BspVertex *a = &bsp_vertices[seg->v1];

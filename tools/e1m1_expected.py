@@ -35,7 +35,7 @@ E1M1_HEADER_ROW = "%du, %du, %du, %du, %du, %du, %du, %du, %du," % (
 # SEG_WINDOW/SEG_SKY_WALL), summing to E1M1_SEG_COUNT. This WAD's E1M1 has no
 # remote-trigger door lines, so SEG_TRIGGER is absent rather than zero (see
 # test-sector-map.py).
-E1M1_WALL_SEG_COUNT = 315
+E1M1_WALL_SEG_COUNT = 345
 E1M1_DOOR_SEG_COUNT = 16  # E1M1_DOOR_GROUP_COUNT * 4 faces per group
 E1M1_EXIT_SEG_COUNT = 1
 
@@ -48,14 +48,20 @@ E1M1_EXIT_SEG_COUNT = 1
 E1M1_WINDOW_SEG_COUNT = 15
 E1M1_WINDOW_LINEDEF_COUNT = 7
 
-# One-sided map-edge walls in front of an F_SKY1 sector (sectors 5, 13, 20,
-# 22, 28, 30, 47) reach the ROM as SEG_SKY_WALL instead of SEG_WALL, so the
+# One-sided walls bounding a LOW F_SKY1 sector -- the parapets along the south
+# edge of the nukage courtyard (sectors 20, 22 and 47, all under the engine's
+# 128-unit slab) -- reach the ROM as SEG_SKY_WALL instead of SEG_WALL, so the
 # renderer can leave the sky visible above them (this engine has no per-wall
 # height, so a textured full-height wall here would otherwise hide almost all
-# of the sky). 39 segs come from exactly 35 linedefs; the BSP splits some of
-# them. Reclassified from SEG_WALL, same geometry-neutral proof as windows.
-E1M1_SKY_WALL_SEG_COUNT = 39
-E1M1_SKY_WALL_LINEDEF_COUNT = 35
+# of the sky). 9 segs come from exactly 9 linedefs. Reclassified from
+# SEG_WALL, same geometry-neutral proof as windows.
+#
+# The courtyards themselves (sectors 5 and 30) are F_SKY1 too but stand 272
+# and 264 units tall, so the slab is already shorter than their real walls and
+# sky_wall_sector() leaves the buildings standing in them -- the start room's
+# east wall around the two window recesses included -- as ordinary SEG_WALL.
+E1M1_SKY_WALL_SEG_COUNT = 9
+E1M1_SKY_WALL_LINEDEF_COUNT = 9
 
 # doom_map.load_map(..., apply_recipes=True) certificate/BFS result.
 E1M1_EXIT_SEG_INDEX = 376

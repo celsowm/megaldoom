@@ -33,12 +33,16 @@ typedef enum {
     // collision and line of sight -- only rendering differs. See
     // window_recess() in tools/doom_map.py for how one is recognised.
     BSP_SEG_WINDOW = 5,
-    // A one-sided map-edge wall in front of an F_SKY1 sector. This engine has
-    // no per-wall height, so these would otherwise render as a full-height
-    // opaque wall and leave almost no sky visible from inside the sector they
-    // bound. Fully solid for collision and line of sight, same as a plain
-    // WALL -- only rendering differs (see bsp_draw_seg). See
-    // sky_wall_sector() in tools/doom_map.py for how one is recognised.
+    // A one-sided parapet bounding an F_SKY1 sector SHORTER than
+    // RAY_WORLD_WALL_HEIGHT. This engine has no per-wall height, so these
+    // would otherwise render as a full-height opaque wall and leave almost no
+    // sky visible from inside the sector they bound. A taller sky sector --
+    // an open-air courtyard -- is deliberately NOT one of these: the slab is
+    // already no taller than its real walls, and blanking the buildings
+    // standing in it left their windows hanging in mid-air. Fully solid for
+    // collision and line of sight, same as a plain WALL -- only rendering
+    // differs (see bsp_draw_seg). See sky_wall_sector() in tools/doom_map.py
+    // for how one is recognised.
     BSP_SEG_SKY_WALL = 6
 } BspSegType;
 

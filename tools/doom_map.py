@@ -24,6 +24,8 @@ import hashlib
 import math
 import struct
 
+import raycast_constants
+
 from flat_map_recipes import resolve_flat_material_transfers
 from world_assets import FALLBACK_TEXTURE
 
@@ -63,6 +65,11 @@ NAV_STEP = 16
 PICKUP_RADIUS = 128
 USE_RADIUS = 256
 BILLBOARD_OBJECT_COUNT = 112
+# The one constant slab height every wall projects from. A sky sector taller
+# than this already renders its walls SHORTER than they really are, so the sky
+# above them survives on its own; only a sector below it needs the sky-wall
+# rule (see sky_wall_sector).
+WORLD_WALL_HEIGHT = raycast_constants.define("RAY_WORLD_WALL_HEIGHT")
 DOOM_THING_SKILL_MEDIUM = 0x0002
 DOOM_THING_NOT_SINGLE_PLAYER = 0x0010
 
@@ -761,7 +768,7 @@ def load_map(wad, mapn, apply_recipes=True, apply_windows=True,
     }
 
     def sky_wall_sector(line_id, ld):
-        """One-sided line whose only side faces an F_SKY1-ceilinged sector.
+        """One-sided line bounding a LOW F_SKY1-ceilinged sector: a parapet.
 
         This engine has no per-wall height (every solid wall projects from one
         constant, RAY_WORLD_WALL_HEIGHT), so a real Doom low parapet with sky
@@ -770,13 +777,27 @@ def load_map(wad, mapn, apply_recipes=True, apply_windows=True,
         from inside the sector they bound. A one-sided line is already forced
         solid unconditionally (see line_solid_without_recipe), so recognising
         it here only changes how it is drawn, never the geometry.
+
+        The sky ceiling alone is NOT enough to recognise one. An open-air
+        courtyard is an F_SKY1 sector too, and the buildings standing in it
+        present their exterior faces to it as ordinary one-sided lines --
+        E1M1's start room is exactly that, and blanking its east wall left the
+        two window recesses in it hanging in mid-air with no building around
+        them. What separates the two cases is the sector's own height: at or
+        above WORLD_WALL_HEIGHT the slab is already no taller than the real
+        wall, so it hides no sky that Doom itself would have shown and the
+        wall has to be drawn. Only below it does the slab overshoot the real
+        parapet and bury the sky the player is meant to see over.
         """
         if ld["left"] != 0xFFFF or ld["right"] == 0xFFFF:
             return None
         sector_id = sidedefs[ld["right"]]["sector"]
-        if sectors[sector_id]["ceiling_name"] == "F_SKY1":
-            return sector_id
-        return None
+        sector = sectors[sector_id]
+        if sector["ceiling_name"] != "F_SKY1":
+            return None
+        if sector["ceiling"] - sector["floor"] >= WORLD_WALL_HEIGHT:
+            return None
+        return sector_id
 
     sky_wall_lines = {
         line_id: sector_id
