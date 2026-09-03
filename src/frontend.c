@@ -14,12 +14,22 @@
 #define MAIN_CURSOR_Y 12
 #define MAIN_CURSOR_STEP 4
 #define BOOT_CARD_FRAMES 180
-#define BOOT_FADE_FRAMES 8
+#define BOOT_SEGA_CARD_FRAMES 564
+#define BOOT_FADE_FRAMES 12
 #define BOOT_CARD_VISIBLE_FRAMES (BOOT_CARD_FRAMES - (BOOT_FADE_FRAMES * 2))
-#define BOOT_CACODEMON_X 128
-#define BOOT_CACODEMON_Y 50
-#define BOOT_CACODEMON_ATTACK_START 48
-#define BOOT_CACODEMON_ATTACK_END 64
+#define BOOT_SEGA_VISIBLE_FRAMES (BOOT_SEGA_CARD_FRAMES - (BOOT_FADE_FRAMES * 2))
+#define BOOT_SEGA_LOGO_Y 128
+#define BOOT_CACODEMON_X 136
+#define BOOT_CACODEMON_Y 60
+#define BOOT_CACODEMON_ENTRY_END 90
+#define BOOT_CACODEMON_ATTACK_START 180
+#define BOOT_CACODEMON_ATTACK_END 228
+#define BOOT_PROJECTILE_START 228
+#define BOOT_PROJECTILE_IMPACT 270
+#define BOOT_PROJECTILE_EXPLOSION_END 318
+#define BOOT_SEGA_LETTERS_FLIGHT_END 438
+#define BOOT_CACODEMON_LAUGH_END 540
+#define BOOT_SEGA_SPRITE_VRAM_TILES 192
 #define ENDING_PROMPT_BLINK_MASK 0x3F
 #define ENDING_PROMPT_ON_FRAMES 48
 // Generated at y=176 and centred at x=114.  This is the exact 12-tile span
@@ -104,89 +114,227 @@ static const s8 s_boot_cacodemon_bob[16] = {
     2, 2, 2, 1, 0, -1, -2, -1,
 };
 
-/* Entries 12..15 are intentionally reserved by make_boot_sgdk().  Cycling
+/* Entries 12..15 are intentionally reserved by make_boot_sega(). Cycling
  * only those shades gives the blue wordmark a metallic sheen without ever
  * touching PAL1, which belongs to the Cacodemon. */
-static const u16 s_sgdk_shimmer[4][4] = {
-    { RGB24_TO_VDPCOLOR(0x0049B6), RGB24_TO_VDPCOLOR(0x0092FF),
-      RGB24_TO_VDPCOLOR(0x6DDBFF), RGB24_TO_VDPCOLOR(0xFFFFFF) },
-    { RGB24_TO_VDPCOLOR(0x006DDB), RGB24_TO_VDPCOLOR(0x00B6FF),
-      RGB24_TO_VDPCOLOR(0xB6FFFF), RGB24_TO_VDPCOLOR(0xFFFFFF) },
-    { RGB24_TO_VDPCOLOR(0x0049B6), RGB24_TO_VDPCOLOR(0x00B6FF),
-      RGB24_TO_VDPCOLOR(0xFFFFFF), RGB24_TO_VDPCOLOR(0xB6FFFF) },
-    { RGB24_TO_VDPCOLOR(0x00246D), RGB24_TO_VDPCOLOR(0x006DDB),
-      RGB24_TO_VDPCOLOR(0x00B6FF), RGB24_TO_VDPCOLOR(0x6DDBFF) },
+static const u16 s_sega_shimmer[4][4] = {
+    { RGB24_TO_VDPCOLOR(0x00287D), RGB24_TO_VDPCOLOR(0x004AB4),
+      RGB24_TO_VDPCOLOR(0x58A8F0), RGB24_TO_VDPCOLOR(0xFFFFFF) },
+    { RGB24_TO_VDPCOLOR(0x003995), RGB24_TO_VDPCOLOR(0x005CC8),
+      RGB24_TO_VDPCOLOR(0x80C4F8), RGB24_TO_VDPCOLOR(0xFFFFFF) },
+    { RGB24_TO_VDPCOLOR(0x00287D), RGB24_TO_VDPCOLOR(0x005CC8),
+      RGB24_TO_VDPCOLOR(0xFFFFFF), RGB24_TO_VDPCOLOR(0x80C4F8) },
+    { RGB24_TO_VDPCOLOR(0x001248), RGB24_TO_VDPCOLOR(0x003995),
+      RGB24_TO_VDPCOLOR(0x005CC8), RGB24_TO_VDPCOLOR(0x58A8F0) },
 };
 
-static const u16 s_sgdk_attack_shimmer[4] = {
-    RGB24_TO_VDPCOLOR(0x0092FF), RGB24_TO_VDPCOLOR(0x00D8FF),
+static const u16 s_sega_attack_shimmer[4] = {
+    RGB24_TO_VDPCOLOR(0x004AB4), RGB24_TO_VDPCOLOR(0x0078D8),
+    RGB24_TO_VDPCOLOR(0x80C4F8), RGB24_TO_VDPCOLOR(0xFFFFFF),
+};
+
+/* Palette indices 2..8 are the solid blue/cyan face. Reinstalling them after
+ * each white hit-flash makes the explosion read on the letters themselves,
+ * rather than only in the projectile sprite. */
+static const u16 s_sega_face_colours[7] = {
+    RGB24_TO_VDPCOLOR(0x001248), RGB24_TO_VDPCOLOR(0x00287D),
+    RGB24_TO_VDPCOLOR(0x0041AA), RGB24_TO_VDPCOLOR(0x0055CD),
+    RGB24_TO_VDPCOLOR(0x1470E1), RGB24_TO_VDPCOLOR(0x4898EE),
+    RGB24_TO_VDPCOLOR(0x80C4F8),
+};
+
+static const u16 s_sega_impact_face[7] = {
+    RGB24_TO_VDPCOLOR(0xFFFFFF), RGB24_TO_VDPCOLOR(0xFFFFFF),
     RGB24_TO_VDPCOLOR(0xB6FFFF), RGB24_TO_VDPCOLOR(0xFFFFFF),
+    RGB24_TO_VDPCOLOR(0xB6FFFF), RGB24_TO_VDPCOLOR(0xFFFFFF),
+    RGB24_TO_VDPCOLOR(0xB6FFFF),
 };
 
-static void animate_sgdk_shimmer(u16 frame, bool attack) {
-    const u16 *colours = attack ? s_sgdk_attack_shimmer
-                                : s_sgdk_shimmer[(frame >> 2) & 3];
+static const SpriteDefinition *const s_sega_letter_defs[4] = {
+    &frontend_sega_s, &frontend_sega_e, &frontend_sega_g, &frontend_sega_a,
+};
+
+/* The classic startup mark is about 70px wide. Sprite rectangles overlap,
+ * but each independently rendered glyph has a transparent gutter. */
+static const s16 s_sega_letter_start_x[4] = { 109, 130, 152, 174 };
+
+static void animate_sega_shimmer(u16 frame, bool attack, bool impact) {
+    const u16 *colours;
+    if (impact && ((frame >> 2) & 1) == 0) {
+        PAL_setColors(2, s_sega_impact_face, 7, CPU);
+        PAL_setColors(12, s_sega_attack_shimmer, 4, CPU);
+        return;
+    }
+    PAL_setColors(2, s_sega_face_colours, 7, CPU);
+    colours = attack ? s_sega_attack_shimmer : s_sega_shimmer[(frame >> 3) & 3];
     PAL_setColors(12, colours, 4, CPU);
 }
 
-static void fade_sgdk_card_in(const Image *image) {
-    /* The card owns PAL0 and the sprite owns PAL1.  Fade the two targets as
-     * one 32-colour block so the Cacodemon never pops over a completed logo. */
-    u16 palette[32];
+static void fade_sega_card_in(const Image *image) {
+    /* PAL0 is the logo, PAL1 the Cacodemon and PAL2 the fireball. */
+    u16 palette[48];
     for (u16 index = 0; index < 16; index++) {
         palette[index] = image->palette->data[index];
         palette[16 + index] = frontend_cacodemon.palette->data[index];
+        palette[32 + index] = frontend_cacodemon_projectile.palette->data[index];
     }
-    PAL_fadeIn(0, 31, palette, BOOT_FADE_FRAMES, FALSE);
+    PAL_fadeIn(0, 47, palette, BOOT_FADE_FRAMES, FALSE);
 }
 
-static u16 sgdk_cacodemon_frame(u16 frame) {
+static u16 sega_cacodemon_frame(u16 frame) {
     if (frame >= BOOT_CACODEMON_ATTACK_START && frame < BOOT_CACODEMON_ATTACK_END) {
-        return (u16)(2 + ((frame - BOOT_CACODEMON_ATTACK_START) >> 2));
+        return (u16)(2 + (((frame - BOOT_CACODEMON_ATTACK_START) >> 3) & 3));
+    }
+    /* The open/closed attack faces, paired with a wider bob, read as a cruel
+     * laugh once the logo has vanished. */
+    if (frame >= BOOT_SEGA_LETTERS_FLIGHT_END && frame < BOOT_CACODEMON_LAUGH_END) {
+        return (u16)(2 + ((frame >> 2) & 3));
     }
     return (frame >> 3) & 1;
 }
 
+static void set_sega_letter_visibility(Sprite *const letters[4], bool visible) {
+    for (u16 index = 0; index < 4; index++) {
+        if (letters[index] != NULL) {
+            SPR_setVisibility(letters[index], visible ? VISIBLE : HIDDEN);
+        }
+    }
+}
+
+static void animate_sega_letters(Sprite *const letters[4], u16 frame) {
+    static const s16 s_velocity_x[4] = { -3, -2, 2, 3 };
+    static const s16 s_velocity_y[4] = { 0, -3, 2, 0 };
+
+    if (frame < BOOT_PROJECTILE_EXPLOSION_END) {
+        for (u16 index = 0; index < 4; index++) {
+            if (letters[index] != NULL) {
+                SPR_setPosition(letters[index], s_sega_letter_start_x[index],
+                                BOOT_SEGA_LOGO_Y);
+                SPR_setVisibility(letters[index], VISIBLE);
+            }
+        }
+        return;
+    }
+    if (frame >= BOOT_SEGA_LETTERS_FLIGHT_END) {
+        set_sega_letter_visibility(letters, FALSE);
+        return;
+    }
+
+    const s16 travel = (s16)(frame - BOOT_PROJECTILE_EXPLOSION_END);
+    const s16 gravity = (s16)(((s32)travel * travel) / 160);
+    for (u16 index = 0; index < 4; index++) {
+        const s16 x = (s16)(s_sega_letter_start_x[index] +
+                            s_velocity_x[index] * travel);
+        const s16 y = (s16)(BOOT_SEGA_LOGO_Y + s_velocity_y[index] * travel + gravity);
+        if (letters[index] == NULL) continue;
+        SPR_setPosition(letters[index], x, y);
+        /* The Genesis X coordinate only represents a bounded signed range;
+         * hide a completed flight instead of letting it wrap back on screen. */
+        SPR_setVisibility(letters[index],
+                          x > -32 && x < 320 && y > -48 && y < 224 ? VISIBLE : HIDDEN);
+    }
+}
+
 static void run_boot_card(const Image *image, bool show_cacodemon) {
     Sprite *cacodemon = NULL;
+    Sprite *projectile = NULL;
+    Sprite *sega_letters[4] = { NULL, NULL, NULL, NULL };
     u16 previous;
     u16 cacodemon_frame = 0;
+    const u16 visible_frames = show_cacodemon ? BOOT_SEGA_VISIBLE_FRAMES
+                                               : BOOT_CARD_VISIBLE_FRAMES;
 
     draw_boot_card(image);
     if (show_cacodemon) {
-        /* Reserve the 96 tiles immediately below the system font. This is the
-         * same 1440-tile user ceiling the frontend test already certifies. */
-        SPR_initEx(96);
+        /* Four wordmark pieces, the smaller Cacodemon and its 56x48 fireball
+         * all fit below the Genesis per-line sprite limit at their overlaps. */
+        /* 42 Cacodemon tiles + 42 projectile tiles + four 24-tile letters
+         * require 180 cached tiles. Keep a small margin so every semantic
+         * letter is allocated before the first visible frame. */
+        SPR_initEx(BOOT_SEGA_SPRITE_VRAM_TILES);
         cacodemon = SPR_addSprite(&frontend_cacodemon, BOOT_CACODEMON_X,
                                   BOOT_CACODEMON_Y,
                                   TILE_ATTR(PAL1, TRUE, FALSE, FALSE));
-        if (cacodemon != NULL) SPR_update();
+        projectile = SPR_addSprite(&frontend_cacodemon_projectile, 132, 72,
+                                   TILE_ATTR(PAL2, TRUE, FALSE, FALSE));
+        for (u16 index = 0; index < 4; index++) {
+            sega_letters[index] = SPR_addSprite(s_sega_letter_defs[index],
+                                                 s_sega_letter_start_x[index],
+                                                 BOOT_SEGA_LOGO_Y,
+                                                 TILE_ATTR(PAL0, TRUE, FALSE, FALSE));
+            /* Each letter is now its own one-frame SpriteDefinition.  Using
+             * the letter index here selected a non-existent animation frame
+             * for E/G/A, making the logo look sliced before impact. */
+            if (sega_letters[index] != NULL) SPR_setFrame(sega_letters[index], 0);
+        }
+        if (projectile != NULL) SPR_setVisibility(projectile, HIDDEN);
+        SPR_update();
     }
 
     if (show_cacodemon) {
-        fade_sgdk_card_in(image);
+        fade_sega_card_in(image);
     } else {
         PAL_fadeIn(0, 63, image->palette->data, BOOT_FADE_FRAMES, FALSE);
     }
     wait_for_release(BUTTON_START);
     previous = JOY_readJoypad(JOY_1);
-    for (u16 frame = 0; frame < BOOT_CARD_VISIBLE_FRAMES; frame++) {
+    for (u16 frame = 0; frame < visible_frames; frame++) {
         const u16 pressed = read_pressed(&previous);
         if ((pressed & BUTTON_START) != 0) break;
         if (show_cacodemon) {
-            const u16 next_frame = sgdk_cacodemon_frame(frame);
-            const bool attack = next_frame >= 2;
-            animate_sgdk_shimmer(frame, attack);
+            u16 caco_x = BOOT_CACODEMON_X;
+            u16 caco_y = BOOT_CACODEMON_Y;
+            const u16 next_frame = sega_cacodemon_frame(frame);
+            const bool attack = frame >= BOOT_CACODEMON_ATTACK_START &&
+                                frame < BOOT_PROJECTILE_IMPACT;
+            const bool impact = frame >= BOOT_PROJECTILE_IMPACT &&
+                                frame < BOOT_PROJECTILE_EXPLOSION_END;
+            if (frame < BOOT_CACODEMON_ENTRY_END) {
+                caco_x = (u16)(320 - ((u32)frame * (320 - BOOT_CACODEMON_X)) /
+                                (BOOT_CACODEMON_ENTRY_END - 1));
+                caco_y = (u16)(8 + ((u32)frame * (BOOT_CACODEMON_Y - 8)) /
+                                (BOOT_CACODEMON_ENTRY_END - 1));
+            }
+            animate_sega_shimmer(frame, attack, impact);
+            animate_sega_letters(sega_letters, frame);
             if (cacodemon != NULL) {
-                const s16 bob = s_boot_cacodemon_bob[(frame >> 1) & 15];
+                s16 bob = s_boot_cacodemon_bob[(frame >> 1) & 15];
+                if (frame >= BOOT_SEGA_LETTERS_FLIGHT_END) bob *= 2;
                 if (next_frame != cacodemon_frame) {
                     SPR_setFrame(cacodemon, next_frame);
                     cacodemon_frame = next_frame;
                 }
-                SPR_setPosition(cacodemon, BOOT_CACODEMON_X,
-                                (s16)(BOOT_CACODEMON_Y + bob));
-                SPR_update();
+                SPR_setPosition(cacodemon, (s16)caco_x, (s16)(caco_y + bob));
             }
+            if (projectile != NULL) {
+                if (frame >= BOOT_PROJECTILE_START && frame < BOOT_PROJECTILE_IMPACT) {
+                    const u16 travel = (u16)(frame - BOOT_PROJECTILE_START);
+                    const s16 x = (s16)(132 + (((travel >> 1) & 3) - 1) * 2);
+                    const s16 y = (s16)(80 + ((u32)travel * 43u) /
+                                         (BOOT_PROJECTILE_IMPACT - BOOT_PROJECTILE_START - 1));
+                    SPR_setFrame(projectile, (s16)((travel >> 3) & 1));
+                    SPR_setPosition(projectile, x, y);
+                    SPR_setVisibility(projectile, VISIBLE);
+                } else if (impact) {
+                    SPR_setFrame(projectile, (s16)(2 + ((frame - BOOT_PROJECTILE_IMPACT) >> 4)));
+                    SPR_setPosition(projectile, 132, 123);
+                    SPR_setVisibility(projectile, VISIBLE);
+                } else {
+                    SPR_setVisibility(projectile, HIDDEN);
+                }
+                if (frame == BOOT_PROJECTILE_START) {
+                    game_audio_play_sfx(sfx_cacodemon_fire,
+                                        sizeof(sfx_cacodemon_fire), SOUND_PCM_CH2);
+                } else if (frame == BOOT_PROJECTILE_IMPACT) {
+                    game_audio_play_sfx(sfx_cacodemon_impact,
+                                        sizeof(sfx_cacodemon_impact), SOUND_PCM_CH3);
+                } else if (frame == BOOT_SEGA_LETTERS_FLIGHT_END + 18 ||
+                           frame == BOOT_SEGA_LETTERS_FLIGHT_END + 72) {
+                    game_audio_play_sfx(sfx_cacodemon_laugh,
+                                        sizeof(sfx_cacodemon_laugh), SOUND_PCM_CH2);
+                }
+            }
+            SPR_update();
         }
         /* SPR_update and the palette sheen are queued work; VDP_waitVSync
          * merely waits for blanking, while this commits the sprite table and
@@ -195,8 +343,12 @@ static void run_boot_card(const Image *image, bool show_cacodemon) {
     }
 
     if (show_cacodemon) {
-        PAL_fadeOut(0, 31, BOOT_FADE_FRAMES, FALSE);
+        PAL_fadeOut(0, 47, BOOT_FADE_FRAMES, FALSE);
         if (cacodemon != NULL) SPR_releaseSprite(cacodemon);
+        if (projectile != NULL) SPR_releaseSprite(projectile);
+        for (u16 index = 0; index < 4; index++) {
+            if (sega_letters[index] != NULL) SPR_releaseSprite(sega_letters[index]);
+        }
         SPR_end();
     } else {
         PAL_fadeOut(0, 63, BOOT_FADE_FRAMES, FALSE);
@@ -211,7 +363,7 @@ static void run_boot_sequence(void) {
     frontend_video_init();
     game_audio_play_music(intro_music);
     run_boot_card(&frontend_boot_disclaimer, FALSE);
-    run_boot_card(&frontend_boot_sgdk, TRUE);
+    run_boot_card(&frontend_boot_sega, TRUE);
     run_boot_card(&frontend_boot_social, FALSE);
 }
 

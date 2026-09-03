@@ -1963,3 +1963,30 @@ code/data ROM (3,328 KB aligned image). The DEBUG_PERF checkpoint route proved
 the 24-byte descriptor ASM contract with `asm_checked_tiles=50`,
 `asm_mismatches=0`, and `asm_canary_failures=0`. A deliberate one-byte fault in
 the differential harness produced `asm_mismatches=50` before being reverted.
+
+## SEGA boot logo: semantic letters and sprite VRAM budget (2026-09-02)
+
+The first four-letter implementation generated one 128x48 wordmark, cut it at
+fixed 32-pixel boundaries, and registered the pieces as four sprites. More
+importantly, `SPR_initEx(128)` could not cache the full scene: the 42-tile
+Cacodemon, 42-tile projectile and four 24-tile letters require 180 tiles. SGDK
+therefore created only the first letter, leaving a sliced `S` visible before
+the attack. The Python preview composited PNGs without exercising SGDK's VRAM
+allocator, so it incorrectly showed a complete logo.
+
+The first art revision used a 16x24 logical grid enlarged to uniform 2x2 blocks.
+It was mechanically clean but user-rejected in motion: the doubled pixels made
+the curves obese and the mark occupied almost 40% of the screen. The first
+native-pixel correction overcompensated at ~70px and was user-rejected as too
+small. The final art keeps four independently rendered 32x48 resources but
+draws a ~96px wordmark at native one-pixel resolution, with a thin navy/white
+edge and a deliberately deep classic-SEGA blue ramp. The aggregate sheet is
+gone, every glyph has its own transparent gutter, and the boot sprite cache
+reserves 192 tiles.
+
+Frontend tests calculate the conservative 180-tile requirement and enforce the
+gutter, palette, compact-size and native-pixel contracts. The release-ROM
+BlastEm capture showed all four intact letters from the first visible logo
+frame and four independent trajectories after impact. The release guardrail
+passed with 21,372 bytes of work RAM free, 3,112,310 bytes of ROM code/data and
+a 3,072 KB aligned image.

@@ -64,8 +64,10 @@ with tempfile.TemporaryDirectory(prefix="megaldoom-build-test-") as folder:
         frontend.generate = real_generate
     assert frontend.complete_outputs(output)
     assert (output / frontend.MANIFEST_NAME).is_file()
-    assert len(frontend.EXPECTED_OUTPUTS) == 49
+    assert len(frontend.EXPECTED_OUTPUTS) == 54
     for name in frontend.CACODEMON_BOOT_FRAMES:
+        assert frontend.SPRITE_SOURCE / f"{name}.png" in frontend.source_paths(source)
+    for name in frontend.CACODEMON_PROJECTILE_FRAMES:
         assert frontend.SPRITE_SOURCE / f"{name}.png" in frontend.source_paths(source)
     assert frontend.BOOT_SOURCE / "SEGA.TTF" in frontend.source_paths(source)
     assert source / "WIMAP0.png" in frontend.source_paths(source)

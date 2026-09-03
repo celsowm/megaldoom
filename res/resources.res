@@ -12,7 +12,7 @@ XGM2 intermission_music "music/d_inter.vgm"
 IMAGE frontend_title          "frontend/title.png"     NONE ALL
 IMAGE frontend_prompt         "frontend/prompt.png"    NONE ALL
 IMAGE frontend_boot_disclaimer "frontend/boot_disclaimer.png" NONE ALL
-IMAGE frontend_boot_sgdk      "frontend/boot_sgdk.png" NONE ALL
+IMAGE frontend_boot_sega      "frontend/boot_sega.png" NONE ALL
 IMAGE frontend_boot_social    "frontend/boot_social.png" NONE ALL
 IMAGE frontend_ending_mars    "frontend/ending_mars.png" NONE ALL
 IMAGE frontend_ending_thanks  "frontend/ending_thanks.png" NONE ALL
@@ -23,7 +23,12 @@ IMAGE frontend_intermission_digits "frontend/intermission_digits.png" NONE ALL
 IMAGE frontend_intermission_splat "frontend/intermission_splat.png" NONE ALL
 IMAGE frontend_intermission_pointer0 "frontend/intermission_pointer0.png" NONE ALL
 IMAGE frontend_intermission_pointer1 "frontend/intermission_pointer1.png" NONE ALL
-SPRITE frontend_cacodemon     "frontend/cacodemon.png" 8 9 FAST 0
+SPRITE frontend_cacodemon     "frontend/cacodemon.png" 6 7 FAST 0
+SPRITE frontend_cacodemon_projectile "frontend/cacodemon_projectile.png" 7 6 FAST 0
+SPRITE frontend_sega_s        "frontend/sega_s.png" 4 6 FAST 0
+SPRITE frontend_sega_e        "frontend/sega_e.png" 4 6 FAST 0
+SPRITE frontend_sega_g        "frontend/sega_g.png" 4 6 FAST 0
+SPRITE frontend_sega_a        "frontend/sega_a.png" 4 6 FAST 0
 # Drawn during gameplay over the live PAL0 world/HUD ramp, not the frontend
 # palette -- see doom_text_mask() in generate-frontend-assets.py. Index 9 is
 # reserved for it in renderer.c's load_game_palettes.
@@ -67,6 +72,9 @@ WAV sfx_player_death "sound/dspldeth.wav"  XGM2
 WAV sfx_door         "sound/dsstnmov.wav"  XGM2
 WAV sfx_pickup       "sound/dsitemup.wav"  XGM2
 WAV sfx_barexp       "sound/dsbarexp.wav"  XGM2
+WAV sfx_cacodemon_fire   "sound/dsfirsht.wav" XGM2
+WAV sfx_cacodemon_impact "sound/dsfirxpl.wav" XGM2
+WAV sfx_cacodemon_laugh  "sound/dscacsit.wav" XGM2
 # Per-weapon fire sounds, referenced from the WEAPON_DEFS table in src/weapons.c.
 # The chaingun deliberately reuses sfx_pistol, as Doom does.
 WAV sfx_shotgun      "sound/dsshotgn.wav"  XGM2

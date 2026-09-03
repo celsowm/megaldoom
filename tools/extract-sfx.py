@@ -64,6 +64,9 @@ DEFAULT_SFX = (
     "DSSTNMOV",   # door / platform move
     "DSITEMUP",   # item pickup
     "DSBAREXP",   # exploding barrel
+    "DSFIRSHT",   # Cacodemon fireball launch (frontend intro)
+    "DSFIRXPL",   # Cacodemon fireball impact (frontend intro)
+    "DSCACSIT",   # Cacodemon vocalization (frontend intro laugh beat)
     "DSSHOTGN",   # shotgun fire
     "DSPUNCH",    # fist swing
     "DSSAWFUL",   # chainsaw swing
