@@ -8,6 +8,49 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## SECRET door groups keep their wall material (2026-09-04)
+
+E1M1's BROWN96 secret door was already mechanically correct: linedefs 247/248
+ship as group 1, lift on direct use and are the only flattened connection to
+secret sector 68. The visual mismatch came later in the renderer. Every
+`BSP_SEG_DOOR` selected `FREEDOOM_WALL_DOOR_PACKED_PAIRS`, which adds a black
+metal frame and yellow safety edge even when Doom deliberately disguises the
+door as a slightly different wall.
+
+The converter now promotes Doom's linedef SECRET bit (`0x20`) to one physical
+group property and stamps `BSP_SEG_FLAG_PLAIN_DOOR` on every emitted face in
+that group. E1M1 marks exactly group 1's four faces; the same WAD-derived rule
+marks 26 faces in E1M2 groups 0, 1, 2, 6, 8, 10 and 11. A negative-control load
+with `apply_plain_doors=False` proves every seg field, ordering and progression
+certificate identical after masking that single new bit.
+
+Closed columns and moving overlays both select the ordinary packed wall plane
+for those groups. The moving variant uses `RayDoorOverlay.band_top`, which has
+no door meaning (`lift != 0`), so `RayDoorOverlay` remains 10 bytes and
+`BspSeg` remains 16. Ordinary doors still select the framed plane, and the
+shared 53-texture atlas is byte-identical.
+
+The complete Windows suite and ROM guardrails passed: 21,372 bytes of work RAM
+free, 3,112,310 bytes of ROM code/data and a 3,072 KB aligned ROM. A release
+BlastEm run of `e1m1-secret-courtyard.txt` reached and crossed the outdoor
+secret after its post-boot inputs were delayed by 600 frames for the current
+frontend; that timing is now stored in the versioned route itself. Dense captures are under
+`out/captures/secret-door-plain-dense-2026-09-04/`; final fidelity still needs
+the standing user-in-motion judgment.
+
+That capture run also exposed two orchestration bugs. `run-blastem-route.ps1`
+accepted a report left by an earlier invocation, so a repeated output path
+could return while the new emulator was still writing frames. Conversely its
+two-second existence-only wait was too short for a fresh report after a dense
+Windows PPM batch, producing a false failure even though the JSON appeared a
+few seconds later. The wrapper now deletes the exact report before launch,
+checks BlastEm's exit code, waits up to 15 seconds for parseable schema-2 JSON,
+rejects `captureFailed`, and prints frame/cycle/capture totals. A capture
+directory containing `frame-*.ppm` is rejected unless `-CleanCaptureDir` is
+explicit; that switch deletes only those runner-owned frames and preserves
+contact sheets or unrelated files. Smoke runs proved clean, refusal and
+explicit-clean paths, and `test-blastem-runner.py` pins the contract.
+
 ## Two dead pointers in WallColumnDescriptor were pinning 384 KB of ROM (2026-08-30)
 
 Chasing the double-pack skip (previous entry) needed one spare per-lane field in

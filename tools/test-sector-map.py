@@ -8,6 +8,7 @@ from pathlib import Path
 from e1m1_expected import (E1M1_HEADER_ROW, E1M1_SEG_COUNT,
                            E1M1_WALL_SEG_COUNT, E1M1_DOOR_SEG_COUNT,
                            E1M1_EXIT_SEG_COUNT, E1M1_DOOR_GROUP_COUNT,
+                           E1M1_PLAIN_DOOR_SEG_COUNT,
                            E1M1_WINDOW_SEG_COUNT, E1M1_WINDOW_LINEDEF_COUNT,
                            E1M1_SKY_WALL_SEG_COUNT, E1M1_SKY_WALL_LINEDEF_COUNT)
 
@@ -60,6 +61,7 @@ def main():
         "bsp_map_min_x", "bsp_map_min_y", "bsp_map_max_x", "bsp_map_max_y"))
     assert re.search(r"\s%d, %d, %d, %d," % bounds, generated)
     assert "const BspMapData g_%s_map" in bsp_emit_source
+    assert "_Static_assert(sizeof(BspSeg) == 16" in header
 
     rows = []
     for row in re.findall(r"\{([^{}]+)\}", declaration(
@@ -138,6 +140,46 @@ def main():
     assert all(row[9] == doom_map.KEY_NONE for row in door_rows)
     assert all(row[10] & doom_map.SEG_FLAG_DIRECT_USE for row in door_rows), (
         "every E1M1 door group's own linedef is directly usable")
+
+    # A SECRET flag on either physical linedef makes the whole grouped door a
+    # camouflaged wall. In E1M1 that is exactly group 1 (BROWN96): both source
+    # lines and all four BSP faces must agree even though only linedef 247 owns
+    # Doom's flag. Ordinary BIGDOOR/EXITDOOR groups retain the framed style.
+    plain_door_rows = [row for row in door_rows
+                       if row[10] & doom_map.SEG_FLAG_PLAIN_DOOR]
+    assert len(plain_door_rows) == E1M1_PLAIN_DOOR_SEG_COUNT
+    assert {row[8] for row in plain_door_rows} == {1}
+    assert all((row[10] & doom_map.SEG_FLAG_PLAIN_DOOR) == 0
+               for row in door_rows if row[8] != 1)
+
+    # Negative control: classification changes only the new flag bit. It must
+    # not perturb ordering, geometry, material, grouping, interaction or the
+    # navigation certificate. E1M2 is checked too so this cannot regress into
+    # an E1M1-specific exception.
+    for map_name, expected_groups, expected_faces in (
+            ("E1M1", {1}, E1M1_PLAIN_DOOR_SEG_COUNT),
+            ("E1M2", {0, 1, 2, 6, 8, 10, 11}, 26)):
+        classified = doom_map.load_map(
+            wad_reader.WadFile(campaign_wad), map_name)
+        control = doom_map.load_map(
+            wad_reader.WadFile(campaign_wad), map_name,
+            apply_plain_doors=False)
+        assert classified.certificate == control.certificate
+        assert len(classified.out_segs) == len(control.out_segs)
+        changed = 0
+        changed_groups = set()
+        for candidate, baseline in zip(classified.out_segs, control.out_segs):
+            candidate_without_style = dict(candidate)
+            candidate_without_style["flags"] &= ~doom_map.SEG_FLAG_PLAIN_DOOR
+            assert candidate_without_style == baseline
+            if candidate["flags"] != baseline["flags"]:
+                assert candidate["type"] == doom_map.SEG_DOOR
+                assert candidate["flags"] == (
+                    baseline["flags"] | doom_map.SEG_FLAG_PLAIN_DOOR)
+                changed += 1
+                changed_groups.add(candidate["door_group"])
+        assert changed == expected_faces, (map_name, changed)
+        assert changed_groups == expected_groups, (map_name, changed_groups)
 
     forbidden = ("BspLine", "BspRenderSeg", "BspSector", "portal",
                  "floor_height", "ceiling_height", "BSP_SECTOR_RENDERER")

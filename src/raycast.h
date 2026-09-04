@@ -122,15 +122,24 @@ typedef struct {
     // Absolute viewport rows, not Q8 fractions: bsp_draw_seg resolves the seg's
     // Q8 band against the slab it just projected, so neither the compositor nor
     // the billboard clip has to multiply. Both are <= RAY_VIEW_ROWS.
-    u8 band_top;    // window: first see-through row
+    // Variant storage: for a window these are its absolute band rows. For a
+    // moving door band_top carries RAY_OVERLAY_FLAG_* and band_bottom is zero.
+    // The variants are disjoint via lift, preserving this 10-byte structure.
+    u8 band_top;    // window: first see-through row; door: overlay flags
     u8 band_bottom; // window: first opaque row below the band
 } RayDoorOverlay;
 
 #define RAY_COLUMN_FLAG_DOOR 0x01u
+#define RAY_OVERLAY_FLAG_PLAIN_DOOR 0x01u
 
 // See the lift discriminator note on RayDoorOverlay.
 static inline bool ray_overlay_is_window(const RayDoorOverlay *overlay) {
     return (bool)(overlay->lift == 0);
+}
+
+static inline bool ray_overlay_is_plain_door(const RayDoorOverlay *overlay) {
+    return (bool)(overlay->lift != 0 &&
+                  (overlay->band_top & RAY_OVERLAY_FLAG_PLAIN_DOOR));
 }
 
 typedef struct {

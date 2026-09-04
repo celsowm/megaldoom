@@ -38,6 +38,7 @@ SEG_TRIGGER = 4
 SEG_WINDOW = 5
 SEG_SKY_WALL = 6
 SEG_FLAG_DIRECT_USE = 0x01
+SEG_FLAG_PLAIN_DOOR = 0x02
 
 # A WINDOW is a linedef this converter ALREADY emits as a solid wall -- two
 # sided, flagged impassable, no special -- whose two sectors form a real
@@ -85,6 +86,7 @@ TELEPORT_SPECIALS = {39, 97, 125, 126}
 BOSS_TRIGGER_MAPS = {"E1M8", "E2M8", "E3M8", "E4M6", "E4M8"}
 
 LINE_FLAG_IMPASSABLE = 0x0001
+LINE_FLAG_SECRET = 0x0020
 
 # The THING types map_thing_type() in src/billboard/billboard.c recognises. Used
 # only for reporting and for the progression certificate's object budget; every
@@ -557,7 +559,7 @@ def certify_flat_progression(vertices, segs, things, start_x, start_y):
 
 
 def load_map(wad, mapn, apply_recipes=True, apply_windows=True,
-             apply_sky_walls=True):
+             apply_sky_walls=True, apply_plain_doors=True):
     """Flatten one Doom map.
 
     apply_windows=False is the negative control for the window
@@ -569,6 +571,10 @@ def load_map(wad, mapn, apply_recipes=True, apply_windows=True,
     reclassification below: a one-sided line is already forced solid by
     line_solid_without_recipe unconditionally, so this can only ever change a
     seg's type byte, never its geometry.
+
+    apply_plain_doors=False disables only the visual classification of Doom
+    SECRET-flagged physical door groups. It is a negative control proving the
+    shipped rule changes one BspSeg flag bit and nothing structural.
     """
     """Parse `mapn`'s lumps out of `wad` and flatten them into a MapData."""
 
@@ -721,6 +727,16 @@ def load_map(wad, mapn, apply_recipes=True, apply_windows=True,
             group = sector_door_group[direct_line_sector[line_id]]
         if group is not None:
             line_door_group[line_id] = group
+
+    # Doom's SECRET linedef flag is the visual tell for a camouflaged door: it
+    # stays a wall material instead of acquiring an obvious door frame. The
+    # flag is not guaranteed to be repeated on both physical faces, so promote
+    # it to group metadata and stamp every emitted BSP face consistently.
+    plain_door_groups = {
+        group for line_id, group in line_door_group.items()
+        if apply_plain_doors and
+        (linedefs[line_id]["flags"] & LINE_FLAG_SECRET)
+    }
 
     remote_line_group = {
         line_id: remote_tag_group[ld["tag"]]
@@ -901,6 +917,8 @@ def load_map(wad, mapn, apply_recipes=True, apply_windows=True,
             seg_type = SEG_DOOR
             door_group = line_door_group[seg["ld"]]
             required_key = group_required_key[door_group]
+            if door_group in plain_door_groups:
+                flags |= SEG_FLAG_PLAIN_DOOR
             if ld["special"] in DIRECT_DOOR_SPECIALS:
                 flags |= SEG_FLAG_DIRECT_USE
         elif seg["ld"] in window_lines:

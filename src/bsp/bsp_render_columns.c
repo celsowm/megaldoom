@@ -22,6 +22,8 @@ void bsp_draw_seg(u16 seg_index) {
     const BspSeg *seg = &bsp_segs[seg_index];
     const u16 door_lift = bsp_seg_door_lift(seg_index);
     const bool moving_door = (bool)(seg->type == BSP_SEG_DOOR && door_lift > 0);
+    const bool plain_door = (bool)(seg->type == BSP_SEG_DOOR &&
+        (seg->flags & BSP_SEG_FLAG_PLAIN_DOOR));
     // A window writes the same near overlay a moving door does, but leaves the
     // column OPEN so the front-to-back walk keeps filling what is behind it.
     const bool window = (bool)(seg->type == BSP_SEG_WINDOW);
@@ -229,7 +231,8 @@ void bsp_draw_seg(u16 seg_index) {
             // RayDoorOverlay's 10-byte budget allows.
             const u16 slab_top = (u16)((RAY_VIEW_ROWS - height) / 2);
             near->band_top = window ? (u8)(slab_top +
-                (((u16)height * bsp_seg_window_band_top(seg)) >> 8)) : 0;
+                (((u16)height * bsp_seg_window_band_top(seg)) >> 8)) :
+                (plain_door ? RAY_OVERLAY_FLAG_PLAIN_DOOR : 0);
             near->band_bottom = window ? (u8)(slab_top +
                 (((u16)height * bsp_seg_window_band_bottom(seg)) >> 8)) : 0;
             near->tex_x = (u8)(scaled_u & WALL_TEX_WIDTH_MASK);
@@ -250,7 +253,8 @@ void bsp_draw_seg(u16 seg_index) {
             col->tex_y = seg->tex_v_offset;
             col->texture_id = tid;
             col->shade = shade;
-            col->flags = (seg->type == BSP_SEG_DOOR) ? RAY_COLUMN_FLAG_DOOR : 0;
+            col->flags = (seg->type == BSP_SEG_DOOR && !plain_door) ?
+                RAY_COLUMN_FLAG_DOOR : 0;
             bsp_mark_sample_solid(sample);
         }
         drew_any = TRUE;

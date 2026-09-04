@@ -23,6 +23,11 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
+& python (Join-Path $PSScriptRoot "test-blastem-runner.py")
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
 & python (Join-Path $PSScriptRoot "test-billboard-layout.py")
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE

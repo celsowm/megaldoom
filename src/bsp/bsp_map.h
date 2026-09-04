@@ -47,6 +47,7 @@ typedef enum {
 } BspSegType;
 
 #define BSP_SEG_FLAG_DIRECT_USE 0x01u
+#define BSP_SEG_FLAG_PLAIN_DOOR 0x02u
 
 // One-sided wall segment. (nx, ny) is the front-facing normal pointing into the
 // room interior (-1/0/1 for the axis-aligned test walls); the seg is drawn and
@@ -70,8 +71,11 @@ typedef struct {
     // array. Widen this struct only with that cost in mind.
     u8 door_group; // shared state for every face of one physical door
     u8 required_key; // BSP_KEY_* bit, or BSP_KEY_NONE
-    u8 flags;      // BSP_SEG_FLAG_* interaction metadata
+    u8 flags;      // BSP_SEG_FLAG_* interaction and visual metadata
 } BspSeg;
+
+_Static_assert(sizeof(BspSeg) == 16,
+               "BspSeg must stay 16 bytes for shift-only indexing");
 
 typedef struct {
     u16 first_seg;

@@ -106,10 +106,12 @@ def main():
     # has spare, so RayDoorOverlay must not grow: it is in every RayColumn.
     assert "_Static_assert(sizeof(RayDoorOverlay) == 10" in RAYCAST
     assert "ray_overlay_is_window" in RAYCAST
+    assert "ray_overlay_is_plain_door" in RAYCAST
     assert "band_top" in RAYCAST and "band_bottom" in RAYCAST
     assert "BSP_SEG_WINDOW" in HEADER
     assert "bsp_seg_window_band_top" in HEADER
     assert "near->lift = window ? 0 :" in BSP_RENDER
+    assert "plain_door ? RAY_OVERLAY_FLAG_PLAIN_DOOR : 0" in BSP_RENDER
     assert "window_band_rows" in SCENE
     # The band is resolved to ABSOLUTE viewport rows once per sampled column in
     # the caster, not re-derived from Q8 by each consumer. That is what keeps
@@ -137,6 +139,16 @@ def main():
         previous_visible = visible
     assert "y_start - descriptor->top + lift_pixels" in SCENE
     assert "door->height * door->lift" in SCENE
+
+    # A SECRET door is mechanically still BSP_SEG_DOOR but uses ordinary wall
+    # pairs both while closed and through the moving overlay. The overlay bit
+    # rides in band_top, which is otherwise unused for the non-window variant,
+    # so no per-column RAM is added.
+    assert "BSP_SEG_FLAG_PLAIN_DOOR" in HEADER
+    assert "seg->flags & BSP_SEG_FLAG_PLAIN_DOOR" in BSP_RENDER
+    assert "seg->type == BSP_SEG_DOOR && !plain_door" in BSP_RENDER
+    assert "ray_overlay_is_plain_door(door)" in SCENE
+    assert "RAY_OVERLAY_FLAG_PLAIN_DOOR" in RAYCAST
 
     # The two overlay posts are hand-written 68000 (renderer_hotpath.s), and the
     # standing rule for that is a differential harness that is PROVEN able to

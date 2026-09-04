@@ -116,6 +116,15 @@ full-height texture and will index past a texture's 128 rows for any nonzero
 `tex_v_offset`. Likewise, a stride-2 write into `g_view_tiles` is a byte store at
 `4*y + lane`, never a 32-bit read-modify-write with a variable shift.
 
+**A Doom SECRET door is still a door, but it looks like its wall.** The WAD's
+SECRET flag may appear on only one linedef face, so `tools/doom_map.py` promotes
+it to `BSP_SEG_FLAG_PLAIN_DOOR` across the whole physical door group. Keep the
+ordinary `BSP_SEG_DOOR` type, lift state, collision, LOS and interaction; only
+the packed-pair selection changes from the framed door plane to the normal wall
+plane, both closed and moving. The moving overlay carries this variant in its
+otherwise-unused `band_top` byte so `RayDoorOverlay` stays 10 bytes (LOG,
+2026-09-04).
+
 ## Dead ends — do not redo without new evidence
 
 Each is measured and written up in [LOG.md](LOG.md); the date locates the entry.

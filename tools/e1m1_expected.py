@@ -37,6 +37,7 @@ E1M1_HEADER_ROW = "%du, %du, %du, %du, %du, %du, %du, %du, %du," % (
 # test-sector-map.py).
 E1M1_WALL_SEG_COUNT = 345
 E1M1_DOOR_SEG_COUNT = 16  # E1M1_DOOR_GROUP_COUNT * 4 faces per group
+E1M1_PLAIN_DOOR_SEG_COUNT = 4  # camouflaged BROWN96 secret-door group
 E1M1_EXIT_SEG_COUNT = 1
 
 # Doom's three window structures on E1M1 -- the pair looking onto the nukage

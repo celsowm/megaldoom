@@ -120,13 +120,14 @@ WallColumnDescriptor describe_wall_column(const RayColumn *column) {
 }
 
 WallColumnDescriptor describe_door_overlay(const RayDoorOverlay *door) {
-    // A window is ordinary wall material -- only a door gets the framed
-    // interactive silhouette style_wall_texel() paints.
+    // Windows and camouflaged SECRET doors keep ordinary wall material. Only
+    // an ordinary door gets the framed interactive silhouette baked for it.
     return describe_textured_column(door->height, door->height,
                                     door->depth,
                                     door->texture_id, door->tex_x,
                                     door->tex_y, door->shade,
-                                    ray_overlay_is_window(door) ?
+                                    (ray_overlay_is_window(door) ||
+                                     ray_overlay_is_plain_door(door)) ?
                                         0u : RAY_COLUMN_FLAG_DOOR);
 }
 
