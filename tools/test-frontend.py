@@ -236,6 +236,7 @@ for token in (
     "frontend_load_death_prompt", "frontend_set_death_prompt", "DEATH_PROMPT_X", "DEATH_PROMPT_Y",
     "run_boot_sequence", "run_boot_card", "BOOT_CARD_FRAMES 180", "BOOT_SEGA_CARD_FRAMES 564",
     "BOOT_SEGA_VISIBLE_FRAMES", "BOOT_CACODEMON_X", "s_sega_letter_start_x",
+    "BOOT_CACODEMON_ENTRY_X 320", "BOOT_CACODEMON_ENTRY_Y 8",
     "frontend_boot_disclaimer", "frontend_boot_sega", "frontend_boot_social", "frontend_cacodemon",
     "frontend_cacodemon_projectile", "s_sega_letter_defs", "sfx_cacodemon_fire",
     "frontend_sega_s", "frontend_sega_e", "frontend_sega_g", "frontend_sega_a",
@@ -251,6 +252,18 @@ for token in (
     "frontend_cacodemon.palette->data", "SYS_doVBlankProcess();",
 ):
     assert token in FRONTEND
+assert "SPR_addSprite(&frontend_cacodemon, BOOT_CACODEMON_ENTRY_X,\n                                  BOOT_CACODEMON_ENTRY_Y," in FRONTEND
+assert "u16 caco_x = BOOT_CACODEMON_X;" in FRONTEND
+assert "u16 caco_y = BOOT_CACODEMON_Y;" in FRONTEND
+assert re.search(
+    r"caco_x = \(u16\)\(BOOT_CACODEMON_ENTRY_X\s*-\s*"
+    r"\(\(u32\)frame \* \(BOOT_CACODEMON_ENTRY_X - BOOT_CACODEMON_X\)\)",
+    FRONTEND), "Cacodemon entry must interpolate from the off-screen x position"
+assert re.search(
+    r"caco_y = \(u16\)\(BOOT_CACODEMON_ENTRY_Y\s*\+\s*"
+    r"\(\(u32\)frame \* \(BOOT_CACODEMON_Y - BOOT_CACODEMON_ENTRY_Y\)\)",
+    FRONTEND), "Cacodemon entry must interpolate from the off-screen y position"
+assert "SPR_addSprite(&frontend_cacodemon, BOOT_CACODEMON_X," not in FRONTEND
 for token in (
     "M_DOOM", "M_NGAME", "M_OPTION", "M_QUITG", "M_OPTTTL", "M_SKILL", "M_JKILL",
     "M_ROUGH", "M_HURT", "M_ULTRA", "M_NMARE", "M_SKULL1", "M_SKULL2", "PRESS START",

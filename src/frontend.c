@@ -21,6 +21,8 @@
 #define BOOT_SEGA_LOGO_Y 128
 #define BOOT_CACODEMON_X 136
 #define BOOT_CACODEMON_Y 60
+#define BOOT_CACODEMON_ENTRY_X 320
+#define BOOT_CACODEMON_ENTRY_Y 8
 #define BOOT_CACODEMON_ENTRY_END 90
 #define BOOT_CACODEMON_ATTACK_START 180
 #define BOOT_CACODEMON_ATTACK_END 228
@@ -252,8 +254,8 @@ static void run_boot_card(const Image *image, bool show_cacodemon) {
          * require 180 cached tiles. Keep a small margin so every semantic
          * letter is allocated before the first visible frame. */
         SPR_initEx(BOOT_SEGA_SPRITE_VRAM_TILES);
-        cacodemon = SPR_addSprite(&frontend_cacodemon, BOOT_CACODEMON_X,
-                                  BOOT_CACODEMON_Y,
+        cacodemon = SPR_addSprite(&frontend_cacodemon, BOOT_CACODEMON_ENTRY_X,
+                                  BOOT_CACODEMON_ENTRY_Y,
                                   TILE_ATTR(PAL1, TRUE, FALSE, FALSE));
         projectile = SPR_addSprite(&frontend_cacodemon_projectile, 132, 72,
                                    TILE_ATTR(PAL2, TRUE, FALSE, FALSE));
@@ -290,9 +292,11 @@ static void run_boot_card(const Image *image, bool show_cacodemon) {
             const bool impact = frame >= BOOT_PROJECTILE_IMPACT &&
                                 frame < BOOT_PROJECTILE_EXPLOSION_END;
             if (frame < BOOT_CACODEMON_ENTRY_END) {
-                caco_x = (u16)(320 - ((u32)frame * (320 - BOOT_CACODEMON_X)) /
+                caco_x = (u16)(BOOT_CACODEMON_ENTRY_X -
+                               ((u32)frame * (BOOT_CACODEMON_ENTRY_X - BOOT_CACODEMON_X)) /
                                 (BOOT_CACODEMON_ENTRY_END - 1));
-                caco_y = (u16)(8 + ((u32)frame * (BOOT_CACODEMON_Y - 8)) /
+                caco_y = (u16)(BOOT_CACODEMON_ENTRY_Y +
+                               ((u32)frame * (BOOT_CACODEMON_Y - BOOT_CACODEMON_ENTRY_Y)) /
                                 (BOOT_CACODEMON_ENTRY_END - 1));
             }
             animate_sega_shimmer(frame, attack, impact);
