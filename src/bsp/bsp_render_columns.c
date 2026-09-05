@@ -275,6 +275,7 @@ void bsp_draw_seg(u16 seg_index) {
     g_cadence_sample_subticks += getSubTick() - sample_loop_start;
 #endif
     if (drew_any) {
+        bsp_automap_mark_seg(seg_index);
         BSP_DBG_INC(segments_drawn);
     }
 }

@@ -109,6 +109,7 @@ def emit_limits(path, maps):
         "MAP_MAX_SUBSECTORS": max(len(map_data.out_ssectors) for map_data in maps),
         "MAP_MAX_NODES": max(len(map_data.nodes) for map_data in maps),
         "MAP_MAX_SECTORS": max(len(map_data.sectors) for map_data in maps),
+        "MAP_MAX_AUTOMAP_LINES": max(len(map_data.automap_lines) for map_data in maps),
         "MAP_MAX_ACTIVE_THINGS": active_max,
     }
     if values["MAP_MAX_ACTIVE_THINGS"] > 255:

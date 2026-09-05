@@ -203,6 +203,8 @@ bool renderer_overlay_requires_base_rebuild(void);
 void renderer_set_view_vram_bank(u16 bank);
 void renderer_prepare_full_base_upload(void);
 void renderer_scene_init(void);
+void renderer_load_world_palette(void);
+void renderer_automap_weapon_visibility(bool active);
 
 #if DEBUG_PERF
 // Per-frame "tiles modified" tracker: counts distinct view tiles whose CPU-side

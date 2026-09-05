@@ -30,8 +30,16 @@
 // PLAYER_CONTROL_CHANGED: it only asks for a weapon-overlay redraw, no re-cast.
 #define PLAYER_CONTROL_WEAPON_BOB 0x0080
 
+typedef enum {
+    PLAYER_CONTROL_MODE_GAMEPLAY = 0,
+    PLAYER_CONTROL_MODE_AUTOMAP_FOLLOW = 1,
+    PLAYER_CONTROL_MODE_AUTOMAP_PAN = 2,
+    PLAYER_CONTROL_MODE_SUPPRESSED = 3
+} PlayerControlMode;
+
 void player_controller_reset(void);
-u16 player_controller_update(PlayerState *player, u16 elapsed_frames, u16 latched_pressed);
+u16 player_controller_update(PlayerState *player, u16 elapsed_frames,
+                             u16 latched_pressed, PlayerControlMode mode);
 
 // How many 35 Hz movement tics the last player_controller_update() call
 // actually ran through simulate_doom_movement_tic. Enemy AI cadence is charged

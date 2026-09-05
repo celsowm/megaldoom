@@ -88,6 +88,11 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
+& python (Join-Path $PSScriptRoot "test-automap.py")
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
 & python (Join-Path $PSScriptRoot "test-weapon-bob.py")
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE

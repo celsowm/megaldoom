@@ -26,8 +26,6 @@
 #define DOOM_STOP_SPEED 0x1000L
 #define DOOM_MAX_MOVE (30L << 16)
 
-#define THREE_BUTTON_AUTOMAP_CHORD (BUTTON_A | BUTTON_B | BUTTON_C)
-
 // --- Doom-style weapon bob (P_CalcBob analogue) ------------------------------
 // Doom derives bob magnitude from |momentum|^2 clamped to MAXBOB, so running
 // pins the bob and walking sits a little below it, and the weapon keeps moving
@@ -67,7 +65,6 @@
 #define BOB_MOVE_GRACE_TICS 4
 
 static u16 s_previous_joy = 0;
-static bool s_three_button_map_chord_active = FALSE;
 // Last direction the C+UP/C+DOWN weapon chord was held in (0 = not held), so
 // the selection advances once per press instead of once per frame.
 static s16 s_weapon_chord_dir = 0;
@@ -213,7 +210,6 @@ static bool simulate_doom_movement_tic(PlayerState *player, s16 forward_command,
 
 void player_controller_reset(void) {
     s_previous_joy = 0;
-    s_three_button_map_chord_active = FALSE;
     s_weapon_chord_dir = 0;
     s_momentum_x = 0;
     s_momentum_y = 0;
@@ -254,24 +250,27 @@ u16 player_controller_consume_latched(void) {
     return latched;
 }
 
-u16 player_controller_update(PlayerState *player, u16 elapsed_frames, u16 latched_pressed) {
+u16 player_controller_update(PlayerState *player, u16 elapsed_frames,
+                             u16 latched_pressed, PlayerControlMode mode) {
     const u16 joy = JOY_readJoypad(JOY_1);
     const bool six_button_pad = (JOY_getJoypadType(JOY_1) == JOY_TYPE_PAD6);
-    const bool three_button_map_chord =
-        !six_button_pad && ((joy & THREE_BUTTON_AUTOMAP_CHORD) == THREE_BUTTON_AUTOMAP_CHORD);
-    const bool strafing = ((joy & BUTTON_C) != 0) &&
+    const bool gameplay = (bool)(mode == PLAYER_CONTROL_MODE_GAMEPLAY);
+    const bool map_follow = (bool)(mode == PLAYER_CONTROL_MODE_AUTOMAP_FOLLOW);
+    const bool directional = (bool)(gameplay || map_follow);
+    const bool strafing = gameplay && ((joy & BUTTON_C) != 0) &&
                           ((joy & (BUTTON_LEFT | BUTTON_RIGHT)) != 0);
     // C is already the modifier that turns lateral D-pad input into strafe, so
     // C+UP / C+DOWN is the natural free chord for weapon selection and is the
     // only one available at all on a 3-button pad (A runs, B fires, C uses,
     // START pauses). Emitted on both pad types so the habit carries over.
-    const bool weapon_chord = ((joy & BUTTON_C) != 0) &&
-                              ((joy & (BUTTON_UP | BUTTON_DOWN)) != 0);
+    const bool weapon_chord = gameplay && ((joy & BUTTON_C) != 0) &&
+                               ((joy & (BUTTON_UP | BUTTON_DOWN)) != 0);
     // C modifies lateral D-pad input into strafe, so it must suppress turn and
     // use for the whole chord rather than leaking an action while strafing.
-    const bool turning_left = !strafing && ((joy & BUTTON_LEFT) != 0);
-    const bool turning_right = !strafing && ((joy & BUTTON_RIGHT) != 0);
-    const bool running = ((joy & BUTTON_A) != 0) && !three_button_map_chord;
+    const bool turning_left = directional && !strafing && ((joy & BUTTON_LEFT) != 0);
+    const bool turning_right = directional && !strafing && ((joy & BUTTON_RIGHT) != 0);
+    const bool running = ((joy & BUTTON_A) != 0) &&
+        (gameplay || (map_follow && six_button_pad));
     const s16 desired_turn = (turning_right && !turning_left) ? 1 : ((turning_left && !turning_right) ? -1 : 0);
     const s16 move_command = running ? DOOM_FORWARD_RUN : DOOM_FORWARD_WALK;
     const s16 strafe_command = running ? DOOM_STRAFE_RUN : DOOM_STRAFE_WALK;
@@ -309,13 +308,13 @@ u16 player_controller_update(PlayerState *player, u16 elapsed_frames, u16 latche
     }
     s_turn_dir = desired_turn;
 
-    if (!three_button_map_chord && !weapon_chord && ((joy & BUTTON_UP) != 0)) {
+    if (directional && !weapon_chord && ((joy & BUTTON_UP) != 0)) {
         target_forward += move_command;
     }
-    if (!three_button_map_chord && !weapon_chord && ((joy & BUTTON_DOWN) != 0)) {
+    if (directional && !weapon_chord && ((joy & BUTTON_DOWN) != 0)) {
         target_forward -= move_command;
     }
-    if (!three_button_map_chord && strafing) {
+    if (gameplay && strafing) {
         if ((joy & BUTTON_LEFT) != 0) {
             target_strafe -= strafe_command;
         }
@@ -343,14 +342,7 @@ u16 player_controller_update(PlayerState *player, u16 elapsed_frames, u16 latche
         result |= PLAYER_CONTROL_WEAPON_BOB;
     }
 
-    if (three_button_map_chord) {
-        if (!s_three_button_map_chord_active) {
-            result |= PLAYER_CONTROL_TOGGLE_AUTOMAP;
-        }
-        s_three_button_map_chord_active = TRUE;
-    } else {
-        s_three_button_map_chord_active = FALSE;
-
+    if (gameplay) {
         // Cached-pad edge OR the ISR latch: a tap that starts and ends between
         // main-loop iterations still fires, since the latch caught its rising
         // edge even though this iteration's cached joy reads no button held.
@@ -371,7 +363,7 @@ u16 player_controller_update(PlayerState *player, u16 elapsed_frames, u16 latche
     // Weapon chord, edge-triggered on the direction so holding it does not spin
     // through the whole arsenal. UP selects the next weapon, DOWN the previous,
     // matching the D-pad direction of Doom's own weapon list.
-    if (weapon_chord) {
+    if (gameplay && weapon_chord) {
         const s16 direction = ((joy & BUTTON_UP) != 0) ? 1 : -1;
         if (direction != s_weapon_chord_dir) {
             result |= (direction > 0) ? PLAYER_CONTROL_NEXT_WEAPON
@@ -382,15 +374,12 @@ u16 player_controller_update(PlayerState *player, u16 elapsed_frames, u16 latche
         s_weapon_chord_dir = 0;
     }
 
-    if (six_button_pad) {
+    if (gameplay && six_button_pad) {
         if (((joy & BUTTON_X) != 0) && ((s_previous_joy & BUTTON_X) == 0)) {
             result |= PLAYER_CONTROL_PREVIOUS_WEAPON;
         }
         if (((joy & BUTTON_Y) != 0) && ((s_previous_joy & BUTTON_Y) == 0)) {
             result |= PLAYER_CONTROL_NEXT_WEAPON;
-        }
-        if (((joy & BUTTON_Z) != 0) && ((s_previous_joy & BUTTON_Z) == 0)) {
-            result |= PLAYER_CONTROL_TOGGLE_AUTOMAP;
         }
     }
 

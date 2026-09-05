@@ -87,6 +87,14 @@ BOSS_TRIGGER_MAPS = {"E1M8", "E2M8", "E3M8", "E4M6", "E4M8"}
 
 LINE_FLAG_IMPASSABLE = 0x0001
 LINE_FLAG_SECRET = 0x0020
+LINE_FLAG_DONTDRAW = 0x0080
+
+# Compact automap visual categories (must match BspAutomapLineKind).  These are
+# derived from the original linedefs, never from split BSP SEGs.
+AUTOMAP_LINE_SOLID = 0
+AUTOMAP_LINE_FLOOR = 1
+AUTOMAP_LINE_CEILING = 2
+AUTOMAP_LINE_SPECIAL = 3
 
 # The THING types map_thing_type() in src/billboard/billboard.c recognises. Used
 # only for reporting and for the progression certificate's object budget; every
@@ -105,6 +113,8 @@ class MapData:
     vertices: list
     sectors: list
     linedefs: list
+    automap_lines: list
+    linedef_automap_indices: list
     source_seg_count: int
     out_segs: list
     out_ssectors: list
@@ -559,7 +569,8 @@ def certify_flat_progression(vertices, segs, things, start_x, start_y):
 
 
 def load_map(wad, mapn, apply_recipes=True, apply_windows=True,
-             apply_sky_walls=True, apply_plain_doors=True):
+             apply_sky_walls=True, apply_plain_doors=True,
+             apply_automap=True):
     """Flatten one Doom map.
 
     apply_windows=False is the negative control for the window
@@ -576,6 +587,10 @@ def load_map(wad, mapn, apply_recipes=True, apply_windows=True,
     apply_plain_doors=False disables only the visual classification of Doom
     SECRET-flagged physical door groups. It is a negative control proving the
     shipped rule changes one BspSeg flag bit and nothing structural.
+
+    apply_automap=False is a conversion control: it omits only the derived
+    original-linedef display table and its SEG mapping. All playable map data
+    must remain identical.
     """
     """Parse `mapn`'s lumps out of `wad` and flatten them into a MapData."""
 
@@ -628,6 +643,39 @@ def load_map(wad, mapn, apply_recipes=True, apply_windows=True,
             "<HHHHHHH", lines_raw, i * 14)
         linedefs.append(dict(v1=v1, v2=v2, flags=flags, special=special,
                              tag=tag, right=right, left=left))
+
+    # Keep one visual record per original WAD linedef.  The flat BSP may split
+    # one linedef into several SEGs, but the automap must never show those
+    # implementation seams.  Priority follows Doom's automap semantics: a
+    # special remains visually distinct even when it is also a solid door.
+    automap_lines = []
+    linedef_automap_indices = [0xFFFF] * len(linedefs)
+    for line_id, ld in enumerate(linedefs) if apply_automap else ():
+        if ld["flags"] & LINE_FLAG_DONTDRAW:
+            continue
+        front_sector = sidedefs[ld["right"]]["sector"] if ld["right"] != 0xFFFF else 0xFF
+        back_sector = sidedefs[ld["left"]]["sector"] if ld["left"] != 0xFFFF else 0xFF
+        kind = None
+        if front_sector == 0xFF or back_sector == 0xFF or \
+                (ld["flags"] & LINE_FLAG_SECRET):
+            kind = AUTOMAP_LINE_SOLID
+        elif ld["special"] != 0:
+            kind = AUTOMAP_LINE_SPECIAL
+        else:
+            front = sectors[front_sector]
+            back = sectors[back_sector]
+            if front["floor"] != back["floor"]:
+                kind = AUTOMAP_LINE_FLOOR
+            elif front["ceiling"] != back["ceiling"]:
+                kind = AUTOMAP_LINE_CEILING
+        if kind is None:
+            continue
+        linedef_automap_indices[line_id] = len(automap_lines)
+        automap_lines.append(dict(
+            v1=ld["v1"], v2=ld["v2"],
+            front_sector=front_sector, back_sector=back_sector,
+            kind=kind, flags=0,
+        ))
 
     material_transfers = resolve_flat_material_transfers(
         mapn, vertices, linedefs, sidedefs, sectors) if apply_recipes else {}
@@ -1098,6 +1146,8 @@ def load_map(wad, mapn, apply_recipes=True, apply_windows=True,
         vertices=vertices,
         sectors=sectors,
         linedefs=linedefs,
+        automap_lines=automap_lines,
+        linedef_automap_indices=linedef_automap_indices,
         source_seg_count=len(segs),
         out_segs=out_segs,
         out_ssectors=out_ssectors,

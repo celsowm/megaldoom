@@ -1,4 +1,5 @@
 #include <genesis.h>
+#include "automap.h"
 #include "billboard.h"
 #include "bsp_map.h"
 #include "bsp_render.h"
@@ -85,6 +86,7 @@ static u16 g_weapon_flash = 0;
 static u16 g_player_damage_flash = 0;
 static u16 g_player_invuln = 0;
 static RendererHudState g_hud;
+static AutomapState g_automap;
 #if DEBUG_BLASTEM_CHECKPOINT
 static s32 g_checkpoint_prev_x;
 static s32 g_checkpoint_prev_y;
@@ -278,6 +280,7 @@ static void enter_level(u16 phase_index, DoomSkill skill, bool pistol_start,
     billboard_init(phase_index, skill);
     player_init(&g_player, phase_index);
     player_controller_reset();
+    automap_reset(&g_automap, &g_player);
     g_weapon_flash = 0;
     g_player_damage_flash = 0;
     g_player_invuln = 0;
@@ -377,6 +380,9 @@ int main(bool hard) {
         u16 elapsed_vblanks;
         u16 elapsed_frames;
         u16 latched_pressed;
+        u16 automap_input;
+        bool six_button_pad;
+        bool automap_toggled;
 #if DEBUG_PERF
         const u32 gameplay_start = getSubTick();
 #endif
@@ -391,10 +397,31 @@ int main(bool hard) {
         // iteration.
         latched_pressed = player_controller_consume_latched();
         system_joy = JOY_readJoypad(JOY_1);
-        system_pressed = (u16)((system_joy & ~previous_system_joy) | (latched_pressed & BUTTON_START));
+        system_pressed = (u16)((system_joy & ~previous_system_joy) | latched_pressed);
         previous_system_joy = system_joy;
 
-        if ((system_pressed & BUTTON_START) != 0) {
+        cur_vtimer = vtimer;
+        elapsed_vblanks = (u16)(cur_vtimer - prev_vtimer);
+        prev_vtimer = cur_vtimer;
+        if (elapsed_vblanks < 1) elapsed_vblanks = 1;
+        elapsed_frames = (elapsed_vblanks > 4) ? 4 : elapsed_vblanks;
+
+        six_button_pad = (bool)(JOY_getJoypadType(JOY_1) == JOY_TYPE_PAD6);
+        automap_input = (!player_dead && !level_cleared) ?
+            automap_update_input(&g_automap, &g_player, system_joy,
+                system_pressed, six_button_pad, elapsed_frames) : 0;
+        automap_toggled = (bool)((automap_input & AUTOMAP_INPUT_TOGGLED) != 0);
+        if (automap_toggled) {
+            wait_scene_upload_complete();
+            renderer_invalidate_scene();
+            renderer_set_automap_active(g_automap.active);
+            renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE);
+        } else if (automap_input & AUTOMAP_INPUT_REDRAW) {
+            renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE);
+        }
+
+        if ((system_pressed & BUTTON_START) != 0 &&
+            (automap_input & AUTOMAP_INPUT_CONSUME_START) == 0) {
             // The pause menu drives its own JOY_update loops; stop the ISR
             // poll so the two never race the same pad read.
             player_controller_set_poll_active(FALSE);
@@ -411,6 +438,7 @@ int main(bool hard) {
             }
 
             renderer_restore_after_menu();
+            if (g_automap.active) renderer_set_automap_active(TRUE);
             if (player_dead) {
                 // The pause panel borrowed the same PAIR_TILE_BASE region the
                 // death prompt lives in and restore_after_menu cleared BG_A;
@@ -433,16 +461,6 @@ int main(bool hard) {
             continue;
         }
 
-        cur_vtimer = vtimer;
-        // Doors (and other wall-clock timers) get the raw vblank delta; the
-        // clamped copy below only feeds the movement/turn controller, whose
-        // ramp was tuned for a [1,4] step.
-        elapsed_vblanks = (u16)(cur_vtimer - prev_vtimer);
-        prev_vtimer = cur_vtimer;
-        if (elapsed_vblanks < 1) {
-            elapsed_vblanks = 1;
-        }
-        elapsed_frames = (elapsed_vblanks > 4) ? 4 : elapsed_vblanks;
         if (!player_dead && !level_cleared) {
             level_progress.time_vblanks += elapsed_vblanks;
         }
@@ -500,7 +518,19 @@ int main(bool hard) {
         }
 
         if (!level_cleared && !player_dead) {
-            control = player_controller_update(&g_player, elapsed_frames, latched_pressed);
+            const PlayerControlMode control_mode = automap_toggled ?
+                PLAYER_CONTROL_MODE_SUPPRESSED :
+                (g_automap.active ?
+                    (g_automap.follow ? PLAYER_CONTROL_MODE_AUTOMAP_FOLLOW :
+                                        PLAYER_CONTROL_MODE_AUTOMAP_PAN) :
+                    PLAYER_CONTROL_MODE_GAMEPLAY);
+            control = player_controller_update(
+                &g_player, elapsed_frames, latched_pressed, control_mode);
+            if (g_automap.active && g_automap.follow &&
+                (control & PLAYER_CONTROL_CHANGED)) {
+                g_automap.center_x = g_player.x;
+                g_automap.center_y = g_player.y;
+            }
             level_progress_visit(&level_progress, g_player.x, g_player.y);
 #if DEBUG_BLASTEM_CHECKPOINT
             {
@@ -515,7 +545,6 @@ int main(bool hard) {
 #endif
         }
 
-        // PLAYER_CONTROL_TOGGLE_AUTOMAP is still reserved: no automap yet.
         if (!player_dead && ((control & (PLAYER_CONTROL_NEXT_WEAPON |
                                          PLAYER_CONTROL_PREVIOUS_WEAPON)) != 0)) {
             const u8 next = weapon_cycle(
@@ -534,7 +563,7 @@ int main(bool hard) {
             }
         }
 
-        if ((control & PLAYER_CONTROL_WEAPON_BOB) != 0) {
+        if (!g_automap.active && (control & PLAYER_CONTROL_WEAPON_BOB) != 0) {
             // Bob advanced (or decayed to neutral) without a whole-pixel world
             // step: a weapon-overlay frame re-applies the BG_A scroll, no cast.
             renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_WEAPON);
@@ -770,6 +799,14 @@ int main(bool hard) {
             }
         }
 
+        if (player_dead && g_automap.active) {
+            wait_scene_upload_complete();
+            automap_close(&g_automap);
+            renderer_invalidate_scene();
+            renderer_set_automap_active(FALSE);
+            renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE);
+        }
+
         if (!level_cleared) {
             // Drive the BEXP animation cycle and request an overlay redraw only
             // when its dedicated animator reports a visual transition.
@@ -807,9 +844,16 @@ int main(bool hard) {
 #if DEBUG_PERF
             renderer_debug_set_redraw_reasons(renderer_redraw_reasons(&redraw));
 #endif
-            render_current_view(player_health, renderer_redraw_base_is_dirty(&redraw), player_dead);
+            if (g_automap.active) {
+                wait_scene_upload_complete();
+                renderer_render_automap(&g_player, &g_automap);
+            } else {
+                render_current_view(player_health,
+                    renderer_redraw_base_is_dirty(&redraw), player_dead);
+            }
             renderer_redraw_consume(&redraw);
-            renderer_queue_scene_upload(g_ray_columns, &g_scene_colors);
+            if (g_automap.active) renderer_queue_full_view_upload();
+            else renderer_queue_scene_upload(g_ray_columns, &g_scene_colors);
         }
 
         // Enter vblank first, then push the freshly built frame to VRAM so the

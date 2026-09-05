@@ -5,6 +5,7 @@
 #include "billboard.h"
 #include "bsp_map.h"
 #include "raycast.h"
+#include "automap.h"
 
 typedef struct {
     u32 frame;
@@ -35,6 +36,9 @@ void renderer_draw_static_screen(void);
 void renderer_draw_hud(const RendererHudState *state);
 u16 renderer_get_menu_tile_base(void);
 void renderer_restore_after_menu(void);
+void renderer_set_automap_active(bool active);
+void renderer_render_automap(const PlayerState *player,
+                             const AutomapState *automap);
 
 // The status-bar number fields live on the WINDOW plane (bottom HUD_PANEL_H
 // rows) so BG_A carries nothing but the weapon and can be whole-plane scrolled
@@ -72,6 +76,7 @@ void renderer_draw_weapon_flash(void);
 void renderer_set_weapon(u8 weapon_id);
 void renderer_queue_scene_upload(const RayColumn *columns,
                                  const RaySceneColors *scene_colors);
+void renderer_queue_full_view_upload(void);
 void renderer_upload_scene_step(void);
 bool renderer_scene_upload_pending(void);
 

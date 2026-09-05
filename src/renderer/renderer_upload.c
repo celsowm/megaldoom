@@ -192,6 +192,19 @@ void renderer_queue_scene_upload(const RayColumn *columns,
 #endif
 }
 
+void renderer_queue_full_view_upload(void) {
+    const u16 bank = (u16)(g_view_vram_bank ^ 1u);
+    g_upload_requires_bank_swap = FALSE;
+    g_view_upload.pending = TRUE;
+    g_view_upload.full = TRUE;
+    g_view_upload.swap = TRUE;
+    g_view_upload.bank = bank;
+    g_view_upload.cursor = 0;
+#if DEBUG_PERF
+    renderer_perf_begin_upload(VIEW_TILE_COUNT, TRUE, TRUE);
+#endif
+}
+
 bool renderer_scene_upload_pending(void) {
     return g_view_upload.pending;
 }

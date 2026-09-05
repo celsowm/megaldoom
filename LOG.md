@@ -2089,3 +2089,58 @@ BlastEm capture showed all four intact letters from the first visible logo
 frame and four independent trajectories after impact. The release guardrail
 passed with 21,372 bytes of work RAM free, 3,112,310 bytes of ROM code/data and
 a 3,072 KB aligned image.
+
+## Playable original-linedef automap (2026-09-05)
+
+Added the Doom/32X-style automap in the existing 160x120 dynamic viewport:
+black PAL3 view, colored original WAD linedefs, always-visible player arrow,
+follow/pan, power-of-two zoom, 128-unit grid and full-map fit. The HUD remains
+on PAL0--2 and is not redrawn or displaced. The map does not cast 3D while
+open, so discovery freezes exactly as in the original Doom behavior.
+
+The converter now emits one 8-byte `BspAutomapLine` per useful original
+linedef and a parallel SEG-to-linedef ROM table. E1M1 produces 451 visual
+lines (303 solid/secret, 97 floor, 35 ceiling, 16 special); E1M2 produces
+1,015 (755/194/39/27). The conversion negative control leaves all playable
+BSP, SEG, collision, LOS, navigation and blockmap fields identical and removes
+only these derived display records. Runtime mutable state is two bitsets:
+1,015 mapped lines plus 200 visited sectors (152 bytes maximum).
+
+Release build and `check-rom.ps1` passed with 21,180 bytes work RAM free,
+above the 20,480-byte guardrail, and a 3,072 KB aligned ROM. The new automap
+test covers WAD classification/counts, hidden lines, secret coloring, the
+negative control, discovery hooks and clipped horizontal/vertical/diagonal
+raster cases with canaries. Final motion acceptance remains the release-ROM
+route `tools/routes/automap-e1m1.txt` (open, walk, follow off/pan, zoom, grid,
+fit, return to 3D). A release BlastEm run completed 2,755 frames with 131
+PPM captures and no capture failure; captures show the black map view, local
+progressive reveal, pan/zoom/grid/fit states, and the restored 3D viewport.
+
+## Boot sprites leaking into the title menu (2026-09-05)
+
+`SPR_end()` resets the sprite table but submits that reset through SGDK's DMA
+queue. The boot animation normally calls `SYS_doVBlankProcess()` every frame,
+but the title and menu loops deliberately use only `VDP_waitVSync()`. Ending
+the boot card therefore left its final SAT update uncommitted, showing pieces
+of the Cacodemon/SEGA sprites down the left side of the menu.
+
+Run `SYS_doVBlankProcess()` immediately after `SPR_end()` to commit the empty
+SAT before the VBlank-only loops take over. `test-frontend.py` locks this
+ordering. A release-ROM BlastEm capture at the main menu shows only the normal
+skull cursor, with no residual boot sprite tiles. Release guardrails remain at
+21,180 bytes free work RAM and 3,132,278 bytes ROM code/data.
+
+## Exit-switch metal housing retained (2026-09-05)
+
+`SW1STRTN` is a mixed material: its brown STARTAN surround occupies most of
+the texture, while the exit control itself is a grey metal housing with red
+and green indicators. The whole-material earth-ramp classifier saw the brown
+majority and limited every texel to brown indices; its coloured LEDs remained
+recognisable, but the housing blended into the wall.
+
+`MIXED_RAMP_MATERIALS` keeps `SW1STRTN` on the ordinary PAL3 quantizer so its
+brown surround, neutral metal and coloured indicators all retain their source
+families. The wall-quality test now requires both a neutral housing texel and
+the red indicator in the baked control region. E1M1 geometry certification and
+release guardrails remain unchanged: 386 SEGs, 21,180 bytes free work RAM and
+3,132,278 bytes ROM code/data.

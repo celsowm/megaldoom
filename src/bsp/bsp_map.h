@@ -24,6 +24,28 @@ typedef struct {
 } BspVertex;
 
 typedef enum {
+    BSP_AUTOMAP_LINE_SOLID = 0,
+    BSP_AUTOMAP_LINE_FLOOR = 1,
+    BSP_AUTOMAP_LINE_CEILING = 2,
+    BSP_AUTOMAP_LINE_SPECIAL = 3
+} BspAutomapLineKind;
+
+// One original WAD linedef for the automap. Sector 0xFF means no sidedef.
+// Keeping this at 8 bytes makes the complete E1M2 visual map only 8120 bytes
+// of cartridge ROM; mutable discovery lives in compact work-RAM bitsets.
+typedef struct {
+    u16 v1;
+    u16 v2;
+    u8 front_sector;
+    u8 back_sector;
+    u8 kind;
+    u8 flags;
+} BspAutomapLine;
+
+_Static_assert(sizeof(BspAutomapLine) == 8,
+               "BspAutomapLine must stay 8 bytes");
+
+typedef enum {
     BSP_SEG_WALL = 0,
     BSP_SEG_DOOR = 1,
     BSP_SEG_EXIT = 2,
@@ -135,6 +157,8 @@ typedef struct {
     // flat NAME only -- no sector height ever enters the ROM. The renderer uses
     // it to swap the flat ceiling table for the baked sky horizon.
     const u8 *sky_sector_bits;
+    const BspAutomapLine *automap_lines;
+    const u16 *seg_automap_lines;
     u16 root_node;
     u16 seg_count;
     u16 vertex_count;
@@ -144,6 +168,7 @@ typedef struct {
     u16 thing_count;
     u16 sector_count;
     u16 secret_count;
+    u16 automap_line_count;
     s16 grid_min_x;
     s16 grid_min_y;
     u16 grid_width;
@@ -212,6 +237,8 @@ const BspMapData *bsp_current_map(void);
 #define bsp_node_count (g_bsp_map->node_count)
 #define bsp_door_count (g_bsp_map->door_count)
 #define bsp_thing_count (g_bsp_map->thing_count)
+#define bsp_automap_lines (g_bsp_map->automap_lines)
+#define bsp_automap_line_count (g_bsp_map->automap_line_count)
 
 // Offline-generated 256-world-unit broad-phase grid. Each cell owns a slice
 // [offsets[cell], offsets[cell+1]) of segment indices. Exact collision and LOS
@@ -241,6 +268,13 @@ const BspMapData *bsp_current_map(void);
 
 bool bsp_sector_is_secret(u16 sector_index);
 bool bsp_sector_is_sky(u16 sector_index);
+
+// Progressive automap discovery. A source linedef becomes mapped only after a
+// corresponding solid SEG actually contributes to a 3D cast. Floor/ceiling
+// transitions also become visible after either adjacent sector is visited.
+void bsp_automap_mark_seg(u16 seg_index);
+void bsp_automap_mark_sector(u16 sector_index);
+bool bsp_automap_line_visible(u16 line_index);
 
 // Window band accessors, Q8 of the drawn slab from its top. Meaningful only
 // for BSP_SEG_WINDOW; see the field-overload note on BspSeg.

@@ -57,6 +57,8 @@ static bool g_door_target_open[BSP_MAX_DOORS];
 static u8 g_query_seen_generation[BSP_MAX_SEGS];
 static u8 g_query_generation = 1;
 static u16 g_visibility_revision = 1;
+static u8 g_automap_mapped_bits[(MEGALDOOM_MAP_MAX_AUTOMAP_LINES + 7) / 8];
+static u8 g_automap_visited_sector_bits[(MEGALDOOM_MAP_MAX_SECTORS + 7) / 8];
 
 #if DEBUG_PERF
 static BspDebugQueryOwner g_query_owner;
@@ -107,8 +109,44 @@ bool bsp_sector_is_sky(u16 sector_index) {
                    (1u << (sector_index & 7))) != 0);
 }
 
+void bsp_automap_mark_seg(u16 seg_index) {
+    if (seg_index >= bsp_seg_count || g_bsp_map->seg_automap_lines == NULL) return;
+    const u16 line = g_bsp_map->seg_automap_lines[seg_index];
+    if (line >= bsp_automap_line_count) return;
+    g_automap_mapped_bits[line >> 3] |= (u8)(1u << (line & 7));
+}
+
+void bsp_automap_mark_sector(u16 sector_index) {
+    if (sector_index >= g_bsp_map->sector_count) return;
+    g_automap_visited_sector_bits[sector_index >> 3] |=
+        (u8)(1u << (sector_index & 7));
+}
+
+static bool bsp_automap_sector_visited(u8 sector_index) {
+    if (sector_index == 0xFF || sector_index >= g_bsp_map->sector_count) return FALSE;
+    return (bool)((g_automap_visited_sector_bits[sector_index >> 3] &
+        (u8)(1u << (sector_index & 7))) != 0);
+}
+
+bool bsp_automap_line_visible(u16 line_index) {
+    if (line_index >= bsp_automap_line_count || bsp_automap_lines == NULL) return FALSE;
+    if ((g_automap_mapped_bits[line_index >> 3] &
+         (u8)(1u << (line_index & 7))) != 0) return TRUE;
+    const BspAutomapLine *line = &bsp_automap_lines[line_index];
+    if (line->kind != BSP_AUTOMAP_LINE_FLOOR &&
+        line->kind != BSP_AUTOMAP_LINE_CEILING) return FALSE;
+    return (bool)(bsp_automap_sector_visited(line->front_sector) ||
+                  bsp_automap_sector_visited(line->back_sector));
+}
+
 void bsp_map_reset(u16 phase_index) {
     bsp_select_map(phase_index);
+    for (u16 i = 0; i < (MEGALDOOM_MAP_MAX_AUTOMAP_LINES + 7) / 8; i++) {
+        g_automap_mapped_bits[i] = 0;
+    }
+    for (u16 i = 0; i < (MEGALDOOM_MAP_MAX_SECTORS + 7) / 8; i++) {
+        g_automap_visited_sector_bits[i] = 0;
+    }
     for (u16 i = 0; i < bsp_door_count && i < BSP_MAX_DOORS; i++) {
         g_door_lift[i] = 0;
         g_door_target_open[i] = FALSE;

@@ -233,6 +233,7 @@ for token in (
     "frontend_run", "frontend_run_pause", "frontend_prompt", "FRONTEND_PAUSE_QUIT_TO_TITLE",
     "run_skill_menu", "DOOM_SKILL_HURT_ME_PLENTY", "(selected + 4) % 5",
     "game_audio_toggle_music", "game_audio_toggle_sfx", "wait_for_release", "MAIN_CURSOR_Y 12",
+    "MAIN_CURSOR_STEP 3",
     "frontend_load_death_prompt", "frontend_set_death_prompt", "DEATH_PROMPT_X", "DEATH_PROMPT_Y",
     "run_boot_sequence", "run_boot_card", "BOOT_CARD_FRAMES 180", "BOOT_SEGA_CARD_FRAMES 564",
     "BOOT_SEGA_VISIBLE_FRAMES", "BOOT_CACODEMON_X", "s_sega_letter_start_x",
@@ -253,6 +254,9 @@ for token in (
 ):
     assert token in FRONTEND
 assert "SPR_addSprite(&frontend_cacodemon, BOOT_CACODEMON_ENTRY_X,\n                                  BOOT_CACODEMON_ENTRY_Y," in FRONTEND
+assert re.search(r"SPR_end\(\);\s*// SPR_end queues the cleared SAT.*?\s*"
+                 r"SYS_doVBlankProcess\(\);", FRONTEND, re.S), \
+    "boot sprites must commit their queued SAT clear before the VBlank-only menu"
 assert "u16 caco_x = BOOT_CACODEMON_X;" in FRONTEND
 assert "u16 caco_y = BOOT_CACODEMON_Y;" in FRONTEND
 assert re.search(

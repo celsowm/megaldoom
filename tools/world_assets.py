@@ -678,6 +678,12 @@ EARTH_MIN_CHROMA = 0.030
 # fix rather than a cost -- the ramp excludes PAL3's only blue (index 2), so
 # classifying a blue light panel as earth was banning it from its own colour.
 EARTH_MIN_SHARE = 0.57
+# These switches place a real metal control housing over a mostly brown wall.
+# A whole-material earth ramp would recolour that housing tan, leaving its red
+# and green lamps seemingly suspended on the wall.  They are not an art recipe:
+# retain the ordinary quantizer so each source region can select its own
+# existing PAL3 family.
+MIXED_RAMP_MATERIALS = ("SW1STRTN",)
 # A near-solid wall material must stay clear of each flat colour on at least ONE
 # of two axes: lightness, or colour (Oklab a/b). Failing both at once is what
 # makes a wall stop reading as a wall and merge into the floor or ceiling.
@@ -1157,7 +1163,8 @@ def _convert_texture(path, palette, use_wall_bake_recipe=True,
             allowed = [index for index in range(0, WORLD_COLOR_DAMAGE)
                        if world_palette.is_neutral(palette[index])]
         else:
-            if _is_earth_material(smoothed):
+            if (material_name not in MIXED_RAMP_MATERIALS and
+                    _is_earth_material(smoothed)):
                 allowed = list(EARTH_RAMP_INDICES)
                 # Disable allowed_indices' low-chroma neutral clamp for this
                 # bucket. It would intersect the neutral set with the earth

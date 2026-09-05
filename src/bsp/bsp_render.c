@@ -66,6 +66,7 @@ void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColor
 
     const u16 subsector = bsp_find_subsector(player->x, player->y);
     u16 sector = (subsector < bsp_subsector_count) ? bsp_subsector_sector[subsector] : 0;
+    bsp_automap_mark_sector(sector);
     if (sector >= FREEDOOM_SECTOR_VISUAL_COUNT) sector = 0;
     const u8 *visual = FREEDOOM_SECTOR_VISUALS[sector];
     scene_colors->ceiling = (RayFlatColor){visual[0], visual[1], visual[2]};

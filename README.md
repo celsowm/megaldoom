@@ -21,7 +21,7 @@ pickups, doors, switches and the classic Doom front-end experience.
 - Enemies, blocking decorations and depth-buffered billboards.
 - Health, armor, keys and pistol-ammo pickups.
 - Pistol with recoil and basic combat feedback.
-- HUD, minimap and pause menu.
+- HUD, playable Doom-style automap and pause menu.
 - Title screen, animated menu, skill selection and audio options.
 - XGM2 music and Doom sound effects.
 - Blue, yellow and red key doors with persistent key state.
@@ -43,6 +43,26 @@ pickups, doors, switches and the classic Doom front-end experience.
 - B: fire
 - C: open doors and activate switches
 - C + D-Pad Left/Right: strafe
+
+### Automap (6-button controller)
+
+- Z: open/close the automap
+- D-Pad: move/turn while follow is on; pan while follow is off
+- X: toggle follow
+- Y: show the full map / restore the previous view
+- C: toggle the 128-unit grid
+- A/B: zoom in/out (A + D-Pad also runs while following)
+- Start: pause
+
+### Automap (3-button controller)
+
+- C + Start: open/close the automap
+- D-Pad: move/turn while follow is on; pan while follow is off
+- B: toggle follow
+- C: toggle the grid
+- A: alternate zoom in/out
+- A + Start: show the full map / restore the previous view
+- Start alone: pause
 
 ## Build from source
 

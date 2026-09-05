@@ -262,6 +262,15 @@ def main():
     assert extractor.WALL_BAKE_RECIPES["COMPUTE2"].facade_window == (
         64, 0, 64, 56,
     )
+    assert extractor.MIXED_RAMP_MATERIALS == ("SW1STRTN",)
+    # SW1STRTN is a brown STARTAN wall with a genuine grey exit-control
+    # housing. It must keep both material families: forcing the full texture
+    # onto the earth ramp leaves only its red/green lamps recognisable.
+    switch = display_textures["SW1STRTN"]
+    switch_panel = {switch[y][x] for y in range(62, 113) for x in range(16, 49)}
+    assert 11 in switch_panel, "exit switch lost its red indicator"
+    assert any(extractor.world_palette.is_neutral(palette[index])
+               for index in switch_panel), "exit switch lost its metal housing"
 
     # The candidate and its old-converter baseline are both generated in
     # memory from the same selected source window and frozen PAL3. This proves

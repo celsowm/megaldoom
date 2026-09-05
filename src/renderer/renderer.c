@@ -81,6 +81,12 @@ static void load_game_palettes(void) {
     }
 }
 
+void renderer_load_world_palette(void) {
+    for (u16 i = 0; i < 16; i++) {
+        PAL_setColor((u16)(48 + i), RGB24_TO_VDPCOLOR(FREEDOOM_WORLD_PALETTE[i]));
+    }
+}
+
 static void init_video(void) {
     VDP_setScreenWidth320();
     VDP_setScreenHeight224();

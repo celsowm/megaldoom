@@ -73,7 +73,25 @@ def emit_map_c(path, wad_path, map_data, texture_ids, texture_meta):
     lines.append("// Generated at: source-derived")
     lines.append("#include \"bsp_map.h\"")
     lines.append("")
+
     lines.append("#if !BSP_USE_HAND_MAP")
+    lines.append("")
+
+    lines.append("static const BspAutomapLine %s[%d] = {" %
+                 (sym("bsp_automap_lines"), len(map_data.automap_lines)))
+    for line in map_data.automap_lines:
+        lines.append("    {%d, %d, %d, %d, %d, %d}," % (
+            line["v1"], line["v2"], line["front_sector"],
+            line["back_sector"], line["kind"], line["flags"]))
+    lines.append("};")
+    lines.append("static const u16 %s[%d] = {" %
+                 (sym("bsp_seg_automap_lines"), len(out_segs)))
+    seg_automap = [map_data.linedef_automap_indices[s["source_linedef"]]
+                   for s in out_segs]
+    for i in range(0, len(seg_automap), 12):
+        lines.append("    %s," % ",".join(
+            "%du" % value for value in seg_automap[i:i + 12]))
+    lines.append("};")
     lines.append("")
 
     # Vertices (full original array; segs/nodes reference these indices).
@@ -217,12 +235,15 @@ def emit_map_c(path, wad_path, map_data, texture_ids, texture_meta):
                  (sym("bsp_subsectors"), sym("bsp_subsector_sector"),
                   sym("bsp_nodes"), sym("bsp_things")))
     lines.append("    %s, %s, %s, %s," %
-                 (sym("bsp_grid_cell_offsets"), sym("bsp_grid_seg_indices"),
-                  sym("bsp_secret_sector_bits"), sym("bsp_sky_sector_bits")))
-    lines.append("    %du, %du, %du, %du, %du, %du, %du, %du, %du," %
+                  (sym("bsp_grid_cell_offsets"), sym("bsp_grid_seg_indices"),
+                   sym("bsp_secret_sector_bits"), sym("bsp_sky_sector_bits")))
+    lines.append("    %s, %s," %
+                 (sym("bsp_automap_lines"), sym("bsp_seg_automap_lines")))
+    lines.append("    %du, %du, %du, %du, %du, %du, %du, %du, %du, %du," %
                  (root, len(out_segs), len(vertices), len(map_data.out_ssectors),
-                  len(nodes), map_data.next_door_group, len(map_data.out_things),
-                  len(map_data.sectors), len(secret_sector_ids)))
+                   len(nodes), map_data.next_door_group, len(map_data.out_things),
+                   len(map_data.sectors), len(secret_sector_ids),
+                   len(map_data.automap_lines)))
     lines.append("    %d, %d, %du, %du," % (grid_min_x, grid_min_y, grid_w, grid_h))
     lines.append("    %d, %d, %d, %d," %
                  (min(x for x, _ in vertices), min(y for _, y in vertices),

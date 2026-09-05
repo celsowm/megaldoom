@@ -9,10 +9,9 @@
 #define PANEL_X 8
 #define PANEL_Y 7
 #define MAIN_CURSOR_X 9
-/* The skull art is 24px tall; its visible head must sit beside the selected
- * label, rather than one tile above it. */
+/* Menu labels are 24px apart, so the 24px skull stays beside every row. */
 #define MAIN_CURSOR_Y 12
-#define MAIN_CURSOR_STEP 4
+#define MAIN_CURSOR_STEP 3
 #define BOOT_CARD_FRAMES 180
 #define BOOT_SEGA_CARD_FRAMES 564
 #define BOOT_FADE_FRAMES 12
@@ -354,6 +353,10 @@ static void run_boot_card(const Image *image, bool show_cacodemon) {
             if (sega_letters[index] != NULL) SPR_releaseSprite(sega_letters[index]);
         }
         SPR_end();
+        // SPR_end queues the cleared SAT, but the title/menu loops only wait
+        // for VBlank and do not run SGDK's queued-work pump. Commit it now or
+        // the boot Cacodemon/letter fragments remain visible over the menu.
+        SYS_doVBlankProcess();
     } else {
         PAL_fadeOut(0, 63, BOOT_FADE_FRAMES, FALSE);
     }

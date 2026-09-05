@@ -53,6 +53,19 @@ void renderer_draw_weapon_flash(void) {
     draw_weapon_overlay(TRUE);
 }
 
+void renderer_automap_weapon_visibility(bool active) {
+    renderer_apply_weapon_bob(0, 0);
+    if (active) {
+        VDP_clearTileMapRect(BG_A,
+            VIEW_TILEMAP_X + MEGALDOOM_WEAPON_TILE_X,
+            VIEW_TILEMAP_Y + MEGALDOOM_WEAPON_TILE_Y,
+            MEGALDOOM_WEAPON_TILE_W, MEGALDOOM_WEAPON_TILE_H);
+    }
+    // Closing needs the next 3D frame to put the idle weapon back. Entering
+    // also invalidates the cache because its tilemap has just been erased.
+    g_last_weapon_variant = -1;
+}
+
 // BG_A now holds only the weapon tilemap (the status-bar numbers moved to the
 // WINDOW plane), so a whole-plane scroll bobs the weapon at pixel precision for
 // the cost of one VDP register write and zero tile DMA. The last-applied cache
