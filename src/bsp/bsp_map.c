@@ -503,6 +503,9 @@ BspUseResult bsp_use_in_front(s32 x, s32 y, u16 angle, u8 owned_keys) {
     const s16 dir_x = fx_cos(angle);
     const s16 dir_y = fx_sin(angle);
     BspUseResult result = {DOOR_ACTION_NONE, BSP_KEY_NONE};
+    const BspSeg *best = NULL;
+    u32 best_dist2 = 0;
+    s32 best_probe_dist = 0;
 
     for (s32 dist = FX_ONE / 2; dist <= FX_ONE * 2; dist += FX_ONE / 2) {
         const s32 px = x + (((s32)dir_x * dist) >> FX_SHIFT);
@@ -515,28 +518,36 @@ BspUseResult bsp_use_in_front(s32 x, s32 y, u16 angle, u8 owned_keys) {
                  (s->flags & BSP_SEG_FLAG_DIRECT_USE) == 0)) {
                 continue;
             }
-            if (seg_point_dist2(s, px, py) >= BSP_USE_REACH2) {
+            const u32 candidate_dist2 = seg_point_dist2(s, px, py);
+            if (candidate_dist2 >= BSP_USE_REACH2) {
                 continue;
             }
-
-            if (s->type == BSP_SEG_EXIT) {
-                result.action = DOOR_ACTION_EXIT;
-                return result;
-            }
-            if (s->type == BSP_SEG_DOOR || s->type == BSP_SEG_SWITCH ||
-                s->type == BSP_SEG_TRIGGER) {
-                result.required_key = s->required_key;
-                if ((owned_keys & s->required_key) != s->required_key) {
-                    result.action = DOOR_ACTION_LOCKED;
-                    return result;
-                }
-                toggle_door(s->door_group);
-                result.action = (s->required_key == BSP_KEY_NONE)
-                    ? DOOR_ACTION_TOGGLED : DOOR_ACTION_UNLOCKED;
-                return result;
+            // A BSP's storage order is unrelated to what the player is aiming
+            // at. Keep evaluating every probe and choose the surface nearest
+            // the aim ray. This keeps a nearby door from becoming an exit,
+            // while the exit panel wins only when the player actually aims at
+            // it instead of whichever SEG was emitted first.
+            if (best == NULL || candidate_dist2 < best_dist2 ||
+                (candidate_dist2 == best_dist2 && dist < best_probe_dist)) {
+                best = s;
+                best_dist2 = candidate_dist2;
+                best_probe_dist = dist;
             }
         }
     }
 
+    if (best == NULL) return result;
+    if (best->type == BSP_SEG_EXIT) {
+        result.action = DOOR_ACTION_EXIT;
+        return result;
+    }
+    result.required_key = best->required_key;
+    if ((owned_keys & best->required_key) != best->required_key) {
+        result.action = DOOR_ACTION_LOCKED;
+        return result;
+    }
+    toggle_door(best->door_group);
+    result.action = (best->required_key == BSP_KEY_NONE)
+        ? DOOR_ACTION_TOGGLED : DOOR_ACTION_UNLOCKED;
     return result;
 }

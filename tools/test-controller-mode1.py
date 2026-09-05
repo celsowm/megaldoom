@@ -30,7 +30,12 @@ def main():
     assert "pressed & BUTTON_Z" in AUTOMAP
     assert "pressed & BUTTON_X" in AUTOMAP
     assert "pressed & BUTTON_Y" in AUTOMAP
-    assert "AUTOMAP_INPUT_CONSUME_START" in MAIN
+    assert "AutomapInput" in AUTOMAP
+    assert "consumed_buttons" in AUTOMAP
+    assert "gameplay_pressed" in MAIN
+    assert "latched_pressed & ~automap_input.consumed_buttons" in MAIN
+    assert "automap_input.consumed_buttons & BUTTON_START" in MAIN
+    assert "AUTOMAP_INPUT_CONSUME_START" not in MAIN
     assert "PLAYER_CONTROL_MODE_SUPPRESSED" in MAIN
     assert "PLAYER_CONTROL_TOGGLE_AUTOMAP is still reserved" not in MAIN
     assert "THREE_BUTTON_AUTOMAP_CHORD" not in SOURCE

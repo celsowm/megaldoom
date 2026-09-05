@@ -65,10 +65,10 @@ void automap_close(AutomapState *state) {
     state->active = FALSE;
 }
 
-u16 automap_update_input(AutomapState *state, const PlayerState *player,
-                         u16 joy, u16 pressed, bool six_button_pad,
-                         u16 elapsed_frames) {
-    u16 result = 0;
+AutomapInput automap_update_input(AutomapState *state, const PlayerState *player,
+                                   u16 joy, u16 pressed, bool six_button_pad,
+                                   u16 elapsed_frames) {
+    AutomapInput result = {0, 0};
     const u16 chord_state = (u16)(joy | pressed);
     const bool three_toggle = (bool)(!six_button_pad &&
         ((chord_state & (BUTTON_C | BUTTON_START)) == (BUTTON_C | BUTTON_START)) &&
@@ -80,8 +80,8 @@ u16 automap_update_input(AutomapState *state, const PlayerState *player,
         state->center_x = player->x;
         state->center_y = player->y;
         state->full_view = FALSE;
-        result |= AUTOMAP_INPUT_REDRAW | AUTOMAP_INPUT_TOGGLED;
-        if (three_toggle) result |= AUTOMAP_INPUT_CONSUME_START;
+        result.flags |= AUTOMAP_INPUT_REDRAW | AUTOMAP_INPUT_TOGGLED;
+        result.consumed_buttons = three_toggle ? (BUTTON_C | BUTTON_START) : BUTTON_Z;
         return result;
     }
     if (!state->active) return result;
@@ -90,7 +90,9 @@ u16 automap_update_input(AutomapState *state, const PlayerState *player,
         ((chord_state & (BUTTON_A | BUTTON_START)) == (BUTTON_A | BUTTON_START)) &&
         ((pressed & (BUTTON_A | BUTTON_START)) != 0)) {
         automap_toggle_full(state, player);
-        return AUTOMAP_INPUT_REDRAW | AUTOMAP_INPUT_CONSUME_START;
+        result.flags = AUTOMAP_INPUT_REDRAW;
+        result.consumed_buttons = BUTTON_A | BUTTON_START;
+        return result;
     }
 
     if (six_button_pad) {
@@ -99,21 +101,30 @@ u16 automap_update_input(AutomapState *state, const PlayerState *player,
             state->full_view = FALSE;
             state->center_x = player->x;
             state->center_y = player->y;
-            result |= AUTOMAP_INPUT_REDRAW;
+            result.flags |= AUTOMAP_INPUT_REDRAW;
+            result.consumed_buttons |= BUTTON_X;
         }
         if (pressed & BUTTON_Y) {
             automap_toggle_full(state, player);
-            result |= AUTOMAP_INPUT_REDRAW;
+            result.flags |= AUTOMAP_INPUT_REDRAW;
+            result.consumed_buttons |= BUTTON_Y;
         }
         if (pressed & BUTTON_C) {
             state->grid = (bool)!state->grid;
-            result |= AUTOMAP_INPUT_REDRAW;
+            result.flags |= AUTOMAP_INPUT_REDRAW;
+            result.consumed_buttons |= BUTTON_C;
         }
-        if ((pressed & BUTTON_A) && automap_zoom(state, 1, player)) {
-            result |= AUTOMAP_INPUT_REDRAW;
+        if (pressed & BUTTON_A) {
+            if (automap_zoom(state, 1, player)) {
+                result.flags |= AUTOMAP_INPUT_REDRAW;
+            }
+            result.consumed_buttons |= BUTTON_A;
         }
-        if ((pressed & BUTTON_B) && automap_zoom(state, -1, player)) {
-            result |= AUTOMAP_INPUT_REDRAW;
+        if (pressed & BUTTON_B) {
+            if (automap_zoom(state, -1, player)) {
+                result.flags |= AUTOMAP_INPUT_REDRAW;
+            }
+            result.consumed_buttons |= BUTTON_B;
         }
     } else {
         if (pressed & BUTTON_B) {
@@ -121,16 +132,19 @@ u16 automap_update_input(AutomapState *state, const PlayerState *player,
             state->full_view = FALSE;
             state->center_x = player->x;
             state->center_y = player->y;
-            result |= AUTOMAP_INPUT_REDRAW;
+            result.flags |= AUTOMAP_INPUT_REDRAW;
+            result.consumed_buttons |= BUTTON_B;
         }
         if (pressed & BUTTON_C) {
             state->grid = (bool)!state->grid;
-            result |= AUTOMAP_INPUT_REDRAW;
+            result.flags |= AUTOMAP_INPUT_REDRAW;
+            result.consumed_buttons |= BUTTON_C;
         }
         if (pressed & BUTTON_A) {
             if (automap_zoom(state, state->three_button_zoom_dir, player)) {
-                result |= AUTOMAP_INPUT_REDRAW;
+                result.flags |= AUTOMAP_INPUT_REDRAW;
             }
+            result.consumed_buttons |= BUTTON_A;
             state->three_button_zoom_dir = (s8)-state->three_button_zoom_dir;
         }
     }
@@ -139,7 +153,7 @@ u16 automap_update_input(AutomapState *state, const PlayerState *player,
         if (state->center_x != player->x || state->center_y != player->y) {
             state->center_x = player->x;
             state->center_y = player->y;
-            result |= AUTOMAP_INPUT_REDRAW;
+            result.flags |= AUTOMAP_INPUT_REDRAW;
         }
     } else {
         const s32 step = (s32)(AUTOMAP_PAN_PIXELS_PER_VBLANK * elapsed_frames)
@@ -152,7 +166,7 @@ u16 automap_update_input(AutomapState *state, const PlayerState *player,
         if ((joy & BUTTON_DOWN) && !(joy & BUTTON_UP)) state->center_y += step;
         if (state->center_x != old_x || state->center_y != old_y) {
             state->full_view = FALSE;
-            result |= AUTOMAP_INPUT_REDRAW;
+            result.flags |= AUTOMAP_INPUT_REDRAW;
         }
     }
     return result;

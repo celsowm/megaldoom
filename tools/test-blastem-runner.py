@@ -51,6 +51,17 @@ def main():
     assert fixed_events == events[:13]
     assert fixed_events[-1] == (2054, 0)
 
+    exit_route = ROOT / "tools" / "routes" / "e1m1-exit-switch.txt"
+    exit_events = [(int(frame), int(mask, 16))
+                   for frame, mask in (line.split()
+                       for line in exit_route.read_text().splitlines() if line.strip())]
+    assert exit_events == [(0, 0), (90, 0x40), (100, 0), (250, 0x40),
+                           (260, 0), (410, 0x40), (420, 0), (570, 0x40),
+                           (580, 0)]
+    exit_test = (ROOT / "tools" / "test-e1m1-exit.ps1").read_text()
+    assert "DEBUG_START_E1M1_EXIT=1" in exit_test
+    assert '-RequireCheckpoints "84"' in exit_test
+
     print("ok    BlastEm runner: fresh JSON, safe captures, current release route")
 
 

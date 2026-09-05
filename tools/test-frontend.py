@@ -200,11 +200,22 @@ intermission_stats_tiles = max(
     unique_tiles(ASSETS / "intermission_stats_e1m2.png"),
 )
 intermission_digits_tiles = unique_tiles(ASSETS / "intermission_digits.png")
+intermission_time_digits_tiles = unique_tiles(ASSETS / "intermission_time_digits.png")
+intermission_digits = Image.open(ASSETS / "intermission_digits.png").convert("P")
+intermission_time_digits = Image.open(ASSETS / "intermission_time_digits.png").convert("P")
+# TIME/PAR labels begin on a tile row. Their values must use the top-aligned
+# sheet; the normal number sheet intentionally carries its 12px glyphs four
+# pixels lower for the KILLS/ITEMS/SECRET labels between tile rows.
+def has_ink(image, y):
+    return len(set(image.crop((0, y, 16, y + 1)).get_flattened_data())) > 1
+
+assert not any(has_ink(intermission_digits, y) for y in range(4))
+assert any(has_ink(intermission_time_digits, y) for y in range(4))
 intermission_map_tiles = sum(unique_tiles(ASSETS / name) for name in (
     "intermission_entering_e1m2.png", "intermission_splat.png",
-    "intermission_pointer0.png", "intermission_pointer1.png",
+    "intermission_pointer0.png",
 ))
-assert 16 + ending_mars_tiles + intermission_stats_tiles + intermission_digits_tiles < 1440, \
+assert 16 + ending_mars_tiles + intermission_stats_tiles + intermission_digits_tiles + intermission_time_digits_tiles < 1440, \
     "intermission stats exceed user VRAM"
 assert 16 + ending_mars_tiles + intermission_map_tiles < 1440, \
     "intermission map overlays exceed user VRAM"
@@ -253,6 +264,9 @@ for token in (
     "frontend_cacodemon.palette->data", "SYS_doVBlankProcess();",
 ):
     assert token in FRONTEND
+assert "frontend_intermission_time_digits" in FRONTEND
+assert "draw_marker(&frontend_intermission_pointer0, tiles->pointer," in FRONTEND
+assert "alternate ? &frontend_intermission_pointer1" not in FRONTEND
 assert "SPR_addSprite(&frontend_cacodemon, BOOT_CACODEMON_ENTRY_X,\n                                  BOOT_CACODEMON_ENTRY_Y," in FRONTEND
 assert re.search(r"SPR_end\(\);\s*// SPR_end queues the cleared SAT.*?\s*"
                  r"SYS_doVBlankProcess\(\);", FRONTEND, re.S), \
@@ -278,6 +292,7 @@ for token in (
     "build_projectile_palette", "SEGA_BOOT_PALETTE", "paletted_sega_canvas",
     "SEGA.TTF", "ImageFont.truetype",
     "WIMAP0", "make_ending_mars", "indexed_ending_mars", "make_ending_thanks",
+    "make_intermission_time_digits",
     "EPISODE COMPLETE", "THE INVASION CONTINUES...", "VERSION 0.1",
 ):
     assert token in (ROOT / "tools/generate-frontend-assets.py").read_text()
@@ -308,7 +323,8 @@ assert "init_backdrop_tiles" not in RENDERER
 assert "init_hud_tiles();" in RENDERER
 for token in ("DOOM_THING_SKILL_EASY", "DOOM_THING_SKILL_MEDIUM", "DOOM_THING_SKILL_HARD", "doom_skill_thing_mask"):
     assert token in BILLBOARD
-assert re.search(r"frontend_run\(\);\s*game_audio_stop_music\(\);\s*renderer_init\(\);", MAIN)
+assert "skill = frontend_run();" in MAIN
+assert "game_audio_stop_music();\n        renderer_init();" in MAIN
 assert "game_audio_play_music(intro_music);\n    run_boot_card(&frontend_boot_disclaimer" in FRONTEND
 assert "wait_for_release(BUTTON_START);" in FRONTEND
 

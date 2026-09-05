@@ -411,13 +411,13 @@ static void run_demo_thanks(void) {
 typedef struct {
     u16 stats;
     u16 digits;
+    u16 time_digits;
 } IntermissionStatsTiles;
 
 typedef struct {
     u16 entering;
     u16 splat;
-    u16 pointer0;
-    u16 pointer1;
+    u16 pointer;
     u16 end;
 } IntermissionMapTiles;
 
@@ -431,6 +431,9 @@ static IntermissionStatsTiles load_intermission_stats_tiles(u16 completed_level)
     next = (u16)(next + stats->tileset->numTile);
     tiles.digits = next;
     VDP_loadTileSet(frontend_intermission_digits.tileset, next, DMA);
+    next = (u16)(next + frontend_intermission_digits.tileset->numTile);
+    tiles.time_digits = next;
+    VDP_loadTileSet(frontend_intermission_time_digits.tileset, next, DMA);
     return tiles;
 }
 
@@ -445,12 +448,10 @@ static IntermissionMapTiles load_intermission_map_tiles(u16 completed_level) {
     tiles.splat = next;
     VDP_loadTileSet(frontend_intermission_splat.tileset, next, DMA);
     next = (u16)(next + frontend_intermission_splat.tileset->numTile);
-    tiles.pointer0 = next;
+    tiles.pointer = next;
     VDP_loadTileSet(frontend_intermission_pointer0.tileset, next, DMA);
     next = (u16)(next + frontend_intermission_pointer0.tileset->numTile);
-    tiles.pointer1 = next;
-    VDP_loadTileSet(frontend_intermission_pointer1.tileset, next, DMA);
-    tiles.end = (u16)(next + frontend_intermission_pointer1.tileset->numTile);
+    tiles.end = next;
     return tiles;
 }
 
@@ -504,7 +505,7 @@ static u16 intermission_percent(u16 value, u16 total) {
     return (u16)(((u32)value * 100u) / total);
 }
 
-static void draw_intermission_values(u16 tile_base,
+static void draw_intermission_values(u16 tile_base, u16 time_tile_base,
                                      u16 kills, u16 items, u16 secrets,
                                      u16 time_seconds, u16 par_seconds) {
     VDP_clearTileMapRect(BG_A, 24, 6, 15, 11);
@@ -513,8 +514,8 @@ static void draw_intermission_values(u16 tile_base,
     draw_intermission_number(tile_base, kills, TRUE, 38, 6);
     draw_intermission_number(tile_base, items, TRUE, 38, 10);
     draw_intermission_number(tile_base, secrets, TRUE, 38, 14);
-    draw_intermission_time(tile_base, time_seconds, 20, 21);
-    draw_intermission_time(tile_base, par_seconds, 40, 21);
+    draw_intermission_time(time_tile_base, time_seconds, 20, 21);
+    draw_intermission_time(time_tile_base, par_seconds, 40, 21);
 }
 
 static void run_intermission_stats(const FrontendIntermissionStats *stats,
@@ -530,7 +531,7 @@ static void run_intermission_stats(const FrontendIntermissionStats *stats,
     draw_intermission_image(stats->completed_level == 0
         ? &frontend_intermission_stats : &frontend_intermission_stats_e1m2,
         tiles->stats);
-    draw_intermission_values(tiles->digits, 0, 0, 0, 0, 0);
+    draw_intermission_values(tiles->digits, tiles->time_digits, 0, 0, 0, 0, 0);
     wait_for_release(INTERMISSION_INPUT);
     previous = JOY_readJoypad(JOY_1);
     while (TRUE) {
@@ -564,7 +565,7 @@ static void run_intermission_stats(const FrontendIntermissionStats *stats,
                           (u16)(par_seconds + 3);
             if (time_seconds == target_time && par_seconds == stats->par_seconds) stage++;
         }
-        draw_intermission_values(tiles->digits, kills, items, secrets,
+        draw_intermission_values(tiles->digits, tiles->time_digits, kills, items, secrets,
                                  time_seconds, par_seconds);
         if ((stage < 4) && ((vtimer & 3) == 0)) {
             game_audio_play_sfx(sfx_pickup, sizeof(sfx_pickup), SOUND_PCM_CH2);
@@ -600,10 +601,11 @@ static void run_intermission_map(u16 completed_level,
         if (completed_level == 0) {
             VDP_clearTileMapRect(BG_A, 10, 18, 8, 2);
             if ((frame & 31) < 24) {
-                const bool alternate = (bool)((frame & 8) != 0);
-                draw_marker(alternate ? &frontend_intermission_pointer1
-                                      : &frontend_intermission_pointer0,
-                            alternate ? tiles->pointer1 : tiles->pointer0,
+                // WIURH0 points at the E1M2 node on the left. WIURH1 is the
+                // mirrored layout for a node on the other side of the label;
+                // alternating them moves the arrow between two map points.
+                // Blink visibility only, keeping the marker on its node.
+                draw_marker(&frontend_intermission_pointer0, tiles->pointer,
                             10, 18);
             }
         }

@@ -20,9 +20,9 @@ IMAGE frontend_intermission_stats "frontend/intermission_stats.png" NONE ALL
 IMAGE frontend_intermission_stats_e1m2 "frontend/intermission_stats_e1m2.png" NONE ALL
 IMAGE frontend_intermission_entering_e1m2 "frontend/intermission_entering_e1m2.png" NONE ALL
 IMAGE frontend_intermission_digits "frontend/intermission_digits.png" NONE ALL
+IMAGE frontend_intermission_time_digits "frontend/intermission_time_digits.png" NONE ALL
 IMAGE frontend_intermission_splat "frontend/intermission_splat.png" NONE ALL
 IMAGE frontend_intermission_pointer0 "frontend/intermission_pointer0.png" NONE ALL
-IMAGE frontend_intermission_pointer1 "frontend/intermission_pointer1.png" NONE ALL
 SPRITE frontend_cacodemon     "frontend/cacodemon.png" 6 7 FAST 0
 SPRITE frontend_cacodemon_projectile "frontend/cacodemon_projectile.png" 7 6 FAST 0
 SPRITE frontend_sega_s        "frontend/sega_s.png" 4 6 FAST 0

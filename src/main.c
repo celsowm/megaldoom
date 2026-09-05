@@ -78,6 +78,9 @@ typedef struct {
 #ifndef DEBUG_START_LEVEL
 #define DEBUG_START_LEVEL 0
 #endif
+#ifndef DEBUG_START_E1M1_EXIT
+#define DEBUG_START_E1M1_EXIT 0
+#endif
 
 static PlayerState g_player;
 static RayColumn g_ray_columns[RAY_VIEW_COLS];
@@ -90,6 +93,14 @@ static AutomapState g_automap;
 #if DEBUG_BLASTEM_CHECKPOINT
 static s32 g_checkpoint_prev_x;
 static s32 g_checkpoint_prev_y;
+#endif
+
+#if DEBUG_START_E1M1_EXIT
+static void debug_place_e1m1_exit(void) {
+    g_player.x = 3200;
+    g_player.y = 4768;
+    g_player.angle = ANGLE_STEPS / 2;
+}
 #endif
 
 static u8 get_portrait_state(u16 player_health) {
@@ -279,6 +290,13 @@ static void enter_level(u16 phase_index, DoomSkill skill, bool pistol_start,
     bsp_map_reset(phase_index);
     billboard_init(phase_index, skill);
     player_init(&g_player, phase_index);
+#if DEBUG_START_E1M1_EXIT
+    // Test-only pose: east of E1M1's certified exit SEG 376, facing its
+    // SW1STRTN surface.  This is compiled out of release ROMs.
+    if (phase_index == 0) {
+        debug_place_e1m1_exit();
+    }
+#endif
     player_controller_reset();
     automap_reset(&g_automap, &g_player);
     g_weapon_flash = 0;
@@ -343,7 +361,14 @@ int main(bool hard) {
         u32 prev_vtimer;
         DoomSkill skill;
 
+#if DEBUG_START_E1M1_EXIT
+        // The exit route exercises gameplay only; bypass the time-varying
+        // frontend so its single C pulse always lands after the V-Int input
+        // latch is armed.  Release builds retain the normal frontend path.
+        skill = DOOM_SKILL_HURT_ME_PLENTY;
+#else
         skill = frontend_run();
+#endif
         game_audio_stop_music();
         renderer_init();
         renderer_redraw_init(&redraw);
@@ -380,7 +405,8 @@ int main(bool hard) {
         u16 elapsed_vblanks;
         u16 elapsed_frames;
         u16 latched_pressed;
-        u16 automap_input;
+        u16 gameplay_pressed;
+        AutomapInput automap_input;
         bool six_button_pad;
         bool automap_toggled;
 #if DEBUG_PERF
@@ -409,19 +435,21 @@ int main(bool hard) {
         six_button_pad = (bool)(JOY_getJoypadType(JOY_1) == JOY_TYPE_PAD6);
         automap_input = (!player_dead && !level_cleared) ?
             automap_update_input(&g_automap, &g_player, system_joy,
-                system_pressed, six_button_pad, elapsed_frames) : 0;
-        automap_toggled = (bool)((automap_input & AUTOMAP_INPUT_TOGGLED) != 0);
+                system_pressed, six_button_pad, elapsed_frames) :
+            (AutomapInput){0, 0};
+        gameplay_pressed = (u16)(latched_pressed & ~automap_input.consumed_buttons);
+        automap_toggled = (bool)((automap_input.flags & AUTOMAP_INPUT_TOGGLED) != 0);
         if (automap_toggled) {
             wait_scene_upload_complete();
             renderer_invalidate_scene();
             renderer_set_automap_active(g_automap.active);
             renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE);
-        } else if (automap_input & AUTOMAP_INPUT_REDRAW) {
+        } else if (automap_input.flags & AUTOMAP_INPUT_REDRAW) {
             renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE);
         }
 
         if ((system_pressed & BUTTON_START) != 0 &&
-            (automap_input & AUTOMAP_INPUT_CONSUME_START) == 0) {
+            (automap_input.consumed_buttons & BUTTON_START) == 0) {
             // The pause menu drives its own JOY_update loops; stop the ISR
             // poll so the two never race the same pad read.
             player_controller_set_poll_active(FALSE);
@@ -518,6 +546,10 @@ int main(bool hard) {
         }
 
         if (!level_cleared && !player_dead) {
+#if DEBUG_START_E1M1_EXIT
+            // Keep every test pulse on the exact exit target.
+            if (phase_index == 0) debug_place_e1m1_exit();
+#endif
             const PlayerControlMode control_mode = automap_toggled ?
                 PLAYER_CONTROL_MODE_SUPPRESSED :
                 (g_automap.active ?
@@ -525,7 +557,7 @@ int main(bool hard) {
                                         PLAYER_CONTROL_MODE_AUTOMAP_PAN) :
                     PLAYER_CONTROL_MODE_GAMEPLAY);
             control = player_controller_update(
-                &g_player, elapsed_frames, latched_pressed, control_mode);
+                &g_player, elapsed_frames, gameplay_pressed, control_mode);
             if (g_automap.active && g_automap.follow &&
                 (control & PLAYER_CONTROL_CHANGED)) {
                 g_automap.center_x = g_player.x;

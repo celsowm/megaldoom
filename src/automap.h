@@ -9,7 +9,14 @@
 
 #define AUTOMAP_INPUT_REDRAW       0x0001u
 #define AUTOMAP_INPUT_TOGGLED      0x0002u
-#define AUTOMAP_INPUT_CONSUME_START 0x0004u
+
+// The automap receives raw edge events before gameplay does.  It reports
+// exactly which buttons it claimed so a map chord cannot turn into a gameplay
+// action on the same frame (notably C is both USE and an automap control).
+typedef struct {
+    u16 flags;
+    u16 consumed_buttons;
+} AutomapInput;
 
 typedef struct {
     s32 center_x;
@@ -26,9 +33,9 @@ typedef struct {
 } AutomapState;
 
 void automap_reset(AutomapState *state, const PlayerState *player);
-u16 automap_update_input(AutomapState *state, const PlayerState *player,
-                         u16 joy, u16 pressed, bool six_button_pad,
-                         u16 elapsed_frames);
+AutomapInput automap_update_input(AutomapState *state, const PlayerState *player,
+                                   u16 joy, u16 pressed, bool six_button_pad,
+                                   u16 elapsed_frames);
 void automap_close(AutomapState *state);
 
 #endif

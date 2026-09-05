@@ -55,7 +55,7 @@ BOOT_INPUTS = (
 )
 INTERMISSION_PATCHES = (
     "WIMAP0", "WILV00", "WILV01", "WIOSTK", "WIOSTI", "WISCRT2",
-    "WITIME", "WIPAR", "WISPLAT", "WIURH0", "WIURH1", "WIPCNT",
+    "WITIME", "WIPAR", "WISPLAT", "WIURH0", "WIPCNT",
     "WICOLON", "WIF", "WIENTER", *(f"WINUM{i}" for i in range(10)),
 )
 ENDING_INPUTS = tuple(SOURCE / f"{name}.png" for name in INTERMISSION_PATCHES)
@@ -93,8 +93,8 @@ def expected_outputs() -> tuple[str, ...]:
         "ending_mars.png", "ending_thanks.png", "intermission_stats.png",
         "intermission_stats_e1m2.png",
         "intermission_entering_e1m2.png", "intermission_digits.png",
-        "intermission_splat.png", "intermission_pointer0.png",
-        "intermission_pointer1.png",
+        "intermission_time_digits.png", "intermission_splat.png",
+        "intermission_pointer0.png",
     ]
     names.extend(f"main_{selected}_{frame}.png" for selected in range(3) for frame in range(2))
     names.extend(
@@ -660,6 +660,23 @@ def make_intermission_digits(source: Path) -> Image.Image:
     return image
 
 
+def make_intermission_time_digits(source: Path) -> Image.Image:
+    """Make the TIME/PAR glyph sheet with its 12px art top-aligned.
+
+    Statistic labels sit between tile rows, so their digit sheet keeps the
+    classic bottom alignment. TIME and PAR are already exactly on a tile row;
+    using that same sheet there drops their values four pixels below the
+    labels. A second, tiny sheet fixes only that footer baseline.
+    """
+    image = transparent_canvas(16 * 12, 16)
+    names = [*(f"WINUM{i}" for i in range(10)), "WIPCNT", "WICOLON"]
+    for index, name in enumerate(names):
+        patch = intermission_patch(name, source)
+        x = index * 16 + (16 - patch.width) // 2
+        image.alpha_composite(patch, (x, 0))
+    return image
+
+
 def padded_intermission_patch(name: str, width: int, height: int,
                                source: Path) -> Image.Image:
     image = transparent_canvas(width, height)
@@ -739,9 +756,9 @@ def generate(source: Path, output: Path) -> None:
     intermission_stats_e1m2 = make_intermission_stats(source, "WILV01")
     intermission_entering = make_intermission_entering(source)
     intermission_digits = make_intermission_digits(source)
+    intermission_time_digits = make_intermission_time_digits(source)
     intermission_splat = padded_intermission_patch("WISPLAT", 32, 24, source)
     intermission_pointer0 = padded_intermission_patch("WIURH0", 64, 16, source)
-    intermission_pointer1 = padded_intermission_patch("WIURH1", 64, 16, source)
     cacodemon_palette = build_cacodemon_palette(cacodemon)
     projectile_palette = build_projectile_palette(cacodemon_projectile)
     # Keep the original Doom title/menu palette selection stable; boot cards
@@ -750,8 +767,8 @@ def generate(source: Path, output: Path) -> None:
     ending_mars_palette = build_palette_for_images([
         ending_mars, intermission_stats, intermission_stats_e1m2,
         intermission_entering,
-        intermission_digits, intermission_splat,
-        intermission_pointer0, intermission_pointer1,
+        intermission_digits, intermission_time_digits, intermission_splat,
+        intermission_pointer0,
     ])
     output.mkdir(parents=True, exist_ok=True)
 
@@ -850,9 +867,9 @@ def generate(source: Path, output: Path) -> None:
         ("intermission_stats_e1m2.png", intermission_stats_e1m2),
         ("intermission_entering_e1m2.png", intermission_entering),
         ("intermission_digits.png", intermission_digits),
+        ("intermission_time_digits.png", intermission_time_digits),
         ("intermission_splat.png", intermission_splat),
         ("intermission_pointer0.png", intermission_pointer0),
-        ("intermission_pointer1.png", intermission_pointer1),
     ):
         indexed(image, ending_mars_palette, True).save(
             output / filename, optimize=False)

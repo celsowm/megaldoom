@@ -263,12 +263,27 @@ def main():
         assert re.search(rf"#define {name} 0x0{value}u", header)
     assert "g_door_lift[BSP_MAX_DOORS]" in runtime
     assert "g_door_lift[seg->door_group]" in runtime
-    assert "owned_keys & s->required_key" in runtime
+    assert "owned_keys & best->required_key" in runtime
     assert all("billboard_consume_key" not in path.read_text()
                for path in (ROOT / "src").glob("*.[ch]"))
     assert "player_keys | pickup.key_mask" in main_source
     assert "target_count > 0" not in main_source
     assert "billboard_consume_key" not in main_source
+
+    # The E1M1 exit sits beside direct-use door faces whose generated indices
+    # precede it. Interaction ranks every sampled candidate by distance to the
+    # aim ray instead of treating BSP storage order as aim order. An exit gets
+    # no global priority: a door remains a door until the exit is aimed at.
+    exit_index = next(index for index, row in enumerate(rows)
+                      if row[7] == doom_map.SEG_EXIT)
+    assert exit_index == 376
+    nearby_earlier_doors = [index for index, row in enumerate(rows[:exit_index])
+                            if row[7] == doom_map.SEG_DOOR and
+                            row[10] & doom_map.SEG_FLAG_DIRECT_USE]
+    assert {367, 370, 371} <= set(nearby_earlier_doors)
+    assert "const BspSeg *best = NULL;" in runtime
+    assert "candidate_dist2 < best_dist2" in runtime
+    assert "if (best->type == BSP_SEG_EXIT)" in runtime
 
     print("ok    flat E1M1: %d textured segs, %d grouped doors, persistent RGB keys" %
           (E1M1_SEG_COUNT, E1M1_DOOR_GROUP_COUNT))
