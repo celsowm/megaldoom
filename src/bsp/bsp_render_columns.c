@@ -28,11 +28,9 @@ void bsp_draw_seg(u16 seg_index) {
     // column OPEN so the front-to-back walk keeps filling what is behind it.
     const bool window = (bool)(seg->type == BSP_SEG_WINDOW);
     const bool overlay = (bool)(moving_door || window);
-    // A sky wall claims its samples like a normal solid wall (same collision,
-    // same occlusion) but is never textured or depth-tested: nothing real is
-    // behind a low parapet at the map edge, so the column is seeded exactly
-    // like one no seg ever claimed (see bsp_seed_unclaimed_columns) and left
-    // for the sky ceiling / floor fill to cover. See sky_wall_sector() in
+    // A sky wall is an ordinary solid wall whose real WAD height is shorter
+    // than the engine's 128-unit slab. Its upper gap is sky; the remaining
+    // textured span is aligned to the floor. See sky_wall_sector() in
     // tools/doom_map.py for how one is recognised.
     const bool sky_wall = (bool)(seg->type == BSP_SEG_SKY_WALL);
     const BspVertex *a = &bsp_vertices[seg->v1];
@@ -143,19 +141,6 @@ void bsp_draw_seg(u16 seg_index) {
             (s32)(bsp_native_mulu_word((u16)(x - xL), (u16)inv_span) >> FX_SHIFT);
         RayColumn *col = &g_columns[x];
 
-        if (sky_wall) {
-            // No depth/u interpolation: nothing is sampled and nothing behind
-            // a map-edge line ever needs to be occlusion-tested against it.
-            bsp_seed_column_default(col);
-            bsp_mark_sample_solid(sample);
-            drew_any = TRUE;
-#if CADENCE_STAGE_PROBE
-            g_cadence_samples++;
-#endif
-            sample = bsp_find_next_open(sample);
-            continue;
-        }
-
         const s32 invz = invzL + (bsp_render_mul(invzR - invzL, sfix) >> FX_SHIFT);
         if (invz <= 0) {
             sample = bsp_find_next_open((u16)(sample + 1));
@@ -202,8 +187,24 @@ void bsp_draw_seg(u16 seg_index) {
         const u16 texture_projected_height =
             (projected_height > RAY_MAX_PROJECTED_WALL_HEIGHT) ?
                 RAY_MAX_PROJECTED_WALL_HEIGHT : (u16)projected_height;
-        const u16 height = (projected_height > RAY_VIEW_ROWS) ?
+        u16 height = (projected_height > RAY_VIEW_ROWS) ?
             RAY_VIEW_ROWS : (u16)projected_height;
+        if (sky_wall) {
+            // Project the whole 128-unit reference slab, then discard only its
+            // Q8 upper sky band. Clamping the two absolute edges (instead of
+            // clamping the shortened height) keeps a near wall anchored to the
+            // floor when its top and/or bottom extend beyond the viewport.
+            const s32 slab_top = (RAY_VIEW_ROWS - projected_height) / 2;
+            s32 wall_top = slab_top +
+                ((projected_height * bsp_seg_sky_gap_top(seg)) >> 8);
+            s32 wall_bottom = slab_top + projected_height;
+            if (wall_top < 0) wall_top = 0;
+            if (wall_top > RAY_VIEW_ROWS) wall_top = RAY_VIEW_ROWS;
+            if (wall_bottom < 0) wall_bottom = 0;
+            if (wall_bottom > RAY_VIEW_ROWS) wall_bottom = RAY_VIEW_ROWS;
+            height = (wall_bottom > wall_top) ?
+                (u16)(wall_bottom - wall_top) : 0;
+        }
 
         // u_col is a DIVS.W quotient (fits s16 by the same map-bounds contract
         // bsp_perspective_divide relies on) and is non-negative: uz interpolates
@@ -250,11 +251,17 @@ void bsp_draw_seg(u16 seg_index) {
             col->projected_height = texture_projected_height;
             col->depth = (u16)depth_col;
             col->tex_x = (u8)(scaled_u & WALL_TEX_WIDTH_MASK);
-            col->tex_y = seg->tex_v_offset;
+            // The ordinary vertical table addresses the complete 128-unit
+            // slab. Move its phase back by the omitted world-space sky gap so
+            // texture row zero begins at the low wall's real top.
+            col->tex_y = sky_wall ?
+                (u8)(seg->tex_v_offset - (bsp_seg_sky_gap_top(seg) >> 1)) :
+                seg->tex_v_offset;
             col->texture_id = tid;
             col->shade = shade;
-            col->flags = (seg->type == BSP_SEG_DOOR && !plain_door) ?
-                RAY_COLUMN_FLAG_DOOR : 0;
+            col->flags = sky_wall ? RAY_COLUMN_FLAG_FLOOR_ALIGNED :
+                ((seg->type == BSP_SEG_DOOR && !plain_door) ?
+                    RAY_COLUMN_FLAG_DOOR : 0);
             bsp_mark_sample_solid(sample);
         }
         drew_any = TRUE;

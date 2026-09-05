@@ -130,6 +130,7 @@ typedef struct {
 } RayDoorOverlay;
 
 #define RAY_COLUMN_FLAG_DOOR 0x01u
+#define RAY_COLUMN_FLAG_FLOOR_ALIGNED 0x02u
 #define RAY_OVERLAY_FLAG_PLAIN_DOOR 0x01u
 
 // See the lift discriminator note on RayDoorOverlay.

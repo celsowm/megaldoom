@@ -62,13 +62,13 @@ typedef struct {
     u8 tex_v_offset;
     u8 texture_id; // exact generated shared-map texture ID
     u8 type;       // BspSegType
-    // For a BSP_SEG_WINDOW these two bytes instead carry the see-through band
-    // as Q8 fractions of the drawn slab, measured from its top
-    // (bsp_seg_window_band_top/_bottom below). A window is never a door and
-    // never locked, so neither field has a meaning to lose -- and keeping
-    // BspSeg at exactly 16 bytes keeps its address calculation a shift instead
-    // of the MULU.W an 18-byte record would force on the renderer's hottest
-    // array. Widen this struct only with that cost in mind.
+    // Variant storage for non-door render metadata. BSP_SEG_WINDOW uses both
+    // bytes for its Q8 opening band; BSP_SEG_SKY_WALL uses door_group for the
+    // Q8 sky gap above its floor-aligned wall. Neither kind is a door or can be
+    // locked, so no meaning is lost -- and keeping BspSeg at exactly 16 bytes
+    // keeps its address calculation a shift instead of the MULU.W an 18-byte
+    // record would force on the renderer's hottest array. Widen this struct
+    // only with that cost in mind.
     u8 door_group; // shared state for every face of one physical door
     u8 required_key; // BSP_KEY_* bit, or BSP_KEY_NONE
     u8 flags;      // BSP_SEG_FLAG_* interaction and visual metadata
@@ -249,6 +249,13 @@ static inline u8 bsp_seg_window_band_top(const BspSeg *seg) {
 }
 static inline u8 bsp_seg_window_band_bottom(const BspSeg *seg) {
     return seg->required_key;
+}
+
+// Upper sky gap in Q8 of the engine's 128-unit wall slab. Meaningful only for
+// BSP_SEG_SKY_WALL; the remaining span is a real textured wall aligned to the
+// sector floor.
+static inline u8 bsp_seg_sky_gap_top(const BspSeg *seg) {
+    return seg->door_group;
 }
 
 // Select the level and reset its mutable state (doors start closed).

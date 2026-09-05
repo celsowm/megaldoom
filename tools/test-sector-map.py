@@ -102,30 +102,53 @@ def main():
                  if s["type"] == doom_map.SEG_WINDOW)}) == E1M1_WINDOW_LINEDEF_COUNT
 
     # Sky walls: same proof, same reason -- a one-sided line is already forced
-    # solid unconditionally (line_solid_without_recipe), so this reclassification
-    # can only ever change the type byte, never geometry, collision or the
-    # blockmap.
+    # solid unconditionally (line_solid_without_recipe). Classification may
+    # change only the type and the otherwise-free door_group byte carrying the
+    # Q8 sky gap; geometry, material, order, navigation, collision and LOS stay
+    # those of the original solid wall.
     sky_wall_rows = [row for row in rows if row[7] == doom_map.SEG_SKY_WALL]
     assert len(sky_wall_rows) == E1M1_SKY_WALL_SEG_COUNT
-    plain_sky = doom_map.load_map(wad_reader.WadFile(campaign_wad), "E1M1",
-                                  apply_sky_walls=False)
-    assert len(plain_sky.out_segs) == len(rows), (len(plain_sky.out_segs), len(rows))
-    for index, (row, seg) in enumerate(zip(rows, plain_sky.out_segs)):
-        geometry = (seg["v1"], seg["v2"], seg["nx"], seg["ny"],
-                    seg["tex_u_offset"])
-        assert tuple(row[0:5]) == geometry, (index, row[0:5], geometry)
-        if row[7] == doom_map.SEG_SKY_WALL:
-            assert seg["type"] == doom_map.SEG_WALL, index
-        else:
-            assert seg["type"] == row[7], (index, seg["type"], row[7])
-    assert len({seg["source_linedef"] for seg in
-                (s for s in doom_map.load_map(
-                    wad_reader.WadFile(campaign_wad), "E1M1").out_segs
-                 if s["type"] == doom_map.SEG_SKY_WALL)}) == E1M1_SKY_WALL_LINEDEF_COUNT
-    assert all(row[8] == doom_map.DOOR_GROUP_NONE for row in sky_wall_rows)
+    assert Counter(row[8] for row in sky_wall_rows) == {96: 5, 16: 4}
     assert all(row[9] == doom_map.KEY_NONE for row in sky_wall_rows)
-    assert all(row[10] == 0 for row in sky_wall_rows), (
-        "a sky wall carries no door_group/required_key/interaction flags")
+    assert all(row[10] == 0 for row in sky_wall_rows)
+
+    for map_name in ("E1M1", "E1M2"):
+        classified_sky = doom_map.load_map(
+            wad_reader.WadFile(campaign_wad), map_name)
+        plain_sky = doom_map.load_map(
+            wad_reader.WadFile(campaign_wad), map_name,
+            apply_sky_walls=False)
+        assert classified_sky.certificate == plain_sky.certificate
+        assert classified_sky.vertices == plain_sky.vertices
+        assert classified_sky.out_ssectors == plain_sky.out_ssectors
+        assert classified_sky.out_ssector_sectors == plain_sky.out_ssector_sectors
+        assert len(classified_sky.out_segs) == len(plain_sky.out_segs)
+        changed = 0
+        for index, (candidate, baseline) in enumerate(zip(
+                classified_sky.out_segs, plain_sky.out_segs)):
+            normalized = dict(candidate)
+            if candidate["type"] == doom_map.SEG_SKY_WALL:
+                normalized["type"] = doom_map.SEG_WALL
+                normalized["door_group"] = doom_map.DOOR_GROUP_NONE
+                assert candidate["required_key"] == doom_map.KEY_NONE
+                assert candidate["flags"] == 0
+                changed += 1
+            assert normalized == baseline, (map_name, index, candidate, baseline)
+        assert changed > 0, map_name
+
+    classified_e1m1 = doom_map.load_map(
+        wad_reader.WadFile(campaign_wad), "E1M1")
+    e1m1_sky_segs = [seg for seg in classified_e1m1.out_segs
+                     if seg["type"] == doom_map.SEG_SKY_WALL]
+    assert len({seg["source_linedef"] for seg in e1m1_sky_segs}) == \
+        E1M1_SKY_WALL_LINEDEF_COUNT
+    assert Counter((seg["texture_name"], seg["door_group"])
+                   for seg in e1m1_sky_segs) == {
+        ("BROWN144", 96): 5,
+        ("BROWN1", 16): 4,
+    }
+    assert "BSP_SEG_SKY_WALL" not in runtime, (
+        "sky-wall type must not alter collision, LOS or interaction")
 
     # The band rides in door_group/required_key (see BspSeg in bsp_map.h) and
     # must describe a real opening strictly inside the drawn slab.

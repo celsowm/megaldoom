@@ -318,13 +318,13 @@ void draw_door_overlays(const RayColumn *columns,
             // Repaint just the ceiling part of the band with the sky. This is
             // the only per-column ceiling in the renderer, and it stays here in
             // C rather than reaching the asm pack post.
-            // Only the wall-behind's TOP is wanted, and that is centring, not
-            // a texture lookup: describe_wall_column() built a whole 24-byte
-            // descriptor -- a [641][120] table index, a fog level, a struct
-            // returned by value -- to read one u16 back out of it, once per
-            // overlay column. describe_textured_column() computes exactly this
-            // expression from exactly this field, so the two cannot disagree.
-            sky_bottom = (u16)((VIEW_PIXEL_H - column->height) / 2);
+            // A normal far wall is centred, so avoid building a descriptor just
+            // to read its top. A courtyard parapet is floor-aligned, however;
+            // its `height` alone cannot recover that top, and the rare window
+            // view must use the same descriptor calculation as the base pack.
+            sky_bottom = (column->flags & RAY_COLUMN_FLAG_FLOOR_ALIGNED) ?
+                describe_wall_column(column).top :
+                (u16)((VIEW_PIXEL_H - column->height) / 2);
             if (sky_bottom > band_bottom) sky_bottom = band_bottom;
         }
 

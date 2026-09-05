@@ -8,6 +8,62 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## Low courtyard sky walls keep their WAD height (2026-09-04)
+
+E1M1's nine one-sided boundaries around the secret courtyard were already
+correctly reclassified as solid `BSP_SEG_SKY_WALL`, but the renderer replaced
+each claimed column with the unclaimed sky/floor seed. That erased the entire
+wall and produced the large transparent gaps seen at oblique angles.
+
+The converter now stores the upper sky band in the otherwise-unused
+`door_group` byte: five `BROWN144` faces from 80-unit sectors carry Q8 96, and
+four `BROWN1` faces from 120-unit sectors carry Q8 16. The caster projects the
+normal 128-unit reference slab, keeps its lower textured span aligned to the
+floor, corrects the texture phase to start at the real wall top, and still
+closes the column for BSP, collision and LOS. The packer consumes a new flag in
+the existing `RayColumn.flags` byte; `BspSeg` remains 16 bytes,
+`RayDoorOverlay` remains 10, and work RAM is unchanged. The window compositor
+also asks a distant floor-aligned wall for its real top before repainting sky
+inside a window band.
+
+`apply_sky_walls=False` remains the negative control. E1M1 and E1M2 compare
+equal in geometry, ordering, texture, offsets, flags, subsectors and navigation
+after normalising only the type and reused Q8 byte. Six projection checks cover
+80/120-unit walls at distant, middle and point-blank scales, including vertical
+clipping and texture phase. The full Windows suite, release build and ROM
+guardrails passed (21,372 bytes work RAM free; 3,111,798 bytes ROM code/data).
+The release `e1m1-secret-courtyard.txt` run completed with 57 captures and no
+capture failure; its courtyard loop keeps these walls present at oblique views.
+
+The same run exposed that `tools/routes/fixed-pose.txt` still used frontend
+timings from before the current boot/menu flow and stopped at the main menu with
+an all-zero perf mailbox. It now shares the proven 13-event bootstrap prefix of
+the courtyard route, pinned by `test-blastem-runner.py`. A DEBUG_PERF rerun at
+the medikit pose compared 480 asm/C packed tiles with 0 mismatches and 0 canary
+failures.
+
+## Medical pickups use a neutral case and red cross (2026-09-04)
+
+`STIMA0` and `MEDIA0` were correctly sourced from Doom, but both travelled
+through PAL3's general two-colour perceptual mixer. PAL3 needs its dark-blue
+endpoint for the world, and that made the health boxes' neutral metal dither
+blue while their cross stayed bright red. At the 3x pickup scale, the medikit
+read as a large blue/red slab rather than a health box.
+
+The billboard converter now assigns the two health sprites the `Medical`
+policy. It maps neutral pixels through PAL3's grey ramp (3, 5, 7, 10, 13) and
+the authored red cross through its existing red ramp (1, 14, 11), without
+changing the shared palette. The first attempt stopped there and therefore did
+not fix the ROM: `BILLBOARD_VISUAL_MEDIKIT` still passed through a legacy
+runtime LUT that replaced the baked colours with alternating red and blue.
+
+The generated MEDIKIT remap is now identity (STIMPACK already was), so the
+original converted pixels survive to the screen at the existing 3x scale.
+`test-billboard-layout.py` applies the same runtime LUT to both atlas sprites
+and requires shaded neutral cases plus red crosses with no blue index. The
+targeted atlas/post/raster tests, fixed-pose BlastEm capture, full suite,
+release build and ROM guardrails passed; work RAM remains 21,372 bytes free.
+
 ## SECRET door groups keep their wall material (2026-09-04)
 
 E1M1's BROWN96 secret door was already mechanically correct: linedefs 247/248

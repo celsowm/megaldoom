@@ -570,7 +570,8 @@ def load_map(wad, mapn, apply_recipes=True, apply_windows=True,
     apply_sky_walls=False is the same negative control for the sky-wall
     reclassification below: a one-sided line is already forced solid by
     line_solid_without_recipe unconditionally, so this can only ever change a
-    seg's type byte, never its geometry.
+    seg's type byte and the otherwise-unused door_group metadata byte, never
+    its geometry.
 
     apply_plain_doors=False disables only the visual classification of Doom
     SECRET-flagged physical door groups. It is a negative control proving the
@@ -932,6 +933,15 @@ def load_map(wad, mapn, apply_recipes=True, apply_windows=True,
                 door_group, required_key = band
         elif seg["ld"] in sky_wall_lines:
             seg_type = SEG_SKY_WALL
+            sector = sectors[sky_wall_lines[seg["ld"]]]
+            wall_height = max(0, min(
+                WORLD_WALL_HEIGHT, sector["ceiling"] - sector["floor"]))
+            # Reuse a non-door field for the sky band above the low wall. Q8
+            # keeps the runtime independent of sector heights while preserving
+            # the exact 80/120-unit WAD spans (96/16 respectively for a
+            # 128-unit engine slab).
+            door_group = ((WORLD_WALL_HEIGHT - wall_height) * 256) // \
+                WORLD_WALL_HEIGHT
 
         name = FALLBACK_TEXTURE
         xoff = seg["offset"]

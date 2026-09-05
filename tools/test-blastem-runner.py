@@ -40,6 +40,17 @@ def main():
     ]
     assert events[-1] == (8365, 0)
 
+    # The pose-locked perf route must traverse the same current frontend. It
+    # used to retain the pre-frontend 1050/1150 START presses, stop on the main
+    # menu and leave a convincing-looking but entirely zero perf mailbox.
+    fixed_route = ROOT / "tools" / "routes" / "fixed-pose.txt"
+    fixed_events = [(int(frame), int(mask, 16))
+                    for frame, mask in (line.split()
+                        for line in fixed_route.read_text().splitlines()
+                        if line.strip())]
+    assert fixed_events == events[:13]
+    assert fixed_events[-1] == (2054, 0)
+
     print("ok    BlastEm runner: fresh JSON, safe captures, current release route")
 
 

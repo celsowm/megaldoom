@@ -10,13 +10,16 @@ GENERATED = (ROOT / "src/bsp/generated_e1m1_map.c").read_text()
 RENDERER = "\n".join((ROOT / "src/bsp" / name).read_text() for name in (
     "bsp_render_projection.c", "bsp_render_traversal.c"))
 BSP_MAP = (ROOT / "src/bsp/bsp_map.c").read_text()
+DRAW_COLUMNS = (ROOT / "src/bsp/bsp_render_columns.c").read_text()
+PACKER = (ROOT / "src/renderer/renderer_pack.c").read_text()
+DOOR_PACKER = (ROOT / "src/renderer/renderer_doors.c").read_text()
 
 FX_SHIFT = 8
 FX_ONE = 1 << FX_SHIFT
 ANGLE_90 = 64
 NEAR = 16
 PROJ_X = 80
-VIEW_COLS, _VIEW_ROWS = raycast_constants.view_pixels()
+VIEW_COLS, VIEW_ROWS = raycast_constants.view_pixels()
 VIEW_CENTER = VIEW_COLS // 2
 STRIDE = raycast_constants.col_stride()
 LEFT_SCALE = VIEW_CENTER + STRIDE + 1
@@ -213,6 +216,34 @@ def projected_range(depths, laterals):
     return max(left, 0), min(right, VIEW_COLS - 1)
 
 
+def floor_aligned_projection(projected_height, sky_gap_q8):
+    """Mirror the caster + descriptor contract for one low sky wall."""
+    slab_top = cdiv(VIEW_ROWS - projected_height, 2)
+    real_top = slab_top + ((projected_height * sky_gap_q8) >> 8)
+    real_bottom = slab_top + projected_height
+    visible_top = max(0, min(VIEW_ROWS, real_top))
+    visible_bottom = max(0, min(VIEW_ROWS, real_bottom))
+    visible_height = max(0, visible_bottom - visible_top)
+
+    sample_height = max(1, min(640, projected_height))
+    full_visible_height = min(sample_height, VIEW_ROWS)
+    full_top = (VIEW_ROWS - full_visible_height) // 2
+    descriptor_bottom = full_top + full_visible_height
+    descriptor_top = descriptor_bottom - visible_height
+    sample_offset = descriptor_top - full_top
+
+    # New-WallSamplingRows includes this near-wall clip offset before scaling
+    # into the 128-row texture. Subtracting gap_q8/2 makes source row zero the
+    # authored top of the low wall; when that top is off-screen, the first row
+    # correctly starts farther down the texture instead.
+    clip_offset = (sample_height - full_visible_height) // 2
+    source_y = ((sample_offset + clip_offset) * 128) // sample_height
+    adjusted_source_y = (source_y - (sky_gap_q8 >> 1)) & 127
+    return (visible_top, visible_bottom, visible_height,
+            descriptor_top, descriptor_bottom, sample_offset,
+            adjusted_source_y)
+
+
 def segment_span(seg, vertices, camera, basis, safe):
     v1, v2, nx, ny = seg[:4]
     px, py = camera
@@ -332,7 +363,38 @@ def main():
                     assert cross * cross > radius * radius * (ndx * ndx + ndy * ndy)
     assert "bsp_find_subsector_with_margin" in BSP_MAP
     assert "radius * (abs_node_dx + abs_node_dy)" in BSP_MAP
-    print(f"ok    BSP native math: {box_checks} boxes, {segment_checks} seg spans")
+
+    # The courtyard's WAD walls are 80 and 120 units high in the engine's
+    # 128-unit reference slab. Exercise distant, middle and point-blank
+    # projections; the wall bottom must remain the slab bottom through clipping
+    # and the texture phase must begin at the real wall top.
+    expected = {
+        (80, 16): (58, 68, 10, 58, 68, 6, 0),
+        (80, 64): (52, 92, 40, 52, 92, 24, 0),
+        (80, 640): (0, 120, 120, 0, 120, 0, 4),
+        (120, 16): (53, 68, 15, 53, 68, 1, 0),
+        (120, 64): (32, 92, 60, 32, 92, 4, 0),
+        (120, 640): (0, 120, 120, 0, 120, 0, 44),
+    }
+    for (wall_height, projected_height), wanted in expected.items():
+        sky_gap_q8 = ((128 - wall_height) * 256) // 128
+        actual = floor_aligned_projection(projected_height, sky_gap_q8)
+        assert actual == wanted, (wall_height, projected_height, actual, wanted)
+        assert actual[3:5] == actual[0:2]
+
+    # Source contracts tie that math to the production path. SKY_WALL must go
+    # through ordinary depth/texture packing and still close its BSP sample;
+    # the window compositor must respect its non-centred top.
+    assert "RAY_COLUMN_FLAG_FLOOR_ALIGNED" in DRAW_COLUMNS
+    assert "bsp_seg_sky_gap_top(seg)" in DRAW_COLUMNS
+    assert "bsp_mark_sample_solid(sample);" in DRAW_COLUMNS
+    assert "nothing is sampled" not in DRAW_COLUMNS
+    assert "RAY_COLUMN_FLAG_FLOOR_ALIGNED" in PACKER
+    assert "ty_table += top - full_top;" in PACKER
+    assert "RAY_COLUMN_FLAG_FLOOR_ALIGNED" in DOOR_PACKER
+    assert "describe_wall_column(column).top" in DOOR_PACKER
+    print(f"ok    BSP native math: {box_checks} boxes, {segment_checks} seg spans; "
+          "6 floor-aligned sky-wall projections")
 
 
 if __name__ == "__main__":

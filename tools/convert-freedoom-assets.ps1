@@ -162,8 +162,12 @@ $BillboardWorldSpecs = @(
     @{ Name = "BLUE_KEY"; Path = "res\originaldoom\sprites\BKEYA0.png" },
     @{ Name = "YELLOW_KEY"; Path = "res\originaldoom\sprites\YKEYA0.png" },
     @{ Name = "RED_KEY"; Path = "res\originaldoom\sprites\RKEYA0.png" },
-    @{ Name = "STIMPACK"; Path = "res\originaldoom\sprites\STIMA0.png" },
-    @{ Name = "MEDIKIT"; Path = "res\originaldoom\sprites\MEDIA0.png" },
+    # The shared PAL3 intentionally has a blue-black endpoint for the world.
+    # Its perceptual two-colour mix turns the neutral metal of Doom's health
+    # boxes into a saturated blue/red slab.  Health pickups instead use the
+    # existing neutral and red ramps explicitly: grey case, red cross.
+    @{ Name = "STIMPACK"; Path = "res\originaldoom\sprites\STIMA0.png"; Palette = "Medical" },
+    @{ Name = "MEDIKIT"; Path = "res\originaldoom\sprites\MEDIA0.png"; Palette = "Medical" },
     @{ Name = "ARMOR_BONUS"; Path = "res\originaldoom\sprites\BON2A0.png" },
     # PAL3 deliberately has no saturated green: its former green slot is now
     # the khaki wall band used heavily by BROWNGRN. Keep ARM1 recognisably
@@ -434,6 +438,27 @@ function Get-NearestArmorOliveIndex([System.Drawing.Color]$Color) {
     return 13
 }
 
+function Get-MedicalPaletteIndex([System.Drawing.Color]$Color) {
+    # STIMA0/MEDIA0 are steel-grey cases with a red medical cross.  Do not use
+    # PAL3's general perceptual mixer here: white/grey can otherwise dither
+    # through its blue-black endpoint while the cross reaches bright red,
+    # turning the pickup into the blue/red block seen at close range.
+    $luminance = [int](($Color.R * 30 + $Color.G * 59 + $Color.B * 11) / 100)
+    if (($Color.R -ge ($Color.G + 32)) -and ($Color.R -ge ($Color.B + 32))) {
+        # STIMA0's cross is dark at source; reserving index 1 for it made the
+        # icon disappear at the atlas' 24px scale. Keep only near-black red in
+        # the shadow slot and promote the readable cross to PAL3's dark red.
+        if ($luminance -lt 35) { return 1 }
+        if ($luminance -lt 145) { return 14 }
+        return 11
+    }
+    if ($luminance -lt 42) { return 3 }
+    if ($luminance -lt 78) { return 5 }
+    if ($luminance -lt 126) { return 7 }
+    if ($luminance -lt 177) { return 10 }
+    return 13
+}
+
 function Get-PreservedAspectPlacement([int]$SourceWidth, [int]$SourceHeight,
                                       [int]$Width, [int]$Height,
                                       [bool]$BottomAlign = $false) {
@@ -541,6 +566,8 @@ function Convert-Image([string]$Path, [int]$Width, [int]$Height, [bool]$UseAlpha
                         }
                         if ($PalettePolicy -eq "OliveArmor") {
                             $index = Get-NearestArmorOliveIndex $avg
+                        } elseif ($PalettePolicy -eq "Medical") {
+                            $index = Get-MedicalPaletteIndex $avg
                         } else {
                             $index = Get-NearestWorldPaletteIndex $avg $false $x $y
                         }

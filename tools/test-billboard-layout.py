@@ -8,6 +8,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 HEADER = ROOT / "src" / "billboard" / "generated_billboard_assets.h"
+RENDERER_HEADER = ROOT / "src" / "renderer" / "generated_renderer_assets.h"
 GEOMETRY_HEADER = ROOT / "src" / "billboard" / "generated_billboard_geometry.h"
 OFFSETS = ROOT / "res" / "originaldoom" / "sprites" / "_offsets.json"
 PUBLIC_HEADER = ROOT / "src" / "billboard" / "billboard.h"
@@ -48,6 +49,7 @@ def balanced_initializer(text: str, marker: str) -> str:
 
 def main() -> int:
     text = HEADER.read_text(encoding="utf-8")
+    renderer_text = RENDERER_HEADER.read_text(encoding="utf-8")
     geometry_text = GEOMETRY_HEADER.read_text(encoding="utf-8")
     offsets = json.loads(OFFSETS.read_text(encoding="utf-8"))
     count_match = re.search(r"#define FREEDOOM_BILLBOARD_WORLD_TEXTURE_COUNT\s+(\d+)", text)
@@ -99,6 +101,57 @@ def main() -> int:
         raise ValueError("GREEN_ARMOR emitted amber, red, or another non-olive colour")
     if len(armor_values - {0}) < 3:
         raise ValueError("GREEN_ARMOR collapsed into a flat, unshaded blob")
+
+    # The health boxes have an authored steel-grey case and red cross.  PAL3's
+    # normal mixed-palette conversion makes neutral pixels dither through the
+    # dark-blue endpoint, which reads as a blue/red rectangle when magnified.
+    # The dedicated Medical bake may only use its neutral ramp and red ramp;
+    # keep both present so a future source or converter change cannot flatten
+    # the pickup into a single-colour block again.
+    health_atlas_values = {}
+    for health_name in ("STIMPACK", "MEDIKIT"):
+        health_index = EXPECTED_NAMES.index(health_name)
+        health_values = {
+            value for row in rows[health_index * WORLD_HEIGHT:(health_index + 1) * WORLD_HEIGHT]
+            for value in row
+        }
+        health_atlas_values[health_name] = health_values
+        allowed_health_values = {0, 1, 3, 5, 7, 10, 11, 13, 14}
+        if not health_values <= allowed_health_values:
+            raise ValueError(f"{health_name} emitted a non-medical PAL3 colour")
+        if not (health_values & {11, 14}):
+            raise ValueError(f"{health_name} lost its red medical cross")
+        if len(health_values & {3, 5, 7, 10, 13}) < 2:
+            raise ValueError(f"{health_name} lost its shaded neutral case")
+
+    # The world atlas is not the last stage before pixels reach the screen:
+    # renderer_billboard_draw applies this per-visual LUT. The old MEDIKIT row
+    # replaced every other colour with red or blue and undid the correct bake.
+    # Check the actual runtime result, and pin the medical rows to identity so
+    # neither health pickup can silently acquire blue again.
+    remap_body = balanced_initializer(
+        renderer_text, "MEGALDOOM_BILLBOARD_REMAP")
+    remap_rows = [
+        [int(value) for value in re.findall(r"\d+", row)]
+        for row in re.findall(r"\{([^{}]+)\}", remap_body)
+    ]
+    if len(remap_rows) != 6 or any(len(row) != 16 for row in remap_rows):
+        raise ValueError("billboard runtime remap dimensions changed")
+    identity = list(range(16))
+    for health_name in ("STIMPACK", "MEDIKIT"):
+        visual_id = EXPECTED_NAMES.index(health_name)
+        if remap_rows[visual_id] != identity:
+            raise ValueError(f"{health_name} runtime remap is not identity")
+        screen_values = {
+            remap_rows[visual_id][value]
+            for value in health_atlas_values[health_name]
+        }
+        if 2 in screen_values:
+            raise ValueError(f"{health_name} reaches the screen with blue pixels")
+        if not (screen_values & {11, 14}) or len(
+                screen_values & {3, 5, 7, 10, 13}) < 2:
+            raise ValueError(
+                f"{health_name} runtime colours lost the grey/red medical ramp")
 
     geometry_body = balanced_initializer(
         geometry_text, "FREEDOOM_BILLBOARD_WORLD_GEOMETRY")

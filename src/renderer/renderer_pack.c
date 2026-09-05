@@ -73,8 +73,8 @@ static WallColumnDescriptor describe_textured_column(u16 wall_h,
                                                      u8 tex_y_value,
                                                      u8 side_shade,
                                                      u8 flags) {
-    const u16 top = (u16)((VIEW_PIXEL_H - wall_h) / 2);
-    const u16 bottom = (u16)(top + wall_h);
+    u16 top;
+    u16 bottom;
     const u8 tid = (u8)((texture_id < FREEDOOM_WALL_TEXTURE_COUNT) ?
                             texture_id : MEGALDOOM_TEX_FALLBACK);
     // Distance fog + side shading fold into one plane selection per column: the
@@ -103,6 +103,21 @@ static WallColumnDescriptor describe_textured_column(u16 wall_h,
             RAY_MAX_PROJECTED_WALL_HEIGHT :
         (projected_wall_h < 1 ? 1 : projected_wall_h);
     const u8 *ty_table = MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[sample_height];
+    if (flags & RAY_COLUMN_FLAG_FLOOR_ALIGNED) {
+        // wall_h is only the visible lower portion of the complete projected
+        // slab. Reconstruct that slab's clipped bottom, anchor the wall there,
+        // and advance its DDA to the same screen row. This preserves clipping
+        // at point-blank range while leaving sky above the wall at distance.
+        const u16 full_visible_height =
+            (sample_height > VIEW_PIXEL_H) ? VIEW_PIXEL_H : sample_height;
+        const u16 full_top = (u16)((VIEW_PIXEL_H - full_visible_height) / 2);
+        bottom = (u16)(full_top + full_visible_height);
+        top = (wall_h < bottom) ? (u16)(bottom - wall_h) : 0;
+        ty_table += top - full_top;
+    } else {
+        top = (u16)((VIEW_PIXEL_H - wall_h) / 2);
+        bottom = (u16)(top + wall_h);
+    }
     const u8 tex_x = (u8)(tex_x_value & WALL_TEX_WIDTH_MASK);
     const u8 texture_height = (u8)FREEDOOM_WALL_TEXTURE_HEIGHT[tid];
     const u16 v_scale_q12 = FREEDOOM_WALL_TEXTURE_VSCALE_Q12[tid];

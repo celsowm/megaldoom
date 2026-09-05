@@ -373,7 +373,7 @@ $lines = New-Object System.Collections.Generic.List[string]
 [void]$lines.Add("    {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15},")
 [void]$lines.Add("    {0, $damageColor, $damageColor, $damageColor, $damageColor, $damageColor, $damageColor, $damageColor, $damageColor, $damageColor, $damageColor, $damageColor, $damageColor, $damageColor, $damageColor, $damageColor},")
 [void]$lines.Add("    {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15},")
-[void]$lines.Add("    {0, $damageColor, 2, $damageColor, 2, $damageColor, 2, $damageColor, 2, $damageColor, 2, $damageColor, 2, $damageColor, 2, $damageColor},")
+[void]$lines.Add("    {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15},")
 [void]$lines.Add("};")
 [void]$lines.Add("")
 [void]$lines.Add("static const u32 MEGALDOOM_PAIR_TILES[256][8] = {")
