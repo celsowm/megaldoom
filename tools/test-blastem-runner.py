@@ -12,12 +12,31 @@ def main():
     # A run must never accept a stale report, a partially-written JSON file or
     # an emulator/capture failure as success.
     assert "Remove-Item -LiteralPath $Report -Force" in runner
-    assert "$blastEmExit = $LASTEXITCODE" in runner
+    # Invoke the emulator as a process, not through $LASTEXITCODE: pwsh -File
+    # can leave the latter unset after BlastEm's batch-loop exit path.
+    assert "Start-Process -FilePath $BlastEm" in runner
+    assert "$blastEmExit = $blastEmProcess.ExitCode" in runner
     assert 'throw "BlastEm exited with code $blastEmExit."' in runner
     assert "$attempt -lt 150" in runner
     assert "ConvertFrom-Json" in runner
     assert "$reportData.schemaVersion -ne 2" in runner
     assert "$reportData.captureFailed" in runner
+    assert "[string]$Waypoints" in runner
+    assert '"--md-waypoints"' in runner
+    assert "Specify exactly one of -Route or -Waypoints." in runner
+
+    runner_source = (ROOT / ".externals" / "blastem" / "megaldoom_runner.c").read_text()
+    runner_header = (ROOT / ".externals" / "blastem" / "megaldoom_runner.h").read_text()
+    blastem_source = (ROOT / ".externals" / "blastem" / "blastem.c").read_text()
+    assert "MEGALDOOM_RUNNER_VERSION 4" in runner_source
+    assert "megaldoom_waypoints_load" in runner_source
+    assert "WAYPOINT_USE" in runner_source and "timeout wp=" in runner_source
+    assert '\\"waypoints\\"' in runner_source
+    assert "megaldoom_waypoints_load" in runner_header
+    assert '"--md-waypoints"' in blastem_source
+    runner_patch = (ROOT / "tools" / "blastem-runner.patch").read_text()
+    assert "MEGALDOOM_RUNNER_VERSION 4" in runner_patch
+    assert "megaldoom_waypoints_load" in runner_patch
 
     # Reusing a capture directory is opt-in and removes only the exact PPM
     # pattern the runner owns; unrelated images remain available for review.

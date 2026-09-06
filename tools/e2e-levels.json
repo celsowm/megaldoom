@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "levels": [
+    {
+      "name": "E1M1",
+      "index": 0,
+      "map": "E1M1",
+      "waypoints": "out/e2e/e1m1.waypoints",
+      "frames": 60000,
+      "requiredEvents": ["started", "moved", "combat_hit", "interaction", "exit"],
+      "requiredKeys": 0,
+      "requiresLockedDoor": false
+    },
+    {
+      "name": "E1M2",
+      "index": 1,
+      "map": "E1M2",
+      "waypoints": "out/e2e/e1m2.waypoints",
+      "frames": 180000,
+      "requiredEvents": ["started", "moved", "combat_hit", "interaction", "exit"],
+      "requiredKeys": 4,
+      "requiresLockedDoor": true
+    }
+  ]
+}

@@ -283,6 +283,51 @@ static BillboardFireResult fire_weapon(const WeaponDef *weapon, const RayColumn 
     return merged;
 }
 
+/* The two damage producers (enemy AI and barrel splash) intentionally share
+ * this path.  DEBUG_E2E_GOD only changes the player consequence; the attack,
+ * explosion, enemy update and collision that produced it have already run. */
+static void apply_player_damage(u16 total_damage, s16 push_x, s16 push_y,
+                                u16 *player_health, u16 *player_armor,
+                                bool *player_dead, u16 *death_lockout,
+                                RendererRedrawState *redraw) {
+#if DEBUG_E2E_GOD
+    (void)total_damage;
+    (void)push_x;
+    (void)push_y;
+    (void)player_health;
+    (void)player_armor;
+    (void)player_dead;
+    (void)death_lockout;
+    (void)redraw;
+    debug_e2e_god_hit();
+#else
+    const u16 armor_absorb = (u16)(((total_damage / 3) < *player_armor) ?
+        (total_damage / 3) : *player_armor);
+    const u16 damage = (u16)(total_damage - armor_absorb);
+    *player_armor = (u16)(*player_armor - armor_absorb);
+    if (*player_health <= damage) {
+        game_audio_play_sfx(sfx_player_death, sizeof(sfx_player_death), SOUND_PCM_CH2);
+        *player_health = 0;
+        *player_dead = TRUE;
+        *death_lockout = DEATH_INPUT_LOCKOUT_VBLANKS;
+        debug_checkpoint_mark(DEBUG_CHECKPOINT_DEATH);
+        debug_e2e_death();
+        player_controller_reset();
+        frontend_load_death_prompt(renderer_get_menu_tile_base());
+        renderer_redraw_request_overlay(redraw, RENDERER_REDRAW_DAMAGE);
+    } else {
+        player_apply_world_push(&g_player,
+                                (s32)push_x * PLAYER_HIT_PUSH_STEP,
+                                (s32)push_y * PLAYER_HIT_PUSH_STEP);
+        *player_health = (u16)(*player_health - damage);
+        g_player_damage_flash = PLAYER_DAMAGE_FLASH_FRAMES;
+        g_player_invuln = PLAYER_INVULN_FRAMES;
+        renderer_redraw_request_overlay(redraw, RENDERER_REDRAW_DAMAGE);
+        game_audio_play_sfx(sfx_player_pain, sizeof(sfx_player_pain), SOUND_PCM_CH2);
+    }
+#endif
+}
+
 static void enter_level(u16 phase_index, DoomSkill skill, bool pistol_start,
                         bool *level_cleared, u16 *shot_cooldown,
                         u16 *player_health, u16 *player_armor, PlayerArsenal *arsenal,
@@ -290,6 +335,7 @@ static void enter_level(u16 phase_index, DoomSkill skill, bool pistol_start,
     bsp_map_reset(phase_index);
     billboard_init(phase_index, skill);
     player_init(&g_player, phase_index);
+    debug_e2e_level_start(phase_index);
 #if DEBUG_START_E1M1_EXIT
     // Test-only pose: east of E1M1's certified exit SEG 376, facing its
     // SW1STRTN surface.  This is compiled out of release ROMs.
@@ -350,7 +396,7 @@ int main(bool hard) {
         bool demo_exit_pending = FALSE;
         bool player_dead = FALSE;
         u16 death_lockout = 0;
-        u16 phase_index = DEBUG_START_LEVEL;
+        u16 phase_index = DEBUG_E2E_ACTIVE ? (u16)DEBUG_E2E_START_LEVEL : DEBUG_START_LEVEL;
         LevelProgress level_progress;
         u16 player_health = PLAYER_MAX_HEALTH;
         u16 player_armor = 0;
@@ -361,7 +407,7 @@ int main(bool hard) {
         u32 prev_vtimer;
         DoomSkill skill;
 
-#if DEBUG_START_E1M1_EXIT
+#if DEBUG_START_E1M1_EXIT || DEBUG_E2E_ACTIVE
         // The exit route exercises gameplay only; bypass the time-varying
         // frontend so its single C pulse always lands after the V-Int input
         // latch is armed.  Release builds retain the normal frontend path.
@@ -564,12 +610,14 @@ int main(bool hard) {
                 g_automap.center_y = g_player.y;
             }
             level_progress_visit(&level_progress, g_player.x, g_player.y);
+            debug_e2e_pose(g_player.x, g_player.y, g_player.angle);
 #if DEBUG_BLASTEM_CHECKPOINT
             {
                 const s32 dx = g_player.x - g_checkpoint_prev_x;
                 const s32 dy = g_player.y - g_checkpoint_prev_y;
                 if (dx != 0 || dy != 0) {
                     debug_checkpoint_mark(DEBUG_CHECKPOINT_MOVED);
+                    debug_e2e_mark(DEBUG_E2E_EVENT_MOVED);
                 }
                 g_checkpoint_prev_x = g_player.x;
                 g_checkpoint_prev_y = g_player.y;
@@ -634,6 +682,7 @@ int main(bool hard) {
                 } else if (pickup.effect == BILLBOARD_EFFECT_KEY) {
                     player_keys = (u8)(player_keys | pickup.key_mask);
                     debug_checkpoint_mark(DEBUG_CHECKPOINT_KEY);
+                    debug_e2e_collect_key(pickup.key_mask);
                 }
                 renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_OTHER);
                 game_audio_play_sfx(
@@ -649,12 +698,21 @@ int main(bool hard) {
                 bsp_use_in_front(g_player.x, g_player.y, g_player.angle, player_keys);
             const DoorActionResult action = use.action;
 
+            debug_e2e_use((u8)action, use.target, use.required_key);
+
             action_status = action;
 
             if (action != DOOR_ACTION_NONE) {
+                debug_e2e_mark(DEBUG_E2E_EVENT_INTERACTION);
+                if (action == DOOR_ACTION_LOCKED) {
+                    debug_e2e_locked(use.required_key);
+                } else if (action == DOOR_ACTION_UNLOCKED) {
+                    debug_e2e_unlocked(use.required_key);
+                }
                 if (action == DOOR_ACTION_EXIT) {
                     demo_exit_pending = TRUE;
                     debug_checkpoint_mark(DEBUG_CHECKPOINT_EXIT);
+                    debug_e2e_exit(phase_index);
                 }
                 renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE);
                 // Door / platform move sound on PCM channel 3. A toggle or a
@@ -716,6 +774,10 @@ int main(bool hard) {
                 debug_checkpoint_mark(DEBUG_CHECKPOINT_COMBAT);
                 fire_result = fire_weapon(weapon, g_ray_columns);
                 shot = fire_result.status;
+                if ((shot == BILLBOARD_SHOT_DAMAGE) ||
+                    (shot == BILLBOARD_SHOT_KILL)) {
+                    debug_e2e_mark(DEBUG_E2E_EVENT_COMBAT_HIT);
+                }
                 shot_cooldown = weapon->cooldown_vblanks;
                 if (weapon->ammo_type != AMMO_NONE) {
                     arsenal.ammo[weapon->ammo_type] =
@@ -754,32 +816,9 @@ int main(bool hard) {
             // explosion from overwriting the player-facing blast outcome.
             if ((fire_result.status == BILLBOARD_SHOT_EXPLOSION) &&
                 (fire_result.player_damage > 0) && (g_player_invuln == 0)) {
-                    const u16 total_damage = fire_result.player_damage;
-                    const u16 armor_absorb = (u16)(((total_damage / 3) < player_armor) ? (total_damage / 3) : player_armor);
-                    const u16 damage = (u16)(total_damage - armor_absorb);
-                    player_armor = (u16)(player_armor - armor_absorb);
-                    if (player_health <= damage) {
-                        // Doom's death: freeze the player, lock health/face at
-                        // zero and hold the red screen; reset_level is deferred
-                        // to the player's own FIRE/USE press below.
-                        game_audio_play_sfx(sfx_player_death, sizeof(sfx_player_death), SOUND_PCM_CH2);
-                        player_health = 0;
-                        player_dead = TRUE;
-                        death_lockout = DEATH_INPUT_LOCKOUT_VBLANKS;
-                        debug_checkpoint_mark(DEBUG_CHECKPOINT_DEATH);
-                        player_controller_reset();
-                        frontend_load_death_prompt(renderer_get_menu_tile_base());
-                        renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_DAMAGE);
-                    } else {
-                        player_apply_world_push(&g_player,
-                                                (s32)fire_result.push_x * PLAYER_HIT_PUSH_STEP,
-                                                (s32)fire_result.push_y * PLAYER_HIT_PUSH_STEP);
-                        player_health = (u16)(player_health - damage);
-                        g_player_damage_flash = PLAYER_DAMAGE_FLASH_FRAMES;
-                        g_player_invuln = PLAYER_INVULN_FRAMES;
-                        renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_DAMAGE);
-                        game_audio_play_sfx(sfx_player_pain, sizeof(sfx_player_pain), SOUND_PCM_CH2);
-                    }
+                apply_player_damage(fire_result.player_damage, fire_result.push_x,
+                                    fire_result.push_y, &player_health, &player_armor,
+                                    &player_dead, &death_lockout, &redraw);
             }
         }
 
@@ -804,30 +843,9 @@ int main(bool hard) {
             }
 
             if ((enemy_update.hits > 0) && (g_player_invuln == 0) && !player_dead) {
-                const u16 armor_absorb = (u16)(((PLAYER_HIT_DAMAGE / 3) < player_armor) ? (PLAYER_HIT_DAMAGE / 3) : player_armor);
-                const u16 damage = (u16)(PLAYER_HIT_DAMAGE - armor_absorb);
-                player_armor = (u16)(player_armor - armor_absorb);
-                if (player_health <= damage) {
-                    // See the barrel-explosion death branch above: freeze and
-                    // hold red, defer reset_level to the player's own press.
-                    game_audio_play_sfx(sfx_player_death, sizeof(sfx_player_death), SOUND_PCM_CH2);
-                    player_health = 0;
-                    player_dead = TRUE;
-                    death_lockout = DEATH_INPUT_LOCKOUT_VBLANKS;
-                    debug_checkpoint_mark(DEBUG_CHECKPOINT_DEATH);
-                    player_controller_reset();
-                    frontend_load_death_prompt(renderer_get_menu_tile_base());
-                    renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_DAMAGE);
-                } else {
-                    player_apply_world_push(&g_player,
-                                            (s32)enemy_update.push_x * PLAYER_HIT_PUSH_STEP,
-                                            (s32)enemy_update.push_y * PLAYER_HIT_PUSH_STEP);
-                    player_health = (u16)(player_health - damage);
-                    g_player_damage_flash = PLAYER_DAMAGE_FLASH_FRAMES;
-                    g_player_invuln = PLAYER_INVULN_FRAMES;
-                    renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_DAMAGE);
-                    game_audio_play_sfx(sfx_player_pain, sizeof(sfx_player_pain), SOUND_PCM_CH2);
-                }
+                apply_player_damage(PLAYER_HIT_DAMAGE, enemy_update.push_x,
+                                    enemy_update.push_y, &player_health, &player_armor,
+                                    &player_dead, &death_lockout, &redraw);
             }
         }
 

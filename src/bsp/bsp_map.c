@@ -502,8 +502,9 @@ static void toggle_door(u8 door_group) {
 BspUseResult bsp_use_in_front(s32 x, s32 y, u16 angle, u8 owned_keys) {
     const s16 dir_x = fx_cos(angle);
     const s16 dir_y = fx_sin(angle);
-    BspUseResult result = {DOOR_ACTION_NONE, BSP_KEY_NONE};
+    BspUseResult result = {DOOR_ACTION_NONE, BSP_KEY_NONE, BSP_USE_TARGET_NONE};
     const BspSeg *best = NULL;
+    u16 best_index = BSP_USE_TARGET_NONE;
     u32 best_dist2 = 0;
     s32 best_probe_dist = 0;
 
@@ -530,6 +531,7 @@ BspUseResult bsp_use_in_front(s32 x, s32 y, u16 angle, u8 owned_keys) {
             if (best == NULL || candidate_dist2 < best_dist2 ||
                 (candidate_dist2 == best_dist2 && dist < best_probe_dist)) {
                 best = s;
+                best_index = i;
                 best_dist2 = candidate_dist2;
                 best_probe_dist = dist;
             }
@@ -537,6 +539,7 @@ BspUseResult bsp_use_in_front(s32 x, s32 y, u16 angle, u8 owned_keys) {
     }
 
     if (best == NULL) return result;
+    result.target = (best->type == BSP_SEG_EXIT) ? (u8)best_index : best->door_group;
     if (best->type == BSP_SEG_EXIT) {
         result.action = DOOR_ACTION_EXIT;
         return result;

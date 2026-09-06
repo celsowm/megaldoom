@@ -25,9 +25,10 @@ diff --git a/blastem.c b/blastem.c
  	uint8_t debug_target = 0;
  	char *port;
  	for (int i = 1; i < argc; i++) {
-+		if (!strcmp(argv[i], "--md-route") || !strcmp(argv[i], "--md-report") || !strcmp(argv[i], "--md-capture-dir")) {
++		if (!strcmp(argv[i], "--md-route") || !strcmp(argv[i], "--md-waypoints") || !strcmp(argv[i], "--md-report") || !strcmp(argv[i], "--md-capture-dir")) {
 +			if (++i >= argc) fatal_error("%s needs a value\n", argv[i-1]);
 +			if (!strcmp(argv[i-1], "--md-route")) megaldoom_route_load(argv[i]);
++			else if (!strcmp(argv[i-1], "--md-waypoints")) megaldoom_waypoints_load(argv[i]);
 +			else if (!strcmp(argv[i-1], "--md-report")) megaldoom_runner_set_report(argv[i]);
 +			else megaldoom_runner_set_capture(argv[i], 1);
 +			continue;
@@ -103,6 +104,24 @@ new file mode 100644
 +#include <stdio.h>
 +#include <stdlib.h>
 +#include <string.h>
++#include <math.h>
++#ifndef M_PI
++#define M_PI 3.14159265358979323846
++#endif
++
++#define MEGALDOOM_RUNNER_VERSION 4
++#define MD_MASK_UP    0x001
++#define MD_MASK_LEFT  0x004
++#define MD_MASK_RIGHT 0x008
++#define MD_MASK_A     0x010
++#define MD_MASK_B     0x020
++#define MD_MASK_C     0x040
++#define E2E_EVENT_STARTED    0x01
++#define E2E_EVENT_COMBAT_HIT 0x04
++#define E2E_EVENT_EXIT       0x80
++
++typedef enum { WAYPOINT_MOVE, WAYPOINT_USE, WAYPOINT_FIRE, WAYPOINT_HURT, WAYPOINT_EXIT } waypoint_action;
++typedef struct { int16_t x, y, aim_x, aim_y; uint16_t radius, timeout; uint8_t action, event_mask, expected_action, expected_target; } waypoint;
 +
 +typedef struct {
 +    uint32_t *masks, count, active, cycles_first, cycles_last;
@@ -114,6 +133,11 @@ new file mode 100644
 +    uint32_t perf_mailbox, perf_mailbox_bytes;
 +    char perf_mailbox_hex[1025];
 +    uint32_t require_checkpoints, checkpoints_seen;
++    waypoint *waypoints;
++    uint32_t waypoint_count, waypoint_index, waypoint_started;
++    uint32_t waypoint_complete, waypoint_failed, waypoint_use_pulse, waypoint_use_serial, waypoint_use_pulses;
++    char waypoint_failure[96];
++    uint8_t mailbox_raw[512];
 +} runner_state;
 +static runner_state state;
 +
@@ -132,6 +156,7 @@ new file mode 100644
 +{
 +    FILE *file = fopen(path, "r"); uint32_t frame, mask, capacity = 0;
 +    uint32_t prev_frame = 0, prev_mask = 0; int have_prev = 0;
++    if (state.waypoints) fatal_error("--md-route and --md-waypoints cannot be combined\n");
 +    if (!file) fatal_error("Could not open deterministic route %s\n", path);
 +    while (fscanf(file, "%u %x", &frame, &mask) == 2) {
 +        if (frame >= capacity) { uint32_t next = capacity ? capacity : 256; while (frame >= next) next *= 2; state.masks = realloc(state.masks, sizeof(*state.masks) * next); if (!state.masks) fatal_error("Out of memory loading route\n"); memset(state.masks + capacity, 0, sizeof(*state.masks) * (next - capacity)); capacity = next; }
@@ -140,6 +165,34 @@ new file mode 100644
 +        prev_frame = frame; prev_mask = mask; have_prev = 1;
 +    }
 +    fclose(file);
++}
++/* X Y AIM_X AIM_Y ARRIVAL_RADIUS ACTION EVENT_MASK EXPECTED_ACTION EXPECTED_TARGET TIMEOUT.
++ * Eight-column v1 files remain accepted, but generated USE lines declare the
++ * expected gameplay result and target identity. */
++void megaldoom_waypoints_load(const char *path)
++{
++    FILE *file = fopen(path, "r"); char line[256], action[16];
++    uint32_t capacity = 0, radius, event_mask, timeout; int x, y, aim_x, aim_y, expected_action = -1, expected_target = -1;
++    if (state.masks) fatal_error("--md-route and --md-waypoints cannot be combined\n");
++    if (!file) fatal_error("Could not open waypoint route %s\n", path);
++    while (fgets(line, sizeof(line), file)) {
++        waypoint_action parsed; char *start = line;
++        while (*start == ' ' || *start == '\t') start++;
++        if (!*start || *start == '#' || *start == '\n') continue;
++        int fields = sscanf(start, "%d %d %d %d %u %15s %x %d %d %u", &x, &y, &aim_x, &aim_y, &radius, action, &event_mask, &expected_action, &expected_target, &timeout);
++        if (fields == 8) { if (sscanf(start, "%d %d %d %d %u %15s %x %u", &x, &y, &aim_x, &aim_y, &radius, action, &event_mask, &timeout) != 8) fields = 0; expected_action = expected_target = -1; }
++        if ((fields != 8 && fields != 10) || radius == 0 || timeout == 0 || x < -32768 || x > 32767 || y < -32768 || y > 32767 || aim_x < -32768 || aim_x > 32767 || aim_y < -32768 || aim_y > 32767 || event_mask > 0xFF || expected_action > 255 || expected_target > 255) fatal_error("Invalid waypoint in %s: %s", path, line);
++        if (!strcmp(action, "MOVE")) parsed = WAYPOINT_MOVE;
++        else if (!strcmp(action, "USE")) parsed = WAYPOINT_USE;
++        else if (!strcmp(action, "FIRE")) parsed = WAYPOINT_FIRE;
++        else if (!strcmp(action, "HURT")) parsed = WAYPOINT_HURT;
++        else if (!strcmp(action, "EXIT")) parsed = WAYPOINT_EXIT;
++        else fatal_error("Unknown waypoint action %s in %s\n", action, path);
++        if (state.waypoint_count == capacity) { uint32_t next = capacity ? capacity * 2 : 32; waypoint *grown = realloc(state.waypoints, sizeof(*grown) * next); if (!grown) fatal_error("Out of memory loading waypoint route\n"); state.waypoints = grown; capacity = next; }
++        waypoint *out = &state.waypoints[state.waypoint_count++];
++        out->x = (int16_t)x; out->y = (int16_t)y; out->aim_x = (int16_t)aim_x; out->aim_y = (int16_t)aim_y; out->radius = (uint16_t)radius; out->action = (uint8_t)parsed; out->event_mask = (uint8_t)event_mask; out->expected_action = fields == 10 ? (uint8_t)expected_action : 0xFF; out->expected_target = fields == 10 ? (uint8_t)expected_target : 0xFF; out->timeout = (uint16_t)timeout;
++    }
++    fclose(file); if (!state.waypoint_count) fatal_error("Waypoint route %s is empty\n", path);
 +}
 +void megaldoom_runner_set_report(const char *path) { set_string(&state.report, path); }
 +void megaldoom_runner_set_mailbox(uint32_t address, uint32_t bytes) { state.mailbox = address; state.mailbox_bytes = bytes > 512 ? 512 : bytes; }
@@ -160,7 +213,7 @@ new file mode 100644
 + * (used for checkpoint-bit accumulation) or -1 if the range is invalid/out
 + * of bounds. Shared by the generic mailbox and the perf mailbox so both
 + * follow the same bounds checking. */
-+static int read_mailbox(genesis_context *gen, uint32_t address, uint32_t bytes, char *hex_out)
++static int read_mailbox(genesis_context *gen, uint32_t address, uint32_t bytes, char *hex_out, uint8_t *raw_out)
 +{
 +    static const char hex[] = "0123456789abcdef";
 +    uint32_t offset;
@@ -169,11 +222,38 @@ new file mode 100644
 +    if (offset + bytes > RAM_WORDS * 2) return -1;
 +    for (uint32_t i = 0; i < bytes; i++) {
 +        uint8_t value = ((uint8_t *)gen->work_ram)[(offset + i) ^ 1];
++        if (raw_out) raw_out[i] = value;
 +        hex_out[i * 2] = hex[value >> 4];
 +        hex_out[i * 2 + 1] = hex[value & 15];
 +        if (i == 0) hex_out[bytes * 2] = 0;
 +    }
 +    return ((uint8_t *)gen->work_ram)[offset ^ 1];
++}
++static int16_t mailbox_s16(const uint8_t *raw, uint32_t offset) { return (int16_t)(((uint16_t)raw[offset] << 8) | raw[offset + 1]); }
++static uint16_t mailbox_u16(const uint8_t *raw, uint32_t offset) { return (uint16_t)(((uint16_t)raw[offset] << 8) | raw[offset + 1]); }
++static void waypoint_fail(const char *reason) { if (!state.waypoint_failed) { snprintf(state.waypoint_failure, sizeof(state.waypoint_failure), "%s", reason); state.waypoint_failed = 1; } }
++static void waypoint_next(void) { state.waypoint_index++; state.waypoint_started = 0; state.waypoint_use_pulse = state.waypoint_use_serial = 0; if (state.waypoint_index == state.waypoint_count) state.waypoint_complete = 1; }
++static uint32_t waypoint_turn(waypoint *current, int16_t px, int16_t py, uint16_t angle) { double desired = atan2((double)current->aim_y - py, (double)current->aim_x - px) * (256.0 / (2.0 * M_PI)); int32_t error = ((int32_t)desired - angle) & 255; if (error > 127) error -= 256; return error > 0 ? MD_MASK_RIGHT : (error < 0 ? MD_MASK_LEFT : 0); }
++static uint32_t waypoint_input(uint32_t frame)
++{
++    if (!state.waypoints || state.waypoint_complete || state.waypoint_failed) return 0;
++    if (!(state.mailbox_raw[0] & E2E_EVENT_STARTED)) return 0;
++    waypoint *current = &state.waypoints[state.waypoint_index]; if (!state.waypoint_started) state.waypoint_started = frame;
++    int16_t px = mailbox_s16(state.mailbox_raw, 14), py = mailbox_s16(state.mailbox_raw, 16); int32_t dx = (int32_t)current->x - px, dy = (int32_t)current->y - py;
++    if (frame - state.waypoint_started > current->timeout) { snprintf(state.waypoint_failure, sizeof(state.waypoint_failure), "timeout wp=%u action=%u pose=%d,%d,%u use=%u/%u result=%u:%u", state.waypoint_index, current->action, px, py, mailbox_u16(state.mailbox_raw, 18), state.waypoint_use_serial, state.mailbox_raw[9], state.mailbox_raw[10], state.mailbox_raw[11]); waypoint_fail(state.waypoint_failure); return 0; }
++    uint32_t in_range = (uint32_t)(dx * dx + dy * dy) <= (uint32_t)current->radius * current->radius;
++    if (current->action == WAYPOINT_MOVE && in_range) { waypoint_next(); return 0; }
++    if (current->action == WAYPOINT_USE && in_range) {
++        uint32_t turn = waypoint_turn(current, px, py, mailbox_u16(state.mailbox_raw, 18)); if (turn) return turn;
++        if (!state.waypoint_use_pulse) { state.waypoint_use_pulse = 1; state.waypoint_use_serial = state.mailbox_raw[9]; state.waypoint_use_pulses++; }
++        if (state.mailbox_raw[9] == state.waypoint_use_serial) return MD_MASK_C;
++        if ((current->expected_action != 0xFF && state.mailbox_raw[10] != current->expected_action) || (current->expected_target != 0xFF && state.mailbox_raw[11] != current->expected_target) || ((state.mailbox_raw[0] & current->event_mask) != current->event_mask)) { snprintf(state.waypoint_failure, sizeof(state.waypoint_failure), "wrong use wp=%u expected=%u:%u got=%u:%u", state.waypoint_index, current->expected_action, current->expected_target, state.mailbox_raw[10], state.mailbox_raw[11]); waypoint_fail(state.waypoint_failure); return 0; }
++        waypoint_next(); return 0;
++    }
++    if (current->action == WAYPOINT_FIRE && in_range) { uint32_t turn = waypoint_turn(current, px, py, mailbox_u16(state.mailbox_raw, 18)); if (turn) return turn; if ((state.mailbox_raw[0] & current->event_mask) == current->event_mask) { waypoint_next(); return 0; } return (frame & 7) ? 0 : MD_MASK_B; }
++    if (current->action == WAYPOINT_HURT) { if (state.mailbox_raw[7]) waypoint_next(); return 0; }
++    if (current->action == WAYPOINT_EXIT) { if ((state.mailbox_raw[0] & current->event_mask) == current->event_mask) waypoint_next(); return 0; }
++    { double desired = atan2((double)dy, (double)dx) * (256.0 / (2.0 * M_PI)); int32_t error = ((int32_t)desired - mailbox_u16(state.mailbox_raw, 18)) & 255; if (error > 127) error -= 256; if (error > 3) return MD_MASK_RIGHT; if (error < -3) return MD_MASK_LEFT; return MD_MASK_UP | MD_MASK_A; }
 +}
 +
 +/* MEGALDOOM_MIN_CAPTURE_FRAME: the VDP hasn't finished a real frame yet on
@@ -216,19 +296,20 @@ new file mode 100644
 +
 +void megaldoom_runner_on_frame(system_header *system, uint32_t frame, uint32_t cycles)
 +{
-+    if (state.masks) set_input(system, frame < state.count ? state.masks[frame] : 0);
 +    if (!state.active++) state.cycles_first = cycles; state.cycles_last = cycles;
 +    if (system->type == SYSTEM_GENESIS) {
 +        genesis_context *gen = (genesis_context *)system;
 +        int checkpoint_byte;
 +        state.pc[(gen->m68k->last_prefetch_address >> 1) & 63]++;
-+        checkpoint_byte = read_mailbox(gen, state.mailbox, state.mailbox_bytes, state.mailbox_hex);
++        checkpoint_byte = read_mailbox(gen, state.mailbox, state.mailbox_bytes, state.mailbox_hex, state.mailbox_raw);
 +        /* Checkpoint bits ride on byte 0 of the generic --md-mailbox range
 +         * (the game publishes them at a src/debug_checkpoint.c-owned
 +         * address); OR across the whole run since bits like MENU are
 +         * transient and would otherwise be lost once gameplay starts. */
 +        if (checkpoint_byte >= 0) state.checkpoints_seen |= (uint32_t)checkpoint_byte;
-+        read_mailbox(gen, state.perf_mailbox, state.perf_mailbox_bytes, state.perf_mailbox_hex);
++        read_mailbox(gen, state.perf_mailbox, state.perf_mailbox_bytes, state.perf_mailbox_hex, NULL);
++        if (state.masks) set_input(system, frame < state.count ? state.masks[frame] : 0);
++        else if (state.waypoints) set_input(system, waypoint_input(frame));
 +        if (state.capture && state.capture_every && frame >= MEGALDOOM_MIN_CAPTURE_FRAME && !(frame % state.capture_every)) {
 +            request_capture(gen, frame);
 +        }
@@ -241,9 +322,9 @@ new file mode 100644
 +    uint32_t checkpoints_ok = (state.checkpoints_seen & state.require_checkpoints) == state.require_checkpoints;
 +    fprintf(file, "{\n  \"schemaVersion\": 2,\n  \"frames\": %u,\n  \"cycles\": %u,\n  \"pcHistogram\": [", state.active, state.cycles_last - state.cycles_first);
 +    for (uint32_t i = 0; i < 64; i++) fprintf(file, "%s%u", i ? ", " : "", state.pc[i]);
-+    fprintf(file, "],\n  \"captureFailed\": %s,\n  \"mailbox\": \"%s\",\n  \"perfMailbox\": \"%s\",\n  \"checkpoints\": {\"seen\": %u, \"required\": %u, \"ok\": %s}\n}\n",
++    fprintf(file, "],\n  \"captureFailed\": %s,\n  \"mailbox\": \"%s\",\n  \"perfMailbox\": \"%s\",\n  \"checkpoints\": {\"seen\": %u, \"required\": %u, \"ok\": %s},\n  \"waypoints\": {\"enabled\": %s, \"complete\": %s, \"failed\": %s, \"current\": %u, \"total\": %u, \"usePulses\": %u, \"reason\": \"%s\"}\n}\n",
 +            state.capture_failed ? "true" : "false", state.mailbox_hex, state.perf_mailbox_hex,
-+            state.checkpoints_seen, state.require_checkpoints, checkpoints_ok ? "true" : "false");
++            state.checkpoints_seen, state.require_checkpoints, checkpoints_ok ? "true" : "false", state.waypoints ? "true" : "false", state.waypoint_complete ? "true" : "false", state.waypoint_failed ? "true" : "false", state.waypoint_index, state.waypoint_count, state.waypoint_use_pulses, state.waypoint_failure);
 +    fclose(file);
 +}
 diff --git a/megaldoom_runner.h b/megaldoom_runner.h
@@ -261,6 +342,7 @@ new file mode 100644
 + * use `frame mask` lines; mask bits map to Up, Down, Left, Right, A, B, C,
 + * Start, X, Y, Z and Mode respectively. */
 +void megaldoom_route_load(const char *path);
++void megaldoom_waypoints_load(const char *path);
 +void megaldoom_runner_set_report(const char *path);
 +void megaldoom_runner_set_mailbox(uint32_t address, uint32_t bytes);
 +void megaldoom_runner_set_perf_mailbox(uint32_t address, uint32_t bytes);

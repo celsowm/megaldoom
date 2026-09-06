@@ -200,7 +200,12 @@ typedef enum {
 typedef struct {
     DoorActionResult action;
     u8 required_key;
+    /* Door group for a door action, or the emitted SEG index for an exit.
+     * BSP_USE_TARGET_NONE means no surface was found on the use ray. */
+    u8 target;
 } BspUseResult;
+
+#define BSP_USE_TARGET_NONE 0xFF
 
 // Define BSP_USE_HAND_MAP to compile the hand-authored two-room test map
 // (src/bsp_map_test.c) instead of the imported E1M1 geometry

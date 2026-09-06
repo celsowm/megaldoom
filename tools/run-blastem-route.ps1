@@ -1,5 +1,6 @@
 param(
-    [Parameter(Mandatory = $true)][string]$Route,
+    [string]$Route = "",
+    [string]$Waypoints = "",
     [int]$Frames = 600,
     [string]$RomPath = "out\rom.bin",
     [string]$Report = "out\blastem-route-report.json",
@@ -21,10 +22,15 @@ function AbsolutePath([string]$Path) {
     return [IO.Path]::GetFullPath((Join-Path $Root $Path))
 }
 
-$Route = AbsolutePath $Route
+if ([bool]$Route -eq [bool]$Waypoints) {
+    throw "Specify exactly one of -Route or -Waypoints."
+}
+if ($Route) { $Route = AbsolutePath $Route }
+if ($Waypoints) { $Waypoints = AbsolutePath $Waypoints }
 $RomPath = AbsolutePath $RomPath
 $Report = AbsolutePath $Report
-if (-not (Test-Path $Route)) { throw "Route file does not exist: $Route" }
+if ($Route -and -not (Test-Path $Route)) { throw "Route file does not exist: $Route" }
+if ($Waypoints -and -not (Test-Path $Waypoints)) { throw "Waypoint file does not exist: $Waypoints" }
 if (-not (Test-Path $RomPath)) { throw "ROM does not exist: $RomPath" }
 if ($Frames -le 0) { throw "Frames must be greater than zero." }
 if ($CaptureEvery -lt 0) { throw "CaptureEvery cannot be negative." }
@@ -37,10 +43,12 @@ if (Test-Path -LiteralPath $Report) {
     Remove-Item -LiteralPath $Report -Force
 }
 
-$args = @("-b", $Frames, "--md-route", $Route, "--md-report", $Report)
-if ($Mailbox) { $args += @("--md-mailbox", $Mailbox) }
-if ($PerfMailbox) { $args += @("--md-perf-mailbox", $PerfMailbox) }
-if ($RequireCheckpoints) { $args += @("--md-require-checkpoints", $RequireCheckpoints) }
+$runnerArgs = @("-b", $Frames, "--md-report", $Report)
+if ($Route) { $runnerArgs += @("--md-route", $Route) }
+if ($Waypoints) { $runnerArgs += @("--md-waypoints", $Waypoints) }
+if ($Mailbox) { $runnerArgs += @("--md-mailbox", $Mailbox) }
+if ($PerfMailbox) { $runnerArgs += @("--md-perf-mailbox", $PerfMailbox) }
+if ($RequireCheckpoints) { $runnerArgs += @("--md-require-checkpoints", $RequireCheckpoints) }
 if ($CaptureDir) {
     $CaptureDir = AbsolutePath $CaptureDir
     New-Item -ItemType Directory -Force -Path $CaptureDir | Out-Null
@@ -57,17 +65,16 @@ if ($CaptureDir) {
             Remove-Item -LiteralPath $capture.FullName -Force
         }
     }
-    $args += @("--md-capture-dir", $CaptureDir)
-    if ($CaptureEvery -gt 0) { $args += @("--md-capture-every", $CaptureEvery) }
+    $runnerArgs += @("--md-capture-dir", $CaptureDir)
+    if ($CaptureEvery -gt 0) { $runnerArgs += @("--md-capture-every", $CaptureEvery) }
 }
-$args += $RomPath
-Push-Location (Split-Path -Parent $BlastEm)
-try {
-    & $BlastEm @args
-    $blastEmExit = $LASTEXITCODE
-} finally {
-    Pop-Location
-}
+$runnerArgs += $RomPath
+# Start-Process gives the actual child exit code even when this helper itself
+# is invoked through pwsh -File (where $LASTEXITCODE can be unset after a
+# native process calls exit from BlastEm's batch loop).
+$blastEmProcess = Start-Process -FilePath $BlastEm -ArgumentList $runnerArgs `
+    -WorkingDirectory (Split-Path -Parent $BlastEm) -PassThru -Wait -NoNewWindow
+$blastEmExit = $blastEmProcess.ExitCode
 if ($blastEmExit -ne 0) {
     throw "BlastEm exited with code $blastEmExit."
 }

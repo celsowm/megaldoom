@@ -307,7 +307,8 @@ def validate_spatial_grid(vertices, segs, grid_min_x, grid_min_y, grid_w,
     return len(points) * 2 + len(rays)
 
 
-def certify_flat_progression(vertices, segs, things, start_x, start_y):
+def certify_flat_progression(vertices, segs, things, start_x, start_y,
+                             capture_route=False):
     """Prove a concrete medium/single-player route through the emitted flat map."""
     exits = [(index, seg) for index, seg in enumerate(segs)
              if seg["type"] == SEG_EXIT]
@@ -422,7 +423,11 @@ def certify_flat_progression(vertices, segs, things, start_x, start_y):
         for exit_index, seg in exits:
             ax, ay = vertices[seg["v1"]]
             bx, by = vertices[seg["v2"]]
-            if point_segment_dist2(ax, ay, bx, by, px, py) <= USE_RADIUS ** 2:
+            # The regular certificate proves progression at runtime reach. A
+            # captured E2E route continues to a close certified standoff so a
+            # nearer door cannot win bsp_use_in_front's probe ordering.
+            reach = 64 if capture_route else USE_RADIUS
+            if point_segment_dist2(ax, ay, bx, by, px, py) <= reach ** 2:
                 return exit_index
         return None
 
@@ -434,6 +439,11 @@ def certify_flat_progression(vertices, segs, things, start_x, start_y):
 
     cell_count = width * height
     visited = [bytearray(cell_count) for _ in range(8)]
+    # Optional predecessor graph for the E2E route generator.  The regular
+    # certificate still uses its compact epoch queue; refs are allocated only
+    # on demand so release asset conversion retains its established footprint.
+    route_refs = [array("i", [-1]) * cell_count for _ in range(8)] if capture_route else None
+    route_nodes = []
     visited_counts = [0] * 8
     opened_by_key = [0] * 8
     queue = array("I")
@@ -447,6 +457,9 @@ def certify_flat_progression(vertices, segs, things, start_x, start_y):
     visited[KEY_NONE][seed] = 1
     visited_counts[KEY_NONE] = 1
     queue.append(queue_entry(seed, KEY_NONE))
+    if capture_route:
+        route_nodes.append((-1, seed_x, seed_y, "start", None))
+        route_refs[KEY_NONE][seed] = 0
     reached_masks = set()
     reached_open_groups = 0
     directions = ((NAV_STEP, 0), (-NAV_STEP, 0), (0, NAV_STEP), (0, -NAV_STEP),
@@ -463,11 +476,20 @@ def certify_flat_progression(vertices, segs, things, start_x, start_y):
             continue
         px = min_x + (index % width) * NAV_STEP
         py = min_y + (index // width) * NAV_STEP
+        route_ref = route_refs[key_mask][index] if capture_route else -1
         opened_groups = opened_by_key[key_mask]
         reached_masks.add(key_mask)
         reached_open_groups |= opened_groups
         exit_index = exit_reached(px, py)
         if exit_index is not None:
+            route = None
+            if capture_route:
+                route = []
+                while route_ref >= 0:
+                    node = route_nodes[route_ref]
+                    route.append(dict(x=node[1], y=node[2], action=node[3], detail=node[4]))
+                    route_ref = node[0]
+                route.reverse()
             return {
                 "reachable": True,
                 "key_mask": key_mask,
@@ -476,6 +498,7 @@ def certify_flat_progression(vertices, segs, things, start_x, start_y):
                 "opened_groups": opened_groups,
                 "exit_index": exit_index,
                 "states": sum(visited_counts),
+                "route": route,
             }
 
         collected = key_mask
@@ -500,10 +523,14 @@ def certify_flat_progression(vertices, segs, things, start_x, start_y):
                 visited[collected][index] = 1
                 visited_counts[collected] += 1
                 queue.append(queue_entry(index, collected))
+                if capture_route:
+                    route_nodes.append((route_ref, px, py, "key", collected ^ key_mask))
+                    route_refs[collected][index] = len(route_nodes) - 1
 
         # Remote switches are monotonic for the proof: opening a group can only
         # add routes, and the runtime can reproduce the same sequence with use.
         newly_opened = opened_groups
+        opened_interaction = None
         for interaction in interactions:
             required = interaction["required_key"]
             if required != KEY_NONE and key_mask & required != required:
@@ -512,6 +539,7 @@ def certify_flat_progression(vertices, segs, things, start_x, start_y):
             bx, by = vertices[interaction["v2"]]
             if point_segment_dist2(ax, ay, bx, by, px, py) <= USE_RADIUS ** 2:
                 newly_opened |= 1 << interaction["door_group"]
+                opened_interaction = interaction
         if newly_opened != opened_groups:
             opened_by_key[key_mask] = newly_opened
             reached_open_groups |= newly_opened
@@ -524,6 +552,11 @@ def certify_flat_progression(vertices, segs, things, start_x, start_y):
             visited[key_mask][current_index] = 1
             visited_counts[key_mask] = 1
             queue.append(queue_entry(current_index, key_mask))
+            if capture_route:
+                route_nodes.append((route_ref, px, py, "use", opened_interaction))
+                route_refs[key_mask] = array("i", [-1]) * cell_count
+                route_refs[key_mask][current_index] = len(route_nodes) - 1
+                route_ref = len(route_nodes) - 1
             opened_groups = newly_opened
 
         for dx, dy in directions:
@@ -540,6 +573,9 @@ def certify_flat_progression(vertices, segs, things, start_x, start_y):
             visited[key_mask][index] = 1
             visited_counts[key_mask] += 1
             queue.append(queue_entry(index, key_mask))
+            if capture_route:
+                route_nodes.append((route_ref, nx, ny, "move", None))
+                route_refs[key_mask][index] = len(route_nodes) - 1
 
         # Drop processed storage periodically; array('I') keeps the frontier at
         # four bytes per cell instead of Python tuple/object overhead.

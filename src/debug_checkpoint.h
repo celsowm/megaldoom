@@ -26,6 +26,21 @@
 #ifndef PERF_FIXED_POSE
 #define PERF_FIXED_POSE 0
 #endif
+
+/* End-to-end gameplay harness.  A test ROM may start at a campaign level
+ * without waiting for the frontend, but it still uses that level's genuine
+ * player start, map geometry, pickups and actors.  -1 keeps normal startup. */
+#ifndef DEBUG_E2E_START_LEVEL
+#define DEBUG_E2E_START_LEVEL -1
+#endif
+#ifndef DEBUG_E2E_GOD
+#define DEBUG_E2E_GOD 0
+#endif
+#if DEBUG_E2E_START_LEVEL >= 0
+#define DEBUG_E2E_ACTIVE 1
+#else
+#define DEBUG_E2E_ACTIVE 0
+#endif
 #if PERF_FIXED_POSE
 #ifndef PERF_POSE_X
 #define PERF_POSE_X 1300
@@ -48,6 +63,43 @@
 #define DEBUG_CHECKPOINT_KEY      0x40
 #define DEBUG_CHECKPOINT_EXIT     0x80
 
+/* Detailed E2E state lives beside (rather than inside) the historical
+ * one-byte checkpoint mailbox.  The runner can therefore keep OR-ing that
+ * byte while the level harness reads this fixed sixteen-byte record verbatim. */
+#define DEBUG_E2E_EVENT_STARTED     0x01
+#define DEBUG_E2E_EVENT_MOVED       0x02
+#define DEBUG_E2E_EVENT_COMBAT_HIT  0x04
+#define DEBUG_E2E_EVENT_INTERACTION 0x08
+#define DEBUG_E2E_EVENT_KEY         0x10
+#define DEBUG_E2E_EVENT_LOCKED      0x20
+#define DEBUG_E2E_EVENT_UNLOCKED    0x40
+#define DEBUG_E2E_EVENT_EXIT        0x80
+
+typedef struct {
+    u8 events;
+    u8 keys_collected;
+    u8 keys_locked;
+    u8 keys_unlocked;
+    u8 start_level;
+    u8 exit_level;
+    u8 god_enabled;
+    u8 god_hits;
+    u8 deaths;
+    /* Every PLAYER_CONTROL_USE consumed by gameplay increments this serial.
+     * The result/target are overwritten even for a miss, so the host can
+     * distinguish a lost C edge from a correctly delivered but badly aimed use. */
+    u8 use_serial;
+    u8 use_action;
+    u8 use_target;
+    u8 use_key;
+    s16 player_x;
+    s16 player_y;
+    u16 player_angle;
+} DebugE2EState;
+
+_Static_assert(sizeof(DebugE2EState) == 20,
+               "E2E mailbox layout must stay byte-addressable");
+
 /* BlastEm's deterministic-route runner reads this single byte through
  * --md-mailbox to confirm a route actually reached the state it claims to
  * exercise, instead of trusting frame counts alone. Bits accumulate within a
@@ -56,6 +108,18 @@
  * previous run doesn't mask a route that never got there this time. */
 void debug_checkpoint_reset(void);
 void debug_checkpoint_mark(u8 bits);
+
+/* These APIs are no-ops outside a DEBUG_E2E_START_LEVEL build. */
+void debug_e2e_level_start(u16 level);
+void debug_e2e_mark(u8 events);
+void debug_e2e_collect_key(u8 key_mask);
+void debug_e2e_locked(u8 key_mask);
+void debug_e2e_unlocked(u8 key_mask);
+void debug_e2e_exit(u16 level);
+void debug_e2e_god_hit(void);
+void debug_e2e_death(void);
+void debug_e2e_use(u8 action, u8 target, u8 required_key);
+void debug_e2e_pose(s32 x, s32 y, u16 angle);
 
 /* A byte-for-byte copy of RendererPerfSnapshot (src/renderer_perf.h),
  * published for BlastEm's --md-perf-mailbox to read. This does not live as
@@ -199,6 +263,16 @@ extern u32 g_cadence_pack_tiles_subticks;
 #else
 #define debug_checkpoint_reset()
 #define debug_checkpoint_mark(bits)
+#define debug_e2e_level_start(level)
+#define debug_e2e_mark(events)
+#define debug_e2e_collect_key(key_mask)
+#define debug_e2e_locked(key_mask)
+#define debug_e2e_unlocked(key_mask)
+#define debug_e2e_exit(level)
+#define debug_e2e_god_hit()
+#define debug_e2e_death()
+#define debug_e2e_use(action, target, required_key)
+#define debug_e2e_pose(x, y, angle)
 #define debug_checkpoint_publish_perf(snapshot, bytes)
 #define CADENCE_STAGE_PROBE 0
 #endif
