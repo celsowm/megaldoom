@@ -264,7 +264,12 @@ u16 player_controller_update(PlayerState *player, u16 elapsed_frames,
     // only one available at all on a 3-button pad (A runs, B fires, C uses,
     // START pauses). Emitted on both pad types so the habit carries over.
     const bool weapon_chord = gameplay && ((joy & BUTTON_C) != 0) &&
-                               ((joy & (BUTTON_UP | BUTTON_DOWN)) != 0);
+                              ((joy & (BUTTON_UP | BUTTON_DOWN)) != 0);
+    /* The V-Int latch can observe the C edge one main-loop iteration before
+     * the cached directional state.  Treat a latched C+direction chord as
+     * strafe/weapon input too, so it can never leak a USE pulse. */
+    const bool latched_directional = (latched_pressed &
+        (BUTTON_UP | BUTTON_DOWN | BUTTON_LEFT | BUTTON_RIGHT)) != 0;
     // C modifies lateral D-pad input into strafe, so it must suppress turn and
     // use for the whole chord rather than leaking an action while strafing.
     const bool turning_left = directional && !strafing && ((joy & BUTTON_LEFT) != 0);
@@ -348,7 +353,8 @@ u16 player_controller_update(PlayerState *player, u16 elapsed_frames,
         // edge even though this iteration's cached joy reads no button held.
         if ((((joy & BUTTON_C) != 0) && ((s_previous_joy & BUTTON_C) == 0) &&
              !strafing && !weapon_chord) ||
-            (((latched_pressed & BUTTON_C) != 0) && !strafing && !weapon_chord)) {
+            (((latched_pressed & BUTTON_C) != 0) && !strafing &&
+             !weapon_chord && !latched_directional)) {
             result |= PLAYER_CONTROL_USE;
         }
         if ((((joy & BUTTON_B) != 0) && ((s_previous_joy & BUTTON_B) == 0)) ||

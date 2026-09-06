@@ -24,7 +24,7 @@ EVENT_UNLOCKED = 0x40
 EVENT_COMBAT_HIT = 0x04
 EVENT_EXIT = 0x80
 USE_RADIUS = 256
-USE_ARRIVAL_RADIUS = 48
+USE_ARRIVAL_RADIUS = 32
 MOVE_ARRIVAL_RADIUS = 48
 ROUTE_SAMPLE_STEP = 128
 COMBAT_THINGS = {3001, 3002, 3003, 3004, 3005, 3006, 3007, 3008, 58}
@@ -112,10 +112,22 @@ def stable_use_pose(map_data, nodes, index, seg):
         except AssertionError:
             continue
         if target == expected_target:
-            candidates.append(((node_index - index) ** 2, x, y, aim, action, target))
+            # Score the pose against the runner's finite arrival tolerance.
+            # The aim point remains fixed while the actual player can land a
+            # few pixels off the certified cell, so reject poses whose probe
+            # ordering changes under the cardinal edge samples.
+            robust = 0
+            for ox, oy in ((0, 0), (16, 0), (-16, 0), (0, 16), (0, -16)):
+                try:
+                    if use_target(map_data, x + ox, y + oy, *aim)[1] == expected_target:
+                        robust += 1
+                except AssertionError:
+                    pass
+            candidates.append((-robust, (node_index - index) ** 2,
+                               x, y, aim, action, target))
     if not candidates:
         raise AssertionError("no stable certified use pose for target %d" % expected_target)
-    _, x, y, aim, action, target = min(candidates)
+    _, _, x, y, aim, action, target = min(candidates)
     return x, y, aim, action, target
 
 
@@ -191,8 +203,8 @@ def route_lines(map_data):
     # the navigation path.
     combat_candidates = [
         (node, enemy) for node in nodes for enemy in enemies
-        if 64 ** 2 <= (node["x"] - enemy[0]) ** 2 +
-                      (node["y"] - enemy[1]) ** 2 <= 160 ** 2]
+        if 128 ** 2 <= (node["x"] - enemy[0]) ** 2 +
+                      (node["y"] - enemy[1]) ** 2 <= 256 ** 2]
     combat_node, combat_target = min(
         combat_candidates or ((node, enemy) for node in nodes for enemy in enemies),
         key=lambda pair: (pair[0]["x"] - pair[1][0]) ** 2 +
