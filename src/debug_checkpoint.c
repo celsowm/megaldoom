@@ -28,9 +28,11 @@ void debug_e2e_level_start(u16 level) {
     g_debug_e2e_state.use_action = 0;
     g_debug_e2e_state.use_target = 0xFF;
     g_debug_e2e_state.use_key = 0;
-    g_debug_e2e_state.player_x = 0;
-    g_debug_e2e_state.player_y = 0;
-    g_debug_e2e_state.player_angle = 0;
+    g_debug_e2e_state.player_x = -32768;
+    g_debug_e2e_state.player_y = -32768;
+    /* Invalid until the first gameplay iteration publishes the real spawn
+     * pose; the host must not steer from a stale mailbox angle. */
+    g_debug_e2e_state.player_angle = 0xFFFF;
 }
 
 void debug_e2e_mark(u8 events) { g_debug_e2e_state.events |= events; }

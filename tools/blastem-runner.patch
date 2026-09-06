@@ -233,11 +233,13 @@ new file mode 100644
 +static uint16_t mailbox_u16(const uint8_t *raw, uint32_t offset) { return (uint16_t)(((uint16_t)raw[offset] << 8) | raw[offset + 1]); }
 +static void waypoint_fail(const char *reason) { if (!state.waypoint_failed) { snprintf(state.waypoint_failure, sizeof(state.waypoint_failure), "%s", reason); state.waypoint_failed = 1; } }
 +static void waypoint_next(void) { state.waypoint_index++; state.waypoint_started = 0; state.waypoint_use_pulse = state.waypoint_use_serial = 0; if (state.waypoint_index == state.waypoint_count) state.waypoint_complete = 1; }
-+static uint32_t waypoint_turn(waypoint *current, int16_t px, int16_t py, uint16_t angle) { double desired = atan2((double)current->aim_y - py, (double)current->aim_x - px) * (256.0 / (2.0 * M_PI)); int32_t error = ((int32_t)desired - angle) & 255; if (error > 127) error -= 256; return error > 0 ? MD_MASK_RIGHT : (error < 0 ? MD_MASK_LEFT : 0); }
++static uint32_t waypoint_turn(waypoint *current, int16_t px, int16_t py, uint16_t angle) { int32_t aim_dx = (int32_t)current->aim_x - px, aim_dy = (int32_t)current->aim_y - py; if (current->action == WAYPOINT_MOVE && aim_dx == 0 && aim_dy != 0) return 0; double desired = atan2((double)aim_dy, (double)aim_dx) * (256.0 / (2.0 * M_PI)); int32_t error = ((int32_t)desired - angle) & 255; if (error > 127) error -= 256; /* The accelerated turn controller needs a small dead-band or it hunts around the target heading forever. */ if (error >= -8 && error <= 8) return 0; return error > 0 ? MD_MASK_RIGHT : (error < 0 ? MD_MASK_LEFT : 0); }
 +static uint32_t waypoint_input(uint32_t frame)
 +{
 +    if (!state.waypoints || state.waypoint_complete || state.waypoint_failed) return 0;
 +    if (!(state.mailbox_raw[0] & E2E_EVENT_STARTED)) return 0;
++    if (mailbox_u16(state.mailbox_raw, 18) == 0xFFFF) return 0;
++    if (mailbox_s16(state.mailbox_raw, 14) == -32768 || mailbox_s16(state.mailbox_raw, 16) == -32768) return 0;
 +    waypoint *current = &state.waypoints[state.waypoint_index]; if (!state.waypoint_started) state.waypoint_started = frame;
 +    int16_t px = mailbox_s16(state.mailbox_raw, 14), py = mailbox_s16(state.mailbox_raw, 16); int32_t dx = (int32_t)current->x - px, dy = (int32_t)current->y - py;
 +    if (frame - state.waypoint_started > current->timeout) { snprintf(state.waypoint_failure, sizeof(state.waypoint_failure), "timeout wp=%u action=%u pose=%d,%d,%u use=%u/%u result=%u:%u", state.waypoint_index, current->action, px, py, mailbox_u16(state.mailbox_raw, 18), state.waypoint_use_serial, state.mailbox_raw[9], state.mailbox_raw[10], state.mailbox_raw[11]); waypoint_fail(state.waypoint_failure); return 0; }
@@ -250,10 +252,10 @@ new file mode 100644
 +        if ((current->expected_action != 0xFF && state.mailbox_raw[10] != current->expected_action) || (current->expected_target != 0xFF && state.mailbox_raw[11] != current->expected_target) || ((state.mailbox_raw[0] & current->event_mask) != current->event_mask)) { snprintf(state.waypoint_failure, sizeof(state.waypoint_failure), "wrong use wp=%u expected=%u:%u got=%u:%u", state.waypoint_index, current->expected_action, current->expected_target, state.mailbox_raw[10], state.mailbox_raw[11]); waypoint_fail(state.waypoint_failure); return 0; }
 +        waypoint_next(); return 0;
 +    }
-+    if (current->action == WAYPOINT_FIRE && in_range) { uint32_t turn = waypoint_turn(current, px, py, mailbox_u16(state.mailbox_raw, 18)); if (turn) return turn; if ((state.mailbox_raw[0] & current->event_mask) == current->event_mask) { waypoint_next(); return 0; } return (frame & 7) ? 0 : MD_MASK_B; }
++    if (current->action == WAYPOINT_FIRE && in_range) { uint32_t turn = waypoint_turn(current, px, py, mailbox_u16(state.mailbox_raw, 18)); if (turn) return turn; if ((state.mailbox_raw[0] & current->event_mask) == current->event_mask) { waypoint_next(); return 0; } return ((frame & 15) < 4) ? MD_MASK_B : 0; }
 +    if (current->action == WAYPOINT_HURT) { if (state.mailbox_raw[7]) waypoint_next(); return 0; }
 +    if (current->action == WAYPOINT_EXIT) { if ((state.mailbox_raw[0] & current->event_mask) == current->event_mask) waypoint_next(); return 0; }
-+    { double desired = atan2((double)dy, (double)dx) * (256.0 / (2.0 * M_PI)); int32_t error = ((int32_t)desired - mailbox_u16(state.mailbox_raw, 18)) & 255; if (error > 127) error -= 256; if (error > 3) return MD_MASK_RIGHT; if (error < -3) return MD_MASK_LEFT; return MD_MASK_UP | MD_MASK_A; }
++    { waypoint travel = *current; travel.aim_x = current->x; travel.aim_y = current->y; if (current->action == WAYPOINT_MOVE && dx == 0) return MD_MASK_UP; uint32_t turn = waypoint_turn(&travel, px, py, mailbox_u16(state.mailbox_raw, 18)); if (turn) return turn; return MD_MASK_UP; }
 +}
 +
 +/* MEGALDOOM_MIN_CAPTURE_FRAME: the VDP hasn't finished a real frame yet on

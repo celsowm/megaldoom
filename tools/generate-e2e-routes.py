@@ -25,6 +25,8 @@ EVENT_COMBAT_HIT = 0x04
 EVENT_EXIT = 0x80
 USE_RADIUS = 256
 USE_ARRIVAL_RADIUS = 48
+MOVE_ARRIVAL_RADIUS = 48
+ROUTE_SAMPLE_STEP = 128
 COMBAT_THINGS = {3001, 3002, 3003, 3004, 3005, 3006, 3007, 3008, 58}
 
 
@@ -88,7 +90,7 @@ def use_target(map_data, x, y, aim_x, aim_y):
             raise AssertionError("no runtime use target at %d,%d angle %d" % (x, y, angle))
         _, _, index, seg = best
         action = 4 if seg["type"] == SEG_EXIT else (2 if seg["required_key"] else 1)
-        target = index if seg["type"] == SEG_EXIT else seg["door_group"]
+        target = 0 if seg["type"] == SEG_EXIT else seg["door_group"]
         declared.append((action, target))
     if len(set(declared)) != 1:
         raise AssertionError("ambiguous use pose at %d,%d: %r" % (x, y, declared))
@@ -97,8 +99,7 @@ def use_target(map_data, x, y, aim_x, aim_y):
 
 def stable_use_pose(map_data, nodes, index, seg):
     """Pick a certified path cell whose whole runner aim tolerance hits seg."""
-    expected_target = (map_data.out_segs.index(seg) if seg["type"] == SEG_EXIT
-                       else seg["door_group"])
+    expected_target = 0 if seg["type"] == SEG_EXIT else seg["door_group"]
     candidates = []
     for node_index, node in enumerate(nodes):
         x, y = node["x"], node["y"]
@@ -124,6 +125,38 @@ def route_lines(map_data):
         map_data.start_x, map_data.start_y, capture_route=True)
     nodes = certificate["route"]
     assert nodes and nodes[0]["action"] == "start"
+
+    # The certificate is deliberately a 16-unit grid proof.  Feeding every
+    # grid cell to the momentum-based controller makes each successive target
+    # inherit the previous thrust and lets the pose mailbox lag several cells
+    # behind the host route.  Keep turns, pickups and certified interactions,
+    # but sample long straight runs at a coarser spacing.  Every retained
+    # segment is still a contiguous, axis-aligned prefix of the certified
+    # path, so this is compression, never a teleport or a new shortcut.
+    compact = [nodes[0]]
+    previous_move = nodes[0]
+    previous_direction = None
+    for node in nodes[1:]:
+        if node["action"] != "move":
+            compact.append(node)
+            previous_move = node
+            previous_direction = None
+            continue
+        dx = node["x"] - previous_move["x"]
+        dy = node["y"] - previous_move["y"]
+        direction = (0 if dx == 0 else (1 if dx > 0 else -1),
+                     0 if dy == 0 else (1 if dy > 0 else -1))
+        if previous_direction is not None and direction != previous_direction:
+            compact.append(previous_move)
+        if (previous_direction is None or direction != previous_direction or
+                abs(node["x"] - compact[-1]["x"]) +
+                abs(node["y"] - compact[-1]["y"]) >= ROUTE_SAMPLE_STEP):
+            compact.append(node)
+        previous_move = node
+        previous_direction = direction
+    if compact[-1] is not nodes[-1]:
+        compact.append(nodes[-1])
+    nodes = compact
     key_index = next((index for index, node in enumerate(nodes)
                       if node["action"] == "key"), None)
 
@@ -151,8 +184,17 @@ def route_lines(map_data):
     enemies = [(x, y) for x, y, thing_type, _, _ in runtime_things(map_data.out_things)
                if thing_type in COMBAT_THINGS]
     assert enemies, "%s has no combat target for E2E" % map_data.mapn
+    # Do not stand on top of the monster: billboard targeting intentionally
+    # rejects objects inside its minimum projection depth.  Prefer a nearby
+    # certified cell with a real point-blank gap, then fall back to the old
+    # nearest pair only for maps whose combat thing is unusually embedded in
+    # the navigation path.
+    combat_candidates = [
+        (node, enemy) for node in nodes for enemy in enemies
+        if 64 ** 2 <= (node["x"] - enemy[0]) ** 2 +
+                      (node["y"] - enemy[1]) ** 2 <= 160 ** 2]
     combat_node, combat_target = min(
-        ((node, enemy) for node in nodes for enemy in enemies),
+        combat_candidates or ((node, enemy) for node in nodes for enemy in enemies),
         key=lambda pair: (pair[0]["x"] - pair[1][0]) ** 2 +
                          (pair[0]["y"] - pair[1][1]) ** 2)
     combat_index = nodes.index(combat_node)
@@ -175,7 +217,8 @@ def route_lines(map_data):
         # corner can cut through a wall even though both endpoints are valid.
         # Reached cells advance in one host frame, so fidelity costs little.
         if last is None or needs_position or last != (x, y):
-            emit(x, y, x, y, 48, "MOVE")
+            move_radius = USE_ARRIVAL_RADIUS if needs_position else MOVE_ARRIVAL_RADIUS
+            emit(x, y, x, y, move_radius, "MOVE")
 
         if index in injected:
             action, _, event = injected[index]
@@ -189,8 +232,9 @@ def route_lines(map_data):
             emit(x, y, aim[0], aim[1], USE_ARRIVAL_RADIUS, action, event,
                  required_action, expected_target)
         if index == combat_index:
-            emit(x, y, combat_target[0], combat_target[1], 160, "FIRE", EVENT_COMBAT_HIT, 3600)
-            emit(x, y, x, y, 160, "HURT", 0, 3600)
+            emit(x, y, combat_target[0], combat_target[1], 160, "FIRE",
+                 EVENT_COMBAT_HIT, -1, -1, 3600)
+            emit(x, y, x, y, 160, "HURT", 0, -1, -1, 3600)
         if node["action"] == "use":
             x, y, aim, expected_action, expected_target = stable_use_pose(
                 map_data, nodes, index, node["detail"])
@@ -205,7 +249,7 @@ def route_lines(map_data):
     assert expected_action == 4
     emit(exit_x, exit_y, exit_aim[0], exit_aim[1], USE_ARRIVAL_RADIUS,
          "USE", EVENT_EXIT, expected_action, expected_target, 3600)
-    emit(exit_x, exit_y, exit_x, exit_y, USE_RADIUS, "EXIT", EVENT_EXIT, -1, -1, 3600)
+    emit(exit_x, exit_y, exit_x, exit_y, MOVE_ARRIVAL_RADIUS, "EXIT", EVENT_EXIT, -1, -1, 3600)
     return "\n".join(lines) + "\n"
 
 

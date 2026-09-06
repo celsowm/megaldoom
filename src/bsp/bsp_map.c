@@ -539,7 +539,9 @@ BspUseResult bsp_use_in_front(s32 x, s32 y, u16 angle, u8 owned_keys) {
     }
 
     if (best == NULL) return result;
-    result.target = (best->type == BSP_SEG_EXIT) ? (u8)best_index : best->door_group;
+    /* Campaign maps currently have one exit; use its stable ordinal rather
+     * than the emitted SEG index, which can exceed the byte mailbox field. */
+    result.target = (best->type == BSP_SEG_EXIT) ? 0 : best->door_group;
     if (best->type == BSP_SEG_EXIT) {
         result.action = DOOR_ACTION_EXIT;
         return result;

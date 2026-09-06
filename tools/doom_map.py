@@ -310,6 +310,7 @@ def validate_spatial_grid(vertices, segs, grid_min_x, grid_min_y, grid_w,
 def certify_flat_progression(vertices, segs, things, start_x, start_y,
                              capture_route=False):
     """Prove a concrete medium/single-player route through the emitted flat map."""
+    collision_radius = PLAYER_RADIUS
     exits = [(index, seg) for index, seg in enumerate(segs)
              if seg["type"] == SEG_EXIT]
     if not exits:
@@ -352,10 +353,10 @@ def certify_flat_progression(vertices, segs, things, start_x, start_y,
     for index, seg in enumerate(segs):
         ax, ay = vertices[seg["v1"]]
         bx, by = vertices[seg["v2"]]
-        cx0 = max(0, (min(ax, bx) - PLAYER_RADIUS - min_x) // broad_cell)
-        cx1 = min(broad_w - 1, (max(ax, bx) + PLAYER_RADIUS - min_x) // broad_cell)
-        cy0 = max(0, (min(ay, by) - PLAYER_RADIUS - min_y) // broad_cell)
-        cy1 = min(broad_h - 1, (max(ay, by) + PLAYER_RADIUS - min_y) // broad_cell)
+        cx0 = max(0, (min(ax, bx) - collision_radius - min_x) // broad_cell)
+        cx1 = min(broad_w - 1, (max(ax, bx) + collision_radius - min_x) // broad_cell)
+        cy0 = max(0, (min(ay, by) - collision_radius - min_y) // broad_cell)
+        cy1 = min(broad_h - 1, (max(ay, by) + collision_radius - min_y) // broad_cell)
         for cy in range(cy0, cy1 + 1):
             for cx in range(cx0, cx1 + 1):
                 broad[cy * broad_w + cx].append(index)
@@ -379,7 +380,7 @@ def certify_flat_progression(vertices, segs, things, start_x, start_y,
                 continue
             ax, ay = vertices[seg["v1"]]
             bx, by = vertices[seg["v2"]]
-            if point_segment_dist2(ax, ay, bx, by, px, py) < PLAYER_RADIUS ** 2:
+            if point_segment_dist2(ax, ay, bx, by, px, py) < collision_radius ** 2:
                 if seg["type"] == SEG_DOOR:
                     door_groups |= 1 << seg["door_group"]
                 else:
@@ -387,7 +388,7 @@ def certify_flat_progression(vertices, segs, things, start_x, start_y,
         for ox, oy, radius in blockers:
             dx = px - ox
             dy = py - oy
-            if dx * dx + dy * dy < (PLAYER_RADIUS + radius) ** 2:
+            if dx * dx + dy * dy < (collision_radius + radius) ** 2:
                 return True, door_groups
         return False, door_groups
 
@@ -465,6 +466,10 @@ def certify_flat_progression(vertices, segs, things, start_x, start_y,
     directions = ((NAV_STEP, 0), (-NAV_STEP, 0), (0, NAV_STEP), (0, -NAV_STEP),
                   (NAV_STEP, NAV_STEP), (NAV_STEP, -NAV_STEP),
                   (-NAV_STEP, NAV_STEP), (-NAV_STEP, -NAV_STEP))
+    # The captured host route follows the same four-neighbour movement that
+    # the controller can realize without cutting a collision corner. The
+    # release certificate keeps its diagonal reachability proof unchanged.
+    route_directions = directions[:4] if capture_route else directions
 
     while queue_head < len(queue):
         encoded = queue[queue_head]
@@ -559,7 +564,7 @@ def certify_flat_progression(vertices, segs, things, start_x, start_y,
                 route_ref = len(route_nodes) - 1
             opened_groups = newly_opened
 
-        for dx, dy in directions:
+        for dx, dy in route_directions:
             nx, ny = px + dx, py + dy
             if blocked(nx, ny, key_mask, opened_groups):
                 continue

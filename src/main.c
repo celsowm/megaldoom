@@ -343,7 +343,14 @@ static void enter_level(u16 phase_index, DoomSkill skill, bool pistol_start,
         debug_place_e1m1_exit();
     }
 #endif
+    /* Publish the genuine spawn pose before the first host-controlled frame;
+     * otherwise a pose-driven runner would steer from the mailbox's zero
+     * placeholder while the first gameplay iteration is still initializing. */
+    debug_e2e_pose(g_player.x, g_player.y, g_player.angle);
     player_controller_reset();
+    /* Resetting controller state must not leave the host with a pre-reset
+     * angle; publish once more at the exact hand-off to gameplay. */
+    debug_e2e_pose(g_player.x, g_player.y, g_player.angle);
     automap_reset(&g_automap, &g_player);
     g_weapon_flash = 0;
     g_player_damage_flash = 0;
