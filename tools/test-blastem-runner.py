@@ -28,15 +28,23 @@ def main():
     runner_source = (ROOT / ".externals" / "blastem" / "megaldoom_runner.c").read_text()
     runner_header = (ROOT / ".externals" / "blastem" / "megaldoom_runner.h").read_text()
     blastem_source = (ROOT / ".externals" / "blastem" / "blastem.c").read_text()
-    assert "MEGALDOOM_RUNNER_VERSION 4" in runner_source
+    assert "MEGALDOOM_RUNNER_VERSION 5" in runner_source
+    assert "WAYPOINT_NO_PROGRESS_LIMIT" in runner_source
+    assert "waypoint_recovery_input" in runner_source
+    assert "velocityX" in runner_source and "noProgress" in runner_source
+    assert "stalled_frames" not in runner_source
     assert "megaldoom_waypoints_load" in runner_source
     assert "WAYPOINT_USE" in runner_source and "timeout wp=" in runner_source
     assert '\\"waypoints\\"' in runner_source
     assert "megaldoom_waypoints_load" in runner_header
     assert '"--md-waypoints"' in blastem_source
     runner_patch = (ROOT / "tools" / "blastem-runner.patch").read_text()
-    assert "MEGALDOOM_RUNNER_VERSION 4" in runner_patch
+    assert "MEGALDOOM_RUNNER_VERSION 5" in runner_patch
     assert "megaldoom_waypoints_load" in runner_patch
+    assert "WAYPOINT_NO_PROGRESS_LIMIT" in runner_patch
+    assert "WAYPOINT_RECOVERY_PHASE_FRAMES" in runner_patch
+    assert "waypoint_recovery_input" in runner_patch
+    assert "stalled_frames" not in runner_patch
 
     # Reusing a capture directory is opt-in and removes only the exact PPM
     # pattern the runner owns; unrelated images remain available for review.

@@ -50,14 +50,15 @@ function Invoke-MegalDoomRoute {
         [string]$RequireCheckpoints = ""
     )
 
-    $arguments = @(
-        "-Frames", $Frames, "-Report", $Report,
-        "-Mailbox", $Mailbox
-    )
-    if ($Route) { $arguments += @("-Route", $Route) }
-    if ($Waypoints) { $arguments += @("-Waypoints", $Waypoints) }
-    if ($RequireCheckpoints) {
-        $arguments += @("-RequireCheckpoints", $RequireCheckpoints)
+    $runnerParams = @{
+        Frames = $Frames
+        Report = $Report
+        Mailbox = $Mailbox
     }
-    & (Join-Path $PSScriptRoot "run-blastem-route.ps1") @arguments
+    if ($Route) { $runnerParams.Route = $Route }
+    if ($Waypoints) { $runnerParams.Waypoints = $Waypoints }
+    if ($RequireCheckpoints) {
+        $runnerParams.RequireCheckpoints = $RequireCheckpoints
+    }
+    & (Join-Path $PSScriptRoot "run-blastem-route.ps1") @runnerParams
 }

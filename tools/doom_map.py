@@ -308,9 +308,10 @@ def validate_spatial_grid(vertices, segs, grid_min_x, grid_min_y, grid_w,
 
 
 def certify_flat_progression(vertices, segs, things, start_x, start_y,
-                             capture_route=False):
+                             capture_route=False, collision_radius_override=None):
     """Prove a concrete medium/single-player route through the emitted flat map."""
-    collision_radius = PLAYER_RADIUS
+    collision_radius = (PLAYER_RADIUS if collision_radius_override is None
+                        else collision_radius_override)
     exits = [(index, seg) for index, seg in enumerate(segs)
              if seg["type"] == SEG_EXIT]
     if not exits:

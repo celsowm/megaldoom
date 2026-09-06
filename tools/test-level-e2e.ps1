@@ -39,8 +39,13 @@ Invoke-MegalDoomDebugBuild `
     "-DDEBUG_BLASTEM_CHECKPOINT=1 -DDEBUG_E2E_START_LEVEL=$($case.index) -DDEBUG_E2E_GOD=1"
 $mailbox = Resolve-MegalDoomMailbox -Symbol "g_debug_e2e_state" -Bytes 20
 $report = Join-Path $root ("out\{0}-e2e-report.json" -f $case.name.ToLowerInvariant())
-Invoke-MegalDoomRoute -Waypoints $waypoints -Frames ([int]$case.frames) `
-    -Report $report -Mailbox $mailbox
+$routeParams = @{
+    Waypoints = $waypoints
+    Frames = [int]$case.frames
+    Report = $report
+    Mailbox = $mailbox
+}
+Invoke-MegalDoomRoute @routeParams
 
 $data = Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
 if (-not $data.waypoints.enabled -or -not $data.waypoints.complete -or

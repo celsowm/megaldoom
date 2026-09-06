@@ -9,7 +9,7 @@ $Source = Join-Path $Root ".externals\blastem"
 $Toolchain = Join-Path $Root ".externals\toolchain"
 $Output = Join-Path $Source "build\windows"
 $RunnerPatch = Join-Path $PSScriptRoot "blastem-runner.patch"
-$RunnerSentinel = "MEGALDOOM_RUNNER_VERSION 4"
+$RunnerSentinel = "MEGALDOOM_RUNNER_VERSION 5"
 
 if ($Setup) { & (Join-Path $PSScriptRoot "setup-blastem-toolchain.ps1"); if ($LASTEXITCODE) { exit $LASTEXITCODE } }
 if (-not (Test-Path (Join-Path $Source "Makefile"))) { throw "BlastEm source is missing at $Source." }
@@ -24,6 +24,9 @@ if (-not (Test-Path (Join-Path $Source "megaldoom_runner.c"))) {
 }
 if (-not (Select-String -LiteralPath (Join-Path $Source "megaldoom_runner.c") -SimpleMatch $RunnerSentinel -Quiet)) {
     throw "BlastEm deterministic runner is stale; apply the current tools/blastem-runner.patch."
+}
+if (-not (Select-String -LiteralPath (Join-Path $Source "megaldoom_runner.c") -SimpleMatch "waypoint_recovery_input" -Quiet)) {
+    throw "BlastEm deterministic runner lacks pose-based recovery; refuse an older external copy."
 }
 
 $clang = Get-ChildItem -Path (Join-Path $Toolchain "llvm-mingw") -Filter "x86_64-w64-mingw32-clang.exe" -Recurse | Select-Object -First 1

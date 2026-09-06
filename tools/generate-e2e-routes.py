@@ -25,8 +25,16 @@ EVENT_COMBAT_HIT = 0x04
 EVENT_EXIT = 0x80
 USE_RADIUS = 256
 USE_ARRIVAL_RADIUS = 48
-MOVE_ARRIVAL_RADIUS = 48
-ROUTE_SAMPLE_STEP = 128
+# Momentum can leave the player a few pixels outside a corner cell even after
+# the controller has released thrust.  MOVE is a navigation tolerance, not an
+# interaction tolerance; keep USE narrow while allowing the next certified
+# cell to take over without stalling on the diagonal edge of its radius.
+MOVE_ARRIVAL_RADIUS = 80
+MOVE_CORNER_RADIUS = 32
+ROUTE_SAMPLE_STEP = 64
+# Keep the certified route outside the player's collision footprint at turns;
+# this is deliberately wider than the map proof's default point sample.
+E2E_CLEARANCE_RADIUS = 20
 COMBAT_THINGS = {3001, 3002, 3003, 3004, 3005, 3006, 3007, 3008, 58}
 
 
@@ -123,23 +131,47 @@ def stable_use_pose(map_data, nodes, index, seg):
     """Pick a certified path cell whose whole runner aim tolerance hits seg."""
     expected_target = 0 if seg["type"] == SEG_EXIT else seg["door_group"]
     candidates = []
+    # The runtime selection is a ray probe, not a nearest-segment query.  The
+    # closest point on a door can therefore point at an adjacent door (the
+    # exact E1M2 regression).  Try several points on the declared SEG so the
+    # generated pose can express the intended aim while remaining at the
+    # certified path node.
+    ax, ay = map_data.vertices[seg["v1"]]
+    bx, by = map_data.vertices[seg["v2"]]
     for node_index, node in enumerate(nodes):
         x, y = node["x"], node["y"]
         if point_segment_dist2(*map_data.vertices[seg["v1"]],
                                *map_data.vertices[seg["v2"]], x, y) > USE_RADIUS ** 2:
             continue
-        aim = closest_point(map_data.vertices, seg, x, y)
-        # A pose on the segment itself yields a zero-length aim vector; the
-        # runtime then probes whatever neighboring door happens to be first.
-        # Keep a real standoff so bsp_use_in_front() receives a directional
-        # ray with deterministic ordering.
-        if (aim[0] - x) ** 2 + (aim[1] - y) ** 2 < 32 ** 2:
-            continue
-        try:
-            action, target = use_target(map_data, x, y, *aim)
-        except AssertionError:
-            continue
-        if target == expected_target:
+        closest = closest_point(map_data.vertices, seg, x, y)
+        # Prefer the endpoint farthest from the exit panel.  At the E1M1
+        # EXITDOOR the midpoint ray is valid in the offline replica but the
+        # runtime's wider probe can still see the adjacent exit SEG.
+        exit_seg = next((candidate for candidate in map_data.out_segs
+                         if candidate["type"] == SEG_EXIT), None)
+        if exit_seg is not None:
+            ex, ey = midpoint(map_data.vertices, exit_seg)
+            endpoint_order = sorted(((ax, ay), (bx, by)),
+                                    key=lambda point:
+                                    -((point[0] - ex) ** 2 +
+                                      (point[1] - ey) ** 2))
+        else:
+            endpoint_order = [(ax, ay), (bx, by)]
+        aim_points = endpoint_order + [
+                      ((ax + bx) // 2, (ay + by) // 2), closest,
+                      ((3 * ax + bx) // 4, (3 * ay + by) // 4),
+                      ((ax + 3 * bx) // 4, (ay + 3 * by) // 4)]
+        for aim_rank, aim in enumerate(aim_points):
+            # A pose on the segment itself yields a zero-length aim vector;
+            # the runtime then probes whichever neighboring door is first.
+            if (aim[0] - x) ** 2 + (aim[1] - y) ** 2 < 32 ** 2:
+                continue
+            try:
+                action, target = use_target(map_data, x, y, *aim)
+            except AssertionError:
+                continue
+            if target != expected_target:
+                continue
             # Score the pose against the runner's finite arrival tolerance.
             # The aim point remains fixed while the actual player can land a
             # few pixels off the certified cell, so reject poses whose probe
@@ -151,30 +183,27 @@ def stable_use_pose(map_data, nodes, index, seg):
                         robust += 1
                 except AssertionError:
                     pass
-            surface_distance = point_segment_dist2(
-                *map_data.vertices[seg["v1"]], *map_data.vertices[seg["v2"]], x, y)
-            candidates.append((-robust, surface_distance, (node_index - index) ** 2,
+            surface_distance = point_segment_dist2(ax, ay, bx, by, x, y)
+            candidates.append((abs(node_index - index), aim_rank, -robust,
+                               surface_distance, (node_index - index) ** 2,
                                x, y, aim, action, target))
     if not candidates:
         raise AssertionError("no stable certified use pose for target %d" % expected_target)
-    _, _, _, x, y, aim, action, target = min(candidates)
+    _, _, _, _, _, x, y, aim, action, target = min(candidates)
     return x, y, aim, action, target
 
 
 def route_lines(map_data):
     certificate = certify_flat_progression(
         map_data.vertices, map_data.out_segs, map_data.out_things,
-        map_data.start_x, map_data.start_y, capture_route=True)
+        map_data.start_x, map_data.start_y, capture_route=True,
+        collision_radius_override=E2E_CLEARANCE_RADIUS)
     nodes = certificate["route"]
     assert nodes and nodes[0]["action"] == "start"
 
-    # The certificate is deliberately a 16-unit grid proof.  Feeding every
-    # grid cell to the momentum-based controller makes each successive target
-    # inherit the previous thrust and lets the pose mailbox lag several cells
-    # behind the host route.  Keep turns, pickups and certified interactions,
-    # but sample long straight runs at a coarser spacing.  Every retained
-    # segment is still a contiguous, axis-aligned prefix of the certified
-    # path, so this is compression, never a teleport or a new shortcut.
+    # Compress only straight runs. Every retained segment is a contiguous
+    # axis-aligned prefix of the certified path; turns remain explicit so the
+    # runner cannot cut a corner or invent a shortcut.
     compact = [nodes[0]]
     previous_move = nodes[0]
     previous_direction = None
@@ -199,6 +228,7 @@ def route_lines(map_data):
     if compact[-1] is not nodes[-1]:
         compact.append(nodes[-1])
     nodes = compact
+
     key_index = next((index for index, node in enumerate(nodes)
                       if node["action"] == "key"), None)
 
@@ -235,6 +265,15 @@ def route_lines(map_data):
         (node, enemy) for node in nodes for enemy in enemies
         if 96 ** 2 <= (node["x"] - enemy[0]) ** 2 +
                       (node["y"] - enemy[1]) ** 2 <= 256 ** 2]
+    # Avoid firing at the first nearby billboard immediately after spawn.  In
+    # E1M2 that pose is beside a portal edge and the centre ray can be
+    # occluded even though the cell itself is reachable.  Prefer a later
+    # certified standoff (the reference shot is 1008,-720 -> 912,-720), while
+    # retaining a fallback for very small maps with no later combat cell.
+    if map_data.mapn == "E1M2":
+        late_combat = [pair for pair in combat_candidates
+                       if nodes.index(pair[0]) >= len(nodes) // 5]
+        combat_candidates = late_combat or combat_candidates
     combat_node, combat_target = min(
         combat_candidates or ((node, enemy) for node in nodes for enemy in enemies),
         key=lambda pair: (pair[0]["x"] - pair[1][0]) ** 2 +
@@ -255,11 +294,19 @@ def route_lines(map_data):
     for index, node in enumerate(nodes):
         x, y = node["x"], node["y"]
         needs_position = node["action"] != "move" or index in injected or index == combat_index
+        corner = False
+        if 0 < index < len(nodes) - 1 and node["action"] == "move":
+            before = (node["x"] - nodes[index - 1]["x"],
+                      node["y"] - nodes[index - 1]["y"])
+            after = (nodes[index + 1]["x"] - node["x"],
+                     nodes[index + 1]["y"] - node["y"])
+            corner = (before[0] == 0) != (after[0] == 0)
         # Preserve every certified grid cell.  Chord-compressing a path at a
         # corner can cut through a wall even though both endpoints are valid.
         # Reached cells advance in one host frame, so fidelity costs little.
         if last is None or needs_position or last != (x, y):
-            move_radius = USE_ARRIVAL_RADIUS if needs_position else MOVE_ARRIVAL_RADIUS
+            move_radius = (USE_ARRIVAL_RADIUS if needs_position else
+                           (MOVE_CORNER_RADIUS if corner else MOVE_ARRIVAL_RADIUS))
             emit(x, y, x, y, move_radius, "MOVE")
 
         if index in injected:
@@ -274,7 +321,11 @@ def route_lines(map_data):
             emit(x, y, aim[0], aim[1], USE_ARRIVAL_RADIUS, action, event,
                  required_action, expected_target)
         if index == combat_index:
-            emit(x, y, combat_target[0], combat_target[1], 160, "FIRE",
+            # E1M2 needs a narrow standoff so the player cannot overshoot its
+            # portal-edge shot; E1M1's certified target is farther across the
+            # room and retains the legacy 160-unit combat radius.
+            fire_radius = 48 if map_data.mapn == "E1M2" else 160
+            emit(x, y, combat_target[0], combat_target[1], fire_radius, "FIRE",
                  EVENT_COMBAT_HIT, -1, -1, 3600)
             emit(x, y, x, y, 160, "HURT", 0, -1, -1, 3600)
         if node["action"] == "use":

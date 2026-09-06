@@ -26,6 +26,11 @@ def main():
             assert all(row[5] in {"MOVE", "USE", "FIRE", "HURT", "EXIT"}
                        for row in rows)
             assert all(int(row[9]) > 0 for row in rows)
+            moves = [row for row in rows if row[5] == "MOVE"]
+            assert all(int(row[4]) in {12, 24, 32, 48, 80} for row in moves)
+            points = [(int(row[0]), int(row[1])) for row in rows]
+            assert all((x2 - x1) ** 2 + (y2 - y1) ** 2 <= 128 ** 2
+                       for (x1, y1), (x2, y2) in zip(points, points[1:]))
             assert any(row[5] == "FIRE" and row[6] == "04" for row in rows)
             assert any(row[5] == "HURT" for row in rows)
             assert rows[-1][5] == "EXIT" and rows[-1][6] == "80"
