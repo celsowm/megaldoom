@@ -24,7 +24,7 @@ EVENT_UNLOCKED = 0x40
 EVENT_COMBAT_HIT = 0x04
 EVENT_EXIT = 0x80
 USE_RADIUS = 256
-USE_ARRIVAL_RADIUS = 32
+USE_ARRIVAL_RADIUS = 48
 MOVE_ARRIVAL_RADIUS = 48
 ROUTE_SAMPLE_STEP = 128
 COMBAT_THINGS = {3001, 3002, 3003, 3004, 3005, 3006, 3007, 3008, 58}
@@ -58,6 +58,29 @@ def use_angle(x, y, aim_x, aim_y):
     return round(math.atan2(aim_y - y, aim_x - x) * 256 / (2 * math.pi)) & 255
 
 
+def fixed_sin(angle):
+    """Bit-for-bit model of src/fixed_math.c's DEBUG trig table."""
+    angle &= 255
+    quadrant, local = divmod(angle, 64)
+    def quarter(a):
+        x = (a * 256) // 64
+        x2 = (x * x) >> 8
+        x3 = (x2 * x) >> 8
+        x5 = (x3 * x2) >> 8
+        return (479 * x - 196 * x3 + 24 * x5) >> 8
+    if quadrant == 0:
+        return quarter(local)
+    if quadrant == 1:
+        return quarter(63 - local)
+    if quadrant == 2:
+        return -quarter(local)
+    return -quarter(63 - local)
+
+
+def fixed_cos(angle):
+    return fixed_sin(angle + 64)
+
+
 def use_target(map_data, x, y, aim_x, aim_y):
     """Offline counterpart of bsp_use_in_front's probes and tie-break.
 
@@ -69,11 +92,10 @@ def use_target(map_data, x, y, aim_x, aim_y):
     declared = []
     base = use_angle(x, y, aim_x, aim_y)
     for angle in (base,):
-        radians = (angle & 255) * 2 * math.pi / 256
         best = None
         for dist in range(128, 513, 128):
-            px = x + round(math.cos(radians) * 303 * dist / 256)
-            py = y + round(math.sin(radians) * 303 * dist / 256)
+            px = x + ((fixed_cos(angle) * dist) >> 8)
+            py = y + ((fixed_sin(angle) * dist) >> 8)
             for index, seg in enumerate(map_data.out_segs):
                 if seg["type"] == SEG_WALL or (seg["type"] == SEG_DOOR and
                    not (seg.get("flags", 0) & SEG_FLAG_DIRECT_USE)):
@@ -107,6 +129,12 @@ def stable_use_pose(map_data, nodes, index, seg):
                                *map_data.vertices[seg["v2"]], x, y) > USE_RADIUS ** 2:
             continue
         aim = closest_point(map_data.vertices, seg, x, y)
+        # A pose on the segment itself yields a zero-length aim vector; the
+        # runtime then probes whatever neighboring door happens to be first.
+        # Keep a real standoff so bsp_use_in_front() receives a directional
+        # ray with deterministic ordering.
+        if (aim[0] - x) ** 2 + (aim[1] - y) ** 2 < 32 ** 2:
+            continue
         try:
             action, target = use_target(map_data, x, y, *aim)
         except AssertionError:
@@ -117,17 +145,19 @@ def stable_use_pose(map_data, nodes, index, seg):
             # few pixels off the certified cell, so reject poses whose probe
             # ordering changes under the cardinal edge samples.
             robust = 0
-            for ox, oy in ((0, 0), (16, 0), (-16, 0), (0, 16), (0, -16)):
+            for ox, oy in ((0, 0), (32, 0), (-32, 0), (0, 32), (0, -32)):
                 try:
                     if use_target(map_data, x + ox, y + oy, *aim)[1] == expected_target:
                         robust += 1
                 except AssertionError:
                     pass
-            candidates.append((-robust, (node_index - index) ** 2,
+            surface_distance = point_segment_dist2(
+                *map_data.vertices[seg["v1"]], *map_data.vertices[seg["v2"]], x, y)
+            candidates.append((-robust, surface_distance, (node_index - index) ** 2,
                                x, y, aim, action, target))
     if not candidates:
         raise AssertionError("no stable certified use pose for target %d" % expected_target)
-    _, _, x, y, aim, action, target = min(candidates)
+    _, _, _, x, y, aim, action, target = min(candidates)
     return x, y, aim, action, target
 
 
@@ -203,7 +233,7 @@ def route_lines(map_data):
     # the navigation path.
     combat_candidates = [
         (node, enemy) for node in nodes for enemy in enemies
-        if 128 ** 2 <= (node["x"] - enemy[0]) ** 2 +
+        if 96 ** 2 <= (node["x"] - enemy[0]) ** 2 +
                       (node["y"] - enemy[1]) ** 2 <= 256 ** 2]
     combat_node, combat_target = min(
         combat_candidates or ((node, enemy) for node in nodes for enemy in enemies),
@@ -215,7 +245,7 @@ def route_lines(map_data):
              "# X Y AIM_X AIM_Y ARRIVAL_RADIUS ACTION EVENT_MASK EXPECTED_ACTION EXPECTED_TARGET TIMEOUT"]
     last = None
     def emit(x, y, aim_x, aim_y, radius, action, event=0, expected_action=-1,
-             expected_target=-1, timeout=1800):
+             expected_target=-1, timeout=6000):
         nonlocal last
         line = (f"{x} {y} {aim_x} {aim_y} {radius} {action} {event:02x} "
                 f"{expected_action} {expected_target} {timeout}")
