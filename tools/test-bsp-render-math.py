@@ -155,33 +155,6 @@ def decomposed_extrema(parts):
             (lateral + max(ldx, 0) + max(ldy, 0)) >> FX_SHIFT)
 
 
-def cheap_reject_old(depths, laterals):
-    """Per-assembled-corner half-plane reject (the old C loop)."""
-    left = max(PROJ_X * l + LEFT_SCALE * d for d, l in zip(depths, laterals))
-    right = min(PROJ_X * l - RIGHT_SCALE * d for d, l in zip(depths, laterals))
-    return left <= 0 or right >= 0
-
-
-def cheap_reject_new(parts):
-    """Axis-decomposed shifted-domain half-plane reject with the +-2-per-corner
-    floor slack (the new C). Must only reject when cheap_reject_old rejects."""
-    depth, lateral, ddx, ldx, ddy, ldy = parts
-    d0, l0 = depth >> FX_SHIFT, lateral >> FX_SHIFT
-    sdx, slx = ddx >> FX_SHIFT, ldx >> FX_SHIFT
-    sdy, sly = ddy >> FX_SHIFT, ldy >> FX_SHIFT
-    left_dx = PROJ_X * slx + LEFT_SCALE * sdx
-    left_dy = PROJ_X * sly + LEFT_SCALE * sdy
-    max_left = (PROJ_X * l0 + LEFT_SCALE * d0 +
-                2 * (PROJ_X + LEFT_SCALE) + max(left_dx, 0) + max(left_dy, 0))
-    if max_left <= 0:
-        return True
-    right_dx = PROJ_X * slx - RIGHT_SCALE * sdx
-    right_dy = PROJ_X * sly - RIGHT_SCALE * sdy
-    min_right = (PROJ_X * l0 - RIGHT_SCALE * d0 -
-                 2 * RIGHT_SCALE + min(right_dx, 0) + min(right_dy, 0))
-    return min_right >= 0
-
-
 def projected_range(depths, laterals):
     min_depth, max_depth = min(depths), max(depths)
     if max_depth < NEAR:
@@ -327,13 +300,6 @@ def main():
                     assert decomposed_extrema(parts) == (
                         min(depths), max(depths),
                         min(laterals), max(laterals)), (camera, angle, box)
-                    # The slackened decomposed half-plane test may only reject
-                    # boxes the exact per-corner test also rejected (the C's
-                    # cheap-reject path only runs when all corners are in front
-                    # of the near plane, so restrict the check to that case).
-                    if min(depths) >= NEAR and cheap_reject_new(parts):
-                        assert cheap_reject_old(depths, laterals), (
-                            camera, angle, box)
                     box_checks += 1
             # Cover every seg for representative cardinal/intercardinal angles;
             # all 256 angles above already exercise every box and near-plane case.
@@ -347,9 +313,13 @@ def main():
     assert "bsp_render_mul" in RENDERER
     assert "depth_dx_q8" in RENDERER and "lateral_dy_q8" in RENDERER
     assert "laterals[i] * depths" not in RENDERER
-    # The shifted-domain cheap reject must carry its floor-slack margins.
-    assert "2 * (RAY_PROJ_X + LEFT_REJECT_SCALE)" in RENDERER
-    assert "2 * RIGHT_REJECT_SCALE" in RENDERER
+    # The cheap half-plane reject these margins belonged to was removed on
+    # 2026-09-07 (10 MULS.W per box to skip 2 DIVS.W on 2.3% of them; cast
+    # -5.7% to -15.1% without it, output identical). Assert it stays gone, so a
+    # future "optimisation" that reintroduces it has to argue with a measurement
+    # rather than slipping back in.
+    assert "LEFT_REJECT_SCALE" not in RENDERER
+    assert "RIGHT_REJECT_SCALE" not in RENDERER
     # A visible-subsector cull may only skip a sprite when its full horizontal
     # footprint cannot cross any partition on the way to its leaf. The runtime
     # uses the cheap L1 upper bound on the splitter norm; prove every accepted

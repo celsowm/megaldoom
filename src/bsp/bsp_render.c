@@ -25,7 +25,7 @@ s32 g_node_cache_px, g_node_cache_py;
 bool g_node_cache_valid;
 
 #if DEBUG_PERF
-u16 g_bsp_dbg_nodes_visited, g_bsp_dbg_boxes_rejected_cheap;
+u16 g_bsp_dbg_nodes_visited;
 u16 g_bsp_dbg_boxes_projected, g_bsp_dbg_near_fallbacks;
 u16 g_bsp_dbg_segments_tested, g_bsp_dbg_segments_drawn;
 u16 g_bsp_dbg_visible_subsectors;
@@ -121,7 +121,6 @@ bool bsp_subsector_was_visited(u16 subsector_id) {
 // itself has no callers for them.
 #define BSP_DEBUG_EXPORT __attribute__((used, externally_visible))
 BSP_DEBUG_EXPORT u16 bsp_get_debug_nodes_visited(void) { return g_bsp_dbg_nodes_visited; }
-BSP_DEBUG_EXPORT u16 bsp_get_debug_boxes_rejected_cheap(void) { return g_bsp_dbg_boxes_rejected_cheap; }
 BSP_DEBUG_EXPORT u16 bsp_get_debug_boxes_projected(void) { return g_bsp_dbg_boxes_projected; }
 BSP_DEBUG_EXPORT u16 bsp_get_debug_near_fallbacks(void) { return g_bsp_dbg_near_fallbacks; }
 BSP_DEBUG_EXPORT u16 bsp_get_debug_segments_tested(void) { return g_bsp_dbg_segments_tested; }

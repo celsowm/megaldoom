@@ -9,8 +9,6 @@
 #include "bsp_inv_depth_lut.h"
 #include "debug_checkpoint.h"
 
-#define LEFT_REJECT_SCALE (RAY_VIEW_CENTER_X + RAY_COL_STRIDE + 1)
-#define RIGHT_REJECT_SCALE (RAY_VIEW_COLS + RAY_COL_STRIDE - RAY_VIEW_CENTER_X)
 #define BSP_NEAR 16
 #define BSP_INV_SCALE 16384
 // Live sampled-column count, and the compile-time maximum the occlusion buffers
@@ -39,7 +37,7 @@ extern s32 g_node_cache_px, g_node_cache_py;
 extern bool g_node_cache_valid;
 
 #if DEBUG_PERF
-extern u16 g_bsp_dbg_nodes_visited, g_bsp_dbg_boxes_rejected_cheap;
+extern u16 g_bsp_dbg_nodes_visited;
 extern u16 g_bsp_dbg_boxes_projected, g_bsp_dbg_near_fallbacks;
 extern u16 g_bsp_dbg_segments_tested, g_bsp_dbg_segments_drawn;
 extern u16 g_bsp_dbg_visible_subsectors;
@@ -50,7 +48,6 @@ extern bool g_bsp_dbg_measure_side, g_bsp_dbg_measure_box;
 extern bool g_bsp_dbg_measure_segment;
 #define BSP_DBG_INC(c) (g_bsp_dbg_##c)++
 #define BSP_DBG_RESET() do { g_bsp_dbg_nodes_visited = 0; \
-        g_bsp_dbg_boxes_rejected_cheap = 0; \
         g_bsp_dbg_boxes_projected = 0; \
         g_bsp_dbg_near_fallbacks = 0; \
         g_bsp_dbg_segments_tested = 0; \
@@ -65,7 +62,6 @@ static inline void bsp_cadence_inc_nodes_visited(void) { g_cadence_nodes_visited
 static inline void bsp_cadence_inc_boxes_projected(void) { g_cadence_boxes_projected++; }
 static inline void bsp_cadence_inc_segments_tested(void) { g_cadence_segs_tested++; }
 static inline void bsp_cadence_inc_segments_drawn(void) { g_cadence_segs_drawn++; }
-static inline void bsp_cadence_inc_boxes_rejected_cheap(void) { g_cadence_box_cheap_reject++; }
 static inline void bsp_cadence_inc_near_fallbacks(void) { g_cadence_box_near_path++; }
 #define BSP_DBG_RESET() ((void)0)
 #else

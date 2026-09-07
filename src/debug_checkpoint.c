@@ -109,7 +109,6 @@ u32 g_cadence_sample_subticks;
 u32 g_cadence_samples;
 u32 g_cadence_box_calls;
 u32 g_cadence_box_near_path;
-u32 g_cadence_box_cheap_reject;
 u32 g_cadence_box_early_out;
 u32 g_cadence_box_subticks;
 u32 g_cadence_range_closed_calls;

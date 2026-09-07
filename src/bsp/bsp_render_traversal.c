@@ -123,37 +123,23 @@ bool bsp_project_box_range(const BspBox *box, s16 *left, s16 *right) {
     // safe side: this test only ever rejects boxes the old exact test also
     // rejected (the hairline band falls through to the division path below,
     // which still culls or clips them exactly).
-    const s32 d0 = depth_q8 >> FX_SHIFT;
-    const s32 l0 = lateral_q8 >> FX_SHIFT;
-    const s32 sdx = depth_dx_q8 >> FX_SHIFT;
-    const s32 slx = lateral_dx_q8 >> FX_SHIFT;
-    const s32 sdy = depth_dy_q8 >> FX_SHIFT;
-    const s32 sly = lateral_dy_q8 >> FX_SHIFT;
-    const s32 proj_lx = bsp_render_mul(RAY_PROJ_X, slx);
-    const s32 proj_ly = bsp_render_mul(RAY_PROJ_X, sly);
-
-    const s32 left_base = bsp_render_mul(RAY_PROJ_X, l0) + bsp_render_mul(LEFT_REJECT_SCALE, d0);
-    const s32 left_dx = proj_lx + bsp_render_mul(LEFT_REJECT_SCALE, sdx);
-    const s32 left_dy = proj_ly + bsp_render_mul(LEFT_REJECT_SCALE, sdy);
-    s32 max_left_plane = left_base + (2 * (RAY_PROJ_X + LEFT_REJECT_SCALE));
-    if (left_dx > 0) max_left_plane += left_dx;
-    if (left_dy > 0) max_left_plane += left_dy;
-    if (max_left_plane <= 0) {
-        BSP_DBG_INC(boxes_rejected_cheap);
-        return FALSE;
-    }
-
-    const s32 right_base = bsp_render_mul(RAY_PROJ_X, l0) - bsp_render_mul(RIGHT_REJECT_SCALE, d0);
-    const s32 right_dx = proj_lx - bsp_render_mul(RIGHT_REJECT_SCALE, sdx);
-    const s32 right_dy = proj_ly - bsp_render_mul(RIGHT_REJECT_SCALE, sdy);
-    s32 min_right_plane = right_base - (2 * RIGHT_REJECT_SCALE);
-    if (right_dx < 0) min_right_plane += right_dx;
-    if (right_dy < 0) min_right_plane += right_dy;
-    if (min_right_plane >= 0) {
-        BSP_DBG_INC(boxes_rejected_cheap);
-        return FALSE;
-    }
-
+    // A cheap half-plane reject used to sit here: it proved a box entirely
+    // outside the left or right frustum plane and returned before paying the
+    // two DIVS.W below. It was removed on 2026-09-07 because the arithmetic
+    // never came close to paying for itself -- 10 MULS.W (bsp_render_mul is a
+    // volatile MULS.W, so GCC could neither fold the two identical
+    // RAY_PROJ_X * l0 products nor strength-reduce any of them) on every box,
+    // to skip ~316 cycles of division on the few it caught.
+    //
+    // In traversal it fired on 2.3% of boxes (1293 of 56282 over both maps),
+    // and test-bsp-render-math.py showed the divide path below would have
+    // rejected 96.1% of those anyway. Measured at five pose-locked vantages:
+    // cast -5.7% to -15.1%, with nodes visited, segs tested, segs drawn and
+    // samples drawn IDENTICAL on every one -- removing a conservative cull can
+    // only add traversal, never change what is drawn.
+    //
+    // Do not reintroduce it without a measurement: it is not obviously wrong,
+    // it is just far more expensive than what it saves.
     // Lateral extrema via the same exact monotonic-shift decomposition as the
     // depth extrema above.
     const s32 ldx_neg = (lateral_dx_q8 < 0) ? lateral_dx_q8 : 0;

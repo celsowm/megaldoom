@@ -8,6 +8,102 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## The box cheap-reject cost 10 MULS.W to skip 2 DIVS.W; removed (2026-09-07)
+
+Follow-up to the entry below, which put ~45% of the worst frame in BSP traversal
+and flagged one counter as the lead: the box-call mix read **0% cheap-reject**.
+
+### The 0% was a rounding artefact, and chasing it anyway paid off
+
+`decode-cadence.py` printed the box-path mix with `:.0f`, so a path firing a
+couple of percent of the time displayed as `0%` and read as dead code. It is not
+dead: over 56282 box calls across both maps and many headings it fires **1293
+times, 2.3%**. The decoder now prints one decimal AND the raw totals, because
+"looks like zero" and "is zero" led to very different conclusions here.
+
+It was worth chasing regardless, for a reason the fire rate makes obvious once
+measured. `bsp_project_box_range`'s cheap half-plane reject proves a box entirely
+outside the left or right frustum plane and returns before the two `DIVS.W`
+below it. It costs **10 `bsp_render_mul`** to do that -- and `bsp_render_mul` is
+a `__asm__ volatile` `MULS.W`, so GCC can neither fold the two identical
+`RAY_PROJ_X * l0` products nor strength-reduce any of them. Roughly 700 cycles
+spent to skip roughly 316. Break-even needs a fire rate over 50%; it has 2.3%.
+
+`test-bsp-render-math.py` sharpened it further before the decision: over the
+exhaustive 604160-box space the reject fires on 19.13% of boxes, but the
+**divide path below it would have rejected 96.1% of those anyway**. Only ~4% of
+its fires are culls nothing else catches.
+
+The tempting stronger claim -- that the cheap reject is strictly redundant, so
+removing it is free -- is FALSE, and the counter-example is cheap to state:
+camera (1056, 3616) angle 5, box [2176, 2112, 2336, 2560]. The cheap test is
+exact over the four corners; the divide path bounds them by the enclosing
+lateral/depth rectangle and is weaker. So removal can cost extra traversal. It
+cannot change output: skipping a conservative cull only ever adds subtrees whose
+contents project off-screen and draw nothing.
+
+### Measured at five pose-locked vantages
+
+Cadence probe, `pack` as the control (it must not move), and every workload
+counter checked identical:
+
+| pose | angle | cast before | cast after | | frame |
+|---|---:|---:|---:|---:|---|
+| (1056, 3616) | 0 | 6053 | 5670 | -6.3% | 11.90 -> 11.63 vb |
+| (1056, 3616) | 128 | 5677 | 5353 | -5.7% | 11.15 -> 10.91 vb |
+| (1056, 3616) | 160 | 7201 | 6650 | -7.7% | 11.98 -> 11.55 vb |
+| (1056, 3616) | 192 | 9055 | 8174 | **-9.7%** | 13.38 -> 12.71 vb |
+| (-285, 3295) | 233 | 18529 | 15734 | **-15.1%** | **23.19 -> 21.07 vb** |
+
+Angle 192 is the important row: the reject fires 5x per rebuild there, the most
+of any vantage tested, and removal still wins by 9.7%. `boxes projected` rose by
+exactly 5 -- those boxes now reach the divide path and are rejected there -- while
+**nodes visited, segs tested, segs drawn and samples drawn were identical at every
+one of the five vantages**. The worst spot on the reported path goes 2.6 -> 2.8 fps.
+
+### Removed, counter and all
+
+The block is gone, and so are `boxes_rejected_cheap` / `g_cadence_box_cheap_reject`,
+the `Br` field on perf-overlay row 4, and `LEFT_REJECT_SCALE` /
+`RIGHT_REJECT_SCALE`. Leaving a permanently-zero counter behind would recreate
+the exact thing that made this hard to see. The cadence mailbox lost a `u32`, so
+`decode-cadence.py`'s field offsets moved with it. `test-bsp-render-math.py`'s
+two floor-slack contracts became `LEFT_REJECT_SCALE not in RENDERER` -- the
+reject stays gone unless someone brings a measurement.
+
+Note the original entry (2026-07-21) reported the box-projection rewrite at
+**cast -5%** overall, but that package also replaced four assembled corners with
+the monotonic-shift extrema decomposition. The two were never measured apart, and
+on this evidence the decomposition carried the win while the cheap reject rode
+along as a net loss.
+
+### Pixels
+
+Pose-locked capture, HEAD~1 vs this, 4 frames at each of two poses. **6 of the 8
+frames are bit-identical.** The two that differ confine every differing pixel to
+one small region each: at the courtyard hall, x147-198 y134-170, which cropping
+shows is the **weapon sprite** (bob phase is driven by the tick count, and a
+faster build has advanced further); at the player start, x164-180 y216-230, which
+is inside the **HUD face**. No differing pixel anywhere in the world geometry.
+
+That is the expected shape, and it is worth stating why the raw count is not the
+metric: `PERF_FIXED_POSE` pins the player, not the world, so a faster build runs
+more game ticks in the same emulator frame budget and every timer-driven sprite
+lands on a different phase. Frames within a single run differ by 10K-56K pixels
+for the same reason. The four counters that actually determine which wall columns
+get drawn -- nodes visited, segs tested, segs drawn, samples drawn -- were
+identical at all five vantages, and that is the real proof.
+
+Release ROM -256 bytes, work RAM unchanged at 23124 free, full suite green.
+
+### Still on the table
+
+Traversal is still the largest item at the worst vantage: ~13100 subticks before
+this change, and the box-call mix is now 86.2% full-divide, 7.5% near-plane,
+6.3% early-out over 254 calls per rebuild. The near-plane path pays up to 8
+`DIVS.W` against the fast path's 2, so at 7.5% it is worth its own look.
+`tools/perf-sweep.ps1` is the instrument.
+
 ## Walked the reported path: the slow spot is cast, not windows (2026-09-07)
 
 Asked to go and measure the route the slowdown was reported on -- "forward, turn

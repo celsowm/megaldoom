@@ -143,9 +143,10 @@ void renderer_perf_overlay_sample_host(u32 frame) {
 //          R   upload runs                     M   view tiles modified
 //          N|F|P - A|I   upload size (none/full/partial) - bank (active/inactive)
 //          RR  redraw reason bits (hex)        Db  diagnostics subticks
-//   row 4  Nv  BSP nodes visited               Br  boxes rejected cheaply
-//          Bp  boxes projected                 Nf  near fallbacks
-//          St  segments tested/drawn
+//   row 4  Nv  BSP nodes visited               Bp  boxes projected
+//          Nf  near fallbacks                  St  segments tested/drawn
+//          (Br, "boxes rejected cheaply", is gone with the reject itself --
+//          see bsp_render_traversal.c and LOG 2026-09-07.)
 //   row 5  Pc  player-collision subticks       Ec  enemy-collision subticks
 //          Lo  line-of-sight subticks          K   collision/LOS candidates
 //   row 6  O   active billboards               C   candidates
@@ -210,8 +211,7 @@ void renderer_draw_perf_overlay(bool frame_complete) {
     put_char('-'); put_char(bank_c); TXT(" RR"); put_hex(perf.redraw_reasons,2);
     TXT(" Db"); DEC(perf.diagnostics_subticks,4); line_commit(3);
 
-    line_begin(); TXT("Nv"); DEC(bsp_get_debug_nodes_visited(),3); TXT(" Br");
-    DEC(bsp_get_debug_boxes_rejected_cheap(),3); TXT(" Bp");
+    line_begin(); TXT("Nv"); DEC(bsp_get_debug_nodes_visited(),3); TXT(" Bp");
     DEC(bsp_get_debug_boxes_projected(),3); TXT(" Nf");
     DEC(bsp_get_debug_near_fallbacks(),3); TXT(" St");
     DEC(bsp_get_debug_segments_tested(),3); put_char('/');

@@ -22,22 +22,22 @@ def main() -> int:
     blob = bytes.fromhex(report["perfMailbox"])
     # u16 magic/last/max/missed, u32 iterations/vblank_sum, u16 hist[8],
     # u32 cast/pack/projection/billboard subtick sums, u32 rebuild_frames
-    fields = struct.unpack(">4H2I8H37I", blob[: 8 + 8 + 16 + 148])
+    fields = struct.unpack(">4H2I8H36I", blob[: 8 + 8 + 16 + 144])
     magic, last, vmax, missed = fields[:4]
     iterations, vblank_sum = fields[4:6]
     hist = fields[6:14]
     cast_sum, pack_sum, proj_sum, bb_sum, rebuilds = fields[14:19]
     nodes, boxes, segs_tested, segs_drawn = fields[19:23]
     drawseg_sum, sample_sum, samples = fields[23:26]
-    (box_calls, box_near, box_cheap, box_early, box_sum,
-     range_calls, range_sum, all_closed_sum) = fields[26:34]
-    scene_frames = fields[34]
+    (box_calls, box_near, box_early, box_sum,
+     range_calls, range_sum, all_closed_sum) = fields[26:33]
+    scene_frames = fields[33]
     (bb_objects, bb_rows, bb_bytes, bb_opaque, bb_commits,
-     bb_marks, bb_mismatch) = fields[35:42]
-    bb_setup_sum, bb_rows_sum = fields[42:44]
-    pack_columns, pack_flat, pack_mixed = fields[44:47]
-    bb_max_bytes, bb_max_subticks = fields[47:49]
-    pack_desc_sum, pack_tiles_sum = fields[49:51]
+     bb_marks, bb_mismatch) = fields[34:41]
+    bb_setup_sum, bb_rows_sum = fields[41:43]
+    pack_columns, pack_flat, pack_mixed = fields[43:46]
+    bb_max_bytes, bb_max_subticks = fields[46:48]
+    pack_desc_sum, pack_tiles_sum = fields[48:50]
     if magic != 0xCADE:
         print(f"bad magic 0x{magic:04X} (expected 0xCADE) - wrong build type? "
               "DEBUG_PERF builds publish RendererPerfSnapshot instead.")
@@ -84,12 +84,17 @@ def main() -> int:
         # it exceeds "boxes projected" (which counts only those reaching a
         # divide). near-path boxes pay up to 8 DIVS.W against the fast path's 2.
         if box_calls:
-            fast = box_calls - box_near - box_cheap - box_early
+            fast = box_calls - box_near - box_early
+            # Raw totals alongside the percentages: a path that fires a couple of
+            # percent of the time rounds to 0% here and reads as dead code. The
+            # cheap-reject did exactly that (0% at one vantage, 2.3% over a
+            # 56282-box sweep), which is a very different conclusion.
             print(f"  box calls        = {box_calls / rebuilds:7.1f} /rebuild"
-                  f"  (near-plane {100.0 * box_near / box_calls:.0f}%,"
-                  f" cheap-reject {100.0 * box_cheap / box_calls:.0f}%,"
-                  f" early-out {100.0 * box_early / box_calls:.0f}%,"
-                  f" fast {100.0 * fast / box_calls:.0f}%)")
+                  f"  (near-plane {100.0 * box_near / box_calls:.1f}%,"
+                  f" early-out {100.0 * box_early / box_calls:.1f}%,"
+                  f" fast {100.0 * fast / box_calls:.1f}%)")
+            print(f"  box path totals  = {box_calls} calls: near {box_near},"
+                  f" early {box_early}, fast {fast}")
         if box_sum or range_sum or all_closed_sum:
             traversal = cast_sum - drawseg_sum
             for name, total, calls in (

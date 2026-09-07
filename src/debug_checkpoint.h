@@ -212,7 +212,6 @@ extern u32 g_cadence_samples;
 #endif
 extern u32 g_cadence_box_calls;
 extern u32 g_cadence_box_near_path;
-extern u32 g_cadence_box_cheap_reject;
 extern u32 g_cadence_box_early_out;
 extern u32 g_cadence_box_subticks;
 extern u32 g_cadence_range_closed_calls;

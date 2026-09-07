@@ -27,7 +27,6 @@ bool bsp_subsector_was_visited(u16 subsector_id);
 #if DEBUG_PERF
 // Temporary BSP traversal instrumentation for the DEBUG_PERF overlay.
 u16 bsp_get_debug_nodes_visited(void);
-u16 bsp_get_debug_boxes_rejected_cheap(void);
 u16 bsp_get_debug_boxes_projected(void);
 u16 bsp_get_debug_near_fallbacks(void);
 u16 bsp_get_debug_segments_tested(void);

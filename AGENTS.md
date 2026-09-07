@@ -77,6 +77,21 @@ spans **2.6 to 5.3 fps from the heading alone**, and cast and pack peak at
 DIFFERENT headings (pack at 153, cast over the 233-9 arc). A single-heading
 measurement therefore says nothing about a location. Sweep before concluding.
 
+**`tools/perf-sweep.ps1` is the instrument for all of the above.** It builds one
+pose-locked ROM per heading and tables where the frame goes:
+`tools/perf-sweep.ps1 -X -285 -Y 3295` sweeps a spot;
+`-Variant base,stub` adds the overlay-compositor control and prints the
+difference; `-Variant drawseg` splits cast into draw_seg vs traversal;
+`-ExtraFlags "-D..." -Label foo` runs a one-off experiment without clobbering the
+baseline's reports. It warns when a run produced fewer than 5 rebuild frames,
+which is the signature of never reaching gameplay.
+
+**A rounded percentage is not a measurement.** `decode-cadence.py` printed the
+box-path mix with no decimals, so a path firing 2.3% of the time showed as `0%`
+and read as dead code -- the opposite conclusion from the truth. It prints one
+decimal and the raw totals now. Before concluding a counter is zero, read the
+raw total.
+
 **DEBUG_PERF measures; RENDERER_ASM_DIFF verifies. They are different builds.**
 The asm/C differential harnesses (`compare_stride2_column_asm`,
 `compare_overlay_posts_asm`) are gated on `RENDERER_ASM_DIFF`, **off by default**,
