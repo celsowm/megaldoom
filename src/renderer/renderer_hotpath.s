@@ -30,7 +30,9 @@
  *
  * `tiles` is the first tile of a run of consecutive tiles in one tile column,
  * and row_count spans all of them. That works because the view tilemap is
- * column-major (view_tile_index = tile_x * VIEW_TILE_H + tile_y), so a column's
+ * column-major (view_tile_index = tile_x * VIEW_TILE_STRIDE + tile_y, where the
+ * stride is the allocated RAY_VIEW_TILE_H_MAX and not the currently selected
+ * viewport height), so a column's
  * tiles are contiguous, and within that block screen row y of lane L sits at
  * byte (y>>3)*32 + (y&7)*4 + L, which is identically 4*y + L. The tile boundary
  * is invisible to a stride-4 byte walk, so a whole column is one call: each

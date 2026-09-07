@@ -13,14 +13,19 @@
 #define RIGHT_REJECT_SCALE (RAY_VIEW_COLS + RAY_COL_STRIDE - RAY_VIEW_CENTER_X)
 #define BSP_NEAR 16
 #define BSP_INV_SCALE 16384
+// Live sampled-column count, and the compile-time maximum the occlusion buffers
+// below are allocated at. Loops take the live form so a small viewport really is
+// cheaper; only the declarations take the _MAX form.
 #define BSP_SAMPLE_COLS (RAY_VIEW_COLS / RAY_COL_STRIDE)
+#define BSP_SAMPLE_COLS_MAX (RAY_VIEW_COLS_MAX / RAY_COL_STRIDE)
 #define BSP_SOLID_WORD_COUNT ((BSP_SAMPLE_COLS + 31) / 32)
+#define BSP_SOLID_WORD_COUNT_MAX ((BSP_SAMPLE_COLS_MAX + 31) / 32)
 
 extern s16 g_fwx, g_fwy;
 extern s16 g_rx, g_ry;
 extern s32 g_px, g_py;
-extern u8 g_next_open[BSP_SAMPLE_COLS + 1];
-extern u32 g_solid_words[BSP_SOLID_WORD_COUNT];
+extern u8 g_next_open[BSP_SAMPLE_COLS_MAX + 1];
+extern u32 g_solid_words[BSP_SOLID_WORD_COUNT_MAX];
 extern u16 g_solid_count;
 extern s16 g_vertex_depth[BSP_MAX_VERTICES];
 extern s16 g_vertex_lateral[BSP_MAX_VERTICES];

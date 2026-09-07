@@ -14,7 +14,7 @@
 #error "Weapon tiles overlap the static ceiling/floor atlas"
 #endif
 
-u32 g_view_tiles[VIEW_TILE_COUNT][8];
+u32 g_view_tiles[VIEW_TILE_ALLOC][8];
 u32 g_view_bank_dirty_bits[VIEW_BANK_COUNT][VIEW_DIRTY_WORD_COUNT];
 u16 g_view_bank_dirty_count[VIEW_BANK_COUNT];
 u16 g_view_vram_bank;
@@ -33,7 +33,8 @@ static u16 g_frame_modified_count;
 #endif
 
 
-static u16 s_view_bank_tilemaps[VIEW_BANK_COUNT][VIEW_TILE_COUNT];
+_Static_assert((VIEW_TILE_BASE + (VIEW_BANK_COUNT * VIEW_TILE_ALLOC)) <= 2048,
+               "view bank base must stay inside the VDP tile-index field");
 
 static void load_game_palettes(void) {
     PAL_setColor(0, RGB24_TO_VDPCOLOR(0x000000));
@@ -123,49 +124,45 @@ static u32 make_pair_tile_row(u8 left_color, u8 right_color) {
 
 static void init_hud_tiles(void) {
     VDP_loadTileData((const u32 *)FREEDOOM_HUD_TILES, HUD_TILE_BASE, FREEDOOM_HUD_TILE_COUNT, DMA);
-    VDP_loadTileData((const u32 *)FREEDOOM_FACE_TILES, FACE_TILE_BASE, FREEDOOM_FACE_TILE_COUNT, DMA);
+    // No face upload here any more: the portrait streams one 16-tile frame into
+    // FACE_TILE_BASE from draw_hud_face(). Blitting all FREEDOOM_FACE_TILE_COUNT
+    // (258) tiles would now run straight over the HUD number and weapon windows.
     // Restores whichever weapon is currently selected into the shared window
     // (the pistol at boot). This runs from renderer_restore_after_menu too, so
     // it must NOT reset the selection -- a pause must not disarm the player.
     reload_weapon_tiles();
 }
 
-static void build_view_bank_tilemaps(void) {
-    for (u16 bank = 0; bank < VIEW_BANK_COUNT; bank++) {
-        for (u16 y = 0; y < VIEW_TILE_H; y++) {
-            for (u16 x = 0; x < VIEW_TILE_W; x++) {
-                // The tilemap array stays in screen order (row-major: the VDP
-                // scans screen rows), but each entry points at the COLUMN-MAJOR
-                // VRAM slot where the packer wrote this tile's pixels
-                // (view_tile_index = x*VIEW_TILE_H + y).
-                const u16 screen_index = (u16)((y * VIEW_TILE_W) + x);
-                const u16 vram_tile = view_tile_index(x, y);
-                s_view_bank_tilemaps[bank][screen_index] = TILE_ATTR_FULL(
-                    PAL3, FALSE, FALSE, FALSE,
-                    VIEW_TILE_BASE + (bank * VIEW_TILE_COUNT) + vram_tile);
-            }
-        }
-    }
-}
-
 void renderer_set_view_vram_bank(u16 bank) {
     g_view_vram_bank = (u16)(bank & 1);
 
-    VDP_setTileMapDataRect(BG_B,
-                           s_view_bank_tilemaps[g_view_vram_bank],
-                           VIEW_TILEMAP_X,
-                           VIEW_TILEMAP_Y,
-                           VIEW_TILE_W,
-                           VIEW_TILE_H,
-                           VIEW_TILE_W,
-                           CPU);
+    // No RAM-side tilemap: the mapping is generated straight into the plane.
+    //
+    // g_view_tiles is COLUMN-major (view_tile_index = x*VIEW_TILE_STRIDE + y),
+    // so one screen column's tiles are a CONTIGUOUS ASCENDING run of VRAM
+    // indices -- which is exactly what VDP_fillTileMapRectInc writes into a
+    // 1-tile-wide, VIEW_TILE_H-tall rect. One call per column replaces a
+    // VIEW_TILE_ALLOC-entry screen-order array that had to be materialized in
+    // work RAM and pushed through the slower ...RectEx path. Work RAM is the
+    // budget the viewport option spends, and this gives 704 bytes of it back for
+    // the same number of VRAM writes: each call sets the auto-increment once and
+    // streams its column.
+    const u16 bank_base = (u16)(VIEW_TILE_BASE + (g_view_vram_bank * VIEW_TILE_ALLOC));
+    for (u16 x = 0; x < VIEW_TILE_W; x++) {
+        VDP_fillTileMapRectInc(BG_B,
+                               TILE_ATTR_FULL(PAL3, FALSE, FALSE, FALSE,
+                                              (u16)(bank_base + view_tile_index(x, 0))),
+                               (u16)(VIEW_TILEMAP_X + x),
+                               VIEW_TILEMAP_Y,
+                               1,
+                               VIEW_TILE_H);
+    }
 }
 
 static void init_view_tilemap(void) {
     // The view tilemap points at one of two dynamic tile banks. Turn/base redraws
     // upload into the inactive bank, then swap this map only after the upload is
     // complete so a half-updated view is never displayed.
-    build_view_bank_tilemaps();
     renderer_set_view_vram_bank(0);
 }
 
@@ -204,16 +201,17 @@ void renderer_prepare_full_base_upload(void) {
         g_view_bank_dirty_count[bank] = 0;
     }
     for (u16 tile = 0; tile < VIEW_TILE_COUNT; tile++) {
+        if (!view_tile_is_live(tile)) continue;
         const u16 word = (u16)(tile >> 5);
         g_view_bank_dirty_bits[target_bank][word] |= (u32)1u << (tile & 31);
     }
-    g_view_bank_dirty_count[target_bank] = VIEW_TILE_COUNT;
+    g_view_bank_dirty_count[target_bank] = VIEW_TILE_LIVE_COUNT;
     g_view_dirty_bank_mask = 0;
 #if DEBUG_PERF
     for (u16 word = 0; word < VIEW_DIRTY_WORD_COUNT; word++) {
         g_frame_modified_bits[word] = 0xFFFFFFFFu;
     }
-    g_frame_modified_count = VIEW_TILE_COUNT;
+    g_frame_modified_count = VIEW_TILE_LIVE_COUNT;
 #endif
 }
 
@@ -249,6 +247,11 @@ void set_view_column_color(u16 column, u16 y, u8 color) {
 static void init_static_atlas(void);
 #endif
 
+// renderer_init() runs after the main menu (and again at each level
+// transition), so it adopts whatever viewport size is currently selected --
+// including one the player just chose in the OPTIONS menu. The boot default is
+// applied once in main(), not here, or returning to the title would silently
+// reset the player's choice.
 void renderer_init(void) {
     init_video();
     init_hud_tiles();
@@ -293,10 +296,23 @@ void renderer_restore_after_menu(void) {
     // The pause frontend deliberately borrows the reloadable pair/HUD region
     // while leaving both dynamic view banks untouched. Restore everything it
     // can have overwritten, then rebuild BG_A and force a fresh scene cast.
+    //
+    // This is also where a VIEW SIZE change made in the pause OPTIONS menu
+    // lands. The frontend only records the choice (raycast_set_view_size); the
+    // geometry is adopted here and in renderer_init(), which between them cover
+    // both ways into the OPTIONS menu. Rebuilding unconditionally keeps that
+    // free of a "did the size change?" flag that could go stale.
+    //
+    // Clearing the play area BEFORE the new tilemap goes down is load-bearing:
+    // a viewport that shrank leaves the outer ring of the previous one on BG_B,
+    // and nothing would ever write those cells again. Clearing the whole area
+    // above the status bar covers any previous size without remembering it.
     VDP_waitVSync();
     load_game_palettes();
     init_hud_tiles();
+    VDP_clearTileMapRect(BG_B, 0, 0, SCREEN_TILE_W, HUD_PANEL_Y);
     VDP_clearPlane(BG_A, TRUE);
+    init_view_tilemap();
     renderer_invalidate_scene();
     renderer_draw_static_screen();
 }

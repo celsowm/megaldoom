@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Contracts for semantic-preserving active-battle performance work."""
 import re
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import raycast_constants
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -332,16 +336,37 @@ def main():
     assert "VDP_setTileMapDataRect(BG_A" not in perf_c
     internal = (ROOT / "src/renderer/renderer_internal.h").read_text()
     overlay_h = int(re.search(r"#define PERF_OVERLAY_H (\d+)", perf_c).group(1))
-    view_y = int(re.search(r"#define VIEW_TILEMAP_Y (\d+)", internal).group(1))
     hud_h = int(re.search(r"#define FREEDOOM_HUD_TILE_H (\d+)",
                           (ROOT / "src/renderer/generated_hud_assets.h").read_text()).group(1))
-    ray_h = int(re.search(r"#define RAY_VIEW_TILE_H (\d+)",
-                          (ROOT / "src/raycast.h").read_text()).group(1))
-    # Top band + bottom gutter is exactly the letterbox the centred view leaves.
-    gutter_h = (28 - hud_h) - (view_y + ray_h)
-    assert overlay_h <= view_y + gutter_h, (
-        f"perf overlay is {overlay_h} rows tall but the view leaves only "
-        f"{view_y} rows above and {gutter_h} below: it would cover the viewport")
+    # The viewport is runtime-selectable, so the letterbox the overlay lives in
+    # shrinks as the selected view grows. The overlay must never draw over the
+    # 3D view or over the status bar at ANY preset: the top band is bounded by
+    # the rows above the view, and the bottom band is clamped to the gutter.
+    # The tallest preset leaves 8 rows against a 9-row overlay, so that clamp is
+    # load-bearing and not decorative -- without it the last line lands on the
+    # status bar.
+    assert "PERF_OVERLAY_W, PERF_OVERLAY_BOTTOM_FIT, PERF_OVERLAY_W, CPU);" in perf_c, (
+        "the perf overlay's bottom band must be clamped to the gutter")
+    clamped_away = 0
+    for size_index, (_, ray_h) in enumerate(raycast_constants.view_sizes()):
+        view_y = ((28 - hud_h) - ray_h + 1) // 2
+        # Top band + bottom gutter is exactly the letterbox the centred view leaves.
+        gutter_h = (28 - hud_h) - (view_y + ray_h)
+        assert gutter_h >= 1, (
+            f"view preset {size_index} leaves no gutter row for the overlay")
+        # The top band is PERF_OVERLAY_TOP_H == VIEW_TILEMAP_Y rows and always
+        # fits by construction; only the bottom band can be cut.
+        assert view_y <= overlay_h, (
+            f"perf overlay top band overruns its tilemap at preset {size_index}")
+        committed = view_y + min(overlay_h - view_y, gutter_h)
+        assert committed <= view_y + gutter_h, (
+            f"perf overlay spills out of the letterbox at preset {size_index}")
+        if committed < overlay_h:
+            clamped_away += 1
+    # If nothing is ever clamped the clamp is untested; if everything is, the
+    # overlay has silently lost a line at the default size.
+    assert clamped_away < len(raycast_constants.view_sizes()), (
+        "the default viewport must show the whole perf overlay")
     assert "#define PERF_OVERLAY_TOP_H VIEW_TILEMAP_Y" in perf_c
 
     # The FPS/CPU fields moved into that same overlay. VDP_showFPS and

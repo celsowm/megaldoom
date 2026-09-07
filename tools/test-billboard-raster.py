@@ -289,14 +289,18 @@ def main() -> int:
     scene = "\n".join((ROOT / "src" / "renderer" / name).read_text(encoding="utf-8")
                       for name in SCENE_SPLIT_FILES)
     required = [
-        "tex_x_by_screen_col[RAY_VIEW_COLS]", "raster_sprite_row",
+        "tex_x_by_screen_col[RAY_VIEW_COLS_MAX]", "raster_sprite_row",
         "renderer_mark_overlay_tile(tile_index)",
         "*dst = (u8)((*dst & (u8)~mask) | value)",
         "door_overlay_blocks_pixel", "columns[wall_col].depth",
         # view_tile_index is column-major, so stepping one tile column is
-        # += VIEW_TILE_H, not ++. Getting this wrong wrote into an unrelated
-        # tile and is exactly what the on-target differential harness caught.
-        "tile_index + VIEW_TILE_H",
+        # += VIEW_TILE_STRIDE, not ++. Getting this wrong wrote into an
+        # unrelated tile and is exactly what the on-target differential harness
+        # caught. It must be the STRIDE (the allocated RAY_VIEW_TILE_H_MAX) and
+        # never the selected VIEW_TILE_H: with a viewport shorter than the
+        # maximum those differ, and stepping by the short height walks into the
+        # middle of the next column.
+        "tile_index + VIEW_TILE_STRIDE",
     ]
     if any(token not in scene for token in required):
         raise ValueError("byte-wise packed billboard renderer contract changed")

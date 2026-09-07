@@ -7,6 +7,69 @@
 // (bsp_map.c); the old grid DDA raycaster is gone — walls are drawn by
 // bsp_cast_frame() in bsp_render.c.
 
+// ---- Viewport geometry ----------------------------------------------------
+// The live size behind the RAY_VIEW_* macros in raycast.h. Everything that
+// allocates uses the _MAX forms instead, so these only ever bound loops and
+// centre coordinates -- shrinking them frees frame time, never memory.
+const RayViewSize g_view_sizes[RAY_VIEW_SIZE_COUNT] = {
+    { RAY_VIEW_SIZE_0_W, RAY_VIEW_SIZE_0_H },  // 160x120 -- historical, 90 deg
+    { RAY_VIEW_SIZE_1_W, RAY_VIEW_SIZE_1_H },  // 176x120 -- wider field, ~95 deg
+    { RAY_VIEW_SIZE_2_W, RAY_VIEW_SIZE_2_H },  // 176x128 -- the _MAX pair
+};
+
+// Every preset must fit the buffers and centre exactly, and the default must be
+// the historical viewport so an untouched option changes nothing.
+_Static_assert(RAY_VIEW_SIZE_0_W <= RAY_VIEW_TILE_W_MAX,
+               "view size 0 is wider than RAY_VIEW_TILE_W_MAX");
+_Static_assert(RAY_VIEW_SIZE_0_H <= RAY_VIEW_TILE_H_MAX,
+               "view size 0 is taller than RAY_VIEW_TILE_H_MAX");
+_Static_assert((RAY_VIEW_SIZE_0_W & 1) == 0,
+               "view size 0 needs an even tile width to centre exactly");
+_Static_assert(RAY_VIEW_SIZE_1_W <= RAY_VIEW_TILE_W_MAX,
+               "view size 1 is wider than RAY_VIEW_TILE_W_MAX");
+_Static_assert(RAY_VIEW_SIZE_1_H <= RAY_VIEW_TILE_H_MAX,
+               "view size 1 is taller than RAY_VIEW_TILE_H_MAX");
+_Static_assert((RAY_VIEW_SIZE_1_W & 1) == 0,
+               "view size 1 needs an even tile width to centre exactly");
+_Static_assert(RAY_VIEW_SIZE_2_W <= RAY_VIEW_TILE_W_MAX,
+               "view size 2 is wider than RAY_VIEW_TILE_W_MAX");
+_Static_assert(RAY_VIEW_SIZE_2_H <= RAY_VIEW_TILE_H_MAX,
+               "view size 2 is taller than RAY_VIEW_TILE_H_MAX");
+_Static_assert((RAY_VIEW_SIZE_2_W & 1) == 0,
+               "view size 2 needs an even tile width to centre exactly");
+_Static_assert(RAY_VIEW_SIZE_DEFAULT == 0,
+               "the default preset must be row 0, the historical viewport");
+
+u16 g_view_tile_w = RAY_VIEW_SIZE_0_W;
+u16 g_view_tile_h = RAY_VIEW_SIZE_0_H;
+u16 g_view_cols = RAY_VIEW_SIZE_0_W * 8;
+u16 g_view_rows = RAY_VIEW_SIZE_0_H * 8;
+u16 g_view_center_x = (RAY_VIEW_SIZE_0_W * 8) / 2;
+u16 g_view_center_y = (RAY_VIEW_SIZE_0_H * 8) / 2;
+
+static u16 s_view_size_index = RAY_VIEW_SIZE_DEFAULT;
+
+u16 raycast_view_size(void) {
+    return s_view_size_index;
+}
+
+bool raycast_set_view_size(u16 size_index) {
+    if (size_index >= RAY_VIEW_SIZE_COUNT) return FALSE;
+    const RayViewSize *size = &g_view_sizes[size_index];
+    if (size->tile_w == g_view_tile_w && size->tile_h == g_view_tile_h) {
+        s_view_size_index = size_index;
+        return FALSE;
+    }
+    s_view_size_index = size_index;
+    g_view_tile_w = size->tile_w;
+    g_view_tile_h = size->tile_h;
+    g_view_cols = (u16)(g_view_tile_w * 8);
+    g_view_rows = (u16)(g_view_tile_h * 8);
+    g_view_center_x = (u16)(g_view_cols / 2);
+    g_view_center_y = (u16)(g_view_rows / 2);
+    return TRUE;
+}
+
 static bool is_blocked_at(s32 x, s32 y) {
 #if DEBUG_PERF
     bsp_debug_set_query_owner(BSP_QUERY_PLAYER);

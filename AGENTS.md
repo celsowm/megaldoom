@@ -51,10 +51,31 @@ each stage timer than on a route -- deltas are valid, absolute shares read a
 little compressed.
 
 **The view tilemap is column-major**, `view_tile_index(tile_x, tile_y) =
-tile_x * VIEW_TILE_H + tile_y`. A column's tiles are contiguous, and screen row
-`y` of byte lane `L` sits at `(y>>3)*32 + (y&7)*4 + L`, which is identically
+tile_x * VIEW_TILE_STRIDE + tile_y`. A column's tiles are contiguous, and screen
+row `y` of byte lane `L` sits at `(y>>3)*32 + (y&7)*4 + L`, which is identically
 `4*y + L`. Two shipped optimizations rest on this, and one real bug came from
 assuming row-major (LOG, 2026-08-03).
+
+**The viewport is runtime-selectable, so `VIEW_TILE_H` is a variable and is NOT
+the column pitch.** `RAY_VIEW_TILE_W/H` are the size the player picked;
+`RAY_VIEW_TILE_W_MAX/_H_MAX` size every buffer and are what the work-RAM budget
+is spent on. Stepping one tile column adds `VIEW_TILE_STRIDE`
+(== `RAY_VIEW_TILE_H_MAX`), never `VIEW_TILE_H` — five sites had the latter and
+walked into the middle of the next column (LOG, 2026-09-07). Declarations take
+the `_MAX` forms; loop bounds take the live ones. A viewport shorter than the
+stride leaves one padding tile per column that must never be uploaded or marked
+dirty. `RAY_PROJ_X/Y` are deliberately NOT derived from the view width: a bigger
+viewport shows more world rather than magnifying it, which keeps
+`g_billboard_recip_proj_lut` exact and the cost linear in area.
+
+**Two route harnesses are dead on `main` and will mislead you.**
+`tools/test-e2e-levels.py` and `tools/test-checkpoints.ps1` both fail on a
+pristine checkout (verified 2026-09-07). `tools/routes/checkpoints.txt` no
+longer reaches the menu at all — the frontend takes until frame ~2010 to show
+the title and the route presses START at 900 — so a capture from it is the title
+screen, not gameplay. Build with `-DDEBUG_START_E1M1_EXIT=1` to land straight in
+E1M1, and remember route masks are HEX (`fscanf("%u %x")`: UP 1, DOWN 2, LEFT 4,
+RIGHT 8, A 10, B 20, C 40, START 80).
 
 **Wall fidelity tuning is an offline 64x64 bake.** The shipped renderer remains
 `WALL_TEX_DIM=64` at stride 2; its 786,432-byte shade/door packed table would
@@ -67,8 +88,13 @@ world repeat but select/compose a readable source-derived 64x64 facade, and
 always audit the close oblique checkpoint (LOG, 2026-08-22).
 
 **Budgets: 64 KB work RAM, 4 MB ROM.** The work-RAM guardrail is the binding
-one — `tools/check-rom.ps1` errors below 16 KB free and SGDK panics at boot
-around 13.7 KB. ROM is *not* tight: `.text` is ~1.39 MB against a 4 MB cap, so
+one. Treat `tools/check-rom.ps1`'s **20480-byte recommendation as the floor**,
+not its 16 KB error line: a build with 18076 bytes free boots into a wild read
+during the frontend fade (a `MEM_alloc` for a boot card failing), and it does
+NOT produce SGDK's "not enough memory to reset VDP" panic — that message marks
+~13.7 KB, well below where things actually break. 19728 bytes completed the
+route (LOG, 2026-09-07). Always run a route, not just the guardrail, after
+adding static data. ROM is *not* tight: `.text` is ~1.39 MB against a 4 MB cap, so
 there is ~2.6 MB of headroom. The 1408 KB figure some notes used is just where
 `sizebnd` pads `out/rom.bin`, not a limit. Check `size.exe out/rom.out` against
 the 4 MB cap before ever calling a precompute-vs-compute tradeoff unaffordable.

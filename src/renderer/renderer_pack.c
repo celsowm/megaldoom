@@ -150,9 +150,9 @@ WallColumnDescriptor describe_door_overlay(const RayDoorOverlay *door) {
 // stride 4) is defined in renderer_pack_abi.h, which the asm hotpath shares.
 
 // Previous base build's per-tile-column packing inputs, for coherence skipping.
-static WallColumnDescriptor s_prev_desc[VIEW_TILE_W][PACK_LANES];
+static WallColumnDescriptor s_prev_desc[RAY_VIEW_TILE_W_MAX][PACK_LANES];
 static RaySceneColors s_prev_scene_flats;
-static u8 s_prev_door_active[VIEW_TILE_W];
+static u8 s_prev_door_active[RAY_VIEW_TILE_W_MAX];
 
 // A tile column's 15 packed tiles are a pure function of its wall descriptors
 // and the shared flat rows, so field-wise equality of those descriptors is
@@ -345,7 +345,7 @@ void renderer_write_mixed_stride2_span_asm(
 #define ASM_PROBE_CANARY_B 0xC001D00Du
 typedef struct {
     u32 before[2];
-    u32 tiles[VIEW_TILE_H][8];
+    u32 tiles[RAY_VIEW_TILE_H_MAX][8];
     u32 after[2];
 } AsmColumnProbe;
 

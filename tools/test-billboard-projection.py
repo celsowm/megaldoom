@@ -23,11 +23,17 @@ SCENE_SPLIT_FILES = [
     "renderer_flats.c",
 ]
 
-VIEW_W = 160
-CENTER_X = 80
-CENTER_Y = 60
-PROJ_X = 80
-PROJ_Y = 80
+# The viewport is runtime-selectable, so this models the DEFAULT preset -- the
+# one a fresh boot renders. PROJ is not viewport-derived (see raycast.h): it is
+# a fixed constant precisely so that a larger preset widens the field instead of
+# magnifying it, which is also what keeps the baked billboard reciprocal LUT
+# exact at every size. Deriving all four here means a preset edit cannot leave
+# this model silently describing a viewport the ROM no longer renders.
+VIEW_W, VIEW_H = raycast_constants.view_pixels()
+CENTER_X = VIEW_W // 2
+CENTER_Y = VIEW_H // 2
+PROJ_X = raycast_constants.proj()
+PROJ_Y = PROJ_X
 CAMERA_HEIGHT = 64
 SCALE_SHIFT = 12
 WORLD_GEOMETRY_SCALE = 1
@@ -190,11 +196,20 @@ def main() -> int:
 
     required = [
         "#define RAY_VIEW_CENTER_X", "#define RAY_VIEW_CENTER_Y",
-        "#define RAY_PROJ_X RAY_VIEW_CENTER_X", "#define RAY_PROJ_Y RAY_VIEW_CENTER_X",
         "#define RAY_WORLD_WALL_HEIGHT 128", "#define RAY_CAMERA_HEIGHT",
     ]
     if any(token not in raycast for token in required):
         raise ValueError("raycast camera geometry is no longer shared")
+    # RAY_PROJ_X/Y used to be spelled "RAY_VIEW_CENTER_X", which tied the world
+    # scale to the viewport width. It must NOT be tied to it again: the viewport
+    # is now runtime-selectable, and g_billboard_recip_proj_lut bakes
+    # K == RAY_PROJ_X << 12 into 1535 entries that no runtime width can rescale.
+    # Wall and billboard projection must still SHARE the value, or objects drift
+    # against the BSP as the player turns.
+    if PROJ_X != PROJ_Y:
+        raise ValueError("RAY_PROJ_X and RAY_PROJ_Y must stay equal")
+    if re.search(r"#define\s+RAY_PROJ_[XY]\s+RAY_VIEW", raycast):
+        raise ValueError("RAY_PROJ_* must not be derived from the viewport size")
     if project_x(-100, 100) != 0 or project_x(100, 100) != VIEW_W:
         raise ValueError("horizontal projection is not an exact 90-degree FOV")
     if "side * RAY_PROJ_X" not in billboard or "side * 80" in billboard:

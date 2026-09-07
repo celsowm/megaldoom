@@ -105,7 +105,7 @@ _Static_assert(sizeof(MEGALDOOM_SKY_CEILING_ROWS) ==
                "sky table must be TILE_COLUMNS contiguous columns of ROW_COUNT rows");
 // sky_column_rows wraps with one conditional subtract rather than a modulo,
 // which is only correct while a viewport's worth of tiles cannot lap the table.
-_Static_assert(RAY_VIEW_TILE_W <= MEGALDOOM_SKY_TILE_COLUMNS,
+_Static_assert(RAY_VIEW_TILE_W_MAX <= MEGALDOOM_SKY_TILE_COLUMNS,
                "sky column wrap assumes tile_x + offset < 2 * TILE_COLUMNS");
 _Static_assert(sizeof(((PackedFlatRows *)0)->floor) == PACK_FLOOR_ROWS_BYTES,
                "asm wraps the floor index with PACK_FLOOR_INDEX_MASK");
@@ -116,7 +116,12 @@ _Static_assert(sizeof(((PackedFlatRows *)0)->floor) == PACK_FLOOR_ROWS_BYTES,
 // (VIEW_PIXEL_H - 1) / 2. write_ceiling_tile reads eight consecutive rows
 // UNMASKED from that index, so the table must also hold the remainder of that
 // tile; both bounds are asserted here rather than trusted.
-_Static_assert(PACK_CEILING_ROW_COUNT > ((VIEW_PIXEL_H - 1) / 2),
+// Checked at the TALLEST viewport a preset can select: a shorter one centres
+// its wall runs nearer the top of the table, never past it. At
+// RAY_VIEW_TILE_H_MAX == 16 the highest centred wall top is row 63 and the
+// table holds 64, so this is exact rather than slack -- raising _H_MAX means
+// regenerating the ceiling/sky bands, not just bumping the constant.
+_Static_assert(PACK_CEILING_ROW_COUNT > ((VIEW_PIXEL_H_MAX - 1) / 2),
                "ceiling table must reach the highest centred wall top");
 _Static_assert((PACK_CEILING_ROW_COUNT & (PACK_CEILING_ROW_COUNT - 1)) == 0,
                "asm masks the ceiling index with an immediate power of two");

@@ -252,12 +252,15 @@ static void raster_sprite_row(const BillboardRasterJob *job,
         dst++;
         if (++lane == 4) {
             lane = 0;
-            // Adjacent tile COLUMNS are VIEW_TILE_H apart, not 1: view_tile_index
-            // is column-major (tile_x * VIEW_TILE_H + tile_y) so that a changed
-            // column uploads as one DMA run. dst has already stepped one byte
-            // past lane 3, so it needs the rest of that same jump.
-            tile_index = (u16)(tile_index + VIEW_TILE_H);
-            dst += (s16)(VIEW_TILE_BYTES * VIEW_TILE_H) - 4;
+            // Adjacent tile COLUMNS are VIEW_TILE_STRIDE apart, not 1:
+            // view_tile_index is column-major (tile_x * VIEW_TILE_STRIDE +
+            // tile_y) so that a changed column uploads as one DMA run. dst has
+            // already stepped one byte past lane 3, so it needs the rest of that
+            // same jump. Note STRIDE, not the current VIEW_TILE_H: the column
+            // pitch is the allocated maximum height, and a short viewport just
+            // leaves the tail of each column unused.
+            tile_index = (u16)(tile_index + VIEW_TILE_STRIDE);
+            dst += (s16)(VIEW_TILE_BYTES * VIEW_TILE_STRIDE) - 4;
             tile_marked = FALSE;
         }
     }
@@ -279,14 +282,14 @@ static void raster_sprite_row(const BillboardRasterJob *job,
 // anyway, so paying that is a straight loss -- measured +44% on stationary-combat
 // when it was applied unconditionally. raster_sprite_row above stays the path for
 // everything that is not magnified.
-static u8 s_row_mask[RAY_VIEW_COLS / 2];
-static u8 s_row_value[RAY_VIEW_COLS / 2];
+static u8 s_row_mask[RAY_VIEW_COLS_MAX / 2];
+static u8 s_row_value[RAY_VIEW_COLS_MAX / 2];
 // Per 8-pixel tile of the row: all four bytes fully opaque, so the packed tile
 // word can be written whole with one move.l instead of four byte
 // read-modify-writes. A magnified sprite is mostly solid interior, which is
 // exactly when this path runs.
-static u8 s_tile_full[RAY_VIEW_TILE_W];
-static u32 s_tile_word[RAY_VIEW_TILE_W];
+static u8 s_tile_full[RAY_VIEW_TILE_W_MAX];
+static u32 s_tile_word[RAY_VIEW_TILE_W_MAX];
 
 // A sprite is worth the row cache once each texel row covers at least two screen
 // rows (tex_y_step is Q16 texels per screen row, so <= 0x8000 means >= 2x), and
@@ -400,8 +403,9 @@ static void apply_sprite_row(const BillboardRasterJob *job, u16 y) {
                 dst++;
             }
         }
-        tile_index = (u16)(tile_index + VIEW_TILE_H);
-        tile_row += (u16)(VIEW_TILE_H * 8);
+        // Column pitch is the allocated stride, not the selected height.
+        tile_index = (u16)(tile_index + VIEW_TILE_STRIDE);
+        tile_row += (u16)(VIEW_TILE_STRIDE * 8);
     }
 }
 
@@ -424,7 +428,7 @@ static void draw_billboards_bytewise(const RayColumn *columns,
             FREEDOOM_BILLBOARD_PICKUP_USE_POSTS[object->visual_id]);
         // 0xFF marks a clipped/wall-hidden screen column. Generated atlas X
         // coordinates are far below 255, so the sentinel cannot alias a texel.
-        u8 tex_x_by_screen_col[RAY_VIEW_COLS];
+        u8 tex_x_by_screen_col[RAY_VIEW_COLS_MAX];
         BillboardRasterJob job;
         s16 x0 = object->left;
         s16 x1 = object->right;
@@ -597,7 +601,7 @@ static void draw_billboards_reference(const RayColumn *columns,
             FREEDOOM_BILLBOARD_PICKUP_USE_POSTS[object->visual_id]);
         const u16 *post_offsets = use_pickup_posts ?
             FREEDOOM_BILLBOARD_PICKUP_POST_OFFSETS[object->visual_id] : NULL;
-        u8 tex_x_by_screen_col[RAY_VIEW_COLS];
+        u8 tex_x_by_screen_col[RAY_VIEW_COLS_MAX];
         s16 x0 = object->left;
         s16 x1 = object->right;
         s16 y0 = object->top;
@@ -707,7 +711,7 @@ static void draw_billboards_reference(const RayColumn *columns,
 // VDP". Verifying a single rotating tile row is still an exact comparison --
 // the reference simply drops commits outside the band -- and 15 bands cycle in
 // 15 frames, so a route of a few hundred frames covers every tile many times.
-static u32 s_verify_band[VIEW_TILE_W][8];
+static u32 s_verify_band[RAY_VIEW_TILE_W_MAX][8];
 static u16 s_verify_band_y;
 
 void draw_projected_billboards(const RayColumn *columns,

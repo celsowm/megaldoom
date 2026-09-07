@@ -16,6 +16,10 @@ read D-pad state or advance phase off the render frame.
 from pathlib import Path
 import math
 import re
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import raycast_constants
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = (ROOT / "src/player_controller.c").read_text()
@@ -253,21 +257,35 @@ def main():
     assert min(wy) >= 0, "vertical dip must never lift the gun (would float it)"
     assert max(wy) > 0, "vertical bob must dip the weapon"
     internal = (ROOT / "src/renderer/renderer_internal.h").read_text()
-    view_y = int(re.search(r"#define VIEW_TILEMAP_Y (\d+)", internal).group(1))
     hud_h = int(re.search(r"#define FREEDOOM_HUD_TILE_H (\d+)",
                           (ROOT / "src/renderer/generated_hud_assets.h").read_text()).group(1))
-    ray_h = int(re.search(r"#define RAY_VIEW_TILE_H (\d+)",
-                          (ROOT / "src/raycast.h").read_text()).group(1))
-    # The view is vertically centred in the play area above the status bar, with
-    # the odd row of slack on top.
-    assert 2 * view_y == (28 - hud_h) - ray_h + 1, "3D view must be centred"
-    # Everything from the view's bottom edge down is window (plane A suppressed),
-    # and that mask is deeper than the largest dip, so the gun is always clipped
-    # on the view edge rather than drawn over the letterbox.
-    window_top = view_y + ray_h
+    play_rows = 28 - hud_h
+    # VIEW_TILEMAP_Y is no longer a literal: the viewport is runtime-selectable,
+    # so the renderer derives it from the current height. Restate that formula
+    # here and check the bob invariants for EVERY preset the OPTIONS menu can
+    # select -- the dip has to be clipped by the window mask at all of them, not
+    # just at whichever size happens to boot.
+    assert ("#define VIEW_TILEMAP_Y ((u16)((HUD_PANEL_Y - VIEW_TILE_H + 1) / 2))"
+            in internal), "view centring formula changed"
     assert "#define VIEW_WINDOW_TOP_Y (VIEW_TILEMAP_Y + VIEW_TILE_H)" in internal
-    assert (28 - window_top) * 8 >= BOB_MAX_Y, "dip must stay inside the window mask"
-    assert window_top < 28 - hud_h, "a centred view needs a gutter below it"
+    for size_index, (_, ray_h) in enumerate(raycast_constants.view_sizes()):
+        view_y = (play_rows - ray_h + 1) // 2
+        # Centred, with any odd row of slack given to the TOP: the space above
+        # the view is never smaller than the space below it, and never more than
+        # one row larger.
+        above, below = view_y, play_rows - ray_h - view_y
+        assert 0 <= above - below <= 1, (
+            "3D view must be centred at preset %d (above=%d below=%d)"
+            % (size_index, above, below))
+        # Everything from the view's bottom edge down is window (plane A
+        # suppressed), and that mask must stay deeper than the largest dip, so
+        # the gun is clipped on the view edge rather than drawn over the
+        # letterbox.
+        window_top = view_y + ray_h
+        assert (28 - window_top) * 8 >= BOB_MAX_Y, (
+            "dip escapes the window mask at preset %d" % size_index)
+        assert window_top < play_rows, (
+            "preset %d leaves no gutter row below the view" % size_index)
 
     # Periodicity: with settled momentum the phase steps by BOB_PHASE_STEP mod
     # ANGLE_STEPS each tic, so the exact repeat period is ANGLE_STEPS/gcd.

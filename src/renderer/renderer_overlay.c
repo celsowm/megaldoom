@@ -14,24 +14,17 @@ static u32 s_current_bits[VIEW_DIRTY_WORD_COUNT];
 static u32 s_prev_overlay_columns;
 static u32 s_cur_overlay_columns;
 // tile index -> screen tile column, for the COLUMN-major g_view_tiles layout
-// (view_tile_index(x, y) == x * VIEW_TILE_H + y, renderer_internal.h). The
-// arithmetic form is `tile_index / VIEW_TILE_H`; a byte table keeps it to one
-// indexed load instead of the 32-bit mulu GCC emits for a divide by 15. ROM
-// only (300 bytes const), so it costs nothing against the work-RAM budget.
-#define OVERLAY_COL_RUN(c) \
-    (c), (c), (c), (c), (c), (c), (c), (c), (c), (c), (c), (c), (c), (c), (c)
-static const u8 s_tile_column[VIEW_TILE_COUNT] = {
-    OVERLAY_COL_RUN(0),  OVERLAY_COL_RUN(1),  OVERLAY_COL_RUN(2),  OVERLAY_COL_RUN(3),
-    OVERLAY_COL_RUN(4),  OVERLAY_COL_RUN(5),  OVERLAY_COL_RUN(6),  OVERLAY_COL_RUN(7),
-    OVERLAY_COL_RUN(8),  OVERLAY_COL_RUN(9),  OVERLAY_COL_RUN(10), OVERLAY_COL_RUN(11),
-    OVERLAY_COL_RUN(12), OVERLAY_COL_RUN(13), OVERLAY_COL_RUN(14), OVERLAY_COL_RUN(15),
-    OVERLAY_COL_RUN(16), OVERLAY_COL_RUN(17), OVERLAY_COL_RUN(18), OVERLAY_COL_RUN(19),
-};
-#undef OVERLAY_COL_RUN
-// The literal table above bakes VIEW_TILE_H == 15 (run length) and
-// VIEW_TILE_W == 20 (run count); the column mask additionally needs W <= 32.
-typedef char overlay_tile_column_shape_check[
-    (VIEW_TILE_H == 15 && VIEW_TILE_W == 20) ? 1 : -1];
+// (view_tile_index(x, y) == x * VIEW_TILE_STRIDE + y, renderer_internal.h).
+//
+// This used to be a 300-byte const table of 15-long runs, because the
+// arithmetic form was `tile_index / 15` and GCC turns a divide by 15 into a
+// 32-bit mulu. The stride is now the power-of-two RAY_VIEW_TILE_H_MAX, so the
+// same mapping is a single shift -- cheaper than the indexed load the table
+// was bought for, and it no longer bakes one viewport shape into the file.
+#define OVERLAY_TILE_COLUMN(tile_index) ((tile_index) / VIEW_TILE_STRIDE)
+// s_cur_overlay_columns / s_prev_overlay_columns are a u32 bit per tile column.
+_Static_assert(RAY_VIEW_TILE_W_MAX <= 32,
+               "overlay column mask is a u32; RAY_VIEW_TILE_W_MAX must fit it");
 #if DEBUG_PERF
 /* The asm/C canary harness and perf mailboxes consume several KB of work RAM.
  * A smaller debug-only snapshot cache keeps enough heap for frontend DMA; its
@@ -41,13 +34,23 @@ typedef char overlay_tile_column_shape_check[
 #define OVERLAY_SNAPSHOT_TILE_LIMIT 128
 #endif
 static u32 s_snapshot_rows[OVERLAY_SNAPSHOT_TILE_LIMIT][8];
-static s16 s_snapshot_slot_by_tile[VIEW_TILE_COUNT];
+// One byte per tile, not one word: the pool is OVERLAY_SNAPSHOT_TILE_LIMIT
+// entries (128 at most), so a slot index fits a u8 and 0xFF is free to mean
+// "no snapshot". At VIEW_TILE_ALLOC that halves the table, which is work RAM
+// the larger viewport sizes need.
+#define OVERLAY_SNAPSHOT_NO_SLOT 0xFFu
+_Static_assert(OVERLAY_SNAPSHOT_TILE_LIMIT < OVERLAY_SNAPSHOT_NO_SLOT,
+               "snapshot slot index must fit a u8 alongside the empty marker");
+static u8 s_snapshot_slot_by_tile[VIEW_TILE_ALLOC];
 static u16 s_snapshot_count;
 static bool s_snapshot_overflow;
 
 static void clear_snapshot_cache(void) {
-    for (u16 tile = 0; tile < VIEW_TILE_COUNT; tile++) {
-        s_snapshot_slot_by_tile[tile] = -1;
+    // Walks the ALLOCATION rather than the current size: shrinking the viewport
+    // must not leave a stale slot behind on a tile that has left the view and
+    // could come back when the player picks a larger size again.
+    for (u16 tile = 0; tile < VIEW_TILE_ALLOC; tile++) {
+        s_snapshot_slot_by_tile[tile] = OVERLAY_SNAPSHOT_NO_SLOT;
     }
     s_snapshot_count = 0;
     s_snapshot_overflow = FALSE;
@@ -82,8 +85,8 @@ void renderer_overlay_restore_previous(void) {
         const u32 mask = (u32)1u << (tile & 31);
         if ((s_previous_bits[word] & mask) == 0) continue;
 
-        const s16 slot = s_snapshot_slot_by_tile[tile];
-        if (slot < 0) continue;
+        const u8 slot = s_snapshot_slot_by_tile[tile];
+        if (slot == OVERLAY_SNAPSHOT_NO_SLOT) continue;
         for (u16 row = 0; row < 8; row++)
             g_view_tiles[tile][row] = s_snapshot_rows[slot][row];
 #if DEBUG_PERF
@@ -117,7 +120,7 @@ void renderer_mark_overlay_tile(u16 tile_index) {
     // set its bit this frame. So the column mask is maintained past the
     // early-out, keeping it off the per-pixel-run repeat path.
     if ((s_current_bits[word] & mask) != 0) return;
-    s_cur_overlay_columns |= (u32)1u << s_tile_column[tile_index];
+    s_cur_overlay_columns |= (u32)1u << OVERLAY_TILE_COLUMN(tile_index);
 
 #if CADENCE_STAGE_PROBE
     g_cadence_bb_marks++;
@@ -125,14 +128,14 @@ void renderer_mark_overlay_tile(u16 tile_index) {
 #if DEBUG_PERF
     renderer_perf_record_overlay_touch((bool)((s_previous_bits[word] & mask) != 0));
 #endif
-    if (s_snapshot_slot_by_tile[tile_index] < 0) {
+    if (s_snapshot_slot_by_tile[tile_index] == OVERLAY_SNAPSHOT_NO_SLOT) {
         if (s_snapshot_count >= OVERLAY_SNAPSHOT_TILE_LIMIT) {
             // The current frame is already correct. Request a full base rebuild
             // next time instead of reserving a 300-tile shadow framebuffer.
             s_snapshot_overflow = TRUE;
         } else {
             const u16 slot = s_snapshot_count++;
-            s_snapshot_slot_by_tile[tile_index] = (s16)slot;
+            s_snapshot_slot_by_tile[tile_index] = (u8)slot;
             for (u16 row = 0; row < 8; row++)
                 s_snapshot_rows[slot][row] = g_view_tiles[tile_index][row];
         }

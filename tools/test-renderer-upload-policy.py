@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Deterministic contract checks for view-bank DMA upload selection."""
 import re
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import raycast_constants
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -16,8 +20,11 @@ def count_runs(dirty):
     return sum(tile == 0 or tile - 1 not in dirty for tile in dirty)
 
 
-VIEW_TILE_W = 20
-VIEW_TILE_H = 15
+# The viewport is runtime-selectable; the DEFAULT preset is what a fresh boot
+# uploads, and VIEW_TILE_STRIDE (the allocated maximum height) is the column
+# pitch every tile index is built from.
+VIEW_TILE_W, VIEW_TILE_H = raycast_constants.view_tiles()
+VIEW_TILE_STRIDE = raycast_constants.view_tiles_max()[1]
 
 
 def check_overlay_column_mask(overlay, mark_overlay):
@@ -36,20 +43,30 @@ def check_overlay_column_mask(overlay, mark_overlay):
             "overlay column mask is using row-major arithmetic on a "
             "column-major tile index (this is the ghost-clone bug)")
 
-    match = re.search(r"s_tile_column\[VIEW_TILE_COUNT\]\s*=\s*\{(.*?)\n\};",
-                      overlay, re.S)
-    if match is None:
-        raise AssertionError("s_tile_column lookup table not found")
-    body = re.sub(r"OVERLAY_COL_RUN\((\d+)\)",
-                  lambda m: ", ".join([m.group(1)] * VIEW_TILE_H), match.group(1))
-    table = [int(v) for v in re.findall(r"\d+", body)]
-    expected = [tile // VIEW_TILE_H for tile in range(VIEW_TILE_W * VIEW_TILE_H)]
-    if table != expected:
+    # The 300-byte s_tile_column run table is gone: the column pitch is now the
+    # power-of-two VIEW_TILE_STRIDE, so tile -> column is a shift and the table
+    # it was bought to avoid a divide-by-15 for is no longer worth its bytes.
+    # What still has to hold is that the mask divides by the COLUMN PITCH, and
+    # not by the currently selected height nor by the width.
+    if "s_tile_column" in overlay:
         raise AssertionError(
-            "s_tile_column does not match view_tile_index(x, y) = x * "
-            "VIEW_TILE_H + y")
-    if "s_cur_overlay_columns |= (u32)1u << s_tile_column[tile_index];" not in mark_overlay:
-        raise AssertionError("the overlay column mask no longer uses s_tile_column")
+            "s_tile_column is back; the column mask should divide by "
+            "VIEW_TILE_STRIDE instead")
+    if ("#define OVERLAY_TILE_COLUMN(tile_index) ((tile_index) / VIEW_TILE_STRIDE)"
+            not in overlay):
+        raise AssertionError(
+            "overlay column mask must map a tile index to its column by "
+            "dividing by VIEW_TILE_STRIDE")
+    if ("s_cur_overlay_columns |= (u32)1u << OVERLAY_TILE_COLUMN(tile_index);"
+            not in mark_overlay):
+        raise AssertionError(
+            "the overlay column mask no longer uses OVERLAY_TILE_COLUMN")
+    # The pitch must be the ALLOCATED maximum height. If it were the selected
+    # height, a viewport shorter than the maximum would map tiles to the wrong
+    # column -- the same class of bug as the row-major mask above.
+    if VIEW_TILE_STRIDE != raycast_constants.view_tiles_max()[1]:
+        raise AssertionError(
+            "column pitch must be RAY_VIEW_TILE_H_MAX, not the selected height")
 
 
 def choose_overlay_full(dirty, full_threshold, max_runs):
@@ -116,9 +133,20 @@ def main():
     overlay = (ROOT / "src/renderer/renderer_overlay.c").read_text()
     renderer = (ROOT / "src/renderer/renderer.c").read_text()
     perf = (ROOT / "src/renderer/renderer_perf.c").read_text()
-    tile_w = define(raycast, "RAY_VIEW_TILE_W")
-    tile_h = define(raycast, "RAY_VIEW_TILE_H")
+    tile_w, tile_h = raycast_constants.view_tiles()
+    # A base upload ships the LIVE tiles only. Each column is allocated
+    # VIEW_TILE_STRIDE slots but shows only its first tile_h, and the padding is
+    # never displayed -- shipping it would cost the default viewport 320 tiles
+    # instead of 300 and push its base upload from two vblank steps to three.
+    # The full path therefore emits one run per column and skips each tail.
+    assert tile_h <= VIEW_TILE_STRIDE
     tile_count = tile_w * tile_h
+    upload = (ROOT / "src/renderer/renderer_upload.c").read_text()
+    if "view_tile_next_live(g_view_upload.cursor)" not in upload:
+        raise AssertionError(
+            "the full-upload path must skip each column's padding tail")
+    if "if (!view_tile_is_live(tile)) continue;" not in renderer:
+        raise AssertionError("padding tiles must never be marked dirty")
     batch_limit = define(header, "VIEW_DMA_TILES_PER_VBLANK")
     full_threshold = define(header, "VIEW_DIRTY_FULL_THRESHOLD")
     max_runs = define(header, "VIEW_DIRTY_MAX_RUNS")
@@ -204,7 +232,10 @@ def main():
     assert "renderer_prepare_full_base_upload();" in scene
     assert "g_view_dirty_bank_mask = (u16)(1u << g_view_vram_bank)" in scene
     assert "g_view_dirty_bank_mask = 0" in renderer
-    assert "g_view_bank_dirty_count[target_bank] = VIEW_TILE_COUNT" in renderer
+    # The dirty COUNT is the on-screen tile count, not the padded index span:
+    # VIEW_TILE_COUNT would overstate the workload by one tile per column at any
+    # viewport shorter than VIEW_TILE_STRIDE.
+    assert "g_view_bank_dirty_count[target_bank] = VIEW_TILE_LIVE_COUNT" in renderer
     assert "if ((g_view_dirty_bank_mask & (1u << bank)) == 0) continue" in renderer
     assert "difference |= (base_rows[row] ^ row_data)" not in scene
     assert "store_base_tile" not in scene

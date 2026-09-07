@@ -12,7 +12,8 @@
 //     text committed there swings with the gun every step the player takes.
 //     Neither plane used here scrolls: BG_B's only VDP_set*Scroll calls in the
 //     tree are frontend.c's (both 0), and the window plane cannot scroll at all.
-//   * The view is centred at rows VIEW_TILEMAP_Y..+VIEW_TILE_H-1 (5..19), so
+//   * The view is centred at rows VIEW_TILEMAP_Y..+VIEW_TILE_H-1 (5..19 at the
+//     default preset; both move with the selected viewport size), so
 //     the black letterbox is now SPLIT: VIEW_TILEMAP_Y rows above it (0..4) and
 //     VIEW_GUTTER_TILE_H rows below it (20..23) before the status bar. The
 //     overlay is split to match -- the top band on BG_B, the bottom band on the
@@ -20,16 +21,32 @@
 //     weapon dip. Text there rides above the (invisible) dipping gun and needs
 //     no coordination with it.
 //
-// Both bands together must hold PERF_OVERLAY_H rows; the static check below and
-// tools/test-active-battle-perf.py enforce it.
+// Both bands together hold up to PERF_OVERLAY_H rows. How many rows there
+// actually ARE depends on the selected viewport: a taller view eats the
+// letterbox from both sides. The tallest preset (RAY_VIEW_TILE_H_MAX) leaves
+// VIEW_TILEMAP_Y + VIEW_GUTTER_TILE_H == 8 rows, one short of the full overlay,
+// so the bottom band is CLAMPED to the gutter at runtime and the last diagnostic
+// line is simply not committed at that size. It is still composed into
+// s_perf_tilemap, and every counter remains readable through the perf mailbox,
+// which is what the measurement tooling actually decodes.
+//
+// The old "#if PERF_OVERLAY_BOTTOM_H > VIEW_GUTTER_TILE_H" check cannot survive
+// here: both operands are runtime values now, so the preprocessor would read
+// them as 0 and the guard would pass while proving nothing. The compile-time
+// part that IS still meaningful is that the top band alone can never exceed the
+// buffer.
 #define PERF_OVERLAY_W 40
 #define PERF_OVERLAY_H 9
 #define PERF_OVERLAY_TOP_H VIEW_TILEMAP_Y
 #define PERF_OVERLAY_BOTTOM_H (PERF_OVERLAY_H - PERF_OVERLAY_TOP_H)
 #define PERF_OVERLAY_REFRESH_FRAMES 30
 
-#if PERF_OVERLAY_BOTTOM_H > VIEW_GUTTER_TILE_H
-#error "Perf overlay does not fit in the letterbox bands around the 3D view"
+// Rows the bottom band can actually commit at the current viewport size.
+#define PERF_OVERLAY_BOTTOM_FIT     ((u16)((PERF_OVERLAY_BOTTOM_H < VIEW_GUTTER_TILE_H) ? PERF_OVERLAY_BOTTOM_H                                                         : VIEW_GUTTER_TILE_H))
+// The widest the top band can ever be is the shortest viewport's letterbox.
+#define PERF_OVERLAY_MAX_TOP_H (((28 - 4) - RAY_VIEW_SIZE_0_H + 1) / 2)
+#if PERF_OVERLAY_MAX_TOP_H > PERF_OVERLAY_H
+#error "Perf overlay top band alone overruns the composed tilemap"
 #endif
 
 static u16 s_perf_tilemap[PERF_OVERLAY_W * PERF_OVERLAY_H];
@@ -219,7 +236,7 @@ void renderer_draw_perf_overlay(bool frame_complete) {
                            PERF_OVERLAY_W, PERF_OVERLAY_TOP_H, PERF_OVERLAY_W, CPU);
     VDP_setTileMapDataRect(WINDOW, &s_perf_tilemap[PERF_OVERLAY_TOP_H * PERF_OVERLAY_W],
                            0, VIEW_WINDOW_TOP_Y,
-                           PERF_OVERLAY_W, PERF_OVERLAY_BOTTOM_H, PERF_OVERLAY_W, CPU);
+                           PERF_OVERLAY_W, PERF_OVERLAY_BOTTOM_FIT, PERF_OVERLAY_W, CPU);
     renderer_perf_record_diagnostics(getSubTick() - diagnostics_start);
 }
 

@@ -83,7 +83,7 @@ typedef struct {
 #endif
 
 static PlayerState g_player;
-static RayColumn g_ray_columns[RAY_VIEW_COLS];
+static RayColumn g_ray_columns[RAY_VIEW_COLS_MAX];
 static RaySceneColors g_scene_colors;
 static u16 g_weapon_flash = 0;
 static u16 g_player_damage_flash = 0;
@@ -385,9 +385,23 @@ static void enter_level(u16 phase_index, DoomSkill skill, bool pistol_start,
     renderer_draw_hud(&g_hud);
 }
 
+// Boot viewport size. Normally RAY_VIEW_SIZE_DEFAULT, i.e. the historical
+// 20x15; overridable so a comparison or capture build can start at a size the
+// deterministic routes cannot reach, because they replay a pad and never open
+// the OPTIONS menu (EXTRA_FLAGS="-DMEGALDOOM_VIEW_SIZE_BOOT=2").
+#ifndef MEGALDOOM_VIEW_SIZE_BOOT
+#define MEGALDOOM_VIEW_SIZE_BOOT RAY_VIEW_SIZE_DEFAULT
+#endif
+#if (MEGALDOOM_VIEW_SIZE_BOOT < 0) || (MEGALDOOM_VIEW_SIZE_BOOT >= RAY_VIEW_SIZE_COUNT)
+#error "MEGALDOOM_VIEW_SIZE_BOOT is not one of the RAY_VIEW_SIZE_* presets"
+#endif
+
 int main(bool hard) {
     (void)hard;
 
+    // Once, before the frontend: renderer_init() runs again on every level
+    // transition and must adopt whatever the player selected, not reset it.
+    raycast_set_view_size(MEGALDOOM_VIEW_SIZE_BOOT);
     JOY_init();
     fx_init_tables();
     bsp_init();

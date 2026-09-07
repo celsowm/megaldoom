@@ -35,6 +35,8 @@ void renderer_invalidate_scene(void);
 void renderer_draw_static_screen(void);
 void renderer_draw_hud(const RendererHudState *state);
 u16 renderer_get_menu_tile_base(void);
+// Also adopts a viewport size selected in the pause OPTIONS menu; see the note
+// on the definition.
 void renderer_restore_after_menu(void);
 void renderer_set_automap_active(bool active);
 void renderer_render_automap(const PlayerState *player,

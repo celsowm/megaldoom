@@ -42,8 +42,8 @@ void draw_weapon_overlay(bool flash) {
             (tile == 0xFFFF) ? 0 : (WEAPON_TILE_BASE + tile));
     }
     VDP_setTileMapDataRect(BG_A, tilemap,
-        VIEW_TILEMAP_X + MEGALDOOM_WEAPON_TILE_X,
-        VIEW_TILEMAP_Y + MEGALDOOM_WEAPON_TILE_Y,
+        WEAPON_TILEMAP_X,
+        WEAPON_TILEMAP_Y,
         MEGALDOOM_WEAPON_TILE_W, MEGALDOOM_WEAPON_TILE_H,
         MEGALDOOM_WEAPON_TILE_W, CPU);
     g_last_weapon_variant = variant;
@@ -57,8 +57,8 @@ void renderer_automap_weapon_visibility(bool active) {
     renderer_apply_weapon_bob(0, 0);
     if (active) {
         VDP_clearTileMapRect(BG_A,
-            VIEW_TILEMAP_X + MEGALDOOM_WEAPON_TILE_X,
-            VIEW_TILEMAP_Y + MEGALDOOM_WEAPON_TILE_Y,
+            WEAPON_TILEMAP_X,
+            WEAPON_TILEMAP_Y,
             MEGALDOOM_WEAPON_TILE_W, MEGALDOOM_WEAPON_TILE_H);
     }
     // Closing needs the next 3D frame to put the idle weapon back. Entering

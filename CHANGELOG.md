@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- The 3D viewport size is now selectable from a **VIEW SIZE** row in the
+  OPTIONS menu (reachable from both the title and the in-game pause menu):
+  160x120 as before, 176x120, or 176x128. Left/Right or the accept button
+  cycles it, and the change applies immediately on resuming a game.
+  - A larger viewport shows MORE of the world at the same pixel scale rather
+    than magnifying it, so the horizontal field widens from 90 to ~95 degrees
+    and frame cost grows only with area.
+  - It costs no work RAM: the Doom-guy portrait now streams a 16-tile VRAM
+    window instead of keeping all 258 baked tiles resident, the per-bank screen
+    tilemaps are generated straight into the plane, and the HUD number canvas
+    moved to the stack.
+
 - Two play-test follow-ups on the enemy-AI tic fix below: the death collapse
   still read as slow under combat, and blood/puff impacts sometimes looked
   detached from the enemy.

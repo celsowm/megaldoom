@@ -29,7 +29,7 @@ static volatile bool g_bg_pump_armed = FALSE;
 // the screen_tilemap pointer parameter of sparse_build_tilemap(); read here
 // when committing the mixed tilemap to the BG_B plane. Dead storage while
 // RENDERER_SPARSE_FB == 0.
-static u16 g_sparse_screen_tilemap[VIEW_TILE_W * VIEW_TILE_H];
+static u16 g_sparse_screen_tilemap[VIEW_TILE_ALLOC];
 
 // Set when prepare_view_upload has built a mixed tilemap into the buffer above,
 // so finish_view_upload's swap branch commits that tilemap to the plane instead
@@ -152,7 +152,7 @@ void renderer_queue_scene_upload(const RayColumn *columns,
         sparse_classify_frame(columns, scene_colors, &s_build);
         if (s_build.dynamic_tile_count <= SPARSE_ONE_VBLANK_BUDGET) {
             const u16 inactive_bank_base =
-                (u16)(VIEW_TILE_BASE + (bank * VIEW_TILE_COUNT));
+                (u16)(VIEW_TILE_BASE + (bank * VIEW_TILE_ALLOC));
             // DMA just the dynamic runs into the inactive bank's column-major
             // tile positions (deferred — they land during the next vblank wait
             // in upload_view_tilemap_step's dbg_wait_dma()).
@@ -239,15 +239,32 @@ static void upload_view_tilemap_step(void) {
     u16 budget = VIEW_DMA_TILES_PER_VBLANK;
     const u16 start_cursor = g_view_upload.cursor;
     const u16 vram_base =
-        (u16)(VIEW_TILE_BASE + (g_view_upload.bank * VIEW_TILE_COUNT));
+        (u16)(VIEW_TILE_BASE + (g_view_upload.bank * VIEW_TILE_ALLOC));
 
     if (!g_view_upload.pending) return;
 
     if (g_view_upload.full) {
-        const u16 remaining = (u16)(VIEW_TILE_COUNT - g_view_upload.cursor);
-        const u16 count = (remaining < budget) ? remaining : budget;
-        load_view_tile_run(vram_base, g_view_upload.cursor, count);
-        g_view_upload.cursor = (u16)(g_view_upload.cursor + count);
+        // One run per tile COLUMN, not one run across the whole buffer: a
+        // viewport shorter than VIEW_TILE_STRIDE leaves a padding tile at the
+        // bottom of every column that is allocated but never displayed. When
+        // the viewport is at full height the columns are adjacent and this
+        // degenerates to the single contiguous run it replaced.
+        while (budget > 0) {
+            g_view_upload.cursor = view_tile_next_live(g_view_upload.cursor);
+            if (g_view_upload.cursor >= VIEW_TILE_COUNT) break;
+
+            const u16 row = (u16)(g_view_upload.cursor & (VIEW_TILE_STRIDE - 1));
+            u16 count = (u16)(VIEW_TILE_H - row);
+            if (count > budget) count = budget;
+            load_view_tile_run(vram_base, g_view_upload.cursor, count);
+            g_view_upload.cursor = (u16)(g_view_upload.cursor + count);
+            budget = (u16)(budget - count);
+        }
+        // Land the cursor on the terminator when only padding is left, or the
+        // step would finish without finish_view_upload() ever firing.
+        if (view_tile_next_live(g_view_upload.cursor) >= VIEW_TILE_COUNT) {
+            g_view_upload.cursor = VIEW_TILE_COUNT;
+        }
     } else {
         while ((g_view_upload.cursor < VIEW_TILE_COUNT) && (budget > 0)) {
             while ((g_view_upload.cursor < VIEW_TILE_COUNT) &&

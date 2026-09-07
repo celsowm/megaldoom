@@ -37,17 +37,28 @@ static const HudNumberField HUD_ARMOR_FIELD = {
     HUD_ARMOR_RIGHT_X, 2, 3, TRUE
 };
 
-static u32 s_hud_number_scratch[HUD_NUMBER_MAX_FIELD_TILES][8];
+// The number canvas is composed on the STACK, not in .bss. It is live only
+// inside draw_hud_number_ex(), and 768 bytes of permanently resident static data
+// is 768 bytes the SGDK heap does not have: the frontend unpacks its boot cards
+// through MEM_alloc, and starving that heap is a boot-time crash, not a slow
+// frame. The larger viewport sizes spend most of the work-RAM headroom, so this
+// buffer pays its way back by being transient.
+//
+// DMA'ing from the stack is safe here because the transfer method is DMA (not
+// DMA_QUEUE): DMA_transfer runs synchronously inside the call, while a queued
+// transfer would read the buffer after the frame has returned.
+typedef u32 HudNumberScratch[HUD_NUMBER_MAX_FIELD_TILES][8];
 
-static void clear_number_scratch(u16 tile_count) {
+static void clear_number_scratch(HudNumberScratch scratch, u16 tile_count) {
     for (u16 tile = 0; tile < tile_count; tile++) {
         for (u16 row = 0; row < 8; row++) {
-            s_hud_number_scratch[tile][row] = 0;
+            scratch[tile][row] = 0;
         }
     }
 }
 
-static void set_number_pixel(const HudNumberField *field, s16 x, s16 y, u8 color) {
+static void set_number_pixel(HudNumberScratch scratch, const HudNumberField *field,
+                             s16 x, s16 y, u8 color) {
     if (x < 0 || y < 0 || x >= (s16)(field->tile_w * 8) ||
         y >= (s16)(HUD_NUMBER_TILE_H * 8) || color == 0) {
         return;
@@ -57,14 +68,15 @@ static void set_number_pixel(const HudNumberField *field, s16 x, s16 y, u8 color
     const u16 tile = (u16)(tile_y * field->tile_w + tile_x);
     const u16 shift = (u16)((7 - (x & 7)) * 4);
     const u32 mask = (u32)0x0Fu << shift;
-    s_hud_number_scratch[tile][y & 7] =
-        (s_hud_number_scratch[tile][y & 7] & ~mask) | ((u32)color << shift);
+    scratch[tile][y & 7] =
+        (scratch[tile][y & 7] & ~mask) | ((u32)color << shift);
 }
 
-static void draw_number_glyph(const HudNumberField *field, u8 glyph, s16 x, s16 y) {
+static void draw_number_glyph(HudNumberScratch scratch, const HudNumberField *field,
+                              u8 glyph, s16 x, s16 y) {
     for (u16 py = 0; py < FREEDOOM_HUD_DIGIT_CANVAS_H; py++) {
         for (u16 px = 0; px < FREEDOOM_HUD_DIGIT_WIDTHS[glyph]; px++) {
-            set_number_pixel(field, (s16)(x + px), (s16)(y + py),
+            set_number_pixel(scratch, field, (s16)(x + px), (s16)(y + py),
                              FREEDOOM_HUD_DIGITS[glyph][py][px]);
         }
     }
@@ -90,19 +102,20 @@ static void draw_hud_number_ex(const HudNumberField *field, u16 value, bool blan
     const s16 local_y = (s16)(HUD_NUMBER_PIXEL_Y - (HUD_PANEL_Y * 8));
     s16 right = (s16)(field->right_x - field_pixel_x);
     u8 digits[3];
+    HudNumberScratch scratch;
     const u8 count = blank ? 0
         : format_number(value, field->min_digits, field->max_digits, digits);
 
-    clear_number_scratch(tile_count);
+    clear_number_scratch(scratch, tile_count);
     if (field->percent && !blank) {
-        draw_number_glyph(field, FREEDOOM_HUD_DIGIT_PERCENT, right, local_y);
+        draw_number_glyph(scratch, field, FREEDOOM_HUD_DIGIT_PERCENT, right, local_y);
     }
     for (u8 i = count; i > 0; i--) {
         const u8 glyph = digits[i - 1];
         right = (s16)(right - FREEDOOM_HUD_DIGIT_WIDTHS[glyph]);
-        draw_number_glyph(field, glyph, right, local_y);
+        draw_number_glyph(scratch, field, glyph, right, local_y);
     }
-    VDP_loadTileData((const u32 *)s_hud_number_scratch,
+    VDP_loadTileData((const u32 *)scratch,
                      (u16)(HUD_NUMBER_TILE_BASE + field->vram_offset),
                      tile_count, DMA);
 }
@@ -165,25 +178,48 @@ static void draw_hud_backdrop(void) {
 // path only rewrites the 16 face tiles when the expression actually changes.
 static u16 s_last_face_frame = 0xFFFF;
 
+// The portrait is a STREAMING WINDOW of FACE_VRAM_TILE_COUNT tiles, not a
+// resident 258-tile atlas -- see the FACE_TILE_BASE note in
+// renderer_internal.h. The tilemap under the face never changes; switching
+// expression DMAs the new frame's 16 tiles over the window instead.
+//
+// The baked set deduplicates tiles across expressions, so a frame's 16 entries
+// are arbitrary indices into FREEDOOM_FACE_TILES rather than a contiguous run.
+// That is why this is 16 one-tile transfers and not a single block copy. It
+// costs 512 bytes of VRAM traffic and runs only when the expression actually
+// changes (an HP bracket crossing or the idle glance cycle, a few times a
+// second at most), which is the same budget the weapon window already spends
+// on a weapon switch.
+static void upload_face_frame(u16 frame_index) {
+    for (u16 tile = 0; tile < FREEDOOM_FACE_FRAME_TILES; tile++) {
+        const u16 src = FREEDOOM_FACE_FRAME_TILE_IDS[frame_index][tile];
+        VDP_loadTileData(FREEDOOM_FACE_TILES[src],
+                         (u16)(FACE_TILE_BASE + tile), 1, DMA);
+    }
+}
+
+// The face cell's tilemap: a fixed 4x4 block pointing straight at the window.
+// Written once per static-screen build; the per-frame path only re-uploads
+// pixels underneath it.
+static void draw_hud_face_tilemap(void) {
+    for (u16 y = 0; y < FREEDOOM_FACE_TILE_H; y++) {
+        for (u16 x = 0; x < FREEDOOM_FACE_TILE_W; x++) {
+            const u16 frame_tile = (u16)(y * FREEDOOM_FACE_TILE_W + x);
+            VDP_setTileMapXY(BG_B,
+                             TILE_ATTR_FULL(PAL2, FALSE, FALSE, FALSE,
+                                            (u16)(FACE_TILE_BASE + frame_tile)),
+                             (u16)(HUD_FACE_TILE_X + x),
+                             (u16)(HUD_FACE_TILE_Y + y));
+        }
+    }
+}
+
 static void draw_hud_face(u16 frame_index) {
     if (frame_index == s_last_face_frame) {
         return;
     }
     s_last_face_frame = frame_index;
-
-    // Generated frame maps reuse identical tiles across expressions so the
-    // centred 4x4 cell leaves enough VRAM for exact-position number canvases.
-    for (u16 y = 0; y < FREEDOOM_FACE_TILE_H; y++) {
-        for (u16 x = 0; x < FREEDOOM_FACE_TILE_W; x++) {
-            const u16 frame_tile = (u16)(y * FREEDOOM_FACE_TILE_W + x);
-            const u16 tile_id = (u16)(FACE_TILE_BASE +
-                FREEDOOM_FACE_FRAME_TILE_IDS[frame_index][frame_tile]);
-            VDP_setTileMapXY(BG_B,
-                             TILE_ATTR_FULL(PAL2, FALSE, FALSE, FALSE, tile_id),
-                             (u16)(HUD_FACE_TILE_X + x),
-                             (u16)(HUD_FACE_TILE_Y + y));
-        }
-    }
+    upload_face_frame(frame_index);
 }
 
 // Pick the portrait expression: dead -> pain -> HP bracket with an idle glance
@@ -222,6 +258,7 @@ static u16 s_last_armor = 0xFFFF;
 void renderer_draw_static_screen(void) {
     draw_hud_backdrop();
     renderer_hud_window_setup();
+    draw_hud_face_tilemap();
     s_last_face_frame = 0xFFFF;
     s_last_ammo = 0xFFFF;
     s_last_health = 0xFFFF;

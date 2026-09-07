@@ -23,7 +23,10 @@ def close(parent, sample):
 
 
 def main():
-    assert "g_next_open[BSP_SAMPLE_COLS + 1]" in RENDERER
+    # Sized at the MAXIMUM sampled-column count, because the viewport is
+    # runtime-selectable and this is a declaration; the loops below still bound
+    # themselves by the live BSP_SAMPLE_COLS.
+    assert "g_next_open[BSP_SAMPLE_COLS_MAX + 1]" in RENDERER
     assert "u16 bsp_find_next_open(u16 sample)" in RENDERER
     assert "g_next_open[sample] = (u8)root;" in RENDERER
     assert "g_next_open[sample] = (u8)bsp_find_next_open((u16)(sample + 1));" in RENDERER

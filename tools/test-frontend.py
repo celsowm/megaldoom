@@ -3,7 +3,11 @@
 
 from pathlib import Path
 import re
+import sys
 from PIL import Image
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import raycast_constants
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,10 +54,13 @@ for selected in range(3):
     for frame in range(2):
         expected[f"main_{selected}_{frame}.png"] = (192, 176)
     expected[f"pause_{selected}.png"] = (320, 224)
+# OPTIONS is the cross product of MUSIC, SFX, the VIEW SIZE preset and the
+# cursor row (MUSIC / SFX / VIEW SIZE / BACK).
 for music in range(2):
     for sfx in range(2):
-        for selected in range(3):
-            expected[f"options_{music}_{sfx}_{selected}.png"] = (320, 224)
+        for view in range(raycast_constants.view_size_count()):
+            for selected in range(4):
+                expected[f"options_{music}_{sfx}_{view}_{selected}.png"] = (320, 224)
 for selected in range(5):
     expected[f"skill_{selected}.png"] = (320, 224)
 for selected in range(2):
@@ -231,7 +238,12 @@ assert 16 + unique_tiles(ASSETS / "main_menu.png") + max(
     unique_tiles(ASSETS / "skull1.png"), unique_tiles(ASSETS / "skull2.png")
 ) < 1440, "main menu exceeds user VRAM"
 
-pair_base = 16 + (20 * 15 * 2)
+# The pause/menu overlays borrow the reloadable PAIR region, which starts after
+# both dynamic view banks. Those banks are sized at the MAXIMUM viewport, so this
+# base moves whenever RAY_VIEW_TILE_W_MAX/_H_MAX do -- it must not stay written
+# out as the old 20x15.
+view_w_max, view_h_max = raycast_constants.view_tiles_max()
+pair_base = 16 + (view_w_max * view_h_max * 2)
 pause_tiles = max(
     unique_tiles(path)
     for pattern in ("pause_*.png", "options_*_*_*.png", "skill_*.png", "confirm_*.png")

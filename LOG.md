@@ -8,6 +8,78 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## Runtime-selectable viewport size (2026-09-07)
+
+The 3D view was a fixed 20x15 tiles (160x120). It is now one of three presets
+chosen from a VIEW SIZE row in the frontend OPTIONS menu: 20x15, 22x15
+(176x120) and 22x16 (176x128), the last being +17% viewport area.
+
+**The projection stays fixed.** `RAY_PROJ_X/Y` used to be spelled
+`RAY_VIEW_CENTER_X`, which ties world scale to view width; a wider viewport
+would then MAGNIFY the same 90-degree field. That costs far more than its extra
+area (wall and sprite raster scale with projected height) and would invalidate
+`g_billboard_recip_proj_lut`, whose 1535 entries bake `K == RAY_PROJ_X << 12`.
+They are now the literal constant 80, so a bigger viewport shows MORE WORLD at
+an unchanged pixel scale: cost grows linearly with area, the baked LUT stays
+exact at every preset, and the hot projection multiplies keep an immediate
+operand instead of a memory load. Horizontal field goes 90 -> ~95 degrees.
+
+**Allocation is split from the current size.** `RAY_VIEW_TILE_W_MAX/_H_MAX`
+size every buffer; `RAY_VIEW_TILE_W/H` are variables behind the old macro
+spellings, so ~200 call sites did not change. Only array declarations and
+preprocessor tests had to move to the `_MAX` forms.
+
+**The column pitch is now a power of two.** `view_tile_index` was
+`tile_x * VIEW_TILE_H + tile_y`; it is `tile_x * VIEW_TILE_STRIDE + tile_y`
+with `VIEW_TILE_STRIDE == RAY_VIEW_TILE_H_MAX == 16`, so the multiply became a
+shift (cheaper than the `* 15` it replaced) and it costs nothing, because the
+buffer is allocated at the maximum height anyway. Two consequences that had to
+be handled and are easy to get wrong:
+
+- Anything stepping one tile COLUMN must add the STRIDE, not `VIEW_TILE_H`.
+  Three sites in `renderer_billboard_draw.c` and two in `renderer_sparse.c` did
+  the latter; `tools/test-billboard-raster.py` caught them.
+- A short viewport leaves one padding tile per column that is allocated but
+  never displayed. Uploading it would cost the default viewport 320 tiles
+  instead of 300 and push its base upload from two vblank steps to three, so
+  the full-upload path emits one run per column and skips each tail, and the
+  padding is never marked dirty. `renderer_overlay.c`'s 300-byte `s_tile_column`
+  run table is gone: divide-by-16 is a shift.
+
+**Cost: zero net work RAM.** The larger buffers are paid for by removing three
+resident arrays. The Doom-guy portrait became a 16-tile streaming VRAM window
+like the weapon (258 -> 16 resident tiles, freeing 242 tiles of VRAM, which the
+768-tile pair of view banks needs); the two per-bank screen tilemaps are gone
+entirely, because a column of a column-major buffer is a contiguous ascending
+run and `VDP_fillTileMapRectInc` writes one straight into the plane; the HUD
+number canvas moved from `.bss` to the stack. 21188 bytes free against a 21184
+baseline.
+
+**The work-RAM boot boundary is higher than the old note claimed.** AGENTS.md
+recorded ~13.7 KB free as the SGDK "not enough memory to reset VDP" panic point
+and ~20 KB as known-good. An intermediate build with **18076 bytes free did not
+panic -- it died in the boot fade with a wild read from 0x834842**, the frontend
+having failed to unpack a card through `MEM_alloc`. 19728 bytes completed the
+route; 21188 is what shipped. `tools/check-rom.ps1`'s 20480-byte recommendation
+is the real floor, not a stylistic one, and heap exhaustion does not always
+announce itself as SGDK's panic message.
+
+**Verified on target**, since two route harnesses are dead on `main` (see
+below): the OPTIONS menu was driven by hand-written BlastEm routes through
+title -> menu -> VIEW SIZE -> new game, and separately through the in-game pause
+menu, confirming the resize survives both `renderer_init()` and
+`renderer_restore_after_menu()` with no stale tiles from the previous size. The
+pause panel is pixel-identical to a pristine build.
+
+**Two pre-existing harness failures found while verifying, NOT caused by this
+work and not fixed here:** `tools/test-e2e-levels.py` fails on pristine `main`
+(it asserts `-Waypoints` is in a runner that no longer takes it), and
+`tools/test-checkpoints.ps1` reports `checkpoints seen: 0x00` on pristine `main`
+-- `tools/routes/checkpoints.txt` no longer reaches the menu at all, because the
+frontend now takes until frame ~2010 to show the title and the route presses
+START at 900. Anything relying on that route to reach gameplay is measuring the
+title screen. Note also that route masks are HEX (`fscanf("%u %x")`).
+
 ## Low courtyard sky walls keep their WAD height (2026-09-04)
 
 E1M1's nine one-sided boundaries around the secret courtyard were already

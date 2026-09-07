@@ -73,8 +73,13 @@ def main() -> int:
     wide = field_pixels(90, [1, 0, 0], widths, True)
     short = field_pixels(90, [0, 9], widths, True)
     assert wide - short
-    assert "clear_number_scratch(tile_count);" in hud
-    assert hud.index("clear_number_scratch(tile_count);") < hud.index(
+    # The number canvas is a stack buffer threaded through the composer, not a
+    # resident static array: 768 bytes of .bss is 768 bytes the SGDK heap does
+    # not have, and the frontend unpacks its boot cards through that heap.
+    assert "clear_number_scratch(scratch, tile_count);" in hud
+    assert "HudNumberScratch scratch;" in hud
+    assert "static u32 s_hud_number_scratch" not in hud
+    assert hud.index("clear_number_scratch(scratch, tile_count);") < hud.index(
         "if (field->percent && !blank)")
     assert "FREEDOOM_HUD_DIGIT_PERCENT" in hud
 

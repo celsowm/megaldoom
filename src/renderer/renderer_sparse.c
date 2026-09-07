@@ -35,7 +35,7 @@ void sparse_queue_dynamic_runs(const SparseFrameBuild *build,
                 y++;
             }
             const u16 run_len = (u16)(y - first_y);
-            const u16 src_first = (u16)(x * VIEW_TILE_H + first_y);
+            const u16 src_first = (u16)(x * VIEW_TILE_STRIDE + first_y);
 
             load_view_tile_run(inactive_bank_base, src_first, run_len);
 
@@ -124,7 +124,7 @@ void sparse_classify_frame(const RayColumn *columns,
 //     current sector (STATIC_CEILING_ATLAS_BASE + g_sector_ceiling_tile[sector]);
 //   * pure-floor cell    -> the single ROM-constant floor tile (STATIC_FLOOR_TILE_BASE);
 //   * dynamic cell       -> the dynamic VRAM tile the sparse upload filled this
-//     frame in the INACTIVE bank: VIEW_TILE_BASE + bank*VIEW_TILE_COUNT +
+//     frame in the INACTIVE bank: VIEW_TILE_BASE + bank*VIEW_TILE_ALLOC +
 //     slot_allocation[col_major_index] (slot_allocation holds the column-major
 //     source index the DMA wrote, per the Phase 3 review fix).
 //
@@ -144,7 +144,7 @@ void sparse_build_tilemap(const RayColumn *columns,
                                                   sector : 0];
     const u16 ceil_vram = (u16)(STATIC_CEILING_ATLAS_BASE + ceil_tile);
     const u16 floor_vram = STATIC_FLOOR_TILE_BASE;
-    const u16 dyn_bank_base = (u16)(VIEW_TILE_BASE + (bank * VIEW_TILE_COUNT));
+    const u16 dyn_bank_base = (u16)(VIEW_TILE_BASE + (bank * VIEW_TILE_ALLOC));
     for (u16 tile_x = 0; tile_x < VIEW_TILE_W; tile_x++) {
         const u16 base_col = (u16)(tile_x * 8);
         const WallColumnDescriptor descriptors[4] = {
@@ -177,7 +177,7 @@ void sparse_build_tilemap(const RayColumn *columns,
 
             // Dynamic: point at the inactive bank's VRAM tile the sparse upload
             // filled (column-major source index == dest, per Phase 3 review fix).
-            const u16 tile_index = (u16)(tile_x * VIEW_TILE_H + tile_y);
+            const u16 tile_index = (u16)(tile_x * VIEW_TILE_STRIDE + tile_y);
             const u16 slot = build->slot_allocation[tile_index];
             screen_tilemap[screen_index] = TILE_ATTR_FULL(
                 PAL3, FALSE, FALSE, FALSE, (u16)(dyn_bank_base + slot));

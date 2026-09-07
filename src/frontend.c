@@ -1,11 +1,22 @@
 #include "frontend.h"
 #include "debug_checkpoint.h"
 #include "game_audio.h"
+// The OPTIONS menu's VIEW SIZE row selects one of the viewport presets defined
+// alongside the render geometry.
+#include "raycast.h"
 #include "resources.h"
 
 #define MENU_ACCEPT (BUTTON_START | BUTTON_A | BUTTON_C)
 #define MENU_BACK BUTTON_B
-#define MENU_INPUT (BUTTON_UP | BUTTON_DOWN | MENU_ACCEPT | MENU_BACK)
+#define MENU_INPUT (BUTTON_UP | BUTTON_DOWN | BUTTON_LEFT | BUTTON_RIGHT |                     MENU_ACCEPT | MENU_BACK)
+
+// OPTIONS rows, top to bottom. VIEW SIZE selects one of the RAY_VIEW_SIZE_*
+// viewport presets (raycast.h).
+#define OPTIONS_ROW_MUSIC 0
+#define OPTIONS_ROW_SFX 1
+#define OPTIONS_ROW_VIEW_SIZE 2
+#define OPTIONS_ROW_BACK 3
+#define OPTIONS_ROW_COUNT 4
 #define PANEL_X 8
 #define PANEL_Y 7
 #define MAIN_CURSOR_X 9
@@ -654,27 +665,43 @@ static void load_main_cursor_tiles(u16 tile_base) {
                     (u16)(tile_base + frontend_skull1.tileset->numTile), DMA);
 }
 
+// One pre-rendered panel per (music, sfx, view size, cursor row) combination.
+// The table is indexed rather than branched so adding a viewport preset is a
+// generator change plus one row here, not another nested if-ladder.
+static const Image *const OPTIONS_PANELS[2][2][RAY_VIEW_SIZE_COUNT][OPTIONS_ROW_COUNT] = {
+    { { { &frontend_options_0_0_0_0, &frontend_options_0_0_0_1,
+          &frontend_options_0_0_0_2, &frontend_options_0_0_0_3 },
+        { &frontend_options_0_0_1_0, &frontend_options_0_0_1_1,
+          &frontend_options_0_0_1_2, &frontend_options_0_0_1_3 },
+        { &frontend_options_0_0_2_0, &frontend_options_0_0_2_1,
+          &frontend_options_0_0_2_2, &frontend_options_0_0_2_3 } },
+      { { &frontend_options_0_1_0_0, &frontend_options_0_1_0_1,
+          &frontend_options_0_1_0_2, &frontend_options_0_1_0_3 },
+        { &frontend_options_0_1_1_0, &frontend_options_0_1_1_1,
+          &frontend_options_0_1_1_2, &frontend_options_0_1_1_3 },
+        { &frontend_options_0_1_2_0, &frontend_options_0_1_2_1,
+          &frontend_options_0_1_2_2, &frontend_options_0_1_2_3 } } },
+    { { { &frontend_options_1_0_0_0, &frontend_options_1_0_0_1,
+          &frontend_options_1_0_0_2, &frontend_options_1_0_0_3 },
+        { &frontend_options_1_0_1_0, &frontend_options_1_0_1_1,
+          &frontend_options_1_0_1_2, &frontend_options_1_0_1_3 },
+        { &frontend_options_1_0_2_0, &frontend_options_1_0_2_1,
+          &frontend_options_1_0_2_2, &frontend_options_1_0_2_3 } },
+      { { &frontend_options_1_1_0_0, &frontend_options_1_1_0_1,
+          &frontend_options_1_1_0_2, &frontend_options_1_1_0_3 },
+        { &frontend_options_1_1_1_0, &frontend_options_1_1_1_1,
+          &frontend_options_1_1_1_2, &frontend_options_1_1_1_3 },
+        { &frontend_options_1_1_2_0, &frontend_options_1_1_2_1,
+          &frontend_options_1_1_2_2, &frontend_options_1_1_2_3 } } },
+};
+
 static const Image *options_panel(u16 selected) {
-    const bool music = game_audio_music_enabled();
-    const bool sfx = game_audio_sfx_enabled();
-    if (!music && !sfx) {
-        if (selected == 0) return &frontend_options_0_0_0;
-        if (selected == 1) return &frontend_options_0_0_1;
-        return &frontend_options_0_0_2;
-    }
-    if (!music && sfx) {
-        if (selected == 0) return &frontend_options_0_1_0;
-        if (selected == 1) return &frontend_options_0_1_1;
-        return &frontend_options_0_1_2;
-    }
-    if (music && !sfx) {
-        if (selected == 0) return &frontend_options_1_0_0;
-        if (selected == 1) return &frontend_options_1_0_1;
-        return &frontend_options_1_0_2;
-    }
-    if (selected == 0) return &frontend_options_1_1_0;
-    if (selected == 1) return &frontend_options_1_1_1;
-    return &frontend_options_1_1_2;
+    const u16 music = game_audio_music_enabled() ? 1 : 0;
+    const u16 sfx = game_audio_sfx_enabled() ? 1 : 0;
+    u16 view = raycast_view_size();
+    if (view >= RAY_VIEW_SIZE_COUNT) view = 0;
+    if (selected >= OPTIONS_ROW_COUNT) selected = 0;
+    return OPTIONS_PANELS[music][sfx][view][selected];
 }
 
 static const Image *skill_panel(u16 selected) {
@@ -695,6 +722,21 @@ static const Image *confirm_panel(u16 selected) {
     return selected == 0 ? &frontend_confirm_0 : &frontend_confirm_1;
 }
 
+// VIEW SIZE is a multi-value row, unlike the two on/off toggles above it, so it
+// also answers LEFT/RIGHT; ACCEPT cycles forward and wraps, which is what a
+// two-button pad needs.
+//
+// Only the NUMBER is changed here. The renderer adopts it the next time it
+// builds its VDP state -- renderer_init() when this menu was opened from the
+// title, renderer_restore_after_menu() when it was opened from the pause menu.
+// Rebuilding from inside the frontend would fight the menu panel that is
+// currently occupying the planes.
+static void options_cycle_view_size(s16 delta) {
+    const u16 current = raycast_view_size();
+    const u16 next = (u16)((current + RAY_VIEW_SIZE_COUNT + delta) % RAY_VIEW_SIZE_COUNT);
+    raycast_set_view_size(next);
+}
+
 static void run_options(u16 tile_base) {
     u16 selected = 0;
     u16 previous;
@@ -706,17 +748,28 @@ static void run_options(u16 tile_base) {
         const u16 pressed = read_pressed(&previous);
         bool redraw = FALSE;
         if ((pressed & BUTTON_UP) != 0) {
-            selected = (u16)((selected + 2) % 3);
+            selected = (u16)((selected + OPTIONS_ROW_COUNT - 1) % OPTIONS_ROW_COUNT);
             redraw = TRUE;
         }
         if ((pressed & BUTTON_DOWN) != 0) {
-            selected = (u16)((selected + 1) % 3);
+            selected = (u16)((selected + 1) % OPTIONS_ROW_COUNT);
             redraw = TRUE;
+        }
+        if (selected == OPTIONS_ROW_VIEW_SIZE) {
+            if ((pressed & BUTTON_LEFT) != 0) {
+                options_cycle_view_size(-1);
+                redraw = TRUE;
+            }
+            if ((pressed & BUTTON_RIGHT) != 0) {
+                options_cycle_view_size(1);
+                redraw = TRUE;
+            }
         }
         if ((pressed & MENU_BACK) != 0) break;
         if ((pressed & MENU_ACCEPT) != 0) {
-            if (selected == 0) game_audio_toggle_music();
-            else if (selected == 1) game_audio_toggle_sfx();
+            if (selected == OPTIONS_ROW_MUSIC) game_audio_toggle_music();
+            else if (selected == OPTIONS_ROW_SFX) game_audio_toggle_sfx();
+            else if (selected == OPTIONS_ROW_VIEW_SIZE) options_cycle_view_size(1);
             else break;
             redraw = TRUE;
         }

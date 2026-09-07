@@ -64,7 +64,11 @@ with tempfile.TemporaryDirectory(prefix="megaldoom-build-test-") as folder:
         frontend.generate = real_generate
     assert frontend.complete_outputs(output)
     assert (output / frontend.MANIFEST_NAME).is_file()
-    assert len(frontend.EXPECTED_OUTPUTS) == 54
+    # 42 fixed cards plus the OPTIONS cross product (MUSIC x SFX x VIEW SIZE x
+    # cursor row). Derived rather than written out so adding a viewport preset
+    # updates it here instead of failing with a bare number mismatch.
+    assert len(frontend.EXPECTED_OUTPUTS) == 42 + (
+        2 * 2 * frontend.VIEW_SIZE_COUNT * frontend.OPTIONS_ROWS)
     for name in frontend.CACODEMON_BOOT_FRAMES:
         assert frontend.SPRITE_SOURCE / f"{name}.png" in frontend.source_paths(source)
     for name in frontend.CACODEMON_PROJECTILE_FRAMES:

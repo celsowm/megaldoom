@@ -55,12 +55,60 @@ def col_stride():
     return power_of_two_define("RAY_COL_STRIDE")
 
 
-def view_tiles():
-    """(RAY_VIEW_TILE_W, RAY_VIEW_TILE_H) -- the viewport in 8px tiles."""
-    return (define("RAY_VIEW_TILE_W"), define("RAY_VIEW_TILE_H"))
+def view_size_count():
+    """RAY_VIEW_SIZE_COUNT -- how many viewport presets the OPTIONS menu offers."""
+    return define("RAY_VIEW_SIZE_COUNT")
 
 
-def view_pixels():
-    """(RAY_VIEW_COLS, RAY_VIEW_ROWS) -- the viewport in pixels."""
-    tile_w, tile_h = view_tiles()
+def view_size_default():
+    """RAY_VIEW_SIZE_DEFAULT -- the preset a fresh boot selects."""
+    return define("RAY_VIEW_SIZE_DEFAULT")
+
+
+def view_sizes():
+    """Every (tile_w, tile_h) preset, in menu order."""
+    return [(define("RAY_VIEW_SIZE_%d_W" % i), define("RAY_VIEW_SIZE_%d_H" % i))
+            for i in range(view_size_count())]
+
+
+def view_tiles(size_index=None):
+    """(tile_w, tile_h) for one viewport preset; the default preset if unnamed.
+
+    The viewport is runtime-selectable (see the RAY_VIEW_* note in raycast.h), so
+    there is no single RAY_VIEW_TILE_W define any more. Tests that model one
+    concrete frame want the default preset; tests that model a BUFFER want
+    view_tiles_max(), which is what the ROM actually allocates.
+    """
+    if size_index is None:
+        size_index = view_size_default()
+    return view_sizes()[size_index]
+
+
+def view_tiles_max():
+    """(RAY_VIEW_TILE_W_MAX, RAY_VIEW_TILE_H_MAX) -- what every buffer is sized at."""
+    return (define("RAY_VIEW_TILE_W_MAX"), define("RAY_VIEW_TILE_H_MAX"))
+
+
+def view_pixels(size_index=None):
+    """(cols, rows) -- one viewport preset in pixels."""
+    tile_w, tile_h = view_tiles(size_index)
     return (tile_w * 8, tile_h * 8)
+
+
+def view_pixels_max():
+    """(RAY_VIEW_COLS_MAX, RAY_VIEW_ROWS_MAX) -- the largest viewport in pixels."""
+    tile_w, tile_h = view_tiles_max()
+    return (tile_w * 8, tile_h * 8)
+
+
+def proj():
+    """RAY_PROJ_X == RAY_PROJ_Y -- the projection scale.
+
+    Deliberately NOT derived from the viewport width: it is a fixed constant so
+    that a larger viewport widens the field instead of magnifying it, and so the
+    baked billboard reciprocal LUT stays exact at every preset.
+    """
+    value = define("RAY_PROJ_X")
+    if value != define("RAY_PROJ_Y"):
+        raise RuntimeError("RAY_PROJ_X and RAY_PROJ_Y must agree")
+    return value

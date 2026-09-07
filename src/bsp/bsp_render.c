@@ -10,8 +10,8 @@
 s16 g_fwx, g_fwy;
 s16 g_rx, g_ry;
 s32 g_px, g_py;
-u8 g_next_open[BSP_SAMPLE_COLS + 1];
-u32 g_solid_words[BSP_SOLID_WORD_COUNT];
+u8 g_next_open[BSP_SAMPLE_COLS_MAX + 1];
+u32 g_solid_words[BSP_SOLID_WORD_COUNT_MAX];
 u16 g_solid_count;
 s16 g_vertex_depth[BSP_MAX_VERTICES];
 s16 g_vertex_lateral[BSP_MAX_VERTICES];
