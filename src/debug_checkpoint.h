@@ -27,6 +27,26 @@
 #define PERF_FIXED_POSE 0
 #endif
 
+/* Overlay-compositor stub (OFF by default; opt in with
+ * EXTRA_FLAGS="... -DPERF_STUB_DOOR_OVERLAYS=1"). Makes draw_door_overlays()
+ * return immediately, so pack_subticks reports the base pack alone.
+ *
+ * This is the control for "what does a window actually cost". The obvious A/B
+ * -- same spot, one heading facing a window and one facing a plain wall -- is
+ * NOT sound: the two headings see different amounts of geometry, so cast moves
+ * too (measured +12.5% at (1300,3300) a0 vs a128) and the pack delta mixes the
+ * overlay's cost with simply having more wall on screen. Stubbing instead holds
+ * the heading fixed, so the scene, the cast and the base pack are all identical
+ * and the entire pack delta is the compositor. Cast is then a free built-in
+ * control: if it moves, the comparison is invalid.
+ *
+ * The 2026-08-29 and 2026-08-30 window diagnoses both did this by hand-editing
+ * the function; it is a flag now so the number can be reproduced without one.
+ * Compiles to nothing when unset. */
+#ifndef PERF_STUB_DOOR_OVERLAYS
+#define PERF_STUB_DOOR_OVERLAYS 0
+#endif
+
 /* End-to-end gameplay harness.  A test ROM may start at a campaign level
  * without waiting for the frontend, but it still uses that level's genuine
  * player start, map geometry, pickups and actors.  -1 keeps normal startup. */

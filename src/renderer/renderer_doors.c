@@ -1,6 +1,8 @@
 #include "renderer_pack_internal.h"
 #include "renderer_perf.h"
 #include "generated_assets.h"
+// PERF_STUB_DOOR_OVERLAYS, the measurement control for the window overlay cost.
+#include "debug_checkpoint.h"
 
 // 0 = ship the hand-written renderer_hotpath.s overlay posts; 1 = ship the C
 // reference below. Same switch, and same purpose, as
@@ -83,7 +85,7 @@ static void window_band_rows(u16 slab_top, u16 slab_bottom,
 // which is what every ordinary wall has always done. Reachable on four moving
 // doors -- the only overlay segs with a nonzero tex_v_offset: E1M1 seg 261
 // (BROWN96, offset 72) and E1M2 segs 48/52/933 (offsets 112/56/8).
-#if DEBUG_PERF || RENDERER_OVERLAY_C_REFERENCE || RAY_COL_STRIDE != 2
+#if RENDERER_ASM_DIFF_ENABLED || RENDERER_OVERLAY_C_REFERENCE || RAY_COL_STRIDE != 2
 static __attribute__((noinline)) void write_overlay_frame_post_reference(
     u8 *dst, u16 row_count, const u8 *dda, const u8 *packed, u16 tex_y) {
     for (u16 i = 0; i < row_count; i++) {
@@ -130,7 +132,7 @@ static __attribute__((noinline)) void write_overlay_sky_post_reference(
 #define write_overlay_sky_post write_overlay_sky_post_reference
 #endif
 
-#if DEBUG_PERF
+#if RENDERER_ASM_DIFF_ENABLED
 // Set only by the differential harness at the bottom of this file, to run the
 // SAME argument resolution below through the other implementation. It exists so
 // the harness exercises the production emitter rather than a second copy of it
@@ -155,7 +157,7 @@ static void paint_frame_rows(const WallColumnDescriptor *descriptor,
     u8 *const dst = col_base + ((u32)y_start * PACK_TILE_ROW_BYTES);
     const u16 rows = (u16)(y_end - y_start);
     const u8 *const dda = &descriptor->vertical_samples[rel_y];
-#if DEBUG_PERF
+#if RENDERER_ASM_DIFF_ENABLED
     if (s_overlay_use_reference) {
         write_overlay_frame_post_reference(dst, rows, dda, packed,
                                            descriptor->tex_y);
@@ -172,7 +174,7 @@ static void paint_sky_rows(const u8 *sky_bytes, u16 lane, u16 y_start,
                              * PACK_TILE_ROW_BYTES) + lane);
     u8 *const dst = col_base + ((u32)y_start * PACK_TILE_ROW_BYTES);
     const u16 rows = (u16)(y_end - y_start);
-#if DEBUG_PERF
+#if RENDERER_ASM_DIFF_ENABLED
     if (s_overlay_use_reference) {
         write_overlay_sky_post_reference(dst, rows, sky_bytes, index);
         return;
@@ -202,7 +204,7 @@ static void paint_overlay_column(const WallColumnDescriptor *descriptor,
                      frame_resume, visible_bottom, col_base);
 }
 
-#if DEBUG_PERF
+#if RENDERER_ASM_DIFF_ENABLED
 // Differential harness for the two asm overlay posts, in the shape
 // compare_stride2_column_asm established in renderer_pack.c -- and reshaped the
 // same way for the same reason (LOG, 2026-08-04). BOTH sides are computed HERE,
@@ -227,8 +229,16 @@ static void paint_overlay_column(const WallColumnDescriptor *descriptor,
 // Every overlay column is checked, not one per frame like the pack harness:
 // overlay columns are sparse and their post boundaries depend on the band, the
 // lift and the wall behind, so a 1-in-20 cursor would sample the interesting
-// cases rarely. The cost is a doubled overlay pass in a build that is already
-// ~7x slower than release.
+// cases rarely.
+//
+// That is affordable only because this no longer rides on DEBUG_PERF. Per
+// column it arms two OVERLAY_PROBE_BYTES buffers, paints the column twice and
+// compares the whole lane, so its cost scales with the number of overlay
+// columns -- and a window wall in close covers ~72 of the 80 sampled columns.
+// Inside the timing build that made the perf overlay report >65535 subticks of
+// harness (~51 of 73 vblanks) in exactly the window scene it was being used to
+// diagnose. It is now gated on RENDERER_ASM_DIFF (renderer_pack_internal.h),
+// off by default; keep the every-column coverage, just do not measure with it.
 // The viewport height is a runtime variable (raycast.h), so the probe struct
 // must be sized at the allocated maximum, not the live height, or this file
 // fails "variably modified at file scope" as soon as DEBUG_PERF is built.
@@ -293,7 +303,7 @@ static void compare_overlay_posts_asm(const WallColumnDescriptor *descriptor,
                                        overlay_probe_broken(&g_overlay_c_probe));
     renderer_perf_record_asm_compare(tile_x, mismatch, canary_failure, FALSE);
 }
-#endif
+#endif /* RENDERER_ASM_DIFF_ENABLED */
 
 // Moving doors and windows are both translucent only in the geometric sense:
 // part of the near slab is omitted so the fully rendered BSP scene behind
@@ -303,6 +313,13 @@ static void compare_overlay_posts_asm(const WallColumnDescriptor *descriptor,
 void draw_door_overlays(const RayColumn *columns,
                         const RaySceneColors *scene_colors,
                         u32 target[][8]) {
+#if PERF_STUB_DOOR_OVERLAYS
+    // Measurement control: see debug_checkpoint.h. Everything below is what a
+    // window costs on top of the base pack, so skipping it -- at a FIXED
+    // heading, with cast unchanged as the check -- isolates exactly that.
+    (void)columns; (void)scene_colors; (void)target;
+    return;
+#else
     for (u16 x = 0; x < RAY_VIEW_COLS; x += RAY_COL_STRIDE) {
         const RayColumn *column = &columns[RAY_SAMPLE_OF(x)];
         const RayDoorOverlay *door = &column->door;
@@ -326,13 +343,18 @@ void draw_door_overlays(const RayColumn *columns,
             // Repaint just the ceiling part of the band with the sky. This is
             // the only per-column ceiling in the renderer, and it stays here in
             // C rather than reaching the asm pack post.
-            // A normal far wall is centred, so avoid building a descriptor just
-            // to read its top. A courtyard parapet is floor-aligned, however;
-            // its `height` alone cannot recover that top, and the rare window
-            // view must use the same descriptor calculation as the base pack.
-            sky_bottom = (column->flags & RAY_COLUMN_FLAG_FLOOR_ALIGNED) ?
-                describe_wall_column(column).top :
-                (u16)((VIEW_PIXEL_H - column->height) / 2);
+            // Where the far geometry's own ceiling ends. A centred far wall is
+            // just (VIEW_PIXEL_H - height) / 2, but a courtyard parapet is
+            // floor-aligned and its `height` alone cannot recover that top, so
+            // this has to agree with the base pack exactly. It used to build
+            // a whole WallColumnDescriptor and throw away 18 of its 20 bytes --
+            // a [641][120] table index, a fog level and a struct returned by
+            // value, per overlay column, to read one u16 back out.
+            // wall_column_top() is that u16 and nothing else, and both it and
+            // the descriptor go through column_slab_bounds(), so "the same
+            // calculation as the base pack" is now enforced by construction
+            // rather than by two copies agreeing.
+            sky_bottom = wall_column_top(column);
             if (sky_bottom > band_bottom) sky_bottom = band_bottom;
         }
 
@@ -382,7 +404,7 @@ void draw_door_overlays(const RayColumn *columns,
         paint_overlay_column(&descriptor, packed, lift_pixels, lane, sky_bytes,
                              sky_start, sky_end, frame_resume, visible_bottom,
                              col_base);
-#if DEBUG_PERF
+#if RENDERER_ASM_DIFF_ENABLED
         {
             // See renderer_pack.c's compare_stride2_column_asm call site: this
             // harness also runs inside the timed pack window purely to verify
@@ -396,6 +418,7 @@ void draw_door_overlays(const RayColumn *columns,
         }
 #endif
     }
+#endif /* PERF_STUB_DOOR_OVERLAYS */
 }
 
 bool door_overlay_blocks_pixel(const RayColumn *column,

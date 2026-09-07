@@ -9,6 +9,24 @@
 #include "bsp_render.h"
 #include "renderer_pack_abi.h"
 
+// The asm/C differential harnesses (compare_stride2_column_asm in
+// renderer_pack.c, compare_overlay_posts_asm in renderer_doors.c) used to ride
+// on DEBUG_PERF, so there was no way to time a frame without also paying for
+// them. That is not a small tax: the overlay harness checks EVERY overlay
+// column, and at ~72 overlay columns it alone exceeded the 65535-subtick
+// display cap -- about 51 of the 73 vblanks in the window screenshot that
+// prompted this split. It scales with overlay columns, so it punished hardest
+// exactly the window scene it was being used to diagnose.
+//
+// They are now opt-in and off by default. DEBUG_PERF measures; this verifies.
+// Turn it on with EXTRA_FLAGS="-DRENDERER_ASM_DIFF=1" (needs DEBUG_PERF too,
+// since the results are reported through DEBUG_PERF's asm_* counters), or run
+// `npm run asm-diff`, which is the route that keeps the check honest.
+#ifndef RENDERER_ASM_DIFF
+#define RENDERER_ASM_DIFF 0
+#endif
+#define RENDERER_ASM_DIFF_ENABLED (DEBUG_PERF && RENDERER_ASM_DIFF)
+
 // Per-column wall/door description, produced once per sampled column by the
 // pack stage (renderer_pack.c) and consumed by the pack stage itself, door
 // overlay compositing (renderer_doors.c), and the sparse classifier
@@ -71,6 +89,14 @@ static inline u16 wall_packed_y(const WallColumnDescriptor *descriptor,
 
 WallColumnDescriptor describe_wall_column(const RayColumn *column);
 WallColumnDescriptor describe_door_overlay(const RayDoorOverlay *door);
+
+// Just the `top` describe_wall_column() would report, without building the
+// descriptor to read it back out. The window compositor wants one u16 to find
+// where the far geometry's ceiling ends; the full descriptor costs a
+// [641][120] table index, a fog level and a 20-byte struct returned by value.
+// Both go through the same slab-bounds helper in renderer_pack.c, so they
+// cannot drift apart.
+u16 wall_column_top(const RayColumn *column);
 
 // The ROM-resident, pre-shaded, pre-vscaled pair column this descriptor samples:
 // WALL_TEX_HEIGHT bytes indexed by wall_packed_y(), each byte carrying both

@@ -65,6 +65,42 @@ void pack_stage_reset(void) {
     s_coherence_valid = FALSE;
 }
 
+// The clamped projected span the vertical DDA table is indexed by.
+static inline u16 column_sample_height(u16 projected_wall_h) {
+    return (projected_wall_h > RAY_MAX_PROJECTED_WALL_HEIGHT) ?
+               RAY_MAX_PROJECTED_WALL_HEIGHT :
+           (projected_wall_h < 1 ? 1 : projected_wall_h);
+}
+
+// A column's screen bounds. Shared by describe_textured_column() and
+// wall_column_top() so there is exactly one expression for where a column
+// starts -- the window compositor reads that `top` to find where the far
+// geometry's ceiling ends, and a second copy of this arithmetic is precisely
+// the kind of thing that drifts.
+//
+// `full_top` is the UNSHORTENED slab's top. A floor-aligned column (a low
+// courtyard parapet with sky above it) is only the visible lower portion of a
+// full projected slab, so its DDA has to skip the omitted rows; the caller
+// advances by top - full_top. For a centred column full_top == top, so that
+// advance is zero and this stays the plain centring it always was.
+static inline void column_slab_bounds(u16 wall_h, u16 sample_height, u8 flags,
+                                      u16 *top, u16 *bottom, u16 *full_top) {
+    if (flags & RAY_COLUMN_FLAG_FLOOR_ALIGNED) {
+        // Reconstruct the complete slab's clipped bottom and anchor the wall
+        // there. This preserves clipping at point-blank range while leaving
+        // sky above the wall at distance.
+        const u16 full_visible_height =
+            (sample_height > VIEW_PIXEL_H) ? VIEW_PIXEL_H : sample_height;
+        *full_top = (u16)((VIEW_PIXEL_H - full_visible_height) / 2);
+        *bottom = (u16)(*full_top + full_visible_height);
+        *top = (wall_h < *bottom) ? (u16)(*bottom - wall_h) : 0;
+    } else {
+        *top = (u16)((VIEW_PIXEL_H - wall_h) / 2);
+        *full_top = *top;
+        *bottom = (u16)(*top + wall_h);
+    }
+}
+
 static WallColumnDescriptor describe_textured_column(u16 wall_h,
                                                      u16 projected_wall_h,
                                                      u16 depth,
@@ -98,26 +134,14 @@ static WallColumnDescriptor describe_textured_column(u16 wall_h,
     // wall_h is the visible span after viewport clipping. The texture lookup
     // must use the unclipped projected span, otherwise a near wall/closed door
     // remaps its entire 128-row texture into the 120 visible rows.
-    const u16 sample_height =
-        (projected_wall_h > RAY_MAX_PROJECTED_WALL_HEIGHT) ?
-            RAY_MAX_PROJECTED_WALL_HEIGHT :
-        (projected_wall_h < 1 ? 1 : projected_wall_h);
+    const u16 sample_height = column_sample_height(projected_wall_h);
     const u8 *ty_table = MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[sample_height];
-    if (flags & RAY_COLUMN_FLAG_FLOOR_ALIGNED) {
-        // wall_h is only the visible lower portion of the complete projected
-        // slab. Reconstruct that slab's clipped bottom, anchor the wall there,
-        // and advance its DDA to the same screen row. This preserves clipping
-        // at point-blank range while leaving sky above the wall at distance.
-        const u16 full_visible_height =
-            (sample_height > VIEW_PIXEL_H) ? VIEW_PIXEL_H : sample_height;
-        const u16 full_top = (u16)((VIEW_PIXEL_H - full_visible_height) / 2);
-        bottom = (u16)(full_top + full_visible_height);
-        top = (wall_h < bottom) ? (u16)(bottom - wall_h) : 0;
-        ty_table += top - full_top;
-    } else {
-        top = (u16)((VIEW_PIXEL_H - wall_h) / 2);
-        bottom = (u16)(top + wall_h);
-    }
+    u16 full_top;
+    column_slab_bounds(wall_h, sample_height, flags, &top, &bottom, &full_top);
+    // Advance the DDA past the rows a floor-aligned wall omits above its top.
+    // column_slab_bounds reports full_top == top for a centred column, so this
+    // is a +0 for every ordinary wall.
+    ty_table += top - full_top;
     const u8 tex_x = (u8)(tex_x_value & WALL_TEX_WIDTH_MASK);
     const u8 texture_height = (u8)FREEDOOM_WALL_TEXTURE_HEIGHT[tid];
     const u16 v_scale_q12 = FREEDOOM_WALL_TEXTURE_VSCALE_Q12[tid];
@@ -132,6 +156,20 @@ WallColumnDescriptor describe_wall_column(const RayColumn *column) {
                                     column->depth,
                                     column->texture_id, column->tex_x,
                                     column->tex_y, column->shade, column->flags);
+}
+
+// describe_wall_column(column).top without the descriptor: no
+// MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[641][120] index, no fog level, no texture
+// height / v-scale lookups, no 20-byte struct returned by value. The window
+// compositor calls this once per overlay column on a floor-aligned wall.
+u16 wall_column_top(const RayColumn *column) {
+    u16 top;
+    u16 bottom;
+    u16 full_top;
+    column_slab_bounds(column->height,
+                       column_sample_height(column->projected_height),
+                       column->flags, &top, &bottom, &full_top);
+    return top;
 }
 
 WallColumnDescriptor describe_door_overlay(const RayDoorOverlay *door) {
@@ -340,7 +378,7 @@ void renderer_write_mixed_stride2_span_asm(
     const u8 *const packed_columns[4],
     const PackedFlatRows *flat_rows);
 
-#if DEBUG_PERF
+#if RENDERER_ASM_DIFF_ENABLED
 #define ASM_PROBE_CANARY_A 0x51A7C0DEu
 #define ASM_PROBE_CANARY_B 0xC001D00Du
 typedef struct {
@@ -435,14 +473,14 @@ static void compare_stride2_column_asm(u16 tile_x,
     g_asm_compare_cursor++;
     if (g_asm_compare_cursor == VIEW_TILE_W) g_asm_compare_cursor = 0;
 }
-#endif
+#endif /* RENDERER_ASM_DIFF_ENABLED */
 
 // A mixed tile used to resolve four columns for each row, then shift/OR four
 // bytes into a u32. On the big-endian 68000 the four packed pairs are already
 // the four bytes of that u32, so write each lane directly. Splitting each lane
 // into ceiling/wall/floor runs removes the four per-row branches and all of the
 // long shifts from the hottest packing path.
-#if DEBUG_PERF || RENDERER_HOTPATH_C_REFERENCE
+#if RENDERER_ASM_DIFF_ENABLED || RENDERER_HOTPATH_C_REFERENCE
 static __attribute__((noinline)) void write_mixed_stride2_tile_reference(
     u32 *tile,
     u16 pixel_y,
@@ -504,8 +542,8 @@ static void write_mixed_stride2_span_reference(
 #endif
 
 // Which implementation actually fills the framebuffer. Kept separate from the
-// guard above on purpose: a DEBUG_PERF build compiles the reference in so the
-// harness can run it, but must still ship the asm, or the probe would be
+// guard above on purpose: a RENDERER_ASM_DIFF build compiles the reference in
+// so the harness can run it, but must still ship the asm, or the probe would be
 // measuring and comparing the C path against itself.
 #if RENDERER_HOTPATH_C_REFERENCE
 #define write_mixed_stride2_span write_mixed_stride2_span_reference
@@ -696,7 +734,7 @@ void build_bsp_tilemap(const RayColumn *columns,
             }
 #endif
         }
-#if DEBUG_PERF
+#if RENDERER_ASM_DIFF_ENABLED
         {
             // Timed separately and subtracted back out of pack_subticks: this
             // call exists only to verify the asm packer, not to build the

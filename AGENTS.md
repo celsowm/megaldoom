@@ -50,6 +50,30 @@ nothing when `PERF_FIXED_POSE` is unset (byte-identical ROM). Note the frame is
 each stage timer than on a route -- deltas are valid, absolute shares read a
 little compressed.
 
+**Two headings from one spot are not an A/B either.** The natural way to price a
+feature -- stand still, face it, then face a plain wall -- fails the rule above
+for the same reason a route does: the two headings see different geometry, so
+the workload counters move. At `(1300,3300)` a0 vs a128 cast moves +12.5%, and
+the pack delta then mixes the window's cost with simply having more wall on
+screen. Hold the heading and remove the FEATURE instead:
+`-DPERF_STUB_DOOR_OVERLAYS=1` (debug_checkpoint.h, off by default) makes
+`draw_door_overlays` a no-op, so scene, cast and base pack are identical and the
+whole pack delta is the overlay compositor. Cast is then a free built-in control:
+if it moves more than a few subticks, the comparison is invalid.
+
+**DEBUG_PERF measures; RENDERER_ASM_DIFF verifies. They are different builds.**
+The asm/C differential harnesses (`compare_stride2_column_asm`,
+`compare_overlay_posts_asm`) are gated on `RENDERER_ASM_DIFF`, **off by default**,
+not on DEBUG_PERF. They are not cheap and their cost is not uniform: the overlay
+one checks every overlay column, so on a window wall it alone exceeded the perf
+overlay's 65535-subtick cap -- ~51 of 73 vblanks -- in exactly the scene it was
+being used to diagnose. Never time anything with `-DRENDERER_ASM_DIFF=1` set.
+Run `npm run asm-diff` after touching `renderer_hotpath.s`, the pack posts, the
+overlay posts or their descriptors; it fails on a mismatch, a canary failure, or
+**fewer than 500 checked tiles**, because a harness that never ran also reports
+zero mismatches. With the flag off, the `As` and `Ah` fields on the perf overlay
+read 0 -- that means "not compiled in", NOT "verified clean".
+
 **`g_ray_columns` is indexed by SAMPLE, not by pixel column.** Only every
 `RAY_COL_STRIDE`-th pixel is cast, so the buffer is `RAY_SAMPLE_COLS_MAX` long.
 Convert a screen x with `RAY_SAMPLE_OF(x)`; walk a tile column's lanes with

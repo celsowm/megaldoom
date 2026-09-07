@@ -132,7 +132,10 @@ void renderer_perf_overlay_sample_host(u32 frame) {
 //   row 1  G   gameplay subticks               C   cast subticks
 //          P   pack subticks                   R   projection subticks
 //          Ah  asm/C differential harness subticks this pack window (already
-//              excluded from P; shown so the excluded cost is not hidden)
+//              excluded from P; shown so the excluded cost is not hidden).
+//              Reads 0 unless the build set -DRENDERER_ASM_DIFF=1: the
+//              harnesses are off by default, so 0 here means "not compiled
+//              in", not "measured and free".
 //   row 2  B   billboard subticks              W   weapon subticks
 //          Es  enemy-separation subticks
 //          Ov  overlay restored/touched/overlapping tiles
@@ -151,7 +154,10 @@ void renderer_perf_overlay_sample_host(u32 frame) {
 //          Qc  projection cache hits/misses
 //   row 7  Dp  deep phase label                Dt  its subticks
 //          Dn  its units                       As  asm compare tile,
-//                                                  then checked/mismatch/canary
+//                                                  then checked/mismatch/canary.
+//              As reads 0/0000/00/00 unless -DRENDERER_ASM_DIFF=1 was set --
+//              that is "the differential did not run", NOT "it ran clean".
+//              `npm run asm-diff` is the build that actually checks it.
 //   row 8  Ep  enemy pair tests/close pairs/separation attempts/moves
 //          Bc  prop-collision calls/scanned/candidates
 //

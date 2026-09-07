@@ -8,6 +8,132 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## The window slowdown was mostly the harness measuring it (2026-09-07)
+
+Reported from play: performance drops near windows. The screenshot showed
+`V73 ... G00660 C05515 P07840 R03175 Ah>5535` with `Nv049 Br002 Bp040 Nf012
+St020/010`.
+
+**Most of that frame was instrumentation.** `Ah>5535` is the saturation marker
+from the entry below: the asm/C differential harnesses alone exceeded 65535
+subticks, about **51 of the 73 vblanks**. The measured stages sum to ~18.3K
+subticks, ~14 vblanks. The cause is in the code's own comment:
+`compare_overlay_posts_asm` checks EVERY overlay column (the pack harness checks
+one per frame via a cursor), and per column it arms two 480-byte probes, paints
+the column twice and compares the whole lane. A window wall in close carries an
+overlay on most of the sampled columns, so the harness scaled with exactly the
+thing being diagnosed -- it punished hardest the one scene it was being used to
+look at. The BSP counters in the same shot (`Nv049`, `St020/010`) confirm
+traversal was never the issue, which is what the 2026-08-29 A/B already found.
+
+### RENDERER_ASM_DIFF: measuring and verifying are now different builds
+
+New flag in `renderer_pack_internal.h`, **off by default**, gating both
+harnesses (`RENDERER_ASM_DIFF_ENABLED = DEBUG_PERF && RENDERER_ASM_DIFF`). With
+it off, a DEBUG_PERF build also loses the two `s_overlay_use_reference` detours
+inside `paint_frame_rows`/`paint_sky_rows`, so the debug emitter is byte-for-byte
+the release one. `RendererPerfSnapshot`'s layout is untouched, so neither decoder
+changed; the `As`/`Ah` overlay fields read 0, and the legend now says that means
+"not compiled in", not "verified clean".
+
+Coverage is kept by `npm run asm-diff` (`tools/check-asm-diff.ps1`), which builds
+with the flag and fails on a mismatch, a canary failure, **or fewer than 500
+checked tiles** -- a differential that never ran also reports zero mismatches,
+which is precisely how the pack harness compared asm against asm for months
+(2026-08-04). That guard earned itself immediately: the first version of the
+script used `e1m1-windows.txt` and came back `checked=0` with an entirely empty
+snapshot, because a walking route cannot be trusted to arrive anywhere in a build
+this slow -- it never left the frontend. It is pose-locked at the window wall now.
+
+- Positive: **checked=552, mismatches=0, canary_failures=0**, 6 cursor cycles.
+- Negative control, built and run: XOR 1 into the C reference's frame-post texel
+  -> **432 mismatches**, script exits 1. The harness can fail.
+
+### What a window actually costs, measured properly
+
+The obvious A/B -- same spot, one heading at a window and one at a plain wall --
+is **not sound**, and this is worth recording because the 2026-08-29 entry used
+it. At `(1300,3300)` a0 vs a128 the two headings see different geometry, so cast
+moves +12.5% and the pack delta mixes the overlay's cost with simply having more
+wall on screen. New `PERF_STUB_DOOR_OVERLAYS` (debug_checkpoint.h, off by
+default) makes `draw_door_overlays` a no-op instead, holding the heading fixed so
+the scene, the cast and the base pack are all identical. Both prior window
+diagnoses did this by hand-editing the function; it is a flag now.
+
+Pose-locked at `(1300,3300)` a0, cadence probe, **workload counters identical on
+both sides** (nodes 117.0, boxes 130.0, segs 55.0/20.0, samples 153.0, pack
+columns 20.0, 138 mixed + 162 flat tiles):
+
+| | with overlay | stubbed | delta |
+|---|---:|---:|---:|
+| pack | 8567 | 4549 | **-4018** |
+| cast (control) | 12809 | 12812 | +3 (0.02%) |
+| frame | 19.39 vb | 16.27 vb | -3.12 vb |
+
+**The window compositor is 4018 subticks/rebuild -- 47% of the pack stage and
+16% of the whole frame** at this vantage. Cast moving 3 subticks is what makes
+the rest of the row believable.
+
+### wall_column_top(): one u16 instead of a 20-byte descriptor
+
+`draw_door_overlays` read `describe_wall_column(column).top` to find where the far
+geometry's ceiling ends, building a `[641][120]` table index, a fog level and a
+struct returned by value to keep 2 of 20 bytes. This is the redundancy the
+2026-08-30 entry removed and that came back on 2026-09-04 with the courtyard
+parapets, because a floor-aligned far wall's top cannot be recovered from
+`height` alone.
+
+The slab bounds are now a shared `column_slab_bounds()` helper that both
+`describe_textured_column()` and the new `wall_column_top()` call, so the
+compositor and the base pack cannot disagree about where a column starts -- the
+old code had two copies of that arithmetic and a comment worrying about it.
+`test-bsp-render-math.py`'s source contract was retargeted at the new chain
+rather than dropped, and now also pins that the base pack shares the helper.
+
+Same pose, cadence probe, workload counters identical, cast as control:
+
+| | before | after | |
+|---|---:|---:|---|
+| pack | 8567 | **8451** | **-1.35%** |
+| cast (control) | 12809 | 12808 | -1 (noise) |
+| frame | 19.39 vb | **19.19 vb** | -0.20 vb |
+
+Small, but above noise by two orders of magnitude on the control. At the
+courtyard pose `(2112,3560)` a0 it is **within noise** (pack +10 on identical
+counters) -- that view has no window overlay, so the branch never runs. The
+durable value is the single-sourced arithmetic, not the 116 subticks.
+
+### Pixels and guardrails
+
+Pose-locked capture, HEAD vs this change, 6 frames at each of two poses
+(courtyard and nukage window): **rows 1..239 differ by 0 pixels** across all 12
+frames, with enemies animating and the HUD changing between them. Only 4 pixels
+at row 0 columns 0-3 differ, which is BlastEm capture metadata -- row 1 is
+entirely black and those 4 values track the run's cycle count. Note
+`PERF_FIXED_POSE` pins the player, not the world: frames within a single run
+differ by 10K-56K pixels, which is what makes the 0 meaningful.
+
+Work RAM **unchanged at 23124 free**; ROM +256 bytes. The release ROM built from
+the RENDERER_ASM_DIFF change alone is **byte-identical** to HEAD's (SHA1
+`780839a1...` both sides), which is the cleanest possible proof that the gating
+is release-neutral. Full suite green except `test-e2e-levels.py`, which fails
+identically on HEAD (AGENTS.md names it).
+
+### Still on the table
+
+The base pack draws the far geometry across the whole window column and the
+compositor then repaints the opaque frame over ~93 of those rows, so those rows
+are written twice. Inverting the roles -- the pack describes a window lane with
+`describe_door_overlay()` and the compositor paints only `[band_top,
+band_bottom)` -- would take the doubled region down to the band (~40 rows), worth
+roughly 40% of the 4018. It is mechanically small (both builders return the same
+type through `describe_textured_column`, so it is the descriptors at
+renderer_pack.c's tile loop) but it touches the most-verified asm path in the
+repo, the compositor gains a fourth post for the far floor inside the band,
+`renderer_sparse.c` makes the same call and would have to follow, and
+`column_door_active` would need to key on the window descriptor. Deferred
+deliberately, with the 4018 now measured so the trade is decidable.
+
 ## DEBUG_PERF's asm-compare harnesses were inflating pack_subticks 8x (2026-09-07)
 
 A user screenshot of the live overlay showed `P65535` (a saturated pack cost)

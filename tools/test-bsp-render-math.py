@@ -391,8 +391,23 @@ def main():
     assert "nothing is sampled" not in DRAW_COLUMNS
     assert "RAY_COLUMN_FLAG_FLOOR_ALIGNED" in PACKER
     assert "ty_table += top - full_top;" in PACKER
-    assert "RAY_COLUMN_FLAG_FLOOR_ALIGNED" in DOOR_PACKER
-    assert "describe_wall_column(column).top" in DOOR_PACKER
+    # The window compositor used to read describe_wall_column(column).top --
+    # building a 20-byte descriptor, a [641][120] table index and a fog level to
+    # get one u16. It now asks for that u16 directly. The contract being pinned
+    # is unchanged (the compositor must honour a floor-aligned far wall's
+    # non-centred top), so pin every link in the new chain instead of the old
+    # call: the compositor goes through wall_column_top(), wall_column_top()
+    # goes through column_slab_bounds(), column_slab_bounds() is where the
+    # floor-aligned case lives, and describe_textured_column() -- the base
+    # pack's own path -- goes through that same helper. That last one is the
+    # point: there is no second copy of the centring arithmetic left to drift
+    # away from the base pack.
+    assert "wall_column_top(column)" in DOOR_PACKER
+    assert "describe_wall_column(column).top" not in DOOR_PACKER
+    assert "column_slab_bounds(" in PACKER.split("u16 wall_column_top(", 1)[1]
+    assert "column_slab_bounds(" in PACKER.split("describe_textured_column(", 1)[1]
+    slab_bounds = PACKER.split("void column_slab_bounds(", 1)[1]
+    assert "RAY_COLUMN_FLAG_FLOOR_ALIGNED" in slab_bounds
     print(f"ok    BSP native math: {box_checks} boxes, {segment_checks} seg spans; "
           "6 floor-aligned sky-wall projections")
 
