@@ -237,7 +237,7 @@ static void raster_sprite_row(const BillboardRasterJob *job,
         // Both screen pixels of a byte share one sampled wall column (and at
         // stride 4 both bytes of a group do), so this stays a per-byte test.
         if (mask != 0 && (!job->has_door_overlay ||
-                !door_overlay_blocks_pixel(&job->columns[(u16)((b << 1) & ~(RAY_COL_STRIDE - 1))],
+                !door_overlay_blocks_pixel(&job->columns[RAY_SAMPLE_OF(b << 1)],
                                            job->depth, y))) {
             // Must snapshot the tile before the first write to it: the overlay
             // restore path replays that snapshot to erase the sprite.
@@ -387,7 +387,7 @@ static void apply_sprite_row(const BillboardRasterJob *job, u16 y) {
                 BB_INC(bytes);
                 if (mask != 0 && (!door ||
                         !door_overlay_blocks_pixel(
-                            &job->columns[(u16)((b << 1) & ~(RAY_COL_STRIDE - 1))],
+                            &job->columns[RAY_SAMPLE_OF(b << 1)],
                             job->depth, y))) {
                     if (!tile_marked) {
                         renderer_mark_overlay_tile(tile_index);
@@ -475,7 +475,7 @@ static void draw_billboards_bytewise(const RayColumn *columns,
                 scene_mulu_word((u16)(x0 - object->left), (u16)tex_x_step);
             for (s16 col = x0; col <= x1; col++) {
                 u8 tex_x = (u8)(tex_x_acc >> 8);
-                const u16 wall_col = (u16)(col & ~(RAY_COL_STRIDE - 1));
+                const u16 wall_col = RAY_SAMPLE_OF(col);
                 tex_x_acc += tex_x_step;
 
                 if (!billboard_depth_visible(object, columns[wall_col].depth)) {
@@ -512,9 +512,8 @@ static void draw_billboards_bytewise(const RayColumn *columns,
         // Most views have no moving door slab across a sprite. Detect that once
         // per object so the row loop can short-circuit the full vertical
         // door/depth test instead of repeating it for every byte.
-        for (u16 wall_col = (u16)(x0 & ~(RAY_COL_STRIDE - 1));
-             wall_col <= (u16)x1;
-             wall_col = (u16)(wall_col + RAY_COL_STRIDE)) {
+        for (u16 wall_col = RAY_SAMPLE_OF(x0);
+             wall_col <= RAY_SAMPLE_OF(x1); wall_col++) {
             const RayDoorOverlay *door = &columns[wall_col].door;
             if (door->height != 0 && door->depth < columns[wall_col].depth &&
                 object->depth >= door->depth) {
@@ -626,7 +625,7 @@ static void draw_billboards_reference(const RayColumn *columns,
                 scene_mulu_word((u16)(x0 - object->left), (u16)tex_x_step);
             for (s16 col = x0; col <= x1; col++) {
                 u8 tex_x = (u8)(tex_x_acc >> 8);
-                const u16 wall_col = (u16)(col & ~(RAY_COL_STRIDE - 1));
+                const u16 wall_col = RAY_SAMPLE_OF(col);
                 tex_x_acc += tex_x_step;
                 if (!billboard_depth_visible(object, columns[wall_col].depth)) {
                     tex_x_by_screen_col[col] = 0xFF;
@@ -636,9 +635,8 @@ static void draw_billboards_reference(const RayColumn *columns,
                 tex_x_by_screen_col[col] = tex_x;
             }
         }
-        for (u16 wall_col = (u16)(x0 & ~(RAY_COL_STRIDE - 1));
-             wall_col <= (u16)x1;
-             wall_col = (u16)(wall_col + RAY_COL_STRIDE)) {
+        for (u16 wall_col = RAY_SAMPLE_OF(x0);
+             wall_col <= RAY_SAMPLE_OF(x1); wall_col++) {
             const RayDoorOverlay *door = &columns[wall_col].door;
             if (door->height != 0 && door->depth < columns[wall_col].depth &&
                 object->depth >= door->depth) {
@@ -668,7 +666,7 @@ static void draw_billboards_reference(const RayColumn *columns,
 
                 for (s16 pair_col = (s16)(col_begin & ~(RAY_COL_STRIDE - 1));
                      pair_col <= col_end; pair_col += RAY_COL_STRIDE) {
-                    const u16 wall_col = (u16)pair_col;
+                    const u16 wall_col = RAY_SAMPLE_OF(pair_col);
                     u32 pair_mask = 0;
                     u32 pair_value = 0;
 

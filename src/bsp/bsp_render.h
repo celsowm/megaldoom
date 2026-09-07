@@ -9,7 +9,7 @@
 #define BILLBOARD_VISIBLE_SUBSECTOR_CULL 0
 #endif
 
-// Lean flat-BSP frame filler. It writes columns[RAY_VIEW_COLS] with the wall
+// Lean flat-BSP frame filler. It writes columns[RAY_SAMPLE_COLS] with the wall
 // height, depth, texture coordinate, texture ID and shade consumed by the
 // single downstream tile packer (renderer_scene.c) and billboard occlusion.
 void bsp_init(void);

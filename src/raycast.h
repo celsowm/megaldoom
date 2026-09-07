@@ -107,6 +107,15 @@ extern u16 g_view_center_y;
 #endif
 #define RAY_SAMPLE_COLS (RAY_VIEW_COLS / RAY_COL_STRIDE)
 #define RAY_SAMPLE_COLS_MAX (RAY_VIEW_COLS_MAX / RAY_COL_STRIDE)
+// Samples per 8px tile column: 4 at stride 2, 2 at stride 4. The packers walk
+// a tile's lanes with this rather than stepping pixels by RAY_COL_STRIDE.
+#define RAY_TILE_SAMPLES (8 / RAY_COL_STRIDE)
+// The RayColumn buffer is indexed by SAMPLE, not by pixel column: only every
+// RAY_COL_STRIDE-th pixel is ever cast, so storing one entry per pixel left
+// half the array permanently untouched (1936 bytes of the 3872 at stride 2 --
+// see LOG 2026-09-07). Anything holding a screen x must convert through this.
+// RAY_COL_STRIDE is a power of two (bsp_render.c asserts it), so it is a shift.
+#define RAY_SAMPLE_OF(pixel_x) ((u16)((pixel_x) / RAY_COL_STRIDE))
 #define PLAYER_HEIGHT 56
 #define PLAYER_EYE_HEIGHT 41
 #define PLAYER_MAX_STEP 24
@@ -172,8 +181,8 @@ typedef struct {
 // never be misread as a window.
 //
 // Field widths are chosen to keep this struct at 10 bytes: it is embedded in
-// every one of the RAY_VIEW_COLS_MAX RayColumns, and on a 64 KB machine growing
-// it by two bytes costs 384 bytes of work RAM. `height` is clipped to
+// every one of the RAY_SAMPLE_COLS_MAX RayColumns, and on a 64 KB machine
+// growing it by two bytes costs 176 bytes of work RAM. `height` is clipped to
 // RAY_VIEW_ROWS and `lift` to 255 before they are stored, so both fit a byte
 // (RAY_VIEW_ROWS_MAX is 128).
 typedef struct {
@@ -220,8 +229,8 @@ typedef struct {
     RayDoorOverlay door;
 } RayColumn;
 
-// Guards the packing note above: this struct is instantiated RAY_VIEW_COLS
-// times, so a silent growth here is 160x the cost.
+// Guards the packing note above: this struct is instantiated RAY_SAMPLE_COLS
+// times, so a silent growth here is 80x the cost.
 _Static_assert(sizeof(RayDoorOverlay) == 10,
                "RayDoorOverlay must stay 10 bytes (see the field-width note)");
 

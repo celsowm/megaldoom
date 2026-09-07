@@ -70,12 +70,12 @@ void sparse_classify_frame(const RayColumn *columns,
     build->dynamic_tile_count = 0;
     build->dynamic_run_count = 0;
     for (u16 x = 0; x < VIEW_TILE_W; x++) {
-        const u16 base_col = (u16)(x * 8);
+        const u16 base_sample = (u16)(x * RAY_TILE_SAMPLES);
         const WallColumnDescriptor descriptors[4] = {
-            describe_wall_column(&columns[base_col]),
-            describe_wall_column(&columns[base_col + 2]),
-            describe_wall_column(&columns[base_col + 4]),
-            describe_wall_column(&columns[base_col + 6])
+            describe_wall_column(&columns[base_sample]),
+            describe_wall_column(&columns[base_sample + 1]),
+            describe_wall_column(&columns[base_sample + 2]),
+            describe_wall_column(&columns[base_sample + 3])
         };
         u16 dyn = 0;
         for (u16 y = 0; y < VIEW_TILE_H; y++) {
@@ -146,12 +146,12 @@ void sparse_build_tilemap(const RayColumn *columns,
     const u16 floor_vram = STATIC_FLOOR_TILE_BASE;
     const u16 dyn_bank_base = (u16)(VIEW_TILE_BASE + (bank * VIEW_TILE_ALLOC));
     for (u16 tile_x = 0; tile_x < VIEW_TILE_W; tile_x++) {
-        const u16 base_col = (u16)(tile_x * 8);
+        const u16 base_sample = (u16)(tile_x * RAY_TILE_SAMPLES);
         const WallColumnDescriptor descriptors[4] = {
-            describe_wall_column(&columns[base_col]),
-            describe_wall_column(&columns[base_col + 2]),
-            describe_wall_column(&columns[base_col + 4]),
-            describe_wall_column(&columns[base_col + 6])
+            describe_wall_column(&columns[base_sample]),
+            describe_wall_column(&columns[base_sample + 1]),
+            describe_wall_column(&columns[base_sample + 2]),
+            describe_wall_column(&columns[base_sample + 3])
         };
         for (u16 tile_y = 0; tile_y < VIEW_TILE_H; tile_y++) {
             const u16 screen_index = (u16)((tile_y * VIEW_TILE_W) + tile_x);

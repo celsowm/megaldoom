@@ -180,9 +180,9 @@ static inline bool wall_desc_equal(const WallColumnDescriptor *a,
 // pixel span, so a column with a door now, or one last frame, must be repacked:
 // otherwise the wall behind a lifting door would keep stale door pixels in the
 // newly revealed gap. Mirrors the guard in draw_door_overlays().
-static inline bool column_door_active(const RayColumn *columns, u16 base_col) {
-    for (u16 i = 0; i < 8; i += RAY_COL_STRIDE) {
-        const RayColumn *column = &columns[base_col + i];
+static inline bool column_door_active(const RayColumn *columns, u16 base_sample) {
+    for (u16 i = 0; i < RAY_TILE_SAMPLES; i++) {
+        const RayColumn *column = &columns[base_sample + i];
         const RayDoorOverlay *door = &column->door;
         if (door->height != 0 && door->depth < column->depth) return TRUE;
     }
@@ -261,21 +261,21 @@ void build_bsp_tilemap(const RayColumn *columns,
                                      !scene_flats_equal(scene_colors, &s_prev_scene_flats));
     const u32 overlay_columns = renderer_overlay_prev_columns();
     for (u16 tile_x = 0; tile_x < VIEW_TILE_W; tile_x++) {
-        const u16 base_col = (u16)(tile_x * 8);
+        const u16 base_sample = (u16)(tile_x * RAY_TILE_SAMPLES);
         const WallColumnDescriptor descriptors[2] = {
-            describe_wall_column(&columns[base_col]),
-            describe_wall_column(&columns[base_col + 4])
+            describe_wall_column(&columns[base_sample]),
+            describe_wall_column(&columns[base_sample + 1])
         };
         if (!flat_changed && !s_prev_door_active[tile_x] &&
             !(overlay_columns & ((u32)1u << tile_x)) &&
             wall_desc_equal(&descriptors[0], &s_prev_desc[tile_x][0]) &&
             wall_desc_equal(&descriptors[1], &s_prev_desc[tile_x][1]) &&
-            !column_door_active(columns, base_col)) {
+            !column_door_active(columns, base_sample)) {
             continue;
         }
         s_prev_desc[tile_x][0] = descriptors[0];
         s_prev_desc[tile_x][1] = descriptors[1];
-        s_prev_door_active[tile_x] = (u8)column_door_active(columns, base_col);
+        s_prev_door_active[tile_x] = (u8)column_door_active(columns, base_sample);
 
         // See the stride-2 packer below: under a sky, each tile column reads its
         // own column of the 2D sky table. At this stride a mixed tile only
@@ -550,15 +550,15 @@ void build_bsp_tilemap(const RayColumn *columns,
     // replicated 2x -> twice the horizontal detail of the stride-4 packer at the
     // same tile count / DMA cost. Describe each column once and pack MSB-first.
     for (u16 tile_x = 0; tile_x < VIEW_TILE_W; tile_x++) {
-        const u16 base_col = (u16)(tile_x * 8);
+        const u16 base_sample = (u16)(tile_x * RAY_TILE_SAMPLES);
 #if CADENCE_PACK_SPLIT
         const u32 desc_start = getSubTick();
 #endif
         const WallColumnDescriptor descriptors[4] = {
-            describe_wall_column(&columns[base_col]),
-            describe_wall_column(&columns[base_col + 2]),
-            describe_wall_column(&columns[base_col + 4]),
-            describe_wall_column(&columns[base_col + 6])
+            describe_wall_column(&columns[base_sample]),
+            describe_wall_column(&columns[base_sample + 1]),
+            describe_wall_column(&columns[base_sample + 2]),
+            describe_wall_column(&columns[base_sample + 3])
         };
         // Skip the whole tile column when its packed output cannot have changed:
         // identical descriptors, unchanged flat rows, and no door RMW to redo
@@ -573,7 +573,7 @@ void build_bsp_tilemap(const RayColumn *columns,
             wall_desc_equal(&descriptors[1], &s_prev_desc[tile_x][1]) &&
             wall_desc_equal(&descriptors[2], &s_prev_desc[tile_x][2]) &&
             wall_desc_equal(&descriptors[3], &s_prev_desc[tile_x][3]) &&
-            !column_door_active(columns, base_col)) {
+            !column_door_active(columns, base_sample)) {
 #if CADENCE_PACK_SPLIT
             g_cadence_pack_desc_subticks += getSubTick() - desc_start;
 #endif
@@ -592,7 +592,7 @@ void build_bsp_tilemap(const RayColumn *columns,
         s_prev_desc[tile_x][1] = descriptors[1];
         s_prev_desc[tile_x][2] = descriptors[2];
         s_prev_desc[tile_x][3] = descriptors[3];
-        s_prev_door_active[tile_x] = (u8)column_door_active(columns, base_col);
+        s_prev_door_active[tile_x] = (u8)column_door_active(columns, base_sample);
 
         // Under a sky the ceiling is 2D: point the (row-indexed) ceiling table
         // at this tile's own sky column, so the horizon has horizontal

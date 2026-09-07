@@ -83,7 +83,7 @@ typedef struct {
 #endif
 
 static PlayerState g_player;
-static RayColumn g_ray_columns[RAY_VIEW_COLS_MAX];
+static RayColumn g_ray_columns[RAY_SAMPLE_COLS_MAX];
 static RaySceneColors g_scene_colors;
 static u16 g_weapon_flash = 0;
 static u16 g_player_damage_flash = 0;
@@ -263,7 +263,7 @@ static BillboardFireResult fire_weapon(const WeaponDef *weapon, const RayColumn 
         if (aim_col < 0) aim_col = 0;
         if (aim_col >= RAY_VIEW_COLS) aim_col = (s16)(RAY_VIEW_COLS - 1);
 
-        u16 depth = columns[aim_col].depth;
+        u16 depth = columns[RAY_SAMPLE_OF(aim_col)].depth;
         // Melee weapons reach only a fixed distance, never all the way to the
         // wall; billboard_fire_center treats this as the pellet's stop depth.
         if ((weapon->melee_range > 0) && (depth > weapon->melee_range)) {

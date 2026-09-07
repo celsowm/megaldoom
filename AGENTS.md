@@ -50,6 +50,24 @@ nothing when `PERF_FIXED_POSE` is unset (byte-identical ROM). Note the frame is
 each stage timer than on a route -- deltas are valid, absolute shares read a
 little compressed.
 
+**`g_ray_columns` is indexed by SAMPLE, not by pixel column.** Only every
+`RAY_COL_STRIDE`-th pixel is cast, so the buffer is `RAY_SAMPLE_COLS_MAX` long.
+Convert a screen x with `RAY_SAMPLE_OF(x)`; walk a tile column's lanes with
+`RAY_TILE_SAMPLES` (never pixel offsets 0/2/4/6). An index that is also used as
+a screen position -- `pair_col` in the reference billboard rasteriser feeds the
+nibble shift -- stays in pixel space and converts only at the lookup
+(LOG, 2026-09-07).
+
+**A frame diff from a BlastEm route is not a correctness signal on its own.**
+The incremental uploader's phase shifts on single-digit cycle deltas, and those
+deltas are dominated by code alignment rather than work: a semantically null
+`volatile` loop added to the baseline changed 30 of 597 frames and made the ROM
+*faster*. Before calling a frame difference a regression, build the same
+baseline with a no-op perturbation and diff that against itself; only a
+divergence outside that band means anything. A large diff that equals the
+previous frame's image is the uploader landing a vblank late, not a bad pixel
+(LOG, 2026-09-07).
+
 **The view tilemap is column-major**, `view_tile_index(tile_x, tile_y) =
 tile_x * VIEW_TILE_STRIDE + tile_y`. A column's tiles are contiguous, and screen
 row `y` of byte lane `L` sits at `(y>>3)*32 + (y&7)*4 + L`, which is identically

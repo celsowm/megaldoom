@@ -24,8 +24,7 @@ static u16 s_wall_depth_max[BILLBOARD_DEPTH_TREE_LEAVES * 2];
 static void billboard_build_depth_tree(const RayColumn *columns) {
     for (u16 i = 0; i < BILLBOARD_DEPTH_TREE_LEAVES; i++) {
         s_wall_depth_max[BILLBOARD_DEPTH_TREE_LEAVES + i] =
-            (i < (RAY_VIEW_COLS / RAY_COL_STRIDE)) ?
-                columns[i * RAY_COL_STRIDE].depth : 0;
+            (i < RAY_SAMPLE_COLS) ? columns[i].depth : 0;
     }
     for (u16 i = BILLBOARD_DEPTH_TREE_LEAVES - 1; i > 0; i--) {
         const u16 left = s_wall_depth_max[i << 1];

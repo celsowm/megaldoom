@@ -139,7 +139,7 @@ void bsp_draw_seg(u16 seg_index) {
         // produces the exact same product as the 32x16 helper it replaces.
         const s32 sfix = (span == 1) ? 0 :
             (s32)(bsp_native_mulu_word((u16)(x - xL), (u16)inv_span) >> FX_SHIFT);
-        RayColumn *col = &g_columns[x];
+        RayColumn *col = &g_columns[sample];
 
         const s32 invz = invzL + (bsp_render_mul(invzR - invzL, sfix) >> FX_SHIFT);
         if (invz <= 0) {
@@ -299,7 +299,7 @@ void bsp_seed_unclaimed_columns(RayColumn *columns) {
         }
         for (u16 bit = 0; bit < count; bit++) {
             if (open & ((u32)1u << bit)) {
-                bsp_seed_column_default(&columns[(u16)((base + bit) * RAY_COL_STRIDE)]);
+                bsp_seed_column_default(&columns[(u16)(base + bit)]);
             }
         }
     }

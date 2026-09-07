@@ -296,7 +296,7 @@ void draw_door_overlays(const RayColumn *columns,
                         const RaySceneColors *scene_colors,
                         u32 target[][8]) {
     for (u16 x = 0; x < RAY_VIEW_COLS; x += RAY_COL_STRIDE) {
-        const RayColumn *column = &columns[x];
+        const RayColumn *column = &columns[RAY_SAMPLE_OF(x)];
         const RayDoorOverlay *door = &column->door;
         if (door->height == 0 || door->depth >= column->depth) continue;
 

@@ -8,6 +8,58 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## RayColumn buffer indexed by sample, not by pixel (2026-09-07)
+
+`g_ray_columns` was `[RAY_VIEW_COLS_MAX]` -- one 22-byte RayColumn per screen
+pixel column -- but `RAY_COL_STRIDE` is 2, so only every second entry was ever
+written or read. Every producer built a sample index and multiplied it back up
+(`columns[sample * RAY_COL_STRIDE]`), and every consumer masked a screen x back
+down (`columns[col & ~(RAY_COL_STRIDE - 1)]`). Half the array -- 1936 of 3872
+bytes -- was permanently untouched padding.
+
+It is now `[RAY_SAMPLE_COLS_MAX]`, indexed by sample. Producers drop the
+multiply, consumers go through `RAY_SAMPLE_OF(pixel_x)`, and the packers walk a
+tile's lanes with `RAY_TILE_SAMPLES` (4 at stride 2, 2 at stride 4) instead of
+stepping pixel offsets 0/2/4/6. **Work RAM free: 21188 -> 23124 bytes.**
+
+`pair_col` in the reference billboard rasteriser is the one index that must stay
+in PIXEL space: it feeds `(7 - (col & 7)) * 4` for the nibble shift as well as
+the column lookup. Only the lookup moved.
+
+**What this buys.** A tile column of viewport costs ~706 bytes, so the 1936
+frees two: `RAY_VIEW_TILE_W_MAX 24` with a 24x16 preset builds, renders
+correctly and leaves 21712 bytes free -- more headroom than the 22-wide build
+had before this change. 26 wide lands at ~20300 and is under the floor, so 24 is
+the ceiling until another array is reclaimed. The wider preset is NOT shipped
+here; widening the view is a visual call for the user to make in motion.
+
+**Verifying it needed a negative control, and this is the important part.**
+The change is pure storage layout, so rendered output should be bit-identical.
+It is not: over 597 consecutive captured frames of `tour-east-combat`, 34
+differed. That looks damning until you perturb the BASELINE by a semantically
+null amount (a `volatile` counter loop in the frame path) and diff it against
+itself:
+
+| build                | differing frames | total diff px | max frame | one-frame lags |
+|----------------------|------------------|---------------|-----------|----------------|
+| baseline + nop(1)    | 8                | 638           | 97        | 0              |
+| baseline + nop(8)    | 36               | 1038          | 87        | 0              |
+| baseline + nop(32)   | 30               | 19522         | 3582      | 5              |
+| **sample indexing**  | **34**           | **27790**     | **3567**  | **7**          |
+
+The change sits inside the band a no-op produces. Every large divergence is
+exactly the previous frame's image (`new[562]` equals `base[561]` to 0 pixels),
+i.e. the incremental uploader completing one vblank later, never a wrong pixel.
+Restricting the comparison to frames where both builds had settled does not
+help: the null-perturbed baseline mismatches at essentially the same frame
+numbers (15) as the real change (17). The uploader's phase is simply sensitive
+to single-digit cycle deltas, and cycle deltas here are dominated by code
+ALIGNMENT, not work -- adding a busy loop made the ROM 304 cycles *faster*.
+
+Do not treat frame-diff counts from this harness as a correctness signal without
+an equally-perturbed control. 28 of 29 python suites pass; `test-e2e-levels.py`
+was already broken on `main`.
+
 ## Runtime-selectable viewport size (2026-09-07)
 
 The 3D view was a fixed 20x15 tiles (160x120). It is now one of three presets

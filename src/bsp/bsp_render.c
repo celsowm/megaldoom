@@ -99,7 +99,7 @@ void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColor
     // bsp_seed_unclaimed_columns below.
     for (u16 sample = 0; sample < BSP_SAMPLE_COLS; sample++) {
         g_next_open[sample] = (u8)sample;
-        columns[(u16)(sample * RAY_COL_STRIDE)].door.height = 0;
+        columns[sample].door.height = 0;
     }
     g_next_open[BSP_SAMPLE_COLS] = BSP_SAMPLE_COLS;
 
