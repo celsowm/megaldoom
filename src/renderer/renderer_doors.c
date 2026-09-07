@@ -229,12 +229,20 @@ static void paint_overlay_column(const WallColumnDescriptor *descriptor,
 // lift and the wall behind, so a 1-in-20 cursor would sample the interesting
 // cases rarely. The cost is a doubled overlay pass in a build that is already
 // ~7x slower than release.
+// The viewport height is a runtime variable (raycast.h), so the probe struct
+// must be sized at the allocated maximum, not the live height, or this file
+// fails "variably modified at file scope" as soon as DEBUG_PERF is built.
+// OVERLAY_PROBE_BYTES stays the LIVE count for the arm/compare loops below: the
+// tail between it and _MAX is canary-filled identically on both probes by
+// overlay_probe_arm() and never written by paint_overlay_column(), so comparing
+// only the live prefix is exact, not just harmless.
+#define OVERLAY_PROBE_BYTES_MAX (VIEW_PIXEL_H_MAX * PACK_TILE_ROW_BYTES)
 #define OVERLAY_PROBE_BYTES (VIEW_PIXEL_H * PACK_TILE_ROW_BYTES)
 #define OVERLAY_PROBE_CANARY_A 0x51A7C0DEu
 #define OVERLAY_PROBE_CANARY_B 0xC001D00Du
 typedef struct {
     u32 before[2];
-    u8 lane[OVERLAY_PROBE_BYTES];
+    u8 lane[OVERLAY_PROBE_BYTES_MAX];
     u32 after[2];
 } OverlayPostProbe;
 
