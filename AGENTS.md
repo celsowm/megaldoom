@@ -61,6 +61,22 @@ screen. Hold the heading and remove the FEATURE instead:
 whole pack delta is the overlay compositor. Cast is then a free built-in control:
 if it moves more than a few subticks, the comparison is invalid.
 
+**Steer a headless route by the pose mailbox, not by screenshots.** Build with
+`-DDEBUG_E2E_START_LEVEL=0` to boot straight into E1M1, point
+`-PerfMailbox <g_debug_e2e_state>:20` at the E2E state and read it back with
+`tools/decode-e2e-pose.py`: it carries `player_x/y/angle`, so a route can be
+calibrated exactly instead of eyeballed. `tools/ppm-contact-sheet.py` tiles a
+run's captures into one PNG for a quick look. E1M1 start is `(1056, 3616)`
+angle 192; LEFT *decreases* the angle, ~90 degrees per 100 route frames.
+Then measure with `PERF_FIXED_POSE` at the pose you found -- the route itself is
+build-speed dependent and will not land in the same place twice.
+
+**Heading matters more than position.** At `(-285, 3295)` -- the courtyard hall
+at the end of `tools/routes/e1m1-courtyard-hall.txt` -- a full heading sweep
+spans **2.6 to 5.3 fps from the heading alone**, and cast and pack peak at
+DIFFERENT headings (pack at 153, cast over the 233-9 arc). A single-heading
+measurement therefore says nothing about a location. Sweep before concluding.
+
 **DEBUG_PERF measures; RENDERER_ASM_DIFF verifies. They are different builds.**
 The asm/C differential harnesses (`compare_stride2_column_asm`,
 `compare_overlay_posts_asm`) are gated on `RENDERER_ASM_DIFF`, **off by default**,

@@ -8,6 +8,91 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## Walked the reported path: the slow spot is cast, not windows (2026-09-07)
+
+Asked to go and measure the route the slowdown was reported on -- "forward, turn
+left, go to the end". Done, and the answer moves the target.
+
+### Navigating headlessly
+
+`DEBUG_E2E_START_LEVEL=0` boots straight into E1M1, and `g_debug_e2e_state`
+(20 bytes) already publishes `player_x/y/angle`, so a route can be steered by
+reading the pose back instead of guessing from screenshots. New
+`tools/decode-e2e-pose.py` prints it; new `tools/ppm-contact-sheet.py` tiles a
+run's captures into one PNG. Calibrated from the mailbox: player start
+`(1056, 3616)` angle 192, forward is -y and stops at a wall at `y=2896`
+(frame ~1000), LEFT *decreases* the angle at roughly 90 degrees per 100 route
+frames. `tools/routes/e1m1-courtyard-hall.txt` is the resulting path; it ends at
+**`(-285, 3295)` angle 121**, a corner of the courtyard hall looking out of a
+window at the sky. Route arrival is build-speed dependent, so use the pose, not
+the route, for anything measured.
+
+### A full heading sweep at that spot
+
+Pose-locked, cadence probe, one build per heading. The location alone spans
+**2.6 to 5.3 fps** depending only on which way you look:
+
+| angle | vblanks | fps | cast | pack |
+|---|---:|---:|---:|---:|
+| 73 | 11.28 | 5.3 | 4575 | 7159 |
+| 105 | 11.55 | 5.2 | 5075 | 7268 |
+| 121 | 12.49 | 4.8 | 5641 | 7874 |
+| 137 | 12.79 | 4.7 | 5719 | 8232 |
+| 153 | 13.20 | 4.5 | 5976 | **8461** |
+| 169 | 12.51 | 4.8 | 5947 | 7652 |
+| 185 | 13.37 | 4.5 | 6877 | 7380 |
+| 201 | 13.02 | 4.6 | 6859 | 6505 |
+| 217 | 15.62 | 3.8 | 8379 | 5180 |
+| **233** | **23.19** | **2.6** | **18529** | 5236 |
+| 249 | 22.07 | 2.7 | 16842 | 5832 |
+| 9 | 22.70 | 2.6 | 17262 | 5934 |
+| 41 | 12.58 | 4.8 | 5560 | 7646 |
+
+Two different regimes, and they do not peak together. Pack peaks at 153 (the
+window-facing headings, 7000-8500). Cast peaks over the 233-9 arc at **3-4x its
+floor**, and that arc is where the frame actually falls apart. Angle 233 is a
+long open hall with a deep sight line, six billboards and a barrel; angle 73 is
+a wall two feet from the player's nose.
+
+### Where the 23 vblanks go at angle 233
+
+| stage | subticks | vblanks | share |
+|---|---:|---:|---:|
+| cast | 18529 | 14.48 | **62%** |
+| pack | 5236 | 4.09 | 18% |
+| billboard | 2839 | 2.22 | 10% |
+| projection | 1794 | 1.40 | 6% |
+
+`PERF_STUB_DOOR_OVERLAYS` control at this heading, cast identical at 18533 vs
+18529: pack 5236 -> 3765, so the **entire door/window compositor is 1471
+subticks -- 1.08 vblank, 4.7% of the frame**. Deleting it outright would take
+23.19 vb to 22.11. At the nukage window pose the same control reads 4018. So the
+compositor's cost is real and scales with on-screen window area, but at the spot
+that actually drops to 2.6 fps it is not the problem.
+
+Splitting cast (`-DCADENCE_DRAWSEG_SPLIT=1`, which itself adds ~1480 to cast):
+`drawseg` totals **6887** (63.8 per seg tested; 3086 of that the sample loop at
+26.4/sample, the other 3801 fixed per-seg setup over 108 segs). The remaining
+**~13100, two thirds of cast and ~45% of the whole frame, is traversal** -- node
+walking and box projection, at 254 box calls and 223 nodes visited per rebuild.
+
+One number in that line is worth its own look: the box-call mix is 86% full
+projection, 7% near-plane, 6% early-out and **0% cheap-reject**. The cheap
+half-plane rejection never fires at this vantage, so essentially every one of the
+254 boxes pays a perspective divide. Compare angle 73, where the mix is 57%
+early-out and only 7% full. Not investigated further here; recorded because it is
+the first concrete lead on the traversal cost that dominates this scene.
+
+### What this changes
+
+The window work in the entry below stands on its own -- the compositor really is
+4018 subticks at a window-filled view, and the harness really was inflating the
+DEBUG_PERF overlay by ~51 vblanks. But the slowdown reported from play is a
+**different bottleneck**: long sight lines making BSP traversal 3-4x more
+expensive. Any further window optimisation (including the deferred base/overlay
+inversion) is worth at most ~1 vblank at the spot the player noticed, against
+~10 vblanks sitting in traversal. Attack cast next, not the compositor.
+
 ## The window slowdown was mostly the harness measuring it (2026-09-07)
 
 Reported from play: performance drops near windows. The screenshot showed
