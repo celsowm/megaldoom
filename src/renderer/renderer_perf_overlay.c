@@ -74,10 +74,18 @@ static void put_dec(u32 value, u16 width) {
     // divu traps when the quotient does not fit in 16 bits. Stage counters are
     // displayed as saturated 16-bit values, which is also enough to expose a
     // missed frame without making the diagnostics path unsafe.
-    if (value > 65535u) value = 65535u;
+    //
+    // A saturated field used to print "65535" indistinguishably from a real
+    // value of exactly 65535, when it actually means "at least 65535, true
+    // magnitude unknown" (a DEBUG_PERF capture showed a saturated pack cost
+    // that was really ~8x higher once measured properly, see LOG). Mark it by
+    // replacing the leading displayed digit with '>' so a capped field reads
+    // as a floor, not an exact count.
+    const bool saturated = (value > 65535u);
+    if (saturated) value = 65535u;
     for (u16 i = start; i < 5; i++) {
         const u16 digit = divu(value, powers[i]);
-        put_char((char)('0' + digit));
+        put_char((saturated && (i == start)) ? '>' : (char)('0' + digit));
         value -= (u32)digit * powers[i];
     }
 }
@@ -123,6 +131,8 @@ void renderer_perf_overlay_sample_host(u32 frame) {
 //          CPU SYS_getCPULoad, percent
 //   row 1  G   gameplay subticks               C   cast subticks
 //          P   pack subticks                   R   projection subticks
+//          Ah  asm/C differential harness subticks this pack window (already
+//              excluded from P; shown so the excluded cost is not hidden)
 //   row 2  B   billboard subticks              W   weapon subticks
 //          Es  enemy-separation subticks
 //          Ov  overlay restored/touched/overlapping tiles
@@ -179,7 +189,8 @@ void renderer_draw_perf_overlay(bool frame_complete) {
 
     line_begin(); TXT("G"); DEC(perf.gameplay_subticks,5); TXT(" C");
     DEC(perf.cast_subticks,5); TXT(" P"); DEC(perf.pack_subticks,5); TXT(" R");
-    DEC(perf.projection_subticks,5); line_commit(1);
+    DEC(perf.projection_subticks,5); TXT(" Ah");
+    DEC(perf.asm_compare_overhead_subticks,5); line_commit(1);
 
     line_begin(); TXT("B"); DEC(perf.billboard_subticks,5); TXT(" W");
     DEC(perf.weapon_subticks,5); TXT(" Es");

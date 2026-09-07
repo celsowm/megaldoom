@@ -46,6 +46,14 @@ typedef struct {
     u16 asm_mismatches;
     u16 asm_canary_failures;
     u16 asm_cycles;
+    // Time spent THIS pack window inside the asm/C differential harnesses
+    // (compare_stride2_column_asm, compare_overlay_posts_asm). Those calls run
+    // between stage_start and renderer_perf_set_pack_subticks(), so left alone
+    // they get counted as pack cost even though they exist only to verify the
+    // asm and never ship in a release build. pack_subticks has this already
+    // subtracted; it is kept here too so the overlay can show how much was
+    // removed rather than hiding it.
+    u32 asm_compare_overhead_subticks;
     // ColumnReuseOracle (Phase 2 measurement): how the per-column coherence
     // cache would translate into per-column DMA. columns_changed/reused are the
     // last base-rebuild frame's split; hypothetical_tiles_uploaded is
@@ -138,6 +146,9 @@ RendererPerfDeepPhase renderer_perf_get_deep_phase(void);
 void renderer_perf_record_deep(RendererPerfDeepPhase phase, u32 subticks, u16 units);
 void renderer_perf_record_asm_compare(u16 tile, bool mismatch, bool canary_failure,
                                       bool completed_cycle);
+void renderer_perf_reset_asm_compare_overhead(void);
+void renderer_perf_add_asm_compare_overhead(u32 subticks);
+u32 renderer_perf_get_asm_compare_overhead(void);
 void renderer_perf_record_column_reuse(u16 columns_changed, u16 columns_reused,
                                        u16 hypothetical_tiles_uploaded);
 void renderer_perf_record_sparse(u16 dyn_wall, u16 ceiling, u16 floor,

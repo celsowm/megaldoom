@@ -8,6 +8,50 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## DEBUG_PERF's asm-compare harnesses were inflating pack_subticks 8x (2026-09-07)
+
+A user screenshot of the live overlay showed `P65535` (a saturated pack cost)
+in a heavy E1M1 courtyard/secret scene, with the observation that the slowdown
+did not seem to depend on the viewport preset. Investigating the overlay
+number turned up two problems, both now fixed, not just documented:
+
+**The overlay could not tell "exactly 65535" from "unknown, at least
+65535".** `put_dec()` saturates for display because `divu` traps on a
+16-bit-overflowing quotient; the digits it prints looked exact either way.
+Fixed by overwriting the leading printed digit with `>` when the true value
+exceeded the cap, so a capped field now reads as a floor.
+
+**The bigger problem: `pack_subticks` was timing its own verification
+harness.** `compare_stride2_column_asm()` (renderer_pack.c) and
+`compare_overlay_posts_asm()` (renderer_doors.c) are DEBUG_PERF-only
+differential checks that reimplement the packer/overlay writer in C and
+byte-compare it against the shipped asm — real work, but work a release
+build never does, and it ran *inside* the window timed as pack cost in
+renderer_scene.c. Measured on the courtyard route: with the harnesses
+counted, DEBUG_PERF reported pack_subticks=34110 of a 45955 total (74.2%);
+the same-route ground truth from the checkpoint-only cadence probe (no
+DEBUG_PERF at all) was pack avg=4142 subticks/rebuild — an 8.2x inflation,
+and it made pack look like the dominant cost when cast (5088) was actually
+larger.
+
+Fixed by timing both harness calls separately
+(`renderer_perf_add_asm_compare_overhead`, reset once per pack window before
+`build_bsp_tilemap`) and subtracting the accumulated overhead from the raw
+elapsed time before it is recorded as `pack_subticks`. Re-measured after the
+fix on the identical route: pack_subticks=7350 of a 19660 total (37.4%) —
+still not identical to the 4142 cadence average (that number is one frame's
+snapshot, not an average, and DEBUG_PERF's bookkeeping calls add their own
+small real cost throughout), but the harness-driven order-of-magnitude
+distortion is gone. The overhead itself is now also shown on the overlay
+(`Ah` on row 1) rather than silently vanishing from the total.
+
+This does not change what a release build does — `DEBUG_PERF` guards every
+line touched. It only makes the debug overlay tell the truth about its own
+build. The underlying finding stands: the courtyard/secret scene is a
+genuinely heavy BSP-traversal case (`Nv207` nodes visited vs a ~28 route
+average), and that cost scales with visible geometry, not with viewport
+size — consistent with the user's report.
+
 ## RayColumn buffer indexed by sample, not by pixel (2026-09-07)
 
 `g_ray_columns` was `[RAY_VIEW_COLS_MAX]` -- one 22-byte RayColumn per screen

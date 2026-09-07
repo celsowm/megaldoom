@@ -60,6 +60,25 @@ void renderer_perf_set_pack_subticks(u32 subticks) {
     s_perf.pack_subticks = subticks;
 }
 
+// See the field comment in renderer_perf.h: the asm/C differential harnesses
+// run inside the timed pack window purely to verify the shipped asm, and were
+// inflating pack_subticks by ~8x on a heavy scene (measured 2026-09-07,
+// courtyard route: cadence ground truth 4142 vs DEBUG_PERF-reported 34110).
+// Reset once per pack window (renderer_scene.c, before build_bsp_tilemap),
+// accumulated by both harness call sites, then subtracted back out of the
+// raw elapsed time before it is recorded as pack_subticks.
+void renderer_perf_reset_asm_compare_overhead(void) {
+    s_perf.asm_compare_overhead_subticks = 0;
+}
+
+void renderer_perf_add_asm_compare_overhead(u32 subticks) {
+    s_perf.asm_compare_overhead_subticks += subticks;
+}
+
+u32 renderer_perf_get_asm_compare_overhead(void) {
+    return s_perf.asm_compare_overhead_subticks;
+}
+
 void renderer_perf_set_projection_subticks(u32 subticks) {
     s_perf.projection_subticks = subticks;
 }

@@ -235,9 +235,14 @@ do not trust dead-reckoned headings more than ~2 legs deep.
 ## Real release framerate (current: 2026-08-04, cadence probe)
 
 A checkpoint-only build (no -DebugPerf) publishes a `CadenceSnapshot`
-(decode with `tools/decode-cadence.py`). **This is the ground truth**, and it
-differs sharply from what DEBUG_PERF builds imply — DEBUG_PERF's own
-instrumentation distorts the timing it reports.
+(decode with `tools/decode-cadence.py`). **This is the ground truth.** A
+DEBUG_PERF build's `pack_subticks` used to be inflated ~8x by its own
+in-loop asm/C differential harnesses (`compare_stride2_column_asm`,
+`compare_overlay_posts_asm`) running inside the timed pack window; that
+overhead is now measured and subtracted back out (LOG, 2026-09-07) and shown
+separately as `Ah` on the overlay, but DEBUG_PERF still carries its own
+bookkeeping cost throughout and its numbers should not be read as exact —
+only the cadence probe's are.
 
 - **Idle frames hit the 2-vblank (30fps) target.** The cost is entirely in
   rebuild frames, which is why a route's average says little on its own: check

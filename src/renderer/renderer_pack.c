@@ -697,8 +697,15 @@ void build_bsp_tilemap(const RayColumn *columns,
 #endif
         }
 #if DEBUG_PERF
-        compare_stride2_column_asm(tile_x, ceiling_tiles, mixed_tiles,
-                                   descriptors, packed_columns, flat_rows);
+        {
+            // Timed separately and subtracted back out of pack_subticks: this
+            // call exists only to verify the asm packer, not to build the
+            // frame, and its cost is not something a real build ever pays.
+            const u32 asm_cmp_start = getSubTick();
+            compare_stride2_column_asm(tile_x, ceiling_tiles, mixed_tiles,
+                                       descriptors, packed_columns, flat_rows);
+            renderer_perf_add_asm_compare_overhead(getSubTick() - asm_cmp_start);
+        }
 #endif
 #if CADENCE_PACK_SPLIT
         g_cadence_pack_tiles_subticks += getSubTick() - tiles_start;

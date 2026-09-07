@@ -56,13 +56,25 @@ void renderer_render_scene(const RayColumn *columns,
         upload_request_bank_swap();
         renderer_prepare_full_base_upload();
         renderer_overlay_base_rebuilt();
-#if DEBUG_PERF || CADENCE_STAGE_PROBE
+#if DEBUG_PERF
+        renderer_perf_reset_asm_compare_overhead();
+        stage_start = getSubTick();
+#elif CADENCE_STAGE_PROBE
         stage_start = getSubTick();
 #endif
         build_bsp_tilemap(columns, scene_colors, g_view_tiles);
         draw_door_overlays(columns, scene_colors, g_view_tiles);
 #if DEBUG_PERF
-        renderer_perf_set_pack_subticks(getSubTick() - stage_start);
+        {
+            // Both draw calls above run the asm/C differential harnesses when
+            // DEBUG_PERF is on (see their call sites); that time is real, but
+            // it is verification cost a release build never pays, so it is
+            // subtracted back out here instead of being reported as pack cost.
+            const u32 raw_pack_subticks = getSubTick() - stage_start;
+            const u32 overhead = renderer_perf_get_asm_compare_overhead();
+            renderer_perf_set_pack_subticks(
+                (raw_pack_subticks > overhead) ? (raw_pack_subticks - overhead) : 0);
+        }
         stage_start = getSubTick();
 #elif CADENCE_STAGE_PROBE
         g_cadence_pack_subticks += getSubTick() - stage_start;

@@ -383,9 +383,17 @@ void draw_door_overlays(const RayColumn *columns,
                              sky_start, sky_end, frame_resume, visible_bottom,
                              col_base);
 #if DEBUG_PERF
-        compare_overlay_posts_asm(&descriptor, packed, lift_pixels, lane,
-                                  sky_bytes, sky_start, sky_end, frame_resume,
-                                  visible_bottom, tile_x);
+        {
+            // See renderer_pack.c's compare_stride2_column_asm call site: this
+            // harness also runs inside the timed pack window purely to verify
+            // the asm overlay writer, so its cost is timed and subtracted back
+            // out of pack_subticks rather than left in as if it were real work.
+            const u32 asm_cmp_start = getSubTick();
+            compare_overlay_posts_asm(&descriptor, packed, lift_pixels, lane,
+                                      sky_bytes, sky_start, sky_end, frame_resume,
+                                      visible_bottom, tile_x);
+            renderer_perf_add_asm_compare_overhead(getSubTick() - asm_cmp_start);
+        }
 #endif
     }
 }
