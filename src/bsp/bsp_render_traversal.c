@@ -57,91 +57,43 @@ bool bsp_project_box_range(const BspBox *box, s16 *left, s16 *right) {
         return FALSE;
     }
 
-    const s32 min_depth = (depth_q8 + ddx_neg + ddy_neg) >> FX_SHIFT;
+    const s32 box_min_depth = (depth_q8 + ddx_neg + ddy_neg) >> FX_SHIFT;
 
-    // Clip a near-plane-crossing box polygon instead of expanding it to the
-    // whole view. The old fallback was safe but caused large adjacent BSP
-    // subtrees to be visited when walking through doorways.
-    if (min_depth < BSP_NEAR) {
-        s32 depths[4];
-        s32 laterals[4];
-        depths[0] = depth_q8 >> FX_SHIFT;
-        laterals[0] = lateral_q8 >> FX_SHIFT;
-        depths[1] = (depth_q8 + depth_dx_q8) >> FX_SHIFT;
-        laterals[1] = (lateral_q8 + lateral_dx_q8) >> FX_SHIFT;
-        depths[2] = (depth_q8 + depth_dx_q8 + depth_dy_q8) >> FX_SHIFT;
-        laterals[2] = (lateral_q8 + lateral_dx_q8 + lateral_dy_q8) >> FX_SHIFT;
-        depths[3] = (depth_q8 + depth_dy_q8) >> FX_SHIFT;
-        laterals[3] = (lateral_q8 + lateral_dy_q8) >> FX_SHIFT;
+    // A near-plane-crossing box used to be clipped to its exact on-near-plane
+    // polygon: one DIVS.W per in-front corner plus, for each of the two
+    // crossing edges, a lerp division and a screen division -- up to 8 DIVS.W
+    // against the fast path's 2. The exactness was there to keep the range
+    // tight when walking through doorways; the old whole-view fallback it
+    // replaced visited large adjacent subtrees. 2026-09-07 replace it with a
+    // bare clamp: clip box_min_depth to BSP_NEAR and fall through to the
+    // 2-DIVS rectangle bound below.
+    //
+    // That bound is still conservative over the clipped polygon's vertices:
+    // every in-front corner has depth >= BSP_NEAR and lateral inside the
+    // extrema, and each near-plane crossing has depth == BSP_NEAR with a
+    // lateral lerped between two corner laterals. It can only widen the range,
+    // so it admits a few more subtrees to traversal but never changes what is
+    // drawn. Measured at seven pose-locked vantages -- including standing in
+    // the NE-corridor door at (1536,2496) -- cast fell 82-216 subticks/rebuild
+    // (-1% to -5%), nodes visited and segs tested were identical everywhere
+    // except the courtyard hall (-285,3295)a233, which grew +5 nodes / +7 segs
+    // tested, and segs drawn / samples drawn were identical everywhere.
+    // Do not re-add a per-corner near division without a measurement.
+    const s32 min_depth = (box_min_depth < BSP_NEAR) ? BSP_NEAR : box_min_depth;
+    if (box_min_depth < BSP_NEAR) {
         BSP_DBG_INC(near_fallbacks);
-        s32 min_screen = 0x7FFFFFFF;
-        s32 max_screen = -0x7FFFFFFF;
-        bool any = FALSE;
-        BSP_DBG_INC(boxes_projected);
-        for (u16 i = 0; i < 4; i++) {
-            const u16 j = (u16)((i + 1) & 3);
-            if (depths[i] >= BSP_NEAR) {
-                const s32 screen = RAY_VIEW_CENTER_X + bsp_perspective_divide(
-                    bsp_render_mul(laterals[i], RAY_PROJ_X), depths[i]);
-                if (screen < min_screen) min_screen = screen;
-                if (screen > max_screen) max_screen = screen;
-                any = TRUE;
-            }
-            if ((depths[i] < BSP_NEAR) != (depths[j] < BSP_NEAR)) {
-                const s32 denom = depths[j] - depths[i];
-                const s32 t = bsp_perspective_divide(((s32)BSP_NEAR - depths[i]) << FX_SHIFT,
-                                                 denom);
-                const s32 lateral = laterals[i] +
-                    (bsp_render_mul(laterals[j] - laterals[i], t) >> FX_SHIFT);
-                const s32 screen = RAY_VIEW_CENTER_X +
-                    bsp_perspective_divide(bsp_render_mul(lateral, RAY_PROJ_X), BSP_NEAR);
-                if (screen < min_screen) min_screen = screen;
-                if (screen > max_screen) max_screen = screen;
-                any = TRUE;
-            }
-        }
-        if (!any) return FALSE;
-        min_screen -= RAY_COL_STRIDE;
-        max_screen += RAY_COL_STRIDE;
-        if ((max_screen < 0) || (min_screen >= RAY_VIEW_COLS)) return FALSE;
-        if (min_screen < 0) min_screen = 0;
-        if (max_screen >= RAY_VIEW_COLS) max_screen = RAY_VIEW_COLS - 1;
-        *left = (s16)min_screen;
-        *right = (s16)max_screen;
-        return TRUE;
     }
 
-    // All four corners are in front of the near plane (depth > 0), so the
-    // half-plane signs are valid. Reject boxes proven completely outside the
-    // expanded viewport without paying for the two perspective divisions below.
-    //
-    // The planes are evaluated axis-decomposed on the SHIFTED base/extent
-    // values instead of per assembled corner. A corner's shifted value differs
-    // from the decomposed floor sum by at most +2 (one +1 per addition folded
-    // under the floor), so padding the decomposed extremum by
-    // 2 * (RAY_PROJ_X + scale) bounds the old per-corner extremum from the
-    // safe side: this test only ever rejects boxes the old exact test also
-    // rejected (the hairline band falls through to the division path below,
-    // which still culls or clips them exactly).
-    // A cheap half-plane reject used to sit here: it proved a box entirely
-    // outside the left or right frustum plane and returned before paying the
-    // two DIVS.W below. It was removed on 2026-09-07 because the arithmetic
-    // never came close to paying for itself -- 10 MULS.W (bsp_render_mul is a
-    // volatile MULS.W, so GCC could neither fold the two identical
-    // RAY_PROJ_X * l0 products nor strength-reduce any of them) on every box,
-    // to skip ~316 cycles of division on the few it caught.
-    //
-    // In traversal it fired on 2.3% of boxes (1293 of 56282 over both maps),
-    // and test-bsp-render-math.py showed the divide path below would have
-    // rejected 96.1% of those anyway. Measured at five pose-locked vantages:
-    // cast -5.7% to -15.1%, with nodes visited, segs tested, segs drawn and
-    // samples drawn IDENTICAL on every one -- removing a conservative cull can
-    // only add traversal, never change what is drawn.
-    //
-    // Do not reintroduce it without a measurement: it is not obviously wrong,
-    // it is just far more expensive than what it saves.
+    // A cheap half-plane reject used to sit in front of the two divisions
+    // below: 10 MULS.W per box, to skip ~316 cycles of division on the 2.3% of
+    // boxes it caught, most of which the divide path rejected anyway. Removed
+    // 2026-09-07 -- see LOG.md and test-bsp-render-math.py, which pins the
+    // reject's scale symbols out of the renderer. Do not reintroduce it without
+    // a measurement.
+
     // Lateral extrema via the same exact monotonic-shift decomposition as the
-    // depth extrema above.
+    // depth extrema above. Every box -- fully front OR near-plane-crossing --
+    // now reaches this two-division rectangle bound.
     const s32 ldx_neg = (lateral_dx_q8 < 0) ? lateral_dx_q8 : 0;
     const s32 ldx_pos = lateral_dx_q8 - ldx_neg;
     const s32 ldy_neg = (lateral_dy_q8 < 0) ? lateral_dy_q8 : 0;

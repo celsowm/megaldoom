@@ -199,9 +199,11 @@ extern u32 g_cadence_samples;
  * The path counters are bare increments and stay always on. Note
  * g_cadence_boxes_projected above only counts boxes that reach a projection, so
  * box_calls is the larger true call count and box_calls - boxes_projected is the
- * number rejected before any divide. box_near_path counts the expensive
- * near-plane polygon branch (up to 8 DIVS.W per box) versus the 2-DIVS fast
- * path — the ratio is what explains the block's cost.
+ * number rejected before any divide. box_near_path counts near-plane-crossing
+ * boxes: since 2026-09-07 these are no longer an expensive polygon clip, they
+ * are clamped to BSP_NEAR and fall through to the same 2-DIVS rectangle bound
+ * as every other projected box, so the counter now marks a geometry condition
+ * rather than a cost.
  *
  * The three timers cost ~2 getSubTick calls per box and per occlusion query
  * (~400/frame), so they are OFF by default like the draw_seg split — opt in with

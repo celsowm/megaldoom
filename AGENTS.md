@@ -92,6 +92,17 @@ and read as dead code -- the opposite conclusion from the truth. It prints one
 decimal and the raw totals now. Before concluding a counter is zero, read the
 raw total.
 
+**A box-range change never alters output, only traversal -- but the proof
+differs by direction.** Removing a conservative cull leaves `nodes visited`,
+`segs tested`, `segs drawn` and `samples drawn` all identical (the divide path
+rejects what the removed test skipped anyway). Widening a bound -- the 2026-09-07
+near-plane clamp clips `box_min_depth` to `BSP_NEAR` and falls into the 2-DIVS
+rectangle bound -- may legally grow `nodes visited` and `segs tested`, because
+the wider box is now visited and its children explored, while `segs drawn` and
+`samples drawn` must stay byte-identical: a bound only selects which subtrees are
+*tested*, never what a tested seg draws. `segs drawn` / `samples drawn` are the
+correctness check; `nodes` / `segs tested` growth is the cost, not a regression.
+
 **DEBUG_PERF measures; RENDERER_ASM_DIFF verifies. They are different builds.**
 The asm/C differential harnesses (`compare_stride2_column_asm`,
 `compare_overlay_posts_asm`) are gated on `RENDERER_ASM_DIFF`, **off by default**,
@@ -149,6 +160,11 @@ the title and the route presses START at 900 — so a capture from it is the tit
 screen, not gameplay. Build with `-DDEBUG_START_E1M1_EXIT=1` to land straight in
 E1M1, and remember route masks are HEX (`fscanf("%u %x")`: UP 1, DOWN 2, LEFT 4,
 RIGHT 8, A 10, B 20, C 40, START 80).
+`tools/test-campaign-e2e.ps1` (→ `test-level-e2e.ps1`) times out on the waypoint
+run on a pristine checkout too (verified 2026-09-07, E1M1 wp 138/140 vs 65/140
+across two builds — the waypoint it dies on moves with the build). A render-only
+change cannot alter its navigation; the route is pacing-sensitive, same as the
+rest.
 
 **Wall fidelity tuning is an offline 64x64 bake.** The shipped renderer remains
 `WALL_TEX_DIM=64` at stride 2; its 786,432-byte shade/door packed table would

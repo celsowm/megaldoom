@@ -82,7 +82,8 @@ def main() -> int:
               f"fixed = {(drawseg_sum - sample_sum) / segs_tested if segs_tested else 0:.1f}/seg)")
         # Traversal attribution: box_calls is every project_box_range entry, so
         # it exceeds "boxes projected" (which counts only those reaching a
-        # divide). near-path boxes pay up to 8 DIVS.W against the fast path's 2.
+        # divide). near-plane boxes are clamped to BSP_NEAR and share the fast
+        # 2-DIVS path since 2026-09-07; the ratio still marks the geometry mix.
         if box_calls:
             fast = box_calls - box_near - box_early
             # Raw totals alongside the percentages: a path that fires a couple of

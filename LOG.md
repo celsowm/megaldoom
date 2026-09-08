@@ -8,6 +8,70 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## The near-plane polygon clip cost up to 8 DIVS.W to stay exact; clamped (2026-09-07)
+
+Chased the lead the entry below closed on: 7.5% of the 254 box calls per rebuild
+were taking the near-plane path, "up to 8 DIVS.W against the fast path's 2".
+The win is small but real, and the proof that it is safe is worth stating.
+
+### What the near path was doing
+
+A box whose near corner falls behind `BSP_NEAR` was projected by clipping its
+on-near-plane polygon: one `DIVS.W` per in-front corner, plus for each of the
+two crossing edges a lerp division and a screen division. The exactness was
+what kept the range tight walking through doorways -- the whole-view fallback
+it replaced paid large adjacent BSP subtrees.
+
+### Clamp, don't clip
+
+A near box only needs a conservative screen range, and the rectangle bound the
+fast path already uses is conservative over near boxes too: every in-front
+corner has `depth >= BSP_NEAR` and a lateral inside the extrema, and each
+crossing has `depth == BSP_NEAR` with a lateral lerped between two corner
+laterals. So clamp `box_min_depth` to `BSP_NEAR` and fall into the same 2-DIVS
+bound. It can only widen the range -- it admits a few extra subtrees to
+traversal -- and never changes what is drawn. That second property is exactly
+what the counters pin: `segs drawn` / `samples drawn` must stay byte-identical,
+while `nodes visited` / `segs tested` may grow (see AGENTS.md, new rule).
+
+Measured at seven pose-locked vantages, cadence probe, `PERF_FIXED_POSE` --
+including a door-straddle pose found by reading the NE-corridor door off the
+emitted BSP node at x=1536 (y span 2432-2560):
+
+| pose | angle | cast before | cast after | | nodes / segs tested |
+|---|--:|---:|---:|---:|---|
+| (1536, 2496) door | 0 | 3535 | 3361 | -4.9% | 8/4 -> 8/4 |
+| (1536, 2496) door | 128 | 4490 | 4408 | -1.8% | 23/12 -> 23/12 |
+| (1056, 3616) | 0 | 5667 | 5500 | -2.9% | 38/20 -> 38/20 |
+| (1056, 3616) | 128 | 5353 | 5199 | -2.9% | 33/21 -> 33/21 |
+| (1056, 3616) | 160 | 6651 | 6520 | -2.0% | 52/40 -> 52/40 |
+| (1056, 3616) | 192 | 8175 | 7959 | -2.6% | 79/54 -> 79/54 |
+| (-285, 3295) hall | 233 | 15734 | 15554 | -1.1% | 223/108 -> 228/115 |
+
+`segs drawn` and `samples drawn` were identical at every vantage. `nodes visited`
+and `segs tested` were identical everywhere except the hall, which grew +5 / +7;
+that is the clamp admitting the extra subtrees the exact clip used to reject, and
+net cast still fell 180 subticks there. Standing in the door at (1536, 2496) --
+the case the clip's exactness existed for -- grew nothing at all.
+
+At the hall the clamp cascades gently: a widened box now visits children that
+are themselves near-plane, so near boxes rise 551 -> 609, but box calls only rise
+2/rebuild and the win holds. The worst measured frame goes 21.07 -> 20.90 vb.
+
+### Pinned, not just removed
+
+`test-bsp-render-math.py` now models the rectangle clamp and asserts
+`"depths[3]"` stays out of the renderer, so a future reintroduction of the
+per-corner near divisions has to argue with a measurement -- the same trap the
+cheap reject set. `box_near_path` still counts near-plane crossings but no longer
+marks an expensive branch; `decode-cadence.py`'s box-path mix and its comment are
+updated to match. Release ROM -768 bytes (.text), work RAM unchanged at 23124
+free; the python contract suites are green and build + check-rom pass (modulo
+the dead route harnesses AGENTS.md lists -- which now includes
+`test-campaign-e2e.ps1`: it times out on the waypoint run on pristine main too,
+at a different waypoint each build, so a render-only change like this one cannot
+be read off its result).
+
 ## The box cheap-reject cost 10 MULS.W to skip 2 DIVS.W; removed (2026-09-07)
 
 Follow-up to the entry below, which put ~45% of the worst frame in BSP traversal
@@ -100,8 +164,9 @@ Release ROM -256 bytes, work RAM unchanged at 23124 free, full suite green.
 
 Traversal is still the largest item at the worst vantage: ~13100 subticks before
 this change, and the box-call mix is now 86.2% full-divide, 7.5% near-plane,
-6.3% early-out over 254 calls per rebuild. The near-plane path pays up to 8
-`DIVS.W` against the fast path's 2, so at 7.5% it is worth its own look.
+6.3% early-out over 254 calls per rebuild. The near-plane path paid up to 8
+`DIVS.W` against the fast path's 2, so at 7.5% it earned its own look -- chased
+and resolved in the entry above (2026-09-07, clamped into the 2-DIVS bound).
 `tools/perf-sweep.ps1` is the instrument.
 
 ## Walked the reported path: the slow spot is cast, not windows (2026-09-07)

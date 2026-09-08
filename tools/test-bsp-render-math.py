@@ -22,8 +22,6 @@ PROJ_X = 80
 VIEW_COLS, VIEW_ROWS = raycast_constants.view_pixels()
 VIEW_CENTER = VIEW_COLS // 2
 STRIDE = raycast_constants.col_stride()
-LEFT_SCALE = VIEW_CENTER + STRIDE + 1
-RIGHT_SCALE = VIEW_COLS + STRIDE - VIEW_CENTER
 
 
 def declaration(typename, symbol):
@@ -156,34 +154,24 @@ def decomposed_extrema(parts):
 
 
 def projected_range(depths, laterals):
+    # Mirror bsp_project_box_range's divide path (shipped 2026-09-07): reject
+    # when every corner is behind the near plane, clamp a near-plane crossing to
+    # BSP_NEAR instead of clipping the exact polygon, then bound by the enclosing
+    # lateral/depth rectangle. The rectangle bound is conservative over the
+    # clipped polygon's vertices: in-front corners have depth >= NEAR (>= the
+    # clamped min) and laterals inside the extrema, and crossings have depth
+    # == NEAR with a lerped lateral, so it can only widen the range.
+    min_lateral, max_lateral = min(laterals), max(laterals)
     min_depth, max_depth = min(depths), max(depths)
     if max_depth < NEAR:
         return None
     if min_depth < NEAR:
-        screens = []
-        for i in range(4):
-            j = (i + 1) & 3
-            if depths[i] >= NEAR:
-                screens.append(VIEW_CENTER + perspective_divide(
-                    laterals[i] * PROJ_X, depths[i]))
-            if (depths[i] < NEAR) != (depths[j] < NEAR):
-                t = perspective_divide((NEAR - depths[i]) << FX_SHIFT,
-                                       depths[j] - depths[i])
-                lateral = laterals[i] + (((laterals[j] - laterals[i]) * t) >> FX_SHIFT)
-                screens.append(VIEW_CENTER + perspective_divide(
-                    lateral * PROJ_X, NEAR))
-        if not screens:
-            return None
-    else:
-        left_planes = [PROJ_X * lat + LEFT_SCALE * depth
-                       for depth, lat in zip(depths, laterals)]
-        right_planes = [PROJ_X * lat - RIGHT_SCALE * depth
-                        for depth, lat in zip(depths, laterals)]
-        if max(left_planes) <= 0 or min(right_planes) >= 0:
-            return None
-        screens = [VIEW_CENTER + perspective_divide(lat * PROJ_X, depth)
-                   for depth, lat in zip(depths, laterals)]
-    left, right = min(screens) - STRIDE, max(screens) + STRIDE
+        min_depth = NEAR
+    min_denominator = min_depth if min_lateral < 0 else max_depth
+    max_denominator = min_depth if max_lateral > 0 else max_depth
+    min_screen = VIEW_CENTER + perspective_divide(min_lateral * PROJ_X, min_denominator)
+    max_screen = VIEW_CENTER + perspective_divide(max_lateral * PROJ_X, max_denominator)
+    left, right = min_screen - STRIDE, max_screen + STRIDE
     if right < 0 or left >= VIEW_COLS:
         return None
     return max(left, 0), min(right, VIEW_COLS - 1)
@@ -320,6 +308,13 @@ def main():
     # rather than slipping back in.
     assert "LEFT_REJECT_SCALE" not in RENDERER
     assert "RIGHT_REJECT_SCALE" not in RENDERER
+    # The near-plane polygon clip (per-corner DIVS.W plus crossing lerps, up to
+    # 8 DIVS.W per box) was replaced on 2026-09-07 by a min-depth clamp into the
+    # two-DIVS rectangle bound (cast -1% to -5%, output identical). Pin the
+    # clamp and the absence of the per-corner near divisions, so a future
+    # "optimisation" that re-adds them has to argue with a measurement.
+    assert "(box_min_depth < BSP_NEAR) ? BSP_NEAR" in RENDERER
+    assert "depths[3]" not in RENDERER
     # A visible-subsector cull may only skip a sprite when its full horizontal
     # footprint cannot cross any partition on the way to its leaf. The runtime
     # uses the cheap L1 upper bound on the splitter norm; prove every accepted
