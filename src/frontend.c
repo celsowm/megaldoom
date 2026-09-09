@@ -1,6 +1,9 @@
 #include "frontend.h"
 #include "debug_checkpoint.h"
 #include "game_audio.h"
+// The intermission screens are sized by the campaign length, which the map
+// generator emits alongside the map limits.
+#include "bsp/generated_map_limits.h"
 // The OPTIONS menu's VIEW SIZE row selects one of the viewport presets defined
 // alongside the render geometry.
 #include "raycast.h"
@@ -432,11 +435,43 @@ typedef struct {
     u16 end;
 } IntermissionMapTiles;
 
+// Per-level intermission art, indexed by the level just completed. `entering`
+// names the level being travelled TO, so the final campaign level has none and
+// the map screen simply omits it. Sized by MEGALDOOM_MAP_COUNT so a new level
+// is a row here, not another `completed_level == 0` branch.
+typedef struct {
+    u16 splat_x, splat_y;      // where this level's completion splat lands
+    u16 pointer_x, pointer_y;  // origin of the arrow that points AT this node
+} IntermissionNode;
+
+static const IntermissionNode INTERMISSION_NODES[MEGALDOOM_MAP_COUNT] = {
+    { 21, 20,  0,  0 },   // E1M1 - never pointed at; it is where you start
+    { 16, 18, 10, 18 },   // E1M2
+    {  6, 15,  0, 15 },   // E1M3
+};
+
+static const Image *intermission_stats_image(u16 completed_level) {
+    static const Image *const stats[MEGALDOOM_MAP_COUNT] = {
+        &frontend_intermission_stats,
+        &frontend_intermission_stats_e1m2,
+        &frontend_intermission_stats_e1m3,
+    };
+    return stats[(completed_level < MEGALDOOM_MAP_COUNT) ? completed_level : 0];
+}
+
+static const Image *intermission_entering_image(u16 completed_level) {
+    static const Image *const entering[MEGALDOOM_MAP_COUNT] = {
+        &frontend_intermission_entering_e1m2,
+        &frontend_intermission_entering_e1m3,
+        NULL,
+    };
+    return (completed_level < MEGALDOOM_MAP_COUNT) ? entering[completed_level] : NULL;
+}
+
 static IntermissionStatsTiles load_intermission_stats_tiles(u16 completed_level) {
     IntermissionStatsTiles tiles;
     u16 next = (u16)(TILE_USER_INDEX + frontend_ending_mars.tileset->numTile);
-    const Image *stats = completed_level == 0
-        ? &frontend_intermission_stats : &frontend_intermission_stats_e1m2;
+    const Image *stats = intermission_stats_image(completed_level);
     tiles.stats = next;
     VDP_loadTileSet(stats->tileset, next, DMA);
     next = (u16)(next + stats->tileset->numTile);
@@ -451,10 +486,11 @@ static IntermissionStatsTiles load_intermission_stats_tiles(u16 completed_level)
 static IntermissionMapTiles load_intermission_map_tiles(u16 completed_level) {
     IntermissionMapTiles tiles;
     u16 next = (u16)(TILE_USER_INDEX + frontend_ending_mars.tileset->numTile);
+    const Image *entering = intermission_entering_image(completed_level);
     tiles.entering = next;
-    if (completed_level == 0) {
-        VDP_loadTileSet(frontend_intermission_entering_e1m2.tileset, next, DMA);
-        next = (u16)(next + frontend_intermission_entering_e1m2.tileset->numTile);
+    if (entering != NULL) {
+        VDP_loadTileSet(entering->tileset, next, DMA);
+        next = (u16)(next + entering->tileset->numTile);
     }
     tiles.splat = next;
     VDP_loadTileSet(frontend_intermission_splat.tileset, next, DMA);
@@ -539,9 +575,8 @@ static void run_intermission_stats(const FrontendIntermissionStats *stats,
     u16 stage = 0;
     u16 previous;
 
-    draw_intermission_image(stats->completed_level == 0
-        ? &frontend_intermission_stats : &frontend_intermission_stats_e1m2,
-        tiles->stats);
+    draw_intermission_image(intermission_stats_image(stats->completed_level),
+                            tiles->stats);
     draw_intermission_values(tiles->digits, tiles->time_digits, 0, 0, 0, 0, 0);
     wait_for_release(INTERMISSION_INPUT);
     previous = JOY_readJoypad(JOY_1);
@@ -597,27 +632,34 @@ static void run_intermission_map(u16 completed_level,
     u16 previous;
     clear_plane_cpu(BG_A);
     // WIMAP0 node coordinates, converted to the tile-aligned 224-line frame.
-    if (completed_level == 0) {
-        draw_intermission_image(&frontend_intermission_entering_e1m2,
-                                tiles->entering);
+    const Image *entering = intermission_entering_image(completed_level);
+    if (entering != NULL) {
+        draw_intermission_image(entering, tiles->entering);
     }
-    draw_marker(&frontend_intermission_splat, tiles->splat, 21, 20);
-    if (completed_level > 0) {
-        draw_marker(&frontend_intermission_splat, tiles->splat, 16, 18);
+    // WIMAP0 node positions, one row per level, in the tile-aligned 224-line
+    // frame. E1M1 and E1M2 are the values this screen already shipped with;
+    // E1M3 follows the same WIMAP0 layout. A splat marks every level already
+    // finished, so the map fills in as the campaign advances.
+    for (u16 level = 0; level <= completed_level &&
+                        level < MEGALDOOM_MAP_COUNT; level++) {
+        draw_marker(&frontend_intermission_splat, tiles->splat,
+                    INTERMISSION_NODES[level].splat_x,
+                    INTERMISSION_NODES[level].splat_y);
     }
     wait_for_release(INTERMISSION_INPUT);
     previous = JOY_readJoypad(JOY_1);
     for (u16 frame = 0; frame < INTERMISSION_MAP_FRAMES; frame++) {
         if ((read_pressed(&previous) & INTERMISSION_INPUT) != 0) break;
-        if (completed_level == 0) {
-            VDP_clearTileMapRect(BG_A, 10, 18, 8, 2);
+        // The arrow blinks on the node being travelled TO, so it is absent
+        // after the final level. WIURH0 is 8 tiles wide and points right, so
+        // its origin sits to the left of the node it indicates.
+        if (completed_level + 1 < MEGALDOOM_MAP_COUNT) {
+            const IntermissionNode *next = &INTERMISSION_NODES[completed_level + 1];
+            VDP_clearTileMapRect(BG_A, next->pointer_x, next->pointer_y, 8, 2);
             if ((frame & 31) < 24) {
-                // WIURH0 points at the E1M2 node on the left. WIURH1 is the
-                // mirrored layout for a node on the other side of the label;
-                // alternating them moves the arrow between two map points.
                 // Blink visibility only, keeping the marker on its node.
                 draw_marker(&frontend_intermission_pointer0, tiles->pointer,
-                            10, 18);
+                            next->pointer_x, next->pointer_y);
             }
         }
         SYS_doVBlankProcess();
@@ -639,7 +681,9 @@ FrontendIntermissionAction frontend_run_intermission(
         load_intermission_map_tiles(stats->completed_level);
     run_intermission_map(stats->completed_level, &map_tiles);
     PAL_fadeOut(0, 63, BOOT_FADE_FRAMES, FALSE);
-    if (stats->completed_level == 0) {
+    // Anything but the last campaign level continues; only finishing the last
+    // one rolls the ending.
+    if (stats->completed_level + 1 < MEGALDOOM_MAP_COUNT) {
         game_audio_stop_music();
         clear_plane_cpu(BG_A);
         clear_plane_cpu(BG_B);

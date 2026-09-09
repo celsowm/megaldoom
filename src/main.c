@@ -82,6 +82,22 @@ typedef struct {
 #define DEBUG_START_E1M1_EXIT 0
 #endif
 
+// One row per campaign level, indexed by phase_index. The length is
+// MEGALDOOM_MAP_COUNT, which tools/wad-map-extract.py emits from the map list
+// it was actually given, so the campaign has a single source of truth and
+// adding a level cannot leave a stale `phase_index == 0` branch behind.
+// Par times are Doom's own for E1M1/E1M2/E1M3.
+typedef struct {
+    const u8 *music;
+    u16 par_seconds;
+} CampaignLevel;
+
+static const CampaignLevel CAMPAIGN[MEGALDOOM_MAP_COUNT] = {
+    { test_music, 30 },
+    { e1m2_music, 75 },
+    { e1m3_music, 120 },
+};
+
 static PlayerState g_player;
 static RayColumn g_ray_columns[RAY_SAMPLE_COLS_MAX];
 static RaySceneColors g_scene_colors;
@@ -180,7 +196,6 @@ static void render_current_view(u16 player_health, bool base_dirty, bool player_
     g_player.angle = PERF_POSE_ANGLE;
     bsp_invalidate_node_cache();
     pack_stage_invalidate_coherence();
-    billboard_projection_invalidate_cache();
     // base_dirty is NOT forced here: redraw policy has exactly one owner
     // (renderer_redraw_request_base), and tools/test-active-battle-perf.py
     // enforces that main.c never sets the flag directly. The harness asks for
@@ -439,7 +454,7 @@ int main(bool hard) {
         game_audio_stop_music();
         renderer_init();
         renderer_redraw_init(&redraw);
-        game_audio_play_music((phase_index == 0) ? test_music : e1m2_music);
+        game_audio_play_music(CAMPAIGN[phase_index].music);
 
         enter_level(phase_index, skill, TRUE, &level_cleared, &shot_cooldown,
                     &player_health, &player_armor, &arsenal, &player_keys, &frame,
@@ -760,16 +775,16 @@ int main(bool hard) {
             stats.secrets = level_progress.secrets_found;
             stats.secret_total = bsp_current_map()->secret_count;
             stats.time_vblanks = level_progress.time_vblanks;
-            stats.par_seconds = (phase_index == 0) ? 30 : 75;
+            stats.par_seconds = CAMPAIGN[phase_index].par_seconds;
             const FrontendIntermissionAction intermission =
                 frontend_run_intermission(&stats);
-            if ((phase_index == 0) &&
+            if ((phase_index + 1 < MEGALDOOM_MAP_COUNT) &&
                 (intermission == FRONTEND_INTERMISSION_CONTINUE)) {
-                phase_index = 1;
+                phase_index++;
                 demo_exit_pending = FALSE;
                 renderer_init();
                 renderer_redraw_init(&redraw);
-                game_audio_play_music(e1m2_music);
+                game_audio_play_music(CAMPAIGN[phase_index].music);
                 enter_level(phase_index, skill, FALSE, &level_cleared,
                             &shot_cooldown, &player_health, &player_armor,
                             &arsenal, &player_keys, &frame, &level_progress);

@@ -221,6 +221,7 @@ typedef struct {
 
 extern const BspMapData g_e1m1_map;
 extern const BspMapData g_e1m2_map;
+extern const BspMapData g_e1m3_map;
 extern const BspMapData *g_bsp_map;
 
 bool bsp_select_map(u16 level_index);

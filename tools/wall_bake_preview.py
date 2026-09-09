@@ -518,7 +518,14 @@ def build_preview(wad_path=DEFAULT_WAD, output_dir=DEFAULT_OUTPUT):
         scene_paths.append(path)
 
     auto_poses = {}
+    # A curated material that no map places any more (tools/texture_aliases.py
+    # folds COMPTILE and COMPUTE2 onto COMPTALL) has no SEG to stand in front
+    # of, so there is no pose to render. Its bake metrics above still run from
+    # the source PNGs; only the in-world preview is skipped.
+    placed = {seg.texture_name for seg in profile.segs}
     for name in TECH_MATERIALS:
+        if name not in placed:
+            continue
         pose, target, normal = auto_pose_for_material(
             profile, name, current_textures, scales)
         auto_poses[name] = pose

@@ -45,7 +45,7 @@ def main():
     )
     assert "remove_index_stable" not in registry[registry.index(
         "void billboard_registry_enemy_died"
-    ):registry.index("const u8 *billboard_registry_active_indices")]
+    ):registry.index("const u16 *billboard_registry_active_indices")]
 
     # The expensive player-distance products must occur only after the active
     # enemy guard in the update loop.

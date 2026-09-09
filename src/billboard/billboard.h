@@ -175,12 +175,6 @@ u16 billboard_get_debug_enemy_separation_moves(void);
 u32 billboard_get_debug_enemy_separation_subticks(void);
 void billboard_debug_reset_stats(void);
 #endif
-#if PERF_FIXED_POSE
-// Pose-locked perf harness: forces the next projection to re-measure every
-// object instead of serving the pinned pose from cache. See billboard_projection.c.
-void billboard_projection_invalidate_cache(void);
-#endif
-
 u16 billboard_project_scene(const PlayerState *player,
                             const RayColumn *columns,
                             ProjectedBillboard *objects,

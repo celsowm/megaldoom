@@ -51,7 +51,7 @@ u16 billboard_get_target_count(void) {
 }
 
 u16 billboard_get_target_health(void) {
-    const u8 *indices = billboard_registry_enemy_indices();
+    const u16 *indices = billboard_registry_enemy_indices();
     const u16 enemy_count = billboard_registry_enemy_count();
     for (u16 slot = 0; slot < enemy_count; slot++) {
         const u16 i = indices[slot];
@@ -107,7 +107,7 @@ BillboardFireResult billboard_fire_center(const PlayerState *player, u16 wall_de
     const s16 cos_a = fx_cos(player->angle);
     const s16 sin_a = fx_sin(player->angle);
 
-    const u8 *indices = billboard_registry_target_indices();
+    const u16 *indices = billboard_registry_target_indices();
     const u16 target_count = billboard_registry_target_count();
     for (u16 slot = 0; slot < target_count; slot++) {
         const u16 i = indices[slot];

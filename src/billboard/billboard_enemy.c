@@ -3,7 +3,7 @@
 
 #define ENEMY_RADIUS 24
 
-static u8 s_simulated_enemy_indices[BILLBOARD_OBJECT_COUNT];
+static u16 s_simulated_enemy_indices[BILLBOARD_OBJECT_COUNT];
 static u8 s_simulated_enemy_visibility[BILLBOARD_OBJECT_COUNT];
 static u16 s_simulated_enemy_count;
 #define SEPARATION_WAS_VISIBLE 0x01u
@@ -380,7 +380,7 @@ BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player,
     s_debug_separation_subticks = 0;
 #endif
 
-    const u8 *enemy_indices = billboard_registry_enemy_indices();
+    const u16 *enemy_indices = billboard_registry_enemy_indices();
     const u16 enemy_count = billboard_registry_enemy_count();
     for (u16 slot = 0; slot < enemy_count; slot++) {
         const u16 i = enemy_indices[slot];
@@ -410,7 +410,7 @@ BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player,
             update.pose_changed = update.pose_changed || change.pose_changed;
         }
         if ((object->life_state == ENEMY_ALIVE) && object->has_last_seen) {
-            s_simulated_enemy_indices[s_simulated_enemy_count] = (u8)i;
+            s_simulated_enemy_indices[s_simulated_enemy_count] = i;
             s_simulated_enemy_visibility[s_simulated_enemy_count] =
                 (!redraw_pending && (changed ? now_visible : was_visible)) ?
                     SEPARATION_WAS_VISIBLE : 0;

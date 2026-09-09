@@ -80,4 +80,8 @@ E1M1_CURATED_TARGET_LINEDEFS = (42, 43, 44, 55, 56)
 # texture actually used on an E1M1 SEG_DOOR (4, not the campaign-wide 5 --
 # generated_assets.h ships the union over the whole campaign, so it is
 # unaffected). Preview-only bookkeeping, not a shipped ROM table size.
-E1M1_PREVIEW_PACKED_PAIR_BYTES = 851968
+# 720896 (22 entries) since tools/texture_aliases.py folded E1M1's rare
+# materials onto generic ones -- COMPUTE2 and COMPTILE onto COMPTALL among
+# them. E1M1's GEOMETRY is deliberately untouched by aliasing, so every other
+# constant in this file must stay put; only the material count moves.
+E1M1_PREVIEW_PACKED_PAIR_BYTES = 720896

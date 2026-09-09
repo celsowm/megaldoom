@@ -32,6 +32,7 @@ def main():
     assert hashlib.sha256((ROOT / "DOOM1.WAD").read_bytes()).hexdigest().upper() == EXPECTED_SHA256
     e1m1 = generated("e1m1")
     e1m2 = generated("e1m2")
+    e1m3 = generated("e1m3")
     limits = (ROOT / "src" / "bsp" / "generated_map_limits.h").read_text()
     header = (ROOT / "src" / "bsp" / "bsp_map.h").read_text()
     runtime = (ROOT / "src" / "bsp" / "bsp_map.c").read_text()
@@ -44,19 +45,22 @@ def main():
     bsp_render_internal = (ROOT / "src" / "bsp" / "bsp_render_internal.h").read_text()
 
     for token in (
-        "MEGALDOOM_MAP_COUNT 2", "MEGALDOOM_MAP_MAX_SEGS 961",
-        "MEGALDOOM_MAP_MAX_VERTICES 942", "MEGALDOOM_MAP_MAX_SUBSECTORS 448",
-        "MEGALDOOM_MAP_MAX_NODES 447", "MEGALDOOM_MAP_MAX_SECTORS 200",
-        "MEGALDOOM_MAP_MAX_ACTIVE_THINGS 207",
+        "MEGALDOOM_MAP_COUNT 3", "MEGALDOOM_MAP_MAX_SEGS 968",
+        "MEGALDOOM_MAP_MAX_VERTICES 946", "MEGALDOOM_MAP_MAX_SUBSECTORS 461",
+        "MEGALDOOM_MAP_MAX_NODES 460", "MEGALDOOM_MAP_MAX_SECTORS 200",
+        "MEGALDOOM_MAP_MAX_ACTIVE_THINGS 317",
     ):
         assert token in limits
     assert "const BspMapData g_e1m1_map" in e1m1
     assert "const BspMapData g_e1m2_map" in e1m2
+    assert "const BspMapData g_e1m3_map" in e1m3
     assert "961u, 942u, 448u, 447u, 12u, 262u, 200u, 6u" in e1m2
     assert E1M1_HEADER_ROW in e1m1
     assert "typedef struct {" in header and "BspMapData" in header
     assert "bsp_select_map(u16 level_index)" in runtime
-    assert "g_bsp_map = &g_e1m2_map" in runtime
+    assert "static const BspMapData *const maps[MEGALDOOM_MAP_COUNT]" in runtime
+    assert "&g_e1m1_map, &g_e1m2_map, &g_e1m3_map," in runtime
+    assert "level_index >= MEGALDOOM_MAP_COUNT) return FALSE" in runtime
 
     bits1 = secret_bits(e1m1, "e1m1")
     bits2 = secret_bits(e1m2, "e1m2")
@@ -79,9 +83,15 @@ def main():
         assert token in billboard
     for token in (
         "enter_level", "pistol_start", "level_progress_reset",
-        "level_progress_visit", "stats.par_seconds = (phase_index == 0) ? 30 : 75",
-        "phase_index = 1", "enter_level(phase_index, skill, FALSE",
-        "*player_keys = BSP_KEY_NONE", "game_audio_play_music(e1m2_music)",
+        "level_progress_visit",
+        # Par time and music are per-level rows in one table, and the advance
+        # is bounded by the campaign length, so a new level needs no new branch.
+        "stats.par_seconds = CAMPAIGN[phase_index].par_seconds",
+        "static const CampaignLevel CAMPAIGN[MEGALDOOM_MAP_COUNT]",
+        "phase_index + 1 < MEGALDOOM_MAP_COUNT", "phase_index++;",
+        "enter_level(phase_index, skill, FALSE",
+        "*player_keys = BSP_KEY_NONE",
+        "game_audio_play_music(CAMPAIGN[phase_index].music)",
     ):
         assert token in main_source
     for token in (
@@ -90,6 +100,9 @@ def main():
         "INTERMISSION_INPUT", "SYS_doVBlankProcess();",
         "frontend_intermission_splat", "frontend_intermission_pointer0",
         "frontend_intermission_entering_e1m2",
+        "frontend_intermission_entering_e1m3",
+        "frontend_intermission_stats_e1m3",
+        "INTERMISSION_NODES[MEGALDOOM_MAP_COUNT]",
     ):
         assert token in frontend
     assert "ensure_extracted_assets" in generator
@@ -107,7 +120,7 @@ def main():
     assert "DEBUG_CHECKPOINT_KEY" in main_source
     assert "DEBUG_CHECKPOINT_EXIT" in main_source
 
-    print("ok    campaign: E1M1/E1M2 descriptors, carry/rebirth, stats and 3/6 secrets")
+    print("ok    campaign: E1M1/E1M2/E1M3 descriptors, carry/rebirth, stats and secrets")
 
 
 if __name__ == "__main__":

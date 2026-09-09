@@ -20,6 +20,7 @@ WORLD_ASSETS_PATH = ROOT / "tools" / "world_assets.py"
 ASSETS_PATH = ROOT / "src" / "bsp" / "generated_assets.h"
 MAP_PATH = ROOT / "src" / "bsp" / "generated_e1m1_map.c"
 MAP2_PATH = ROOT / "src" / "bsp" / "generated_e1m2_map.c"
+MAP3_PATH = ROOT / "src" / "bsp" / "generated_e1m3_map.c"
 LIMITS_PATH = ROOT / "src" / "bsp" / "generated_map_limits.h"
 LEGACY_WORLD_PALETTE = [
     (0x00, 0x00, 0x00), (0x00, 0x00, 0x91), (0x48, 0x00, 0x00),
@@ -239,7 +240,9 @@ def main():
         assert perceptual <= limit, (texture_name, perceptual, baseline)
 
     wall_textures = generated_wall_textures(assets)
-    assert len(wall_textures) == 53
+    # 33 after tools/texture_aliases.py folds the rare-material tail onto the
+    # generic head; the campaign is three maps but the atlas is smaller.
+    assert len(wall_textures) == 34
     # What actually reaches the screen: one texel per displayed pixel, which is
     # what FREEDOOM_WALL_PACKED_PAIRS carries. Every quality contract below is
     # measured on this, and emit_world_assets certifies the very same grids, so
@@ -294,7 +297,10 @@ def main():
                          extractor.WALL_TEX_WIDTH * extractor.WALL_TEX_HEIGHT)
     # Unchanged by the sub-texel pair change: the same byte count now carries
     # WALL_TEX_DISPLAY_WIDTH texels per row instead of WALL_TEX_WIDTH.
-    assert packed_pair_bytes == 2195456
+    # 1835008 for a THREE-map campaign, against 2195456 for the old two-map
+    # one: tools/texture_aliases.py folds the rare-material tail onto the
+    # generic head, so E1M3 fits with the atlas shrinking rather than growing.
+    assert packed_pair_bytes == 1835008
 
     curated_metrics = [wall_bake_preview.texture_metrics(name)
                        for name in extractor.TECH_WALL_MATERIALS]
@@ -315,11 +321,17 @@ def main():
     # bar; it measures -0.001). It has no isolated texels on either side, so
     # nothing above applies to it -- it is simply a material the recipe leaves
     # alone, and every hard guard in certify_metrics still holds for it.
+    # Measured from the source PNGs through the curated converter, so this list
+    # is unaffected by which materials the campaign actually uses.
     assert strict_improvements == [
         "COMPTILE", "COMPUTE2", "STARG3", "STARGR1", "STARTAN1", "STARTAN3",
         "SUPPORT2",
     ]
-    wall_bake_preview.certify_compute2_facade(display_textures["COMPUTE2"])
+    # The facade certification reads the BAKED atlas, so it only applies while
+    # COMPUTE2 is still in it. tools/texture_aliases.py currently folds it onto
+    # COMPTALL, and the check restores itself if that alias is ever removed.
+    if "COMPUTE2" in display_textures:
+        wall_bake_preview.certify_compute2_facade(display_textures["COMPUTE2"])
 
     # "Churn" -- the share of horizontally adjacent texel pairs with different
     # palette indices -- is the direct measure of the salt-and-pepper noise that
@@ -475,17 +487,20 @@ def main():
         temp_root = Path(temp)
         generated_map = temp_root / "generated_e1m1_map.c"
         generated_map2 = temp_root / "generated_e1m2_map.c"
+        generated_map3 = temp_root / "generated_e1m3_map.c"
         generated_assets = temp_root / "generated_assets.h"
         generated_limits = temp_root / "generated_map_limits.h"
         subprocess.run([
             sys.executable, str(EXTRACTOR_PATH),
-            "--wad", str(ROOT / "DOOM1.WAD"), "--maps", "E1M1", "E1M2",
+            "--wad", str(ROOT / "DOOM1.WAD"),
+            "--maps", "E1M1", "E1M2", "E1M3",
             "--map-out-dir", str(temp_root),
             "--assets-out", str(generated_assets),
             "--limits-out", str(generated_limits),
         ], cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
         assert generated_map.read_bytes() == MAP_PATH.read_bytes()
         assert generated_map2.read_bytes() == MAP2_PATH.read_bytes()
+        assert generated_map3.read_bytes() == MAP3_PATH.read_bytes()
         assert generated_assets.read_bytes() == ASSETS_PATH.read_bytes()
         assert generated_limits.read_bytes() == LIMITS_PATH.read_bytes()
 
@@ -499,10 +514,14 @@ def main():
         assert report["wad_sha256"] == wall_bake_preview.EXPECTED_WAD_SHA256
         assert report["segments"] == E1M1_SEG_COUNT
         assert report["packed_pair_bytes"] == E1M1_PREVIEW_PACKED_PAIR_BYTES
-        assert len(scene_paths) == 14
+        # 12, not 14: COMPTILE and COMPUTE2 are aliased onto COMPTALL, so no
+        # SEG places them and they get no in-world preview scene.
+        assert len(scene_paths) == 12
         assert len(list((preview_root / "atlases").glob("*.png"))) == 8
-        assert len(list((preview_root / "motion").glob("*.gif"))) == 8
-        assert len(list((preview_root / "motion").glob("*-contact.png"))) == 8
+        # One motion strip per curated material still placed in E1M1: 6 of the
+        # 8, for the same reason as the scene count above.
+        assert len(list((preview_root / "motion").glob("*.gif"))) == 6
+        assert len(list((preview_root / "motion").glob("*-contact.png"))) == 6
         assert (preview_root / "report.json").is_file()
 
     print("ok    walls: 64x128, stride 2/80 columns, native-V short textures")

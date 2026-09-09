@@ -7,7 +7,13 @@
       "map": "E1M1",
       "waypoints": "out/e2e/e1m1.waypoints",
       "frames": 100000,
-      "requiredEvents": ["started", "moved", "combat_hit", "interaction", "exit"],
+      "requiredEvents": [
+        "started",
+        "moved",
+        "combat_hit",
+        "interaction",
+        "exit"
+      ],
       "requiredKeys": 0,
       "requiresLockedDoor": false
     },
@@ -17,8 +23,30 @@
       "map": "E1M2",
       "waypoints": "out/e2e/e1m2.waypoints",
       "frames": 500000,
-      "requiredEvents": ["started", "moved", "combat_hit", "interaction", "exit"],
+      "requiredEvents": [
+        "started",
+        "moved",
+        "combat_hit",
+        "interaction",
+        "exit"
+      ],
       "requiredKeys": 4,
+      "requiresLockedDoor": true
+    },
+    {
+      "name": "E1M3",
+      "index": 2,
+      "map": "E1M3",
+      "waypoints": "out/e2e/e1m3.waypoints",
+      "frames": 500000,
+      "requiredEvents": [
+        "started",
+        "moved",
+        "combat_hit",
+        "interaction",
+        "exit"
+      ],
+      "requiredKeys": 3,
       "requiresLockedDoor": true
     }
   ]

@@ -174,18 +174,6 @@ def early_culled(side: int, forward: int, width: int,
     return right_numerator < left_clip or left_numerator >= right_clip
 
 
-def geometry_key(type_id: int, visual: int, frame: int) -> int:
-    geometry_frame = frame if visual == 19 else 0
-    return ((type_id & 0x1F) | ((visual & 0x1F) << 5) |
-            ((geometry_frame & 0x0F) << 10))
-
-
-def cache_hit(cached: tuple[int, int, int, int],
-              current: tuple[int, int, int, int]) -> bool:
-    """Camera generation, object X/Y, and geometry key must all match."""
-    return cached == current
-
-
 def main() -> int:
     raycast = RAYCAST.read_text(encoding="utf-8")
     billboard = BILLBOARD.read_text(encoding="utf-8")
@@ -287,21 +275,20 @@ def main() -> int:
     if ("left_numerator" not in billboard or "right_numerator" not in billboard or
             "RAY_VIEW_CENTER_X + 2" not in billboard):
         raise ValueError("conservative pre-division frustum rejection is missing")
-    cache_tokens = [
-        "billboard_projection_cache_begin", "s_cache_player_x == player->x",
-        "s_cache_player_y == player->y", "s_cache_player_angle == player->angle",
-        "cache->object_x == object->x", "cache->object_y == object->y",
-        "cache->geometry_key == geometry_key",
-        "visual == BILLBOARD_VISUAL_BARREL_EXPLODING",
-        # Every per-frame geometry must fold its frame into the key, or a
-        # stationary object animating in front of a stationary camera keeps
-        # serving its first pose's box -- which would pin a corpse at standing
-        # height however correct ENEMY_FRAME_GEOMETRY is.
-        "visual == BILLBOARD_VISUAL_DUMMY",
-        "visual == BILLBOARD_VISUAL_DUMMY_DAMAGED",
-    ]
-    if any(token not in projector for token in cache_tokens):
-        raise ValueError("billboard measurement cache invalidation contract changed")
+    # The per-object measurement cache was removed: at 317 active THINGs it
+    # cost 7608 bytes of a 64 KB work RAM budget, and the DEBUG_PERF Qc counter
+    # showed it hitting on 100% of still-camera frames and 0% of moving ones --
+    # it bought nothing in the frame budget that is actually tight. Every
+    # active object is now measured fresh. Guard against a per-object array
+    # quietly coming back without that budget conversation happening again.
+    if "billboard_measure_tracked" not in projector:
+        raise ValueError("projection no longer measures objects directly")
+    for token in ("s_measure_cache", "BillboardMeasureCache",
+                  "billboard_projection_cache_begin", "s_cache_generation"):
+        if token in projector:
+            raise ValueError(
+                "per-object measurement cache reintroduced (%s): re-check the "
+                "work-RAM budget in tools/check-rom.ps1 first" % token)
 
     # Three successive turns preserve the exact wall/billboard horizontal law.
     # The changing side coordinate models a fixed prop as the camera rotates.
@@ -335,23 +322,6 @@ def main() -> int:
                 touches = max(left, right) >= 0 and left < VIEW_W
                 if touches and early_culled(side, forward, width, left_offset, scale):
                     raise ValueError("early frustum rejection lost an edge sprite")
-
-    # Camera changes invalidate every measurement. Object movement and geometry
-    # changes invalidate only that object's entry; enemy animation reuses fixed
-    # geometry while each barrel-explosion shape gets a distinct key.
-    enemy_key_0 = geometry_key(5, 2, 0)
-    enemy_key_3 = geometry_key(5, 2, 3)
-    barrel_key_0 = geometry_key(7, 19, 0)
-    barrel_key_3 = geometry_key(7, 19, 3)
-    if enemy_key_0 != enemy_key_3 or barrel_key_0 == barrel_key_3:
-        raise ValueError("animation geometry cache key is over/under-invalidating")
-    base = (4, 100, 200, enemy_key_0)
-    if not cache_hit(base, base):
-        raise ValueError("unchanged projection did not reuse its measurement")
-    if (cache_hit(base, (5, 100, 200, enemy_key_0)) or
-            cache_hit(base, (4, 101, 200, enemy_key_0)) or
-            cache_hit(base, (4, 100, 200, geometry_key(5, 3, 0)))):
-        raise ValueError("camera, movement, or geometry change reused stale projection")
 
     depths = [0x7FFF] * VIEW_W
     depths[80] = 96
@@ -406,7 +376,7 @@ def main() -> int:
     if edge_clip[1] < 0 or not span_visible(128, edge_clip[0], edge_clip[1], edge_depths):
         raise ValueError("partially on-screen item was incorrectly clipped")
 
-    print("ok    native/fallback projection, conservative cull, cache invalidation, and span z-test")
+    print("ok    native/fallback projection, conservative cull, direct measurement, and span z-test")
     return 0
 
 

@@ -322,13 +322,22 @@ assert "renderer_restore_after_menu();" in MAIN
 # half of the pair and puts the gameplay lines back on RESUME.
 assert "PAL_setColors(0, frontend_pause_0.palette->data, 64, CPU);" in FRONTEND
 assert "clear_plane_cpu(BG_B);\n    PAL_setColors(0, frontend_pause_0" in FRONTEND
-assert "game_audio_play_music((phase_index == 0) ? test_music : e1m2_music);" in MAIN
+# Each level plays its own music, and the campaign is a table rather than a
+# chain of phase_index comparisons, so adding a level cannot leave one branch
+# behind still playing the previous level's track.
+assert "game_audio_play_music(CAMPAIGN[phase_index].music);" in MAIN
+assert "static const CampaignLevel CAMPAIGN[MEGALDOOM_MAP_COUNT]" in MAIN
+assert "{ test_music, 30 }," in MAIN
+assert "{ e1m2_music, 75 }," in MAIN
+assert "{ e1m3_music, 120 }," in MAIN
+assert "phase_index + 1 < MEGALDOOM_MAP_COUNT" in MAIN
 assert "game_audio_play_music(intermission_music);" in FRONTEND
 assert "PAL_fadeOut(0, 63, BOOT_FADE_FRAMES, FALSE);\n    frontend_video_init();" in FRONTEND
 assert "level_cleared = TRUE" not in MAIN
 assert "demo_exit_pending" in MAIN and "frontend_run_intermission(&stats)" in MAIN
 assert 'XGM2 intermission_music "music/d_inter.vgm"' in RESOURCES
 assert 'XGM2 e1m2_music  "music/d_e1m2.vgm"' in RESOURCES
+assert 'XGM2 e1m3_music  "music/d_e1m3.vgm"' in RESOURCES
 assert 'SPRITE frontend_sega_s        "frontend/sega_s.png" 4 6 FAST 0' in RESOURCES
 assert 'SPRITE frontend_sega_e        "frontend/sega_e.png" 4 6 FAST 0' in RESOURCES
 assert 'SPRITE frontend_sega_g        "frontend/sega_g.png" 4 6 FAST 0' in RESOURCES

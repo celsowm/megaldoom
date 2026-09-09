@@ -24,6 +24,7 @@ import tempfile
 
 import bsp_emit
 import doom_map
+import texture_aliases
 import world_assets
 from wad_reader import WadFile
 from wad_source import EXPECTED_CAMPAIGN_WAD_SHA256
@@ -112,8 +113,8 @@ def emit_limits(path, maps):
         "MAP_MAX_AUTOMAP_LINES": max(len(map_data.automap_lines) for map_data in maps),
         "MAP_MAX_ACTIVE_THINGS": active_max,
     }
-    if values["MAP_MAX_ACTIVE_THINGS"] > 255:
-        raise SystemExit("active THING count exceeds u8 registry index capacity")
+    if values["MAP_MAX_ACTIVE_THINGS"] > 65535:
+        raise SystemExit("active THING count exceeds u16 registry index capacity")
     lines = [
         "#ifndef MEGALDOOM_GENERATED_MAP_LIMITS_H",
         "#define MEGALDOOM_GENERATED_MAP_LIMITS_H",
@@ -197,6 +198,9 @@ def main():
             for seg in campaign_map.out_segs
             if seg["type"] == doom_map.SEG_DOOR
         }
+        texture_aliases.assert_alias_table_sound(
+            door_texture_names=door_texture_names,
+            known_texture_names=combined_usage)
         sector_owner = max(campaign_maps, key=lambda value: len(value.sectors))
 
         temp_paths = []

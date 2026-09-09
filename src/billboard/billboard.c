@@ -434,7 +434,7 @@ static u8 pickup_weapon_id(u8 type_id) {
 BillboardPickupResult billboard_collect_near(s32 x, s32 y) {
     BillboardPickupResult result = {FALSE, BILLBOARD_EFFECT_NONE, 0, BSP_KEY_NONE,
                                     BILLBOARD_PICKUP_NONE, AMMO_NONE, WEAPON_FIST};
-    const u8 *indices = billboard_registry_active_indices();
+    const u16 *indices = billboard_registry_active_indices();
     const u16 active_count = billboard_registry_active_count();
     for (u16 slot = 0; slot < active_count; slot++) {
         const u16 i = indices[slot];
@@ -503,7 +503,7 @@ BillboardPickupResult billboard_collect_near(s32 x, s32 y) {
 }
 
 bool billboard_position_blocked(s32 x, s32 y, s32 radius) {
-    const u8 *indices = billboard_registry_blocking_indices();
+    const u16 *indices = billboard_registry_blocking_indices();
     const u16 blocking_count = billboard_registry_blocking_count();
 #if DEBUG_PERF
     g_debug_prop_collision_calls++;

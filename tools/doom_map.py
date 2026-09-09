@@ -27,6 +27,7 @@ import struct
 import raycast_constants
 
 from flat_map_recipes import resolve_flat_material_transfers
+from texture_aliases import resolve_texture_alias
 from world_assets import FALLBACK_TEXTURE
 
 # Flat runtime contract (must match src/bsp/bsp_map.h / billboard_internal.h).
@@ -1089,6 +1090,11 @@ def load_map(wad, mapn, apply_recipes=True, apply_windows=True,
                 continue  # degenerate linedef
             stype, texture_name, tex_u_offset, tex_v_offset, door_group, required_key, flags = \
                 seg_type_and_visual(seg)
+            # Fold rare materials onto generic ones before anything downstream
+            # sees the name, so texture_usage, the door set, the world palette
+            # and the emitted texture ids are all canonical. Purely cosmetic:
+            # geometry, collision, LOS and door grouping are untouched.
+            texture_name = resolve_texture_alias(texture_name)
             texture_usage[texture_name] += 1
             out_segs.append(dict(v1=seg["v1"], v2=seg["v2"],
                                 nx=nx, ny=ny, texture_name=texture_name,

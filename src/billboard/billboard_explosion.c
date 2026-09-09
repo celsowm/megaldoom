@@ -36,7 +36,7 @@ static void process_blast(s32 bx, s32 by,
     // The target registry is exactly the union affected by blast damage:
     // barrels plus enemies. Avoid walking pickups and decorative billboards;
     // moving enemies remain present without requiring a static spatial grid.
-    const u8 *indices = billboard_registry_target_indices();
+    const u16 *indices = billboard_registry_target_indices();
     const u16 target_count = billboard_registry_target_count();
     PendingHit pending[BILLBOARD_OBJECT_COUNT];
     u16 pending_count = 0;

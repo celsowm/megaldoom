@@ -66,7 +66,12 @@ def main():
     assert "test-level-e2e.ps1" in campaign_runner
     assert "e2e-common.ps1" in focused_exit
     assert "generate-e2e-routes.py" in level_runner
-    assert "-Waypoints" in level_runner
+    # The runner drives the ROM by waypoints, not by a canned button route.
+    # It passes them through a splatted parameter hashtable, so the contract to
+    # assert is that entry -- not a literal "-Waypoints" spelling the script has
+    # no reason to use.
+    assert "Waypoints = $waypoints" in level_runner
+    assert "Invoke-MegalDoomRoute @routeParams" in level_runner
     assert "waypoints.complete" in level_runner
     assert "godHits -eq 0" in level_runner
     print("ok    E2E levels: manifest covers %d campaign maps" % map_count)

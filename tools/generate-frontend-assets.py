@@ -35,7 +35,7 @@ SEGA_FONT = BOOT_SOURCE / "SEGA.TTF"
 MANIFEST_NAME = ".frontend-assets.json"
 # Bumped whenever the generated set changes shape, so a stale cache is rebuilt
 # rather than silently reused. 12: the OPTIONS panel gained a VIEW SIZE row.
-MANIFEST_VERSION = 12
+MANIFEST_VERSION = 13
 
 sys.path.insert(0, str(ROOT / "tools"))
 import raycast_constants
@@ -60,7 +60,7 @@ DOOM_FONT_TEXT = (
     "DOOM IS A TRADEMARK OF ID SOFTWARE.", "BUILT FOR SEGA MEGA DRIVE", "SEGA",
     "BUILT FOR THE 16-BIT ERA", "SOFTWARE DEVELOPMENT KIT", "FOLLOW THE PROJECT",
     "GITHUB.COM/CELSOWM/MEGALDOOM", "X.COM/PROFCELSOFONTES", "THANKS FOR PLAYING",
-    "EPISODE COMPLETE", "THE INVASION CONTINUES...", "VERSION 0.1", "PRESS START",
+    "EPISODE COMPLETE", "THE INVASION CONTINUES...", "VERSION 0.2", "PRESS START",
 )
 GLYPHS = tuple(sorted({
     f"STCFN{ord(character):03d}"
@@ -79,7 +79,7 @@ BOOT_INPUTS = (
     SEGA_FONT,
 )
 INTERMISSION_PATCHES = (
-    "WIMAP0", "WILV00", "WILV01", "WIOSTK", "WIOSTI", "WISCRT2",
+    "WIMAP0", "WILV00", "WILV01", "WILV02", "WIOSTK", "WIOSTI", "WISCRT2",
     "WITIME", "WIPAR", "WISPLAT", "WIURH0", "WIPCNT",
     "WICOLON", "WIF", "WIENTER", *(f"WINUM{i}" for i in range(10)),
 )
@@ -116,8 +116,9 @@ def expected_outputs() -> tuple[str, ...]:
         "cacodemon_projectile.png",
         "sega_s.png", "sega_e.png", "sega_g.png", "sega_a.png",
         "ending_mars.png", "ending_thanks.png", "intermission_stats.png",
-        "intermission_stats_e1m2.png",
-        "intermission_entering_e1m2.png", "intermission_digits.png",
+        "intermission_stats_e1m2.png", "intermission_stats_e1m3.png",
+        "intermission_entering_e1m2.png", "intermission_entering_e1m3.png",
+        "intermission_digits.png",
         "intermission_time_digits.png", "intermission_splat.png",
         "intermission_pointer0.png",
     ]
@@ -377,6 +378,11 @@ def centered_doom_text_at(image: Image.Image, text: str, x: int, y: int,
     image.alpha_composite(doom_text(text, source), (x, y))
 
 
+def doom_cap_height(source: Path = SOURCE) -> int:
+    """Height of a capital letter, which is where the STCFN baseline sits."""
+    return load("STCFN065", source).height  # 'A'
+
+
 def doom_text(text: str, source: Path = SOURCE) -> Image.Image:
     glyphs: list[Image.Image | None] = []
     width = 0
@@ -384,13 +390,19 @@ def doom_text(text: str, source: Path = SOURCE) -> Image.Image:
         glyph = None if character == " " else load(f"STCFN{ord(character):03d}", source)
         glyphs.append(glyph)
         width += 5 if glyph is None else glyph.width + 1
+    # STCFN glyphs are not a fixed height: a capital is 8x7 while a period is
+    # 4x3. They share a BASELINE, not a top edge, so each one is dropped by the
+    # difference. Compositing them all at y=0 floated the short glyphs to the
+    # top of the line, which turned "..." into what read as three apostrophes
+    # and lifted the dot in "VERSION 0.1" into a superscript.
+    baseline = doom_cap_height(source)
     out = transparent_canvas(width - 1, 8)
     x = 0
     for glyph in glyphs:
         if glyph is None:
             x += 5
         else:
-            out.alpha_composite(glyph, (x, 0))
+            out.alpha_composite(glyph, (x, max(0, baseline - glyph.height)))
             x += glyph.width + 1
     return out
 
@@ -666,10 +678,11 @@ def make_intermission_stats(source: Path, level_name: str = "WILV00") -> Image.I
     return image
 
 
-def make_intermission_entering(source: Path) -> Image.Image:
+def make_intermission_entering(source: Path,
+                               level_name: str = "WILV01") -> Image.Image:
     image = transparent_canvas(320, 224)
     centered_patch(image, intermission_patch("WIENTER", source), 14)
-    centered_patch(image, intermission_patch("WILV01", source), 32)
+    centered_patch(image, intermission_patch(level_name, source), 32)
     return image
 
 
@@ -732,7 +745,7 @@ def make_ending_thanks(source: Path) -> Image.Image:
     centered_doom_text(image, "EPISODE COMPLETE", 48, source)
     centered_doom_text(image, "THE INVASION CONTINUES...", 80, source)
     centered_doom_text(image, "THANKS FOR PLAYING", 112, source)
-    centered_doom_text(image, "VERSION 0.1", 136, source)
+    centered_doom_text(image, "VERSION 0.2", 136, source)
     centered_doom_text(image, "PRESS START", 176, source)
     return image
 
@@ -779,7 +792,9 @@ def generate(source: Path, output: Path) -> None:
     ending_thanks = make_ending_thanks(source)
     intermission_stats = make_intermission_stats(source)
     intermission_stats_e1m2 = make_intermission_stats(source, "WILV01")
+    intermission_stats_e1m3 = make_intermission_stats(source, "WILV02")
     intermission_entering = make_intermission_entering(source)
+    intermission_entering_e1m3 = make_intermission_entering(source, "WILV02")
     intermission_digits = make_intermission_digits(source)
     intermission_time_digits = make_intermission_time_digits(source)
     intermission_splat = padded_intermission_patch("WISPLAT", 32, 24, source)
@@ -791,7 +806,8 @@ def generate(source: Path, output: Path) -> None:
     palette = build_palette(images)
     ending_mars_palette = build_palette_for_images([
         ending_mars, intermission_stats, intermission_stats_e1m2,
-        intermission_entering,
+        intermission_stats_e1m3, intermission_entering,
+        intermission_entering_e1m3,
         intermission_digits, intermission_time_digits, intermission_splat,
         intermission_pointer0,
     ])
@@ -901,7 +917,9 @@ def generate(source: Path, output: Path) -> None:
     for filename, image in (
         ("intermission_stats.png", intermission_stats),
         ("intermission_stats_e1m2.png", intermission_stats_e1m2),
+        ("intermission_stats_e1m3.png", intermission_stats_e1m3),
         ("intermission_entering_e1m2.png", intermission_entering),
+        ("intermission_entering_e1m3.png", intermission_entering_e1m3),
         ("intermission_digits.png", intermission_digits),
         ("intermission_time_digits.png", intermission_time_digits),
         ("intermission_splat.png", intermission_splat),

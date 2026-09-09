@@ -82,9 +82,14 @@ bool bsp_select_map(u16 level_index) {
     g_bsp_map = &g_hand_map;
     return TRUE;
 #else
-    if (level_index == 0) g_bsp_map = &g_e1m1_map;
-    else if (level_index == 1) g_bsp_map = &g_e1m2_map;
-    else return FALSE;
+    // One table, not a branch chain: the campaign length lives in
+    // MEGALDOOM_MAP_COUNT, which the generator emits from the map list it was
+    // actually given, so adding a level cannot leave a stale dispatch behind.
+    static const BspMapData *const maps[MEGALDOOM_MAP_COUNT] = {
+        &g_e1m1_map, &g_e1m2_map, &g_e1m3_map,
+    };
+    if (level_index >= MEGALDOOM_MAP_COUNT) return FALSE;
+    g_bsp_map = maps[level_index];
     return TRUE;
 #endif
 }
