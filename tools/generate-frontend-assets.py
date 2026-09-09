@@ -588,10 +588,10 @@ def make_boot_social() -> Image.Image:
     image = boot_background()
     draw = ImageDraw.Draw(image)
     centered_boot_text(image, "FOLLOW THE PROJECT", 44)
-    draw_github_icon(draw, 42, 97)
-    draw_x_icon(draw, 42, 137)
-    centered_doom_text_at(image, "GITHUB.COM/CELSOWM/MEGALDOOM", 72, 100)
-    centered_doom_text_at(image, "X.COM/PROFCELSOFONTES", 72, 140)
+    draw_github_icon(draw, 24, 97)
+    draw_x_icon(draw, 24, 137)
+    centered_doom_text_at(image, "GITHUB.COM/CELSOWM/MEGALDOOM", 48, 100)
+    centered_doom_text_at(image, "X.COM/PROFCELSOFONTES", 48, 140)
     centered_boot_text(image, "THANKS FOR PLAYING", 187)
     return image
 
