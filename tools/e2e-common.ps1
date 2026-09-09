@@ -47,7 +47,9 @@ function Invoke-MegalDoomRoute {
         [Parameter(Mandatory = $true)][int]$Frames,
         [Parameter(Mandatory = $true)][string]$Report,
         [Parameter(Mandatory = $true)][string]$Mailbox,
-        [string]$RequireCheckpoints = ""
+        [string]$RequireCheckpoints = "",
+        [string]$Trace = "",
+        [int]$TraceEvery = 0
     )
 
     $runnerParams = @{
@@ -60,5 +62,7 @@ function Invoke-MegalDoomRoute {
     if ($RequireCheckpoints) {
         $runnerParams.RequireCheckpoints = $RequireCheckpoints
     }
+    if ($Trace) { $runnerParams.Trace = $Trace }
+    if ($TraceEvery -gt 0) { $runnerParams.TraceEvery = $TraceEvery }
     & (Join-Path $PSScriptRoot "run-blastem-route.ps1") @runnerParams
 }

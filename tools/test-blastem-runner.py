@@ -1,9 +1,21 @@
 #!/usr/bin/env python3
 """Contracts for deterministic BlastEm route orchestration."""
+import importlib.util
+import sys
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _load_refresh_tool():
+    """tools/refresh-blastem-patch.py is not importable by its own name."""
+    path = Path(__file__).resolve().parent / "refresh-blastem-patch.py"
+    spec = importlib.util.spec_from_file_location("refresh_blastem_patch", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["refresh_blastem_patch"] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def main():
@@ -28,7 +40,22 @@ def main():
     runner_source = (ROOT / ".externals" / "blastem" / "megaldoom_runner.c").read_text()
     runner_header = (ROOT / ".externals" / "blastem" / "megaldoom_runner.h").read_text()
     blastem_source = (ROOT / ".externals" / "blastem" / "blastem.c").read_text()
-    assert "MEGALDOOM_RUNNER_VERSION 5" in runner_source
+    assert "MEGALDOOM_RUNNER_VERSION 6" in runner_source
+    # The follower decides on the GAMEPLAY clock, not the host frame clock.
+    # One callback per VDP frame against a gameplay tick that lands every ten
+    # to sixty of them meant every budget in the follower expired about an
+    # order of magnitude early: the no-progress limit fired after two ticks of
+    # real movement and the recovery phases cycled inside a single tick.
+    assert "WAYPOINT_RECOVERY_PHASE_TICKS" in runner_source
+    assert "WAYPOINT_TICK_WATCHDOG_FRAMES" in runner_source
+    assert "no_progress_ticks" in runner_source
+    assert "no_progress_frames" not in runner_source
+    assert "state.mailbox_raw[13]" in runner_source, "tick gate lost its clock"
+    assert "gameplay_tick" in (ROOT / "src" / "debug_checkpoint.h").read_text()
+    # Steering follows the certified polyline with a lookahead goal; aiming at
+    # the immediate waypoint walks a 16-unit collision circle into the wall of
+    # any corridor the 16-unit grid path renders as a zigzag.
+    assert "waypoint_pursuit_goal" in runner_source
     assert "WAYPOINT_NO_PROGRESS_LIMIT" in runner_source
     assert "waypoint_recovery_input" in runner_source
     assert "velocityX" in runner_source and "noProgress" in runner_source
@@ -38,13 +65,18 @@ def main():
     assert '\\"waypoints\\"' in runner_source
     assert "megaldoom_waypoints_load" in runner_header
     assert '"--md-waypoints"' in blastem_source
-    runner_patch = (ROOT / "tools" / "blastem-runner.patch").read_text()
-    assert "MEGALDOOM_RUNNER_VERSION 5" in runner_patch
-    assert "megaldoom_waypoints_load" in runner_patch
-    assert "WAYPOINT_NO_PROGRESS_LIMIT" in runner_patch
-    assert "WAYPOINT_RECOVERY_PHASE_FRAMES" in runner_patch
-    assert "waypoint_recovery_input" in runner_patch
-    assert "stalled_frames" not in runner_patch
+    # The patch is the ONLY tracked copy of the runner: .externals/ is
+    # gitignored and tools/build-blastem-windows.ps1 applies the patch just
+    # once, when megaldoom_runner.c is absent. Checking a handful of tokens
+    # let the two drift silently -- a verified waypoint fix lived for a whole
+    # session in the untracked tree and would have vanished on a fresh clone.
+    # Compare them in full instead, and say how to resolve a mismatch.
+    refresh = _load_refresh_tool()
+    current = refresh.PATCH.read_bytes().decode("utf-8")
+    if refresh.rebuild() != current.replace("\r\n", "\n"):
+        raise AssertionError(
+            "tools/blastem-runner.patch does not match .externals/blastem. "
+            "Run: python tools/refresh-blastem-patch.py")
 
     # Reusing a capture directory is opt-in and removes only the exact PPM
     # pattern the runner owns; unrelated images remain available for review.

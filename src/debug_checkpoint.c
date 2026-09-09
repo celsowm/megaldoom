@@ -68,6 +68,7 @@ void debug_e2e_pose(s32 x, s32 y, u16 angle) {
     g_debug_e2e_state.player_x = (s16)x;
     g_debug_e2e_state.player_y = (s16)y;
     g_debug_e2e_state.player_angle = angle;
+    g_debug_e2e_state.gameplay_tick++;
 }
 #else
 void debug_e2e_level_start(u16 level) { (void)level; }

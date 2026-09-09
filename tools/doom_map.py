@@ -309,14 +309,26 @@ def validate_spatial_grid(vertices, segs, grid_min_x, grid_min_y, grid_w,
 
 
 def certify_flat_progression(vertices, segs, things, start_x, start_y,
-                             capture_route=False, collision_radius_override=None):
-    """Prove a concrete medium/single-player route through the emitted flat map."""
+                             capture_route=False, collision_radius_override=None,
+                             exit_seg_indices=None):
+    """Prove a concrete medium/single-player route through the emitted flat map.
+
+    The search stops at whichever exit it reaches first, which is the right
+    contract for proving a map completable.  A caller that needs a specific
+    exit -- the campaign E2E must certify normal progression, not the secret
+    exit E1M3 happens to place much nearer the start -- passes the SEG indices
+    it will accept in exit_seg_indices.
+    """
     collision_radius = (PLAYER_RADIUS if collision_radius_override is None
                         else collision_radius_override)
     exits = [(index, seg) for index, seg in enumerate(segs)
-             if seg["type"] == SEG_EXIT]
+             if seg["type"] == SEG_EXIT and
+             (exit_seg_indices is None or index in exit_seg_indices)]
     if not exits:
-        raise ValueError("no supported exit linedef (special 11/51) survives flattening")
+        raise ValueError("no supported exit linedef (special 11/51) survives flattening"
+                         if exit_seg_indices is None else
+                         "none of the %d requested exit SEGs survives flattening"
+                         % len(exit_seg_indices))
 
     active_things = runtime_things(things)
     source_key_mask = KEY_NONE

@@ -7,6 +7,8 @@ param(
     [string]$Mailbox = "",
     [string]$PerfMailbox = "",
     [string]$RequireCheckpoints = "",
+    [string]$Trace = "",
+    [int]$TraceEvery = 0,
     [string]$CaptureDir = "",
     [int]$CaptureEvery = 0,
     [switch]$CleanCaptureDir
@@ -49,6 +51,10 @@ if ($Waypoints) { $runnerArgs += @("--md-waypoints", $Waypoints) }
 if ($Mailbox) { $runnerArgs += @("--md-mailbox", $Mailbox) }
 if ($PerfMailbox) { $runnerArgs += @("--md-perf-mailbox", $PerfMailbox) }
 if ($RequireCheckpoints) { $runnerArgs += @("--md-require-checkpoints", $RequireCheckpoints) }
+# Diagnostic only: the trace never feeds back into input, so a traced and an
+# untraced run of the same waypoints must report the same cycle count.
+if ($Trace) { $runnerArgs += @("--md-trace", (AbsolutePath $Trace)) }
+if ($TraceEvery -gt 0) { $runnerArgs += @("--md-trace-every", $TraceEvery) }
 if ($CaptureDir) {
     $CaptureDir = AbsolutePath $CaptureDir
     New-Item -ItemType Directory -Force -Path $CaptureDir | Out-Null

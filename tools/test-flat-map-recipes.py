@@ -9,6 +9,7 @@ import tempfile
 import flat_map_preview
 from flat_map_recipes import (FLAT_MATERIAL_TRANSFER_RECIPES,
                               resolve_flat_material_transfers)
+from texture_aliases import resolve_texture_alias
 from wad_reader import WadFile
 from wad_source import EXPECTED_CAMPAIGN_WAD_SHA256 as EXPECTED_SHA256
 from e1m1_expected import (E1M1_SEG_COUNT, E1M1_EXIT_SEG_INDEX,
@@ -124,7 +125,13 @@ def test_current_wad_contract():
                if baseline_seg["texture_name"] != candidate_seg["texture_name"]]
     assert len(changed) == len(E1M1_CURATED_TARGET_LINEDEFS)
     assert {seg["source_linedef"] for seg in changed} == set(E1M1_CURATED_TARGET_LINEDEFS)
-    assert {seg["texture_name"] for seg in changed} == {"COMPUTE2"}
+    # The recipe names COMPUTE2 (flat_map_recipes.py), but texture_aliases
+    # deliberately folds the computer panels onto COMPTALL downstream, so the
+    # emitted name is the resolved one.  Resolve it here rather than restating
+    # the destination: hardcoding it is what left this contract stale when the
+    # alias table landed.
+    assert ({seg["texture_name"] for seg in changed} ==
+            {resolve_texture_alias("COMPUTE2")})
     assert all(seg["curated_material"] for seg in changed)
     # The recipe matches by geometry (endpoints/heights), not by linedef id, so
     # renumbering (a different, correctly-verified source WAD) shifts which

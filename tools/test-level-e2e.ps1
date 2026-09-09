@@ -1,5 +1,11 @@
 param(
-    [Parameter(Mandatory = $true)][string]$Level
+    [Parameter(Mandatory = $true)][string]$Level,
+    # Diagnosing a waypoint stall needs the per-frame follower trace, and only
+    # this script knows how to build the level and resolve its mailbox.  A run
+    # here spans hundreds of thousands of host frames, so decimate first
+    # (-TraceEvery 30) and re-run at full rate on the window that matters.
+    [string]$Trace = "",
+    [int]$TraceEvery = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -45,6 +51,8 @@ $routeParams = @{
     Report = $report
     Mailbox = $mailbox
 }
+if ($Trace) { $routeParams.Trace = $Trace }
+if ($TraceEvery -gt 0) { $routeParams.TraceEvery = $TraceEvery }
 Invoke-MegalDoomRoute @routeParams
 
 $data = Get-Content -LiteralPath $report -Raw | ConvertFrom-Json

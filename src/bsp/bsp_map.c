@@ -519,9 +519,19 @@ BspUseResult bsp_use_in_front(s32 x, s32 y, u16 angle, u8 owned_keys) {
 
         for (u16 i = 0; i < bsp_seg_count; i++) {
             const BspSeg *s = &bsp_segs[i];
-            if (s->type == BSP_SEG_WALL ||
-                (s->type == BSP_SEG_DOOR &&
-                 (s->flags & BSP_SEG_FLAG_DIRECT_USE) == 0)) {
+            /* Only these four surfaces answer to use. WINDOW and SKY_WALL
+             * are solid scenery, and for a non-door SEG the door_group and
+             * required_key bytes carry wall-band data instead (see the band
+             * packing in tools/doom_map.py) -- so accepting one here reads
+             * that data as a lock. E1M2's final door is the case that showed
+             * it: a BROWN1 window beside the EXITDOOR packs group 128 and
+             * key 208, so pressing C at the door could select the window and
+             * report DOOR_ACTION_LOCKED for a key that does not exist. The
+             * door never opened. */
+            if (!(s->type == BSP_SEG_EXIT || s->type == BSP_SEG_SWITCH ||
+                  s->type == BSP_SEG_TRIGGER ||
+                  (s->type == BSP_SEG_DOOR &&
+                   (s->flags & BSP_SEG_FLAG_DIRECT_USE) != 0))) {
                 continue;
             }
             const u32 candidate_dist2 = seg_point_dist2(s, px, py);

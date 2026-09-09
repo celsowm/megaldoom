@@ -46,7 +46,7 @@
         "interaction",
         "exit"
       ],
-      "requiredKeys": 3,
+      "requiredKeys": 1,
       "requiresLockedDoor": true
     }
   ]

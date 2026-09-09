@@ -112,6 +112,15 @@ typedef struct {
     u8 use_action;
     u8 use_target;
     u8 use_key;
+    /* Monotonic gameplay-iteration counter, published next to the pose it
+     * belongs to. The host runs one callback per VDP frame, but gameplay only
+     * advances a tick every ~10-20 of those while the camera is moving, so a
+     * follower that reasons in host frames re-decides its input about ten
+     * times per tick and expires its own stall timers before the player has
+     * moved at all. This byte lets the host tell the two clocks apart. It
+     * occupies what was already struct padding, so every later field keeps its
+     * offset and the mailbox stays 20 bytes. */
+    u8 gameplay_tick;
     s16 player_x;
     s16 player_y;
     u16 player_angle;

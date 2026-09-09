@@ -21,7 +21,7 @@ diff --git a/blastem.c b/blastem.c
  #ifndef DISABLE_NUKLEAR
  #include "nuklear_ui/blastem_nuklear.h"
  #endif
-@@ -427,6 +428,17 @@ int main(int argc, char ** argv)
+@@ -427,6 +428,20 @@ int main(int argc, char ** argv)
  	uint8_t debug_target = 0;
  	char *port;
  	for (int i = 1; i < argc; i++) {
@@ -33,6 +33,8 @@ diff --git a/blastem.c b/blastem.c
 +			else megaldoom_runner_set_capture(argv[i], 1);
 +			continue;
 +		}
++		if (!strcmp(argv[i], "--md-trace")) { if (++i >= argc) fatal_error("--md-trace needs a value\n"); megaldoom_runner_set_trace(argv[i]); continue; }
++		if (!strcmp(argv[i], "--md-trace-every")) { if (++i >= argc) fatal_error("--md-trace-every needs a value\n"); megaldoom_runner_set_trace_every(atoi(argv[i])); continue; }
 +		if (!strcmp(argv[i], "--md-capture-every")) { if (++i >= argc) fatal_error("--md-capture-every needs a value\n"); megaldoom_runner_set_capture_every(atoi(argv[i])); continue; }
 +		if (!strcmp(argv[i], "--md-mailbox")) { uint32_t address, bytes = 128; if (++i >= argc || sscanf(argv[i], "%x:%u", &address, &bytes) < 1) fatal_error("--md-mailbox needs ADDRESS[:BYTES]\n"); megaldoom_runner_set_mailbox(address, bytes); continue; }
 +		if (!strcmp(argv[i], "--md-perf-mailbox")) { uint32_t address, bytes = 128; if (++i >= argc || sscanf(argv[i], "%x:%u", &address, &bytes) < 1) fatal_error("--md-perf-mailbox needs ADDRESS[:BYTES]\n"); megaldoom_runner_set_perf_mailbox(address, bytes); continue; }
@@ -40,7 +42,7 @@ diff --git a/blastem.c b/blastem.c
  		if (argv[i][0] == '-') {
  			switch(argv[i][1]) {
  			case 'b':
-@@ -779,5 +791,6 @@ int main(int argc, char ** argv)
+@@ -779,5 +794,6 @@ int main(int argc, char ** argv)
  	}
  #endif //__EMSCRIPTEN__
  
@@ -95,7 +97,7 @@ new file mode 100644
 index 0000000..0000000
 --- /dev/null
 +++ b/megaldoom_runner.c
-@@ -0,0 +548 @@
+@@ -0,0 +1,835 @@
 +#include "megaldoom_runner.h"
 +#include "genesis.h"
 +#include "io.h"
@@ -110,7 +112,7 @@ index 0000000..0000000
 +#define M_PI 3.14159265358979323846
 +#endif
 +
-+#define MEGALDOOM_RUNNER_VERSION 5
++#define MEGALDOOM_RUNNER_VERSION 6
 +#define MD_MASK_UP    0x001
 +#define MD_MASK_DOWN  0x002
 +#define MD_MASK_LEFT  0x004
@@ -121,8 +123,20 @@ index 0000000..0000000
 +#define E2E_EVENT_STARTED    0x01
 +#define E2E_EVENT_COMBAT_HIT 0x04
 +#define E2E_EVENT_EXIT       0x80
++/* Both budgets are counted in GAMEPLAY TICKS, never in host frames. The
++ * runner callback fires once per VDP frame, but the game only advances a tick
++ * every ~10-20 of those while the camera is moving, so the same numbers
++ * expressed in host frames meant "give up after two ticks of no progress" and
++ * "switch recovery phase faster than the player can act on any of them". The
++ * game publishes its tick counter in byte 13 of the E2E mailbox. */
 +#define WAYPOINT_NO_PROGRESS_LIMIT 30
-+#define WAYPOINT_RECOVERY_PHASE_FRAMES 8
++#define WAYPOINT_RECOVERY_PHASE_TICKS 8
++/* Escape hatch for the tick gate below: gameplay stops publishing ticks
++ * entirely once a level ends and the intermission takes over, but the EXIT
++ * waypoint still has to observe its event bit and finish the route. Any value
++ * comfortably longer than a real tick (~10-20 host frames under motion) keeps
++ * the gate's effect while making sure the follower can never wedge itself. */
++#define WAYPOINT_TICK_WATCHDOG_FRAMES 120
 +
 +typedef enum {
 +    WAYPOINT_MOVE, WAYPOINT_USE, WAYPOINT_FIRE, WAYPOINT_HURT, WAYPOINT_EXIT
@@ -148,18 +162,37 @@ index 0000000..0000000
 +    uint32_t require_checkpoints, checkpoints_seen;
 +    waypoint *waypoints;
 +    uint32_t waypoint_count, waypoint_index, waypoint_started;
++    /* Gameplay clock, read from mailbox byte 13. `held_mask` is what the pad
++     * keeps reporting between ticks: an input must be held across every host
++     * frame of a tick for gameplay to sample it at all, so re-deciding per
++     * host frame both starves real inputs and manufactures phantom ones. */
++    uint8_t last_tick, tick_valid;
++    uint32_t tick_count, waypoint_started_tick, held_mask, last_decision_frame;
 +    uint32_t waypoint_complete, waypoint_failed, waypoint_use_pulse, waypoint_use_serial;
 +    uint32_t waypoint_use_pulses;
 +    uint16_t waypoint_fire_hold;
 +    uint32_t last_input_mask, input_frames;
 +    int16_t previous_pose_x, previous_pose_y;
 +    uint8_t previous_pose_valid;
-+    uint16_t no_progress_frames;
++    uint16_t no_progress_ticks;
 +    uint32_t last_distance2;
++    uint32_t best_distance2;
 +    uint8_t progress_valid;
 +    recovery_phase recovery;
 +    int16_t last_vx, last_vy;
 +    uint32_t last_distance;
++    /* Leg origin: where the player actually was when this waypoint became
++     * current. The pair (leg origin -> waypoint) is the line the run is
++     * supposed to stay on, which is the only way to see lateral drift; a
++     * heading-only view cannot distinguish "aimed at the target" from
++     * "aimed at the target from 143 units off the corridor". */
++    int16_t leg_origin_x, leg_origin_y;
++    uint8_t leg_origin_valid;
++    char *trace;
++    FILE *trace_file;
++    uint32_t trace_every;
++    int32_t trace_cross, trace_along;
++    uint8_t trace_valid;
 +    char waypoint_failure[256];
 +    uint8_t mailbox_raw[512];
 +} runner_state;
@@ -167,6 +200,9 @@ index 0000000..0000000
 +
 +static char *copy_string(const char *value) { size_t n = strlen(value) + 1; char *out = malloc(n); if (out) memcpy(out, value, n); return out; }
 +static void set_string(char **out, const char *value) { free(*out); *out = copy_string(value); }
++
++void megaldoom_runner_set_trace(const char *path) { set_string(&state.trace, path); }
++void megaldoom_runner_set_trace_every(uint32_t every) { state.trace_every = every; }
 +
 +/* Each line is a (frame, mask) edge: the mask takes effect at `frame` and
 + * holds for every subsequent frame until the next line changes it (a route
@@ -318,8 +354,10 @@ index 0000000..0000000
 +    state.waypoint_index++; state.waypoint_started = 0;
 +    state.waypoint_use_pulse = 0; state.waypoint_use_serial = 0;
 +    state.waypoint_fire_hold = 0;
-+    state.no_progress_frames = 0; state.progress_valid = 0;
++    state.no_progress_ticks = 0; state.progress_valid = 0;
++    state.best_distance2 = 0xFFFFFFFFu;
 +    state.recovery = RECOVERY_NONE;
++    state.leg_origin_valid = 0;
 +    if (state.waypoint_index == state.waypoint_count) state.waypoint_complete = 1;
 +}
 +
@@ -331,21 +369,106 @@ index 0000000..0000000
 +    return error;
 +}
 +
-+static uint32_t waypoint_turn(const waypoint *current, int16_t px, int16_t py, uint16_t angle)
++/* Decompose the pose against the leg (leg origin -> waypoint target) into a
++ * distance ALONG the leg and a signed perpendicular offset from it. `along` is
++ * clamped to the segment so a pose past the target keeps a meaningful goal.
++ * The perpendicular term is what a heading-only controller is blind to: under
++ * the game's DOOM-style thrust-plus-momentum movement
++ * (src/player_controller.c simulate_doom_movement_tic) a heading correction
++ * does not cancel lateral velocity already accumulated, so the offset
++ * integrates instead of decaying. Returns 0 when there is no usable leg. */
++static int waypoint_leg_geometry(const waypoint *current, int16_t px, int16_t py,
++                                 int32_t *along, int32_t *cross, int32_t *length)
++{
++    int32_t sx, sy, rx, ry, len2;
++    double len;
++    if (!state.leg_origin_valid) return 0;
++    sx = (int32_t)current->x - state.leg_origin_x;
++    sy = (int32_t)current->y - state.leg_origin_y;
++    len2 = sx * sx + sy * sy;
++    if (len2 <= 0) return 0;
++    len = sqrt((double)len2);
++    rx = (int32_t)px - state.leg_origin_x;
++    ry = (int32_t)py - state.leg_origin_y;
++    *along = (int32_t)(((double)(rx * sx + ry * sy)) / len);
++    *cross = (int32_t)(((double)(sx * ry - sy * rx)) / len);
++    *length = (int32_t)len;
++    if (*along < 0) *along = 0;
++    if (*along > *length) *along = *length;
++    return 1;
++}
++
++/* `travelling` selects between the two jobs this function does. Aiming at a
++ * door surface for USE is pure heading. Walking a leg is not: the player must
++ * also stay ON the leg, and heading alone cannot express that. Under
++ * thrust-plus-momentum a heading that merely points at the target is satisfied
++ * from anywhere on a widening cone, so lateral offset accumulates instead of
++ * decaying -- measured on E1M2, the run left a corridor at y=-608 by 15 units
++ * and wedged on the doorway edge while the follower reported itself aimed.
++ * The cross-track term makes being off the line an error in its own right. */
++/* Steer at a point a fixed distance ahead ALONG the certified polyline rather
++ * than at the next waypoint.
++ *
++ * The route generator emits certified cells on a 16-unit grid, so a corridor
++ * that runs at 45 degrees comes out as a zigzag of east and south steps. The
++ * immediate waypoint therefore points due east while the corridor itself runs
++ * south-east, and following it walks the player's 16-unit collision circle
++ * into the diagonal wall -- measured in E1M2's passage below (-1408,-2080),
++ * where the free channel is a single diagonal band and the run wedged at
++ * (-1427,-2076) with the target due east of it. Averaging the next few cells
++ * into one goal point recovers the direction the corridor actually has, and
++ * because the goal always sits on the certified path, lateral drift corrects
++ * itself without a separate cross-track term. */
++static void waypoint_pursuit_goal(int16_t px, int16_t py,
++                                  int32_t *goal_x, int32_t *goal_y)
++{
++    const double lookahead = 64.0;
++    double remaining = lookahead, cx = px, cy = py;
++    uint32_t i = state.waypoint_index;
++    for (;;) {
++        const waypoint *w = &state.waypoints[i];
++        double dx = (double)w->x - cx, dy = (double)w->y - cy;
++        double len = sqrt(dx * dx + dy * dy);
++        if (len > 0.0 && len >= remaining) {
++            *goal_x = (int32_t)(cx + dx * (remaining / len));
++            *goal_y = (int32_t)(cy + dy * (remaining / len));
++            return;
++        }
++        remaining -= len;
++        cx = (double)w->x; cy = (double)w->y;
++        /* Never look past the end of the path or into a USE/FIRE pose: those
++         * are aiming positions, not corridor geometry. */
++        if (i + 1 >= state.waypoint_count) break;
++        if (state.waypoints[i + 1].action != WAYPOINT_MOVE) break;
++        i++;
++    }
++    *goal_x = (int32_t)cx; *goal_y = (int32_t)cy;
++}
++
++static uint32_t waypoint_turn(const waypoint *current, int16_t px, int16_t py,
++                              uint16_t angle, uint8_t travelling)
 +{
 +    int32_t aim_dx = (int32_t)current->aim_x - px;
 +    int32_t aim_dy = (int32_t)current->aim_y - py;
-+    /* Axis-aligned MOVE legs need no turn; keep this explicit so a narrow
-+     * corridor cannot accumulate a spurious heading correction. */
-+    if (current->action == WAYPOINT_MOVE && aim_dx == 0 && aim_dy != 0) return 0;
 +    int32_t error = waypoint_angle_error(aim_dx, aim_dy, angle);
++
 +    /* The game turn controller is accelerated and advances several angle
 +     * units per gameplay tick.  Requiring an exact zero makes it hunt around
 +     * the heading (and never release the D-pad), especially on a slow render
 +     * frame.  A small angular dead-band is still tight enough for USE's
 +     * certified probe while allowing forward movement to take over. */
 +    {
-+        const int32_t tolerance = 8;
++        /* The dead-band has to shrink as the target gets close: 8 units of a
++         * 256-step circle is 11 degrees, which is a harmless heading error at
++         * 600 units out and a miss at 40. */
++        /* A USE is a certified probe: the route's expected target was
++         * chosen offline for one heading, and bsp_use_in_front picks the
++         * surface nearest the aim ray. Pressing C with 11 degrees of slop
++         * resolves a different surface than the one the route declared --
++         * E1M3 pressed door group 15 where the route named 11. Aim tightly
++         * before pressing; only travel keeps the wide band. */
++        const int32_t remaining = (int32_t)state.last_distance;
++        const int32_t tolerance = travelling ? (remaining < 96 ? 3 : 8) : 2;
 +        if (error >= -tolerance && error <= tolerance) return 0;
 +    }
 +    if (error > 0) return MD_MASK_RIGHT;
@@ -353,32 +476,69 @@ index 0000000..0000000
 +    return 0;
 +}
 +
-+static uint32_t waypoint_move_drive(uint32_t frame, int32_t dx, int32_t dy,
-+                                    int16_t vx, int16_t vy, uint8_t have_velocity)
++/* Throttle for a MOVE leg.  Braking has to be expressed against the waypoint's
++ * OWN arrival radius and the momentum actually on the player, never against
++ * fixed distances: with the old constants (reverse inside 192, coast inside
++ * 384, Manhattan) and the generator's 80-unit arrival radius, every approach
++ * longer than one grid step entered a band where the follower refused to
++ * accelerate but had not arrived either.  It then alternated DOWN and A|UP
++ * forever -- measured on E1M2's leg to (-240,-608): 5974 ticks of no progress
++ * oscillating between x=-98 and x=-154, never closing the last 86 units.
++ * Distances here are Euclidean, matching the arrival test in waypoint_decide;
++ * mixing Manhattan into a Euclidean comparison is how the dead band opened. */
++/* Does the path turn sharply at the waypoint being approached? Certified
++ * routes through DOOM's diagonal passages are one-cell-wide staircases -- the
++ * free space around E1M2's (-1392,-2080) is a single 16-unit channel with wall
++ * on both diagonals -- so carrying speed into a corner puts the player's
++ * 16-unit collision circle into the wall the staircase existed to avoid. */
++static uint8_t waypoint_corner_ahead(const waypoint *current)
 +{
-+    const int32_t distance = (dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy);
++    const waypoint *next;
++    double ax, ay, bx, by, la, lb;
++    if (state.waypoint_index + 1 >= state.waypoint_count) return 0;
++    if (!state.leg_origin_valid) return 0;
++    next = &state.waypoints[state.waypoint_index + 1];
++    ax = (double)current->x - state.leg_origin_x;
++    ay = (double)current->y - state.leg_origin_y;
++    bx = (double)next->x - current->x;
++    by = (double)next->y - current->y;
++    la = sqrt(ax * ax + ay * ay);
++    lb = sqrt(bx * bx + by * by);
++    if (la <= 0.0 || lb <= 0.0) return 0;
++    /* cos 40 degrees; anything tighter is a corner to be taken slowly. */
++    return ((ax * bx + ay * by) / (la * lb)) < 0.766 ? 1 : 0;
++}
++
++static uint32_t waypoint_move_drive(int32_t distance, int32_t radius,
++                                    int32_t dx, int32_t dy,
++                                    int16_t vx, int16_t vy, uint8_t have_velocity,
++                                    uint8_t corner)
++{
 +    const int32_t toward = (int32_t)vx * dx + (int32_t)vy * dy;
-+    const int32_t speed2 = (int32_t)vx * vx + (int32_t)vy * vy;
-+    (void)frame;
-+    /* Brake before entering the declared arrival circle.  A MOVE waypoint is
-+     * only complete after the pose is inside that circle, but carrying the
-+     * previous segment's momentum through it can leave the next target behind
-+     * a wall.  DOWN is the normal gameplay reverse command; it changes only
-+     * momentum and never the pose directly. */
-+    if (have_velocity && distance <= 192 && toward > 0 && speed2 > 0) {
-+        return MD_MASK_DOWN;
++    const int32_t speed = (vx < 0 ? -vx : vx) + (vy < 0 ? -vy : vy);
++    /* DOOM friction bleeds momentum over several ticks rather than stopping
++     * the player dead, so the gap that the current momentum will still carry
++     * is what decides whether thrust is needed. */
++    const int32_t stopping = speed * 3;
++    if (have_velocity && toward > 0 && distance <= radius) return MD_MASK_DOWN;
++    /* A corner is entered slowly by coasting sooner, never by reversing.
++     * Reversing here made the follower press DOWN whenever it was within
++     * radius + stopping of a corner, which at speed is a band far wider than
++     * the gap itself: it braked, drifted backwards along its own facing,
++     * re-accelerated, and walked itself west out of E1M2's staircase instead
++     * of through it. Friction alone bleeds the speed off without ever pushing
++     * the player the wrong way. */
++    if (have_velocity && toward > 0 &&
++        distance <= radius + (corner ? stopping * 2 : stopping)) {
++        return 0;
 +    }
-+    /* Release thrust while approaching a target.  This is ordinary gameplay
-+     * friction, not a teleport or a position write; it prevents momentum from
-+     * carrying the player through the next certified corner. */
-+    if (have_velocity && distance <= 384 && toward > 0) return 0;
 +    return MD_MASK_A | MD_MASK_UP;
 +}
 +
 +static uint32_t waypoint_recovery_input(int32_t dx, int32_t dy, uint16_t angle)
 +{
-+    const uint16_t phase = (uint16_t)((state.no_progress_frames /
-+                                      WAYPOINT_RECOVERY_PHASE_FRAMES) % 5);
++    const uint16_t phase = (uint16_t)((state.no_progress_ticks /
++                                      WAYPOINT_RECOVERY_PHASE_TICKS) % 6);
 +    int32_t error;
 +    if (phase == 0) {
 +        state.recovery = RECOVERY_BRAKE;
@@ -400,13 +560,28 @@ index 0000000..0000000
 +        return 0;
 +    }
 +    if (phase == 2) {
-+        state.recovery = RECOVERY_STRAFE;
 +        /* C+direction is the game's strafe chord.  player_controller.c
 +         * explicitly suppresses PLAYER_CONTROL_USE for a directional C
 +         * chord, so this cannot create an interaction serial. */
++        state.recovery = RECOVERY_STRAFE;
 +        if (error > 0) return MD_MASK_A | MD_MASK_C | MD_MASK_RIGHT;
 +        if (error < 0) return MD_MASK_A | MD_MASK_C | MD_MASK_LEFT;
 +        return MD_MASK_A | MD_MASK_C | MD_MASK_RIGHT;
++    }
++    if (phase == 4) {
++        /* Nothing kinematic has worked, so consider that the obstruction is a
++         * thing rather than geometry: an unawakened monster standing in a
++         * corridor blocks the player exactly like a wall and never moves on
++         * its own. Measured on E1M2's leg to (-192,-608), the run held forward
++         * for 73,378 host frames across 6,002 ticks and the pose changed six
++         * times. Shooting is ordinary gameplay -- the route already contains
++         * FIRE waypoints -- and B must be released between shots for the
++         * semi-auto edge, so alternate on the gameplay clock. */
++        state.recovery = RECOVERY_NONE;
++        if (error > 8) return MD_MASK_RIGHT;
++        if (error < -8) return MD_MASK_LEFT;
++        if (state.no_progress_ticks & 1) return MD_MASK_A | MD_MASK_UP | MD_MASK_B;
++        return MD_MASK_A | MD_MASK_UP;
 +    }
 +    if (phase == 3) {
 +        state.recovery = RECOVERY_NONE;
@@ -419,7 +594,7 @@ index 0000000..0000000
 +    return MD_MASK_A | MD_MASK_UP;
 +}
 +
-+static uint32_t waypoint_input(uint32_t frame)
++static uint32_t waypoint_decide(uint32_t frame)
 +{
 +    waypoint *current;
 +    int32_t dx, dy;
@@ -432,15 +607,22 @@ index 0000000..0000000
 +    if (mailbox_s16(state.mailbox_raw, 14) == -32768 ||
 +        mailbox_s16(state.mailbox_raw, 16) == -32768) return 0;
 +    current = &state.waypoints[state.waypoint_index];
-+    if (!state.waypoint_started) state.waypoint_started = frame;
-+    if (frame - state.waypoint_started > current->timeout) {
++    if (!state.waypoint_started) {
++        state.waypoint_started = frame;
++        state.waypoint_started_tick = state.tick_count;
++    }
++    /* Deadline in gameplay ticks. Spending it in host frames let a heavier
++     * frame consume a waypoint's whole budget without the player having taken
++     * a single step, which is exactly the "a render-cost change must not steer
++     * a run" contract this file's waypoint format was designed around. */
++    if (state.tick_count - state.waypoint_started_tick > current->timeout) {
 +        snprintf(state.waypoint_failure, sizeof(state.waypoint_failure),
 +                 "timeout wp=%u action=%u pose=%d,%d angle=%u target=%d,%d aim=%d,%d velocity=%d,%d distance=%u recovery=%u noProgress=%u use=%u/%u result=%u:%u",
 +                 state.waypoint_index, current->action, mailbox_s16(state.mailbox_raw, 14),
 +                 mailbox_s16(state.mailbox_raw, 16), mailbox_u16(state.mailbox_raw, 18),
 +                 current->x, current->y, current->aim_x, current->aim_y,
 +                 state.last_vx, state.last_vy, state.last_distance,
-+                 state.recovery, state.no_progress_frames,
++                 state.recovery, state.no_progress_ticks,
 +                 state.waypoint_use_serial, state.mailbox_raw[9], state.mailbox_raw[10],
 +                 state.mailbox_raw[11]);
 +        waypoint_fail(state.waypoint_failure);
@@ -457,14 +639,48 @@ index 0000000..0000000
 +    state.previous_pose_y = py;
 +    state.last_vx = vx; state.last_vy = vy;
 +    state.previous_pose_valid = 1;
++    if (!state.leg_origin_valid) {
++        /* The leg is the CERTIFIED edge (previous waypoint -> this one), not
++         * the chord from wherever the player happens to stand. A generous
++         * arrival radius lets one pose satisfy several waypoints in a row, and
++         * anchoring the leg to that pose turns the survivors into a diagonal
++         * shortcut -- across a staircase corner, straight into the wall the
++         * staircase existed to go around. Anchoring it to the previous
++         * waypoint instead means the cross-track term pulls the player back
++         * onto the path the certifier actually proved. */
++        if (state.waypoint_index > 0) {
++            const waypoint *previous = &state.waypoints[state.waypoint_index - 1];
++            state.leg_origin_x = previous->x; state.leg_origin_y = previous->y;
++        } else {
++            state.leg_origin_x = px; state.leg_origin_y = py;
++        }
++        state.leg_origin_valid = 1;
++    }
 +    dx = (int32_t)current->x - px;
 +    dy = (int32_t)current->y - py;
++    {
++        int32_t along = 0, cross = 0, length = 0;
++        state.trace_valid = (uint8_t)waypoint_leg_geometry(current, px, py,
++                                                           &along, &cross, &length);
++        state.trace_along = along;
++        state.trace_cross = cross;
++    }
 +    distance2 = (uint32_t)(dx * dx + dy * dy);
 +    state.last_distance = (uint32_t)sqrt((double)distance2);
-+    if (state.progress_valid && distance2 + 16 >= state.last_distance2) {
-+        if (state.no_progress_frames != 0xFFFF) state.no_progress_frames++;
++    /* Progress is measured against the CLOSEST this waypoint has ever been,
++     * not against the previous frame. Comparing to the previous frame let a
++     * player bouncing off geometry reset the counter on every rebound: the
++     * distance dipped, the counter cleared, and no_progress_ticks never
++     * reached WAYPOINT_NO_PROGRESS_LIMIT, so recovery never engaged and the
++     * run simply burned its whole frame budget in place. Against the best
++     * distance, oscillation accumulates and recovery fires as designed. */
++    if (state.progress_valid && distance2 + 16 >= state.best_distance2) {
++        if (state.no_progress_ticks != 0xFFFF) state.no_progress_ticks++;
 +    } else {
-+        state.no_progress_frames = 0;
++        state.no_progress_ticks = 0;
++    }
++    if (!state.progress_valid || distance2 < state.best_distance2) {
++        state.best_distance2 = distance2;
 +    }
 +    state.last_distance2 = distance2;
 +    state.progress_valid = 1;
@@ -474,13 +690,14 @@ index 0000000..0000000
 +        return 0;
 +    }
 +    if (current->action == WAYPOINT_MOVE &&
-+        state.no_progress_frames > WAYPOINT_NO_PROGRESS_LIMIT) {
++        state.no_progress_ticks > WAYPOINT_NO_PROGRESS_LIMIT) {
 +        return waypoint_recovery_input(dx, dy,
 +                                       mailbox_u16(state.mailbox_raw, 18));
 +    }
 +    if (current->action == WAYPOINT_USE && distance2 <= (uint32_t)current->radius * current->radius) {
 +        uint32_t turn = waypoint_turn(current, mailbox_s16(state.mailbox_raw, 14),
-+                                      mailbox_s16(state.mailbox_raw, 16), mailbox_u16(state.mailbox_raw, 18));
++                                      mailbox_s16(state.mailbox_raw, 16),
++                                      mailbox_u16(state.mailbox_raw, 18), 0);
 +        if (turn) return turn;
 +        /* C stays down until gameplay acknowledges its rising edge. It is one
 +         * logical pulse, regardless of how many emulator frames rendering took. */
@@ -548,19 +765,79 @@ index 0000000..0000000
 +        /* Approach the waypoint position first; aim_x/aim_y are the surface
 +         * target and may be beyond a doorway, so steering at them would cut
 +         * the certified path and never enter the USE arrival radius. */
-+        travel.aim_x = current->x; travel.aim_y = current->y;
-+        if (current->action == WAYPOINT_MOVE && dx == 0) {
-+            return waypoint_move_drive(frame, dx, dy, vx, vy, have_velocity);
++        int32_t goal_x = current->x, goal_y = current->y;
++        if (current->action == WAYPOINT_MOVE) {
++            waypoint_pursuit_goal(px, py, &goal_x, &goal_y);
 +        }
++        travel.aim_x = (int16_t)goal_x; travel.aim_y = (int16_t)goal_y;
 +        uint32_t turn = waypoint_turn(&travel, mailbox_s16(state.mailbox_raw, 14),
-+                                      mailbox_s16(state.mailbox_raw, 16), mailbox_u16(state.mailbox_raw, 18));
++                                      mailbox_s16(state.mailbox_raw, 16),
++                                      mailbox_u16(state.mailbox_raw, 18), 1);
 +        if (turn) return turn;
 +        if (current->action == WAYPOINT_MOVE) {
-+            return waypoint_move_drive(frame, dx, dy, vx, vy, have_velocity);
++            return waypoint_move_drive((int32_t)state.last_distance,
++                                       current->radius, dx, dy, vx, vy,
++                                       have_velocity,
++                                       waypoint_corner_ahead(current));
 +        }
 +    return MD_MASK_A | MD_MASK_UP;
 +}
 +    return 0;
++}
++
++/* One CSV row per sampled frame. The report only ever published a single
++ * end-of-run snapshot, which is far too little to debug a 100,000-frame
++ * navigation run: it says where the follower ended up, never how it got
++ * there. Writing is strictly observational -- it reads the same mailbox the
++ * controller already read and never feeds anything back into set_input -- so a
++ * traced run and an untraced run must produce identical cycle counts. */
++static void trace_row(uint32_t frame, uint32_t mask)
++{
++    const waypoint *current;
++    if (!state.trace_file) return;
++    if (state.trace_every > 1 && (frame % state.trace_every)) return;
++    if (!state.waypoints || state.waypoint_index >= state.waypoint_count) return;
++    current = &state.waypoints[state.waypoint_index];
++    fprintf(state.trace_file,
++            "%u,%u,%u,%u,%d,%d,%u,%d,%d,%d,%d,%u,%d,%d,%d,%d,%u,%u,%u,%u\n",
++            frame, state.tick_count, state.waypoint_index, current->action,
++            mailbox_s16(state.mailbox_raw, 14), mailbox_s16(state.mailbox_raw, 16),
++            mailbox_u16(state.mailbox_raw, 18),
++            current->x, current->y,
++            (int32_t)current->x - mailbox_s16(state.mailbox_raw, 14),
++            (int32_t)current->y - mailbox_s16(state.mailbox_raw, 16),
++            state.last_distance, state.last_vx, state.last_vy,
++            state.trace_cross, state.trace_along, state.trace_valid,
++            state.no_progress_ticks, (uint32_t)state.recovery, mask);
++}
++
++/* Decide at most once per gameplay tick, and hold the decision in between.
++ *
++ * The runner callback runs at the VDP's rate; the game's movement, turning and
++ * USE handling all advance in waypoint_decide's terms only when the gameplay
++ * loop iterates, which during camera motion is roughly every ten to twenty
++ * host frames (see the release cadence measurements in AGENTS.md). Deciding
++ * per host frame made every timer in the follower run about ten times too
++ * fast -- a 30-frame no-progress budget expired after two ticks of real
++ * movement, and the four recovery phases cycled entirely within a single tick,
++ * so the player received an incoherent blur of brake/align/strafe instead of
++ * any one of them. Gating here fixes all of those at once and leaves the
++ * control law itself untouched. */
++static uint32_t waypoint_input(uint32_t frame)
++{
++    uint8_t tick;
++    if (!state.waypoints || state.waypoint_complete || state.waypoint_failed) return 0;
++    tick = state.mailbox_raw[13];
++    if (state.tick_valid && tick == state.last_tick &&
++        frame - state.last_decision_frame < WAYPOINT_TICK_WATCHDOG_FRAMES) {
++        return state.held_mask;
++    }
++    if (state.tick_valid && tick != state.last_tick) state.tick_count++;
++    state.last_tick = tick;
++    state.tick_valid = 1;
++    state.last_decision_frame = frame;
++    state.held_mask = waypoint_decide(frame);
++    return state.held_mask;
 +}
 +
 +/* MEGALDOOM_MIN_CAPTURE_FRAME: the VDP hasn't finished a real frame yet on
@@ -618,7 +895,19 @@ index 0000000..0000000
 +        read_mailbox(gen, state.perf_mailbox, state.perf_mailbox_bytes,
 +                     state.perf_mailbox_hex, NULL);
 +        if (state.masks) set_input(system, frame < state.count ? state.masks[frame] : 0);
-+        else if (state.waypoints) set_input(system, waypoint_input(frame));
++        else if (state.waypoints) {
++            uint32_t mask = waypoint_input(frame);
++            set_input(system, mask);
++            if (state.trace && !state.trace_file) {
++                state.trace_file = fopen(state.trace, "w");
++                if (state.trace_file) {
++                    fprintf(state.trace_file,
++                            "frame,tick,wp,action,px,py,angle,tx,ty,dx,dy,distance,"
++                            "vx,vy,cross,along,legValid,noProgress,recovery,mask\n");
++                }
++            }
++            trace_row(frame, mask);
++        }
 +        if (state.capture && state.capture_every && frame >= MEGALDOOM_MIN_CAPTURE_FRAME && !(frame % state.capture_every)) {
 +            request_capture(gen, frame);
 +        }
@@ -626,6 +915,7 @@ index 0000000..0000000
 +}
 +void megaldoom_runner_finish(void)
 +{
++    if (state.trace_file) { fclose(state.trace_file); state.trace_file = NULL; }
 +    if (!state.report) return;
 +    FILE *file = fopen(state.report, "w"); if (!file) return;
 +    uint32_t checkpoints_ok = (state.checkpoints_seen & state.require_checkpoints) == state.require_checkpoints;
@@ -640,15 +930,15 @@ index 0000000..0000000
 +            state.input_frames, mailbox_s16(state.mailbox_raw, 14),
 +            mailbox_s16(state.mailbox_raw, 16), mailbox_u16(state.mailbox_raw, 18),
 +            state.last_vx, state.last_vy, state.last_distance, state.recovery,
-+            state.no_progress_frames, state.waypoint_failure);
++            state.no_progress_ticks, state.waypoint_failure);
 +    fclose(file);
 +}
-+
 diff --git a/megaldoom_runner.h b/megaldoom_runner.h
 new file mode 100644
+index 0000000..0000000
 --- /dev/null
 +++ b/megaldoom_runner.h
-@@ -0,0 +1,20 @@
+@@ -0,0 +1,26 @@
 +#ifndef MEGALDOOM_RUNNER_H_
 +#define MEGALDOOM_RUNNER_H_
 +
@@ -659,6 +949,7 @@ new file mode 100644
 + * use `frame mask` lines; mask bits map to Up, Down, Left, Right, A, B, C,
 + * Start, X, Y, Z and Mode respectively. */
 +void megaldoom_route_load(const char *path);
++/* Pose-driven E2E script.  Mutually exclusive with --md-route. */
 +void megaldoom_waypoints_load(const char *path);
 +void megaldoom_runner_set_report(const char *path);
 +void megaldoom_runner_set_mailbox(uint32_t address, uint32_t bytes);
@@ -666,6 +957,10 @@ new file mode 100644
 +void megaldoom_runner_set_require_checkpoints(uint32_t mask);
 +void megaldoom_runner_set_capture(const char *directory, uint32_t every);
 +void megaldoom_runner_set_capture_every(uint32_t every);
++/* Per-frame CSV of the waypoint follower's own view of the run. Purely
++ * observational: enabling it must not change a run's cycle count. */
++void megaldoom_runner_set_trace(const char *path);
++void megaldoom_runner_set_trace_every(uint32_t every);
 +void megaldoom_runner_on_frame(system_header *system, uint32_t frame, uint32_t cycles);
 +void megaldoom_runner_finish(void);
 +
