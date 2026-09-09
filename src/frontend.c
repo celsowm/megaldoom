@@ -995,6 +995,25 @@ FrontendPauseAction frontend_run_pause(u16 tile_base) {
     u16 previous;
 
     clear_plane_cpu(BG_A);
+    // Every menu panel -- pause, OPTIONS, the quit confirmation -- is quantized
+    // against the one shared 64-colour frontend palette, and draw_panel() never
+    // uploads it: from the title screen the right colours are already live. From
+    // here they are not. Gameplay owns all four lines (PAL0 grey HUD ramp, PAL1
+    // status digits, PAL2 the face, PAL3 the world), so a panel tile that asked
+    // for PAL2's red text ramp was painting itself in Doom-guy skin tones.
+    // Install the frontend palette for the duration of the menu; on RESUME
+    // renderer_restore_after_menu() calls load_game_palettes() to put all four
+    // gameplay lines back. QUIT TO TITLE wants to keep it: the title screen is
+    // quantized against this same shared palette and frontend_run() only fades
+    // one in on the first boot, so before this the second visit to the title
+    // was also inheriting the gameplay ramps.
+    //
+    // BG_B still holds the world and the status bar and would show through the
+    // panel's transparent index 0 in those same wrong colours, so clear it too.
+    // restore_after_menu rebuilds it (clearTileMapRect + init_view_tilemap +
+    // renderer_draw_static_screen), so nothing is lost.
+    clear_plane_cpu(BG_B);
+    PAL_setColors(0, frontend_pause_0.palette->data, 64, CPU);
     draw_panel(pause_panel(selected), tile_base);
     wait_for_release(MENU_INPUT);
     previous = JOY_readJoypad(JOY_1);

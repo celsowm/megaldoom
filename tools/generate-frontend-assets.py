@@ -367,14 +367,6 @@ def centered_boot_text(image: Image.Image, text: str, y: int,
     centered_doom_text(image, text, y)
 
 
-def centered_text(image: Image.Image, text: str, y: int) -> None:
-    draw = ImageDraw.Draw(image)
-    font = ImageFont.load_default()
-    box = draw.textbbox((0, 0), text, font=font)
-    draw.text(((image.width - (box[2] - box[0])) // 2, y), text,
-              font=font, fill=(255, 255, 255, 255))
-
-
 def centered_doom_text(image: Image.Image, text: str, y: int, source: Path = SOURCE) -> None:
     patch = doom_text(text, source)
     image.alpha_composite(patch, ((image.width - patch.width) // 2, y))
@@ -876,19 +868,22 @@ def generate(source: Path, output: Path) -> None:
 
     for selected in range(3):
         panel = submenu_panel(images, selected)
-        centered_text(panel, "MEGALDOOM", 8)
-        centered_text(panel, "RESUME", 40)
-        centered_text(panel, "OPTIONS", 64)
-        centered_text(panel, "QUIT TO TITLE", 88)
+        centered_doom_text(panel, "MEGALDOOM", 8, source)
+        centered_doom_text(panel, "RESUME", 40, source)
+        centered_doom_text(panel, "OPTIONS", 64, source)
+        centered_doom_text(panel, "QUIT TO TITLE", 88, source)
         assets[f"pause_{selected}.png"] = (screen_overlay(panel), True)
 
     for selected in range(2):
         panel = Image.new("RGBA", (192, 112), (0, 0, 0, 255))
         skull = images["M_SKULL1"]
-        panel.alpha_composite(skull, (24, 47 + selected * 24))
-        centered_text(panel, "QUIT TO TITLE?", 20)
-        centered_text(panel, "YES", 52)
-        centered_text(panel, "NO", 76)
+        # Same row/cursor geometry as submenu_panel: the skull sits one pixel
+        # above the 8px-tall glyph row it points at, not five, which is what the
+        # taller default-font rows used to need.
+        panel.alpha_composite(skull, (24, 51 + selected * 24))
+        centered_doom_text(panel, "QUIT TO TITLE?", 20, source)
+        centered_doom_text(panel, "YES", 52, source)
+        centered_doom_text(panel, "NO", 76, source)
         assets[f"confirm_{selected}.png"] = (screen_overlay(panel), True)
     for filename, (image, transparent) in assets.items():
         if filename == "boot_sega.png":

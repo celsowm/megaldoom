@@ -308,10 +308,20 @@ for token in (
     "EPISODE COMPLETE", "THE INVASION CONTINUES...", "VERSION 0.1",
 ):
     assert token in (ROOT / "tools/generate-frontend-assets.py").read_text()
+# Every in-game panel is Doom glyphs now. PIL's default bitmap font was still
+# rendering the pause and quit-confirmation rows, which put two different fonts
+# on adjacent menus; centered_text() is gone rather than left as a trap.
+assert "centered_text(" not in (ROOT / "tools/generate-frontend-assets.py").read_text()
 assert "(selected + 2) % 3" in FRONTEND and "(selected + 1) % 3" in FRONTEND
 assert "system_joy & ~previous_system_joy" in MAIN
 assert "frontend_run_pause(renderer_get_menu_tile_base())" in MAIN
 assert "renderer_restore_after_menu();" in MAIN
+# The pause menu opens over live gameplay, which owns all four palette lines.
+# Without this upload the panels paint themselves in the HUD/face/world ramps
+# they were never quantized against; renderer_restore_after_menu() is the other
+# half of the pair and puts the gameplay lines back on RESUME.
+assert "PAL_setColors(0, frontend_pause_0.palette->data, 64, CPU);" in FRONTEND
+assert "clear_plane_cpu(BG_B);\n    PAL_setColors(0, frontend_pause_0" in FRONTEND
 assert "game_audio_play_music((phase_index == 0) ? test_music : e1m2_music);" in MAIN
 assert "game_audio_play_music(intermission_music);" in FRONTEND
 assert "PAL_fadeOut(0, 63, BOOT_FADE_FRAMES, FALSE);\n    frontend_video_init();" in FRONTEND
