@@ -1028,6 +1028,44 @@ def build_shade_planes(rows, smoothed, palette, allowed, levels):
                 family = [index for index in candidates.get(
                     shade_family(palette[base]), ())
                     if luminance[index] <= luminance[base] + 1e-6]
+                # A reserved index is barred as a shade TARGET so darkening
+                # cannot PAINT the floor or ceiling colour onto a wall that
+                # did not have it. That is not a reason to evict a texel that
+                # already sits on one: it is showing that colour at level 0
+                # regardless, so letting it hold introduces nothing new.
+                #
+                # Without this hold, index 7 (GLOBAL_FLOOR_INDEX, #6D6D6D) has
+                # exactly ONE legal target -- the neutral rungs are 3/5/7/10/13,
+                # 3 and 7 are the two reserved flats, and the monotonic guard
+                # above drops everything brighter, leaving only 5 (#484848).
+                # So level 1 asks for a 10% dim (WALL_SHADE_RAMP 0.90) and the
+                # quantizer is forced to deliver 34%, merging the whole rung
+                # into what is usually already the dominant index. Measured on
+                # the shipped header, EVERY index-7 texel in EVERY material
+                # vanished at level 1: STONE 49% -> 0 (dominance 49% -> 54% ->
+                # 74% -> 87%), STONE2 46.6% -> 0 (49% -> 96% at level 1 alone),
+                # DOORSTOP 46.1% -> 0, COMPTALL 22.6% -> 0 (55% -> 77%).
+                # `side_shade` puts every N/S wall on level 1 (bsp_draw_seg's
+                # fake contrast), so this is not a distance effect -- it is
+                # half the walls in the game, at any range.
+                #
+                # Nothing is forced to hold: `base` competes with the legal
+                # rungs in nearest_palette_index on the scaled colour, so a
+                # texel keeps its index only while the requested darkening has
+                # not yet carried it past the next rung down. It therefore
+                # decays on its own with depth -- index 7 holds at 0.90 and
+                # 0.80 but loses to 5 at 0.70. Index 0 and index 3 already
+                # behaved this way via the `not family` path below (neither has
+                # any darker rung to move to); this only makes it uniform.
+                #
+                # The ceiling on how far this can go is unchanged:
+                # _relieve_dominant_indices still runs with the reserved
+                # indices excluded from `allowed`, so it can only move texels
+                # OFF a held index, never onto one, and a material that would
+                # go solid on a flat colour is still broken up before emission
+                # and still checked by certify_flat_wall_contrast.
+                if base in blocked and base not in family:
+                    family.append(base)
                 if not family:
                     out.append(base)
                     continue
