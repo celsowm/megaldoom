@@ -40,7 +40,7 @@ def main():
     runner_source = (ROOT / ".externals" / "blastem" / "megaldoom_runner.c").read_text()
     runner_header = (ROOT / ".externals" / "blastem" / "megaldoom_runner.h").read_text()
     blastem_source = (ROOT / ".externals" / "blastem" / "blastem.c").read_text()
-    assert "MEGALDOOM_RUNNER_VERSION 6" in runner_source
+    assert "MEGALDOOM_RUNNER_VERSION 7" in runner_source
     # The follower decides on the GAMEPLAY clock, not the host frame clock.
     # One callback per VDP frame against a gameplay tick that lands every ten
     # to sixty of them meant every budget in the follower expired about an

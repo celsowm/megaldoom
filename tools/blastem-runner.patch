@@ -97,7 +97,7 @@ new file mode 100644
 index 0000000..0000000
 --- /dev/null
 +++ b/megaldoom_runner.c
-@@ -0,0 +1,887 @@
+@@ -0,0 +1,933 @@
 +#include "megaldoom_runner.h"
 +#include "genesis.h"
 +#include "io.h"
@@ -112,7 +112,7 @@ index 0000000..0000000
 +#define M_PI 3.14159265358979323846
 +#endif
 +
-+#define MEGALDOOM_RUNNER_VERSION 6
++#define MEGALDOOM_RUNNER_VERSION 7
 +#define MD_MASK_UP    0x001
 +#define MD_MASK_DOWN  0x002
 +#define MD_MASK_LEFT  0x004
@@ -131,6 +131,16 @@ index 0000000..0000000
 + * game publishes its tick counter in byte 13 of the E2E mailbox. */
 +#define WAYPOINT_NO_PROGRESS_LIMIT 30
 +#define WAYPOINT_RECOVERY_PHASE_TICKS 8
++/* A FIRE waypoint stands still and shoots, so no_progress_ticks (which counts
++ * ticks the pose has not closed on the target) doubles as "ticks spent firing
++ * without the hit landing". After SWEEP_GRACE of those the planned aim point is
++ * treated as stale -- an enemy target walks a DUMMY_MOVE_STEP per AI tick -- and
++ * the aim is swept across a small arc. After STALL_LIMIT the shot is declared
++ * unwinnable (target dead/gone, or the gun is empty, which gates the combat_hit
++ * mark outright) and the waypoint fails immediately instead of draining a
++ * 3600-tick budget in place. */
++#define WAYPOINT_FIRE_SWEEP_GRACE 90
++#define WAYPOINT_FIRE_STALL_LIMIT 600
 +/* Escape hatch for the tick gate below: gameplay stops publishing ticks
 + * entirely once a level ends and the intermission takes over, but the EXIT
 + * waypoint still has to observe its event bit and finish the route. Any value
@@ -751,6 +761,31 @@ index 0000000..0000000
 +        double desired = atan2((double)aim_dy, (double)aim_dx) * (256.0 / (2.0 * M_PI));
 +        int32_t error = ((int32_t)desired - (int32_t)mailbox_u16(state.mailbox_raw, 18)) & 255;
 +        if (error > 127) error -= 256;
++        /* The aim point is a fixed coordinate the route planner read from a
++         * thing's spawn cell. If the shot has not connected after a grace
++         * period standing in the radius, that coordinate is stale -- an enemy
++         * has walked off it -- so sweep a small arc around it (triangular wave,
++         * +/-12 of 256, ~17 deg) until something is crossed. Harmless on the
++         * happy path: a live target on the planned bearing is hit within a few
++         * ticks and this never engages. */
++        if (state.no_progress_ticks > WAYPOINT_FIRE_SWEEP_GRACE) {
++            int32_t phase = (int32_t)(state.no_progress_ticks - WAYPOINT_FIRE_SWEEP_GRACE) % 48;
++            error += (phase < 24) ? (phase - 12) : (36 - phase);
++        }
++        /* A FIRE still unconnected this far into its budget is not going to
++         * connect: the target is dead or gone, or the gun is empty (and
++         * weapon_has_ammo gates the combat_hit mark, so no amount of extra
++         * firing time can satisfy the waypoint). Fail now, with the cause
++         * named, instead of orbiting to the 3600-tick timeout -- which is what
++         * made E1M2 the slowest run in the suite. */
++        if (state.no_progress_ticks > WAYPOINT_FIRE_STALL_LIMIT) {
++            snprintf(state.waypoint_failure, sizeof(state.waypoint_failure),
++                     "fire wp=%u unconnected after %u ticks in radius %u: pose=%d,%d aim=%d,%d -- target dead/moved or out of ammo",
++                     state.waypoint_index, state.no_progress_ticks, current->radius,
++                     px, py, current->aim_x, current->aim_y);
++            waypoint_fail(state.waypoint_failure);
++            return 0;
++        }
 +        /* A point-blank shot is still a ray test in the game.  The old
 +         * 32-step dead-band let a target at the edge of the cone consume all
 +         * shots while the runner reported that it was aligned. */
@@ -774,16 +809,27 @@ index 0000000..0000000
 +         * E1M2's at (-512,-672) -- "aligned" is also "pointed down the
 +         * hallway", so the player ran through the target, out the far side,
 +         * all the way around and back for the rest of the run's frame budget
-+         * without ever holding still long enough to land a hit. Brake
-+         * actively against any velocity the single nudge (or the entry
-+         * brake's own overshoot) leaves behind instead of waiting on
-+         * friction; only add the forward nudge from a genuine dead stop. The
-+         * shot itself (B) still fires on cadence regardless. */
++         * without ever holding still long enough to land a hit. */
++        /* A blind "brake whenever speed is nonzero" is wrong the same way the
++         * UP nudge was: DOWN accelerates opposite the player's FACING, not
++         * opposite whatever the velocity vector actually is. Once a tick of
++         * drift put the player moving away from the target, continuing to
++         * hold DOWN there accelerates it further away instead of arresting
++         * it -- this is what broke E1M1's own FIRE waypoint (which had always
++         * passed) the moment this became unconditional. waypoint_move_drive
++         * already gets this right for the approach leg by braking only when
++         * velocity has a positive component TOWARD the target (dx,dy, the
++         * same vector computed above); mirror that convention here instead of
++         * inventing a new rule. Drift away from the target is left to
++         * friction: if it ever carries the player back out past the radius,
++         * control falls through to that same approach/brake path on the next
++         * tick, which already knows how to bring it back. The shot itself
++         * (B) still fires on cadence regardless of any of this. */
 +        {
-+            const int32_t speed2 = (int32_t)vx * vx + (int32_t)vy * vy;
++            const int32_t toward = (int32_t)vx * dx + (int32_t)vy * dy;
 +            const uint32_t shoot = ((frame & 15) < 4) ? MD_MASK_B : 0;
-+            if (speed2 > 0) return shoot | MD_MASK_DOWN;
-+            return shoot | MD_MASK_UP;
++            if (toward > 0) return shoot | MD_MASK_DOWN;
++            return shoot;
 +        }
 +    }
 +    if (current->action == WAYPOINT_HURT) {

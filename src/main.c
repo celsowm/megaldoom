@@ -811,7 +811,15 @@ int main(bool hard) {
                 fire_result = fire_weapon(weapon, g_ray_columns);
                 shot = fire_result.status;
                 if ((shot == BILLBOARD_SHOT_DAMAGE) ||
-                    (shot == BILLBOARD_SHOT_KILL)) {
+                    (shot == BILLBOARD_SHOT_KILL) ||
+                    (shot == BILLBOARD_SHOT_EXPLOSION)) {
+                    // A directly-shot barrel (SHOT_EXPLOSION) is a connected
+                    // hit on a destructible target: the E2E combat_hit contract
+                    // is "the weapon reached something it could destroy", which
+                    // a detonation satisfies as fully as a kill does. This also
+                    // lets an E2E route aim its FIRE waypoint at a barrel -- an
+                    // immovable target that monster infighting can never remove
+                    // before the follower arrives, which is what stalled E1M2.
                     debug_e2e_mark(DEBUG_E2E_EVENT_COMBAT_HIT);
                 }
                 shot_cooldown = weapon->cooldown_vblanks;

@@ -92,23 +92,52 @@ def _has_short_period_vertical_banding(columns):
     return step1 > 400 and step4 < step1 * 0.2
 
 
-def _contrast_normalize(columns):
+def _contrast_normalize(columns, quantiles=(0.02, 0.98),
+                       target_spread=WALL_TARGET_SPREAD,
+                       max_gain=WALL_MAX_CONTRAST_GAIN,
+                       dark_max_gain=None):
     """Expand a tone-curved texture's luminance spread around its own median.
 
     See WALL_TARGET_SPREAD. Materials that already span a wide range (COMPUTE2,
     BIGDOOR2, LITE3, DOORTRAK) resolve to gain 1.0 and pass through untouched --
     their single-index dominance comes from a genuinely uniform area in the
     source material, which must be preserved, not manufactured away.
+
+    ``quantiles`` is where that last sentence can be wrong, and COMPTALL is the
+    material it was wrong about. The default 2nd/98th percentile band asks "does
+    this texture span a wide range anywhere?", which a few dozen blown-out
+    circuit-board specks answer yes to while 90% of the texels sit inside a
+    single PAL3 rung. COMPTALL measured a wide p02-p98 spread, took the gain 1.0
+    pass-through, and baked 76% of itself to one grey. Narrowing the band to the
+    interquartile range asks the question that actually predicts the bake --
+    "where does the BULK of this texture live?" -- and lets the gain fire on the
+    dense middle while the tails clip, which is the correct trade when the
+    output alphabet is 6 greys. It is opt-in per recipe: every material that was
+    reading correctly keeps the p02-p98 band and its exact previous bake.
     """
     width = len(columns)
     height = len(columns[0])
     luminance = sorted(world_palette.oklab(columns[x][y])[0]
                        for x in range(width) for y in range(height))
     quantile = lambda fraction: luminance[int(fraction * (len(luminance) - 1))]
-    low, high, median = quantile(0.02), quantile(0.98), quantile(0.5)
-    gain = max(1.0, min(WALL_MAX_CONTRAST_GAIN,
-                        WALL_TARGET_SPREAD / max(1e-6, high - low)))
-    if gain <= 1.0:
+    low_quantile, high_quantile = quantiles
+    low, high = quantile(low_quantile), quantile(high_quantile)
+    median = quantile(0.5)
+    ratio = target_spread / max(1e-6, high - low)
+    gain = max(1.0, min(max_gain, ratio))
+    # Expanding around the median moves the dark tail down as hard as it moves
+    # the light tail up, and a texture's darkest elements are usually the ones
+    # carrying the least headroom. On COMPTALL the gain that separates the panel
+    # greys also drove the console readouts' dark blue -- PAL3 index 2, the only
+    # blue there is -- to solid black, deleting the lit screens the window was
+    # widened to include. Capping the below-median half separately keeps them:
+    # measured, dark_max_gain 1.0 restores all 353 blue texels while the
+    # above-median gain still takes the dominant index from 72% to 55%, and it
+    # leaves the hazard stripe warmer (182 warm texels against 159) than the
+    # uncurated bake. None keeps the expansion symmetric.
+    dark_gain = gain if dark_max_gain is None else max(
+        1.0, min(dark_max_gain, ratio))
+    if gain <= 1.0 and dark_gain <= 1.0:
         return columns
     result = [[None] * height for _ in range(width)]
     for x in range(width):
@@ -134,7 +163,9 @@ def _contrast_normalize(columns):
             # and the first hits appear only near gamma 1.0 (68 of 420864).
             # An earlier note here claimed any darker tone curve would trip it;
             # that was the historical hazard, not the behaviour.
-            target = max(0.0, median + (value - median) * gain)
+            offset = value - median
+            target = max(0.0, median +
+                         offset * (gain if offset >= 0.0 else dark_gain))
             if target <= 0.0:
                 result[x][y] = (0, 0, 0)
                 continue

@@ -239,18 +239,45 @@ def certify_metrics(metrics):
         # Absolute ceiling on what actually ships, fallback and all.
         if result["shipped_candidate_churn"] > 0.35:
             raise AssertionError("%s churn exceeds 35%%" % name)
-        churn_margin = 0.04 if name == "COMPUTE2" else 0.02
+        # Materials whose recipe changes the TONE MAPPING rather than only the
+        # smoothing. Both comparisons below assume the two sides differ by a
+        # filter: churn is expected to fall, and edge retention is scored
+        # against a reference mask taken from the candidate's own pipeline. Feed
+        # them a recipe that re-bands _contrast_normalize and they stop being
+        # like-for-like -- the expansion puts real indices where the recipe-off
+        # bake had one flat grey, which necessarily raises churn and moves every
+        # palette boundary at once.
+        #
+        # This is the certificate that steered COMPTALL wrong. It rewards lower
+        # churn, so it accepted a facade bake that scored 0.062 by flattening
+        # 76% of the campaign's largest wall into a single index, and it would
+        # reject the fix that puts the structure back. What replaces the two
+        # relaxed gates is not nothing: the checks that still apply to COMPTALL
+        # are the ones that actually caught the defect -- perceptual error
+        # (0.47, less than half the recipe-off bake's), isolated texels
+        # (213 -> 60), the absolute churn ceiling it stays far inside (0.197
+        # against 0.35, below STARTAN3's 0.222), and the dominant-index ceiling
+        # in test-wall-quality.py, which is where "did this stay a wall?" is now
+        # answered directly instead of by proxy.
+        CONTRAST_REBASED = {"COMPTALL"}
+        churn_margin = 0.04 if name in CONTRAST_REBASED | {"COMPUTE2"} else 0.02
         if result["candidate_churn"] > result["current_churn"] + churn_margin:
             raise AssertionError("%s churn regressed over its margin" % name)
         if result["candidate_isolated"] > result["current_isolated"]:
             raise AssertionError("%s introduced isolated texels" % name)
         if result["error_ratio"] > 1.05:
             raise AssertionError("%s perceptual error regressed over 5%%" % name)
+        if name in CONTRAST_REBASED and result["error_ratio"] > 0.6:
+            # Tighter than the shared gate, because the relaxed edge check
+            # above is only defensible while the tonal rebase is a large,
+            # measured perceptual win rather than a wash.
+            raise AssertionError("%s tonal rebase must clearly pay" % name)
         # The 128-row candidate samples twice as many vertical source rows;
         # quantization can move a single threshold edge by one row even when
         # the material is unchanged. Keep the old contract strict at the
         # material scale while allowing this bounded one-percent raster noise.
-        if result["candidate_edge_f1"] + 0.01 < result["current_edge_f1"]:
+        if (name not in CONTRAST_REBASED and
+                result["candidate_edge_f1"] + 0.01 < result["current_edge_f1"]):
             raise AssertionError("%s edge retention regressed" % name)
         if result["candidate_edge_f1"] > result["current_edge_f1"] + 0.005:
             strict.append(name)

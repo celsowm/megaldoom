@@ -7,6 +7,7 @@ cannot gain a hand-timed route that quietly diverges from its certified path.
 """
 import argparse
 import math
+import re
 import sys
 from pathlib import Path
 
@@ -14,9 +15,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
 from wad_reader import WadFile
-from doom_map import (KEY_NONE, SEG_DOOR, SEG_EXIT, SEG_SWITCH, SEG_TRIGGER,
+from doom_map import (DOOM_THING_NOT_SINGLE_PLAYER, DOOM_THING_SKILL_MEDIUM,
+                      KEY_NONE, SEG_DOOR, SEG_EXIT, SEG_SWITCH, SEG_TRIGGER,
                       SEG_WALL, SEG_FLAG_DIRECT_USE, certify_flat_progression,
-                      load_map, point_segment_dist2, runtime_things)
+                      load_map, point_segment_dist2)
 
 # Doom special 11 is the normal exit switch; 51 is the secret exit.  E1M3 ships
 # both (linedef 982 at 736,1760 and linedef 785 at -1024,1536).  The campaign
@@ -57,6 +59,36 @@ ROUTE_SAMPLE_STEP = 64
 # this is deliberately wider than the map proof's default point sample.
 E2E_CLEARANCE_RADIUS = 20
 COMBAT_THINGS = {3001, 3002, 3003, 3004, 3005, 3006, 3007, 3008, 58}
+# An explosive barrel. Preferred over a monster as the FIRE target: it never
+# walks off its spawn column and monster infighting cannot remove it before the
+# follower arrives -- both of which happened to E1M2's certified enemy target,
+# stalling waypoint 390 for 85% of the run's frame budget. src/main.c marks
+# combat_hit on a direct barrel detonation, so a barrel satisfies the waypoint.
+BARREL_THING = 2035
+# The runtime's own billboard spawn cap (src/bsp/generated_map_limits.h). It
+# must NOT be read from doom_map.runtime_things: that helper carries a stale
+# hardcoded 112, which silently drops every one of E1M2's 24 barrels (they sit
+# past the 112th qualifying thing in table order) and is why the barrel-target
+# search below found nothing on the first attempt. The campaign maps all have
+# fewer things than this, so in practice no target is ever capped away.
+MAX_ACTIVE_THINGS = int(re.search(
+    r"MEGALDOOM_MAP_MAX_ACTIVE_THINGS\s+(\d+)",
+    (ROOT / "src" / "bsp" / "generated_map_limits.h").read_text()).group(1))
+
+
+def spawnable_things(out_things):
+    """Things the runtime actually spawns: same skill filter as billboard_init,
+    the real cap, and no type restriction (barrels included)."""
+    kept = []
+    for x, y, thing_type, angle, flags in out_things:
+        if not (flags & DOOM_THING_SKILL_MEDIUM):
+            continue
+        if flags & DOOM_THING_NOT_SINGLE_PLAYER:
+            continue
+        kept.append((x, y, thing_type, angle, flags))
+        if len(kept) >= MAX_ACTIVE_THINGS:
+            break
+    return kept
 
 
 def midpoint(vertices, seg):
@@ -494,31 +526,43 @@ def route_lines(map_data):
                             "reachable control to open it" %
                             (map_data.mapn, group, index))
 
-    enemies = [(x, y) for x, y, thing_type, _, _ in runtime_things(map_data.out_things)
-               if thing_type in COMBAT_THINGS]
-    assert enemies, "%s has no combat target for E2E" % map_data.mapn
-    # Do not stand on top of the monster: billboard targeting intentionally
+    # (priority, x, y): a barrel is priority 0, a monster priority 1, so the
+    # selection below takes a barrel whenever a certified standoff cell has one
+    # in the point-blank band and only falls back to a monster where no map
+    # geometry puts a barrel in reach.
+    targets = []
+    for x, y, thing_type, _, _ in spawnable_things(map_data.out_things):
+        if thing_type == BARREL_THING:
+            targets.append((0, x, y))
+        elif thing_type in COMBAT_THINGS:
+            targets.append((1, x, y))
+    assert any(priority == 1 for priority, _, _ in targets), \
+        "%s has no combat target for E2E" % map_data.mapn
+    # Do not stand on top of the target: billboard targeting intentionally
     # rejects objects inside its minimum projection depth.  Prefer a nearby
     # certified cell with a real point-blank gap, then fall back to the old
     # nearest pair only for maps whose combat thing is unusually embedded in
     # the navigation path.
     combat_candidates = [
-        (node, enemy) for node in nodes for enemy in enemies
-        if 96 ** 2 <= (node["x"] - enemy[0]) ** 2 +
-                      (node["y"] - enemy[1]) ** 2 <= 256 ** 2]
+        (node, target) for node in nodes for target in targets
+        if 96 ** 2 <= (node["x"] - target[1]) ** 2 +
+                      (node["y"] - target[2]) ** 2 <= 256 ** 2]
     # Avoid firing at the first nearby billboard immediately after spawn.  In
     # E1M2 that pose is beside a portal edge and the centre ray can be
     # occluded even though the cell itself is reachable.  Prefer a later
-    # certified standoff (the reference shot is 1008,-720 -> 912,-720), while
-    # retaining a fallback for very small maps with no later combat cell.
+    # certified standoff, while retaining a fallback for very small maps with
+    # no later combat cell.
     if map_data.mapn == "E1M2":
         late_combat = [pair for pair in combat_candidates
                        if nodes.index(pair[0]) >= len(nodes) // 5]
         combat_candidates = late_combat or combat_candidates
-    combat_node, combat_target = min(
-        combat_candidates or ((node, enemy) for node in nodes for enemy in enemies),
-        key=lambda pair: (pair[0]["x"] - pair[1][0]) ** 2 +
-                         (pair[0]["y"] - pair[1][1]) ** 2)
+    combat_node, combat_pick = min(
+        combat_candidates or ((node, target) for node in nodes for target in targets),
+        key=lambda pair: (pair[1][0],
+                          (pair[0]["x"] - pair[1][1]) ** 2 +
+                          (pair[0]["y"] - pair[1][2]) ** 2))
+    combat_target = (combat_pick[1], combat_pick[2])
+    combat_target_is_barrel = combat_pick[0] == 0
     combat_index = nodes.index(combat_node)
 
     cert_uses = {}
@@ -603,10 +647,12 @@ def route_lines(map_data):
             emit(x, y, aim[0], aim[1], radius, action, event,
                  required_action, expected_target)
         if index == combat_index:
-            # E1M2 needs a narrow standoff so the player cannot overshoot its
-            # portal-edge shot; E1M1's certified target is farther across the
-            # room and retains the legacy 160-unit combat radius.
-            fire_radius = 48 if map_data.mapn == "E1M2" else 160
+            # The narrow E1M2 standoff existed to stop the follower overshooting
+            # a portal-edge enemy shot. A barrel target is immovable, so that
+            # risk is gone and the uniform radius applies; keep the tight one
+            # only where we fell back to an enemy on E1M2.
+            fire_radius = 160 if combat_target_is_barrel else \
+                (48 if map_data.mapn == "E1M2" else 160)
             emit(x, y, combat_target[0], combat_target[1], fire_radius, "FIRE",
                  EVENT_COMBAT_HIT, -1, -1, 3600)
             emit(x, y, x, y, 160, "HURT", 0, -1, -1, 3600)

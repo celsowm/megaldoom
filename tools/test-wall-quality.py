@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Deterministic quality contracts for the 64x64, stride-2 wall pipeline."""
 import importlib.util
+import math
 import re
 import subprocess
 import sys
@@ -56,6 +57,71 @@ def generated_define(source, name):
     match = re.search(rf"#define\s+{name}\s+(\d+)\b", source)
     assert match, name
     return int(match.group(1))
+
+
+def worst_block_churn(rows, active_height, block):
+    """Highest churn found in any block x block window, either axis.
+
+    The texture-wide mean answers "is this material noisy overall"; this
+    answers "is any part of it noise", which is the question a mostly-flat
+    material with a dense inset panel defeats. Both axes matter and are taken
+    separately rather than pooled: the runtime aliases them through different
+    mechanisms -- RAY_COL_STRIDE 2 skips screen columns, while rows resample
+    through MEGALDOOM_WALL_TEX_Y_BY_HEIGHT -- so a material may be quiet on one
+    and confetti on the other.
+    """
+    width = len(rows[0])
+    worst = 0.0
+    for top in range(0, max(1, active_height - 1), block):
+        for left in range(0, max(1, width - 1), block):
+            bottom = min(top + block, active_height)
+            right = min(left + block, width)
+            horizontal = [1 if rows[y][x] != rows[y][x + 1] else 0
+                          for y in range(top, bottom)
+                          for x in range(left, right - 1)]
+            vertical = [1 if rows[y][x] != rows[y + 1][x] else 0
+                        for y in range(top, bottom - 1)
+                        for x in range(left, right)]
+            for samples in (horizontal, vertical):
+                if samples:
+                    worst = max(worst, sum(samples) / len(samples))
+    return worst
+
+
+def campaign_wall_area_shares():
+    """Share of shipped wall area each texture paints, across all three maps.
+
+    Area-weighted by seg length, not counted per texture: the memory of this
+    codebase is that per-texture averages hide which materials actually fill
+    the screen. A BspSeg initialiser is
+    {v1, v2, nx, ny, tex_u_offset, tex_v_offset, texture_id, type, ...}, so the
+    texture id is the seventh field and the endpoints index bsp_vertices.
+    """
+    atlas = {}
+    assets = ASSETS_PATH.read_text(errors="ignore")
+    for index, name, _width, _height in re.findall(
+            r"// (\d+): (\S+) \((\d+)x(\d+)\)", assets):
+        atlas[int(index)] = name
+    totals = Counter()
+    for path in (MAP_PATH, MAP2_PATH, MAP3_PATH):
+        source = path.read_text(errors="ignore")
+        vertex_body = re.search(r"bsp_vertices\[\d+\]\s*=\s*\{(.*?)\n\};",
+                                source, re.S)
+        seg_body = re.search(r"bsp_segs\[\d+\]\s*=\s*\{(.*?)\n\};", source, re.S)
+        assert vertex_body and seg_body, path.name
+        vertices = [(int(x), int(y)) for x, y in re.findall(
+            r"\{\s*(-?\d+)\s*,\s*(-?\d+)\s*\}", vertex_body.group(1))]
+        for row in re.findall(r"\{([^{}]*)\}", seg_body.group(1)):
+            fields = [int(value) for value in re.findall(r"-?\d+", row)]
+            if len(fields) < 8:
+                continue
+            (x1, y1), (x2, y2) = vertices[fields[0]], vertices[fields[1]]
+            name = atlas.get(fields[6])
+            if name:
+                totals[name] += math.hypot(x2 - x1, y2 - y1)
+    span = sum(totals.values())
+    assert span > 0
+    return {name: length / span for name, length in totals.items()}
 
 
 def generated_wall_textures(source):
@@ -256,15 +322,34 @@ def main():
         display_planes[name] = planes
     assert set(extractor.WALL_BAKE_RECIPES) == set(extractor.CURATED_WALL_MATERIALS)
     assert tuple(extractor.TECH_WALL_MATERIALS) == (
-        "COMPTILE", "COMPUTE2", "LITE3", "STARG3",
+        "COMPTALL", "COMPTILE", "COMPUTE2", "LITE3", "STARG3",
         "STARGR1", "STARTAN1", "STARTAN3", "SUPPORT2",
     )
+    # TEKWALL5 takes a magnified facade, not a composed one: its window covers
+    # the whole source and only halves both axes, so the material stays Doom's
+    # own art at one bake texel per two display texels. COMPUTE2 keeps the
+    # authored composition. Pinning facade_compose per material is what keeps
+    # "magnify this" from silently becoming "redraw this".
+    assert extractor.WALL_BAKE_RECIPES["TEKWALL5"].facade_compose is False
+    # COMPTALL must NOT take one. Halving its axes was tried and made its real
+    # defect worse -- it drove the dominant index from 67% to 76% while churn
+    # improved, which is the whole reason the dominant-index ceiling below
+    # exists. Its fix is tone and window, not resolution.
+    assert extractor.WALL_BAKE_RECIPES["COMPTALL"].facade_window is None
+    # COMPTALL's window takes the right half of a 256-wide source, where every
+    # screen and console bank in the art sits; the default left-128 crop had
+    # none of them. Sampled dimensions stay (128,128) -- the same size the
+    # default crop produced -- so the wall's world-space repeat is unchanged and
+    # only the choice of which columns get baked moves.
     assert extractor.CURATED_TEXTURE_WINDOWS == {
+        "COMPTALL": (128, 0, 128, 128),
         "COMPUTE2": (128, 0, 128, 56),
     }
+    assert extractor.sampled_texture_dimensions("COMPTALL", 256, 128) == (128, 128)
     assert extractor.WALL_BAKE_RECIPES["COMPUTE2"].facade_window == (
         64, 0, 64, 56,
     )
+    assert extractor.WALL_BAKE_RECIPES["COMPUTE2"].facade_compose is True
     assert extractor.MIXED_RAMP_MATERIALS == ("SW1STRTN",)
     # SW1STRTN is a brown STARTAN wall with a genuine grey exit-control
     # housing. It must keep both material families: forcing the full texture
@@ -323,9 +408,21 @@ def main():
     # alone, and every hard guard in certify_metrics still holds for it.
     # Measured from the source PNGs through the curated converter, so this list
     # is unaffected by which materials the campaign actually uses.
+    #
+    # COMPTALL is deliberately NOT here, and its absence is the honest reading
+    # of what its recipe does. This list is "materials whose recipe retains more
+    # palette edges than the recipe-off bake", and COMPTALL's recipe rebases the
+    # tone instead: it measures 0.781 -> 0.720, because the reference mask is
+    # built from the candidate's own expanded contrast while the recipe-off side
+    # is scored on a flat grey that has few boundaries to miss. certify_metrics
+    # names it CONTRAST_REBASED and holds it to perceptual error and isolated
+    # count instead -- 0.47 and 213 -> 60, both large wins -- plus the
+    # dominant-index ceiling above, which is the check that actually describes
+    # the defect. Listing it here anyway would be claiming a result the metric
+    # does not support.
     assert strict_improvements == [
-        "COMPTILE", "COMPUTE2", "STARG3", "STARGR1", "STARTAN1", "STARTAN3",
-        "SUPPORT2",
+        "COMPTILE", "COMPUTE2", "STARG3", "STARGR1", "STARTAN1",
+        "STARTAN3", "SUPPORT2",
     ]
     # The facade certification reads the BAKED atlas, so it only applies while
     # COMPUTE2 is still in it. tools/texture_aliases.py currently folds it onto
@@ -348,7 +445,15 @@ def main():
     # FREEDOOM_WALL_TEXTURES is a decimation for the door overlay and is the
     # noisiest possible view of a material, so it is the wrong thing to gate on.
     CHURN_LIMIT = extractor.WALL_CHURN_LIMIT
-    CHURN_EXEMPT = {"EXITDOOR", "TEKWALL2", "TEKWALL5"}
+    # TEKWALL2 and TEKWALL5 used to sit here beside EXITDOOR. Neither belonged:
+    # the pair was added inside 12466b1, a large E1M2 commit whose message does
+    # not mention textures at all, and unlike EXITDOOR neither carried a written
+    # justification. TEKWALL2 does not even exist any more -- texture_aliases
+    # folds it away and it has no atlas slot -- and TEKWALL5's noise turned out
+    # to be fixable rather than intrinsic: given the magnified facade its
+    # vertical churn falls 0.435 -> 0.285, inside the ceiling, so it is now held
+    # to the same bar as everything else. EXITDOOR remains the one real outlier.
+    CHURN_EXEMPT = {"EXITDOOR"}
     for texture_name in sorted(display_textures):
         with Image.open(extractor.texture_path(texture_name)) as image:
             active_height = extractor.sampled_texture_dimensions(
@@ -365,17 +470,75 @@ def main():
             assert churn <= CHURN_LIMIT, (texture_name, churn)
             assert vertical_churn <= CHURN_LIMIT, (texture_name, vertical_churn)
 
+    # The ceiling above is a texture-wide AVERAGE, and an average has a blind
+    # spot big enough to drive the campaign's largest material through. COMPTALL
+    # is 14.4% of all wall area and its computer panels baked with 87% of
+    # horizontally adjacent texels changing index -- visibly, they read as
+    # coloured confetti -- yet it measured 0.255 against the 0.35 limit and no
+    # test complained, because the flat grey field surrounding those panels is
+    # most of the texture and diluted them away.
+    #
+    # So bound the WORST 16x16 block as well as the mean. The limit is looser
+    # than the average's on purpose: a block that lands wholly inside a panel
+    # boundary or a door stripe legitimately churns hard, and this contract is
+    # meant to catch "a material the player stares at is made of noise", not to
+    # relitigate every local edge.
+    #
+    # It applies only to materials carrying real screen area. A one-off
+    # decorative door earns the benefit of the doubt; a wall you spend an eighth
+    # of the game looking at does not. Measured across the three shipped maps,
+    # every material over the area threshold passes today, the closest being
+    # STARG3 at 0.542 -- worth a look on its own merits later, but deliberately
+    # not touched here.
+    LOCAL_CHURN_AREA_SHARE = 0.03
+    LOCAL_CHURN_LIMIT = 0.55
+    LOCAL_CHURN_BLOCK = 16
+    area_shares = campaign_wall_area_shares()
+    checked = 0
+    for texture_name, share in sorted(area_shares.items()):
+        if share < LOCAL_CHURN_AREA_SHARE or texture_name not in display_textures:
+            continue
+        if texture_name in CHURN_EXEMPT:
+            continue
+        with Image.open(extractor.texture_path(texture_name)) as image:
+            active_height = extractor.sampled_texture_dimensions(
+                texture_name, image.width, image.height)[1]
+        local = worst_block_churn(display_textures[texture_name], active_height,
+                                  LOCAL_CHURN_BLOCK)
+        assert local <= LOCAL_CHURN_LIMIT, (texture_name, share, local)
+        checked += 1
+    # The threshold has to actually select the big materials. If aliasing or a
+    # map change ever empties this set the contract silently stops running.
+    assert checked >= 8, checked
+    assert "COMPTALL" in area_shares and \
+        area_shares["COMPTALL"] >= LOCAL_CHURN_AREA_SHARE, area_shares.get("COMPTALL")
+
     # Structure floor, the other half of the same contract: killing the noise
     # must not be achieved by flattening a material into one block. Two clauses,
     # because neither alone says "this still reads as a wall":
     #   - at least two indices carry real area (a lone dominant index plus a
     #     scattering of strays is a flat block, whatever len(counts) says), and
     #   - no index may swallow the whole surface.
-    # Deliberately NOT a tight dominance cap. The old 0.75 cap was a proxy for
-    # "wall must not look like the floor", and it now fights the fix: with
-    # dithering off, a two-tone brick like STARTAN1 legitimately resolves to
-    # 57/41 across two indices. The flat-collision contract is enforced directly
-    # and far more precisely by certify_flat_wall_contrast below.
+    # The cap is NOT the flat-collision contract -- that is enforced directly and
+    # far more precisely by certify_flat_wall_contrast below. It is the ceiling
+    # on monotony, and it sat at 0.85 while COMPTALL baked 76% of itself to a
+    # single grey: the largest wall material in the campaign was three quarters
+    # one colour and every check here passed it. 0.85 was inherited from a
+    # loosening whose stated reason was a two-tone brick at 57/41, which never
+    # needed anything above 0.75 in the first place.
+    #
+    # 0.70 is where the measured distribution actually separates. Post-fix, the
+    # highest non-uniform material is BROWNHUG at 0.65 (a genuinely plain brown
+    # wall, worth its own look but not touched here), then SW1COMP 0.59 and
+    # BROWNGRN 0.58; COMPTALL now sits at 0.51. Nothing legitimate is near the
+    # line, and a material that crosses it is making the same mistake COMPTALL
+    # made rather than expressing something Doom drew.
+    #
+    # This is the check the churn work needed and did not have. Churn measures
+    # how OFTEN neighbours differ, so flattening a texture improves every churn
+    # number at once -- the facade attempt on COMPTALL scored 0.062 horizontal
+    # churn, the best in the atlas, by deleting the wall. Only a dominance
+    # ceiling can tell those two outcomes apart.
     MIN_STRUCTURAL_SHARE = 0.02
     # Materials whose source really is a near-uniform field: LITE3 is a white
     # light panel, COMPTILE a two-tone tile. Manufacturing spread into them would
@@ -391,8 +554,14 @@ def main():
             (texture_name, counts)
         dominant_share = counts.most_common(1)[0][1] / len(flat)
         cap = 1.0 if texture_name in SOLID_MATERIALS else \
-              (0.90 if texture_name in UNIFORM_MATERIALS else 0.85)
+              (0.90 if texture_name in UNIFORM_MATERIALS else 0.70)
         assert dominant_share <= cap, (texture_name, dominant_share, counts)
+    # Named so a regression reports as "COMPTALL went monotone again" rather
+    # than as an anonymous cap breach on the campaign's largest wall.
+    comptall_flat = [v for row in display_textures["COMPTALL"] for v in row]
+    comptall_share = (Counter(comptall_flat).most_common(1)[0][1] /
+                      len(comptall_flat))
+    assert comptall_share <= 0.60, comptall_share
 
     # The contract behind the global flats: no wall may read as an unbroken
     # field of the ceiling's or the floor's colour, at ANY shade level. Index
@@ -505,23 +674,26 @@ def main():
         assert generated_limits.read_bytes() == LIMITS_PATH.read_bytes()
 
         # Exercise the CLI's complete artifact contract in a disposable tree:
-        # eight atlases, fourteen exact-renderer scene pairs (including the
-        # close COMPUTE2 failure angle), and one animated approach/lateral
-        # sequence plus contact sheet per curated material.
+        # one atlas per curated material, exact-renderer scene pairs (including
+        # the close COMPUTE2 failure angle), and one animated approach/lateral
+        # sequence plus contact sheet per curated material the campaign places.
         preview_root = temp_root / "preview"
         report, scene_paths = wall_bake_preview.build_preview(
             ROOT / "DOOM1.WAD", preview_root)
         assert report["wad_sha256"] == wall_bake_preview.EXPECTED_WAD_SHA256
         assert report["segments"] == E1M1_SEG_COUNT
         assert report["packed_pair_bytes"] == E1M1_PREVIEW_PACKED_PAIR_BYTES
-        # 12, not 14: COMPTILE and COMPUTE2 are aliased onto COMPTALL, so no
-        # SEG places them and they get no in-world preview scene.
-        assert len(scene_paths) == 12
-        assert len(list((preview_root / "atlases").glob("*.png"))) == 8
-        # One motion strip per curated material still placed in E1M1: 6 of the
-        # 8, for the same reason as the scene count above.
-        assert len(list((preview_root / "motion").glob("*.gif"))) == 6
-        assert len(list((preview_root / "motion").glob("*-contact.png"))) == 6
+        # 13, not 15: COMPTILE and COMPUTE2 are aliased onto COMPTALL, so no
+        # SEG places them and they get no in-world preview scene. COMPTALL
+        # itself does get one now that it is curated -- and being the material
+        # those two fold INTO, it is the scene that actually shows what every
+        # computer panel in the campaign looks like.
+        assert len(scene_paths) == 13
+        assert len(list((preview_root / "atlases").glob("*.png"))) == 9
+        # One motion strip per curated material still placed in E1M1: 7 of the
+        # 9, for the same reason as the scene count above.
+        assert len(list((preview_root / "motion").glob("*.gif"))) == 7
+        assert len(list((preview_root / "motion").glob("*-contact.png"))) == 7
         assert (preview_root / "report.json").is_file()
 
     print("ok    walls: 64x128, stride 2/80 columns, native-V short textures")

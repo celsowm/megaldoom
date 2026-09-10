@@ -539,6 +539,33 @@ class WallBakeRecipe:
     # module to fill the fixed 64x64 runtime texture instead of compressing
     # several tiny modules until their controls become single-pixel noise.
     facade_window: tuple | None = None
+    # Whether the windowed module is rebuilt by _compose_compute2_facade_indices
+    # (rails, instrument bays, cabinet doors) or merely baked on the 64x64
+    # lattice and magnified back onto the display grid.
+    #
+    # The composed form is authored geometry: about 60% of its texels are drawn
+    # by fill() rather than taken from Doom, and its bay rows are placed for
+    # COMPUTE2's module layout specifically. That is the right trade for a
+    # material whose source really is unreconstructable, but pointed at a
+    # different texture it reads as flat drawn rectangles rather than as a
+    # wall. COMPTALL does not need it: halving both axes already removes the
+    # noise (711 isolated texels -> 0) while keeping Doom's own structure, and
+    # it measures better on every axis than the composed form does
+    # (avg v 0.131 vs 0.314, block-max v 0.408 vs 0.625).
+    #
+    # Defaults to True so COMPUTE2's bake stays bit-identical.
+    facade_compose: bool = True
+    # Luminance band handed to _contrast_normalize. The default asks whether the
+    # texture spans a wide range anywhere; a narrower band asks where the bulk of
+    # it lives. See that function -- this is the knob COMPTALL needed and the
+    # churn work missed, because churn measures how OFTEN neighbours differ and
+    # says nothing about how MANY distinct indices exist to differ between. A
+    # wall baked to one flat grey has excellent churn.
+    contrast_quantiles: tuple = (0.02, 0.98)
+    contrast_target_spread: float = WALL_TARGET_SPREAD
+    contrast_max_gain: float = WALL_MAX_CONTRAST_GAIN
+    # Separate cap for the below-median half. None expands symmetrically.
+    contrast_dark_max_gain: float | None = None
 
 
 # Only structural technological walls are curated. Doors and switches retain
@@ -547,20 +574,107 @@ class WallBakeRecipe:
 # certificate below: a change large enough to identify a panel boundary is
 # preserved, while lower-frequency ripple inside a panel is simplified.
 TECH_WALL_MATERIALS = (
-    "COMPTILE", "COMPUTE2", "LITE3", "STARG3",
+    "COMPTALL", "COMPTILE", "COMPUTE2", "LITE3", "STARG3",
     "STARGR1", "STARTAN1", "STARTAN3", "SUPPORT2",
 )
-CURATED_WALL_MATERIALS = TECH_WALL_MATERIALS + ("TEKWALL1", "TEKWALL4")
-WALL_BAKE_RECIPES = {
-    name: WallBakeRecipe(
-        source_window=(128, 0, 128, 56) if name == "COMPUTE2" else None,
+CURATED_WALL_MATERIALS = TECH_WALL_MATERIALS + ("TEKWALL1", "TEKWALL4",
+                                                "TEKWALL5")
+# Per-material overrides. Everything absent here takes the plain edge-aware
+# low-pass, which is what the majority of curated materials want.
+_WALL_BAKE_OVERRIDES = {
+    "COMPUTE2": dict(
+        source_window=(128, 0, 128, 56),
         # The rightmost 64px module contains the large green waveform bank,
         # metal control panel and lower cabinets.  Sampling it 1:1 keeps those
         # structures legible in the 160px-wide stride-2 viewport.  The public
         # source_window remains 128px so the wall's world-space repeat does not
         # change; this is an offline facade selection only.
-        facade_window=(64, 0, 64, 56) if name == "COMPUTE2" else None,
-    )
+        facade_window=(64, 0, 64, 56),
+    ),
+    # COMPTALL is the largest wall material in the campaign -- 203 segs, 14.4%
+    # of all wall area across the three maps -- and every computer panel in the
+    # game draws it, because texture_aliases folds COMPUTE1/COMPUTE2/COMPUTE3/
+    # COMP2/COMPSTA1/COMPTILE onto it. It had no recipe at all until now.
+    #
+    # Two independent defects, and the churn ceiling could see neither, because
+    # churn counts how OFTEN adjacent texels differ and never asks how MANY
+    # distinct indices there are to differ between. A wall baked to a single
+    # flat grey scores perfectly.
+    #
+    # 1. Tone. COMPTALL's art lives almost entirely between luminance 19 and 59.
+    #    PAL3's grey rungs are 0/36/72/109/145/182, so that whole band collapses
+    #    onto one or two indices: 76% of the baked texels came out index 5. The
+    #    vent grilles, the recessed bay outlines and every module border -- the
+    #    "varias bordas" the source obviously has -- fell under the quantizer and
+    #    became one monotone field. _contrast_normalize was supposed to catch
+    #    this and did not: its p02-p98 band saw the handful of blown-out circuit
+    #    board specks, concluded the texture already spanned a wide range, and
+    #    took the gain 1.0 pass-through. The interquartile band below measures
+    #    where the bulk actually sits and lets the gain fire on it.
+    #
+    #                        dom index   uniq   churn h/v   block-max
+    #      uncurated            72%       13    0.169/0.--     0.--
+    #      after                55%       14    0.165/0.193    0.529
+    #      STARTAN3 (reads)     32%        9    0.222/0.188    0.412
+    #
+    #    The expansion is asymmetric (contrast_dark_max_gain). A symmetric one
+    #    reached 51% dominant but drove the console readouts' dark blue to solid
+    #    black, deleting the lit screens this window exists to include.
+    #
+    #    Both churn figures stay well inside WALL_CHURN_LIMIT and the local
+    #    ceiling -- and are LOWER than the uncurated bake's -- so restoring the
+    #    structure costs no guardrail headroom. The dominant-index share is now
+    #    asserted directly in test-wall-quality.py; COMPTALL was the worst
+    #    material in the atlas on it by 11 points.
+    #
+    # 2. Window. The source is 256 wide and the default crop keeps the left 128,
+    #    which holds vent grilles and two circuit boards -- and none of the
+    #    screens. Every CRT, readout bank and console strip in the art sits past
+    #    x=190 and was being thrown away, which is why the converted wall had no
+    #    computer on it. The window below takes the right half instead. Sampled
+    #    dimensions stay (128,128), identical to the default crop, so the wall's
+    #    world-space repeat does not move -- only which 128 columns are baked.
+    #
+    # An earlier attempt here halved both axes through the COMPUTE2 facade path
+    # and made defect 1 worse (76% dominant, up from 67%): it optimised churn to
+    # 0.062 by deleting the remaining structure. Kept out on purpose.
+    #
+    # Known limitation, measured and left alone: the CRT interior reads as dark
+    # red rather than as green-on-black. Two causes, neither local to this
+    # recipe. PAL3 has no green at all, so the text has nowhere correct to land;
+    # and _spatial_smooth bleeds the text into the screen's pure black, which
+    # dither_index's 5-bit cache key then rounds from a near-neutral (6,9,4) to
+    # a saturated (0,8,0), whose nearest PAL3 entry is index 1's dark red. The
+    # obvious lever, putting the material on the neutral ramp, is worse: it also
+    # desaturates the yellow hazard stripe, which is the one element in this
+    # texture a player actually recognises. Fixing it properly means changing
+    # the shared quantizer key, which is not this change's blast radius.
+    "COMPTALL": dict(
+        source_window=(128, 0, 128, 128),
+        contrast_quantiles=(0.25, 0.75),
+        contrast_target_spread=0.50,
+        contrast_max_gain=4.5,
+        contrast_dark_max_gain=1.0,
+    ),
+    # TEKWALL5 was the second noisiest material in the atlas (block-max 0.783,
+    # 2.0% of campaign wall area) and the reason it carried a churn exemption:
+    # its art is uniformly dense machinery, with no calm region to crop to, so
+    # every attempt to isolate a quiet module failed -- no combination of a
+    # 64-tall facade window x smooth_weight (4/8/16/24) x
+    # edge_lightness_threshold (0.09/0.14/0.20) brought it under the ceiling.
+    #
+    # Halving both axes over the WHOLE texture does what cropping could not,
+    # precisely because there is nothing to crop to: vertical churn 0.435 ->
+    # 0.285 and horizontal 0.256 -> 0.233, both inside WALL_CHURN_LIMIT, with
+    # its isolated texels gone. The exemption is therefore retired rather than
+    # narrowed; see tools/test-wall-quality.py.
+    "TEKWALL5": dict(
+        facade_window=(0, 0, 128, 128),
+        facade_compose=False,
+    ),
+}
+WALL_BAKE_RECIPES = {
+    name: WallBakeRecipe(**_WALL_BAKE_OVERRIDES.get(name, {}))
     for name in CURATED_WALL_MATERIALS
 }
 
@@ -1105,11 +1219,15 @@ def _convert_texture(path, palette, use_wall_bake_recipe=True,
         else:
             smoothed = [[tone_curve(columns[x][y]) for y in range(bake_height)]
                        for x in range(bake_width)]
-        normalized = _contrast_normalize(smoothed)
         if recipe is None:
+            normalized = _contrast_normalize(smoothed)
             smoothed = _spatial_smooth(normalized)
             edge_mask = [[False] * bake_height for _ in range(bake_width)]
         else:
+            normalized = _contrast_normalize(
+                smoothed, recipe.contrast_quantiles,
+                recipe.contrast_target_spread, recipe.contrast_max_gain,
+                recipe.contrast_dark_max_gain)
             # Detect structure after the established low-pass, otherwise every
             # one-texel rivet/readout becomes an "edge" and defeats the point
             # of simplifying detail that stride 2 cannot reconstruct.
@@ -1200,8 +1318,14 @@ def _convert_texture(path, palette, use_wall_bake_recipe=True,
             rows = _relieve_dominant_indices(rows, smoothed, palette,
                                              list(allowed))
         if recipe is not None and recipe.facade_window is not None:
-            rows = _compose_compute2_facade_indices(
-                _resize_index_rows(rows, COMPUTE2_FACADE_DIM))
+            # Both branches land on the square COMPUTE2_FACADE_DIM lattice; they
+            # differ only in whether its content is rebuilt or kept. Dropping to
+            # the lattice in V is what halves the vertical axis -- bake_width
+            # already did the horizontal half -- so a magnified facade costs one
+            # bake texel per two display texels on both axes.
+            rows = _resize_index_rows(rows, COMPUTE2_FACADE_DIM)
+            if recipe.facade_compose:
+                rows = _compose_compute2_facade_indices(rows)
             rows = _resize_index_rows(rows, bake_height)
             # The semantic facade is the candidate target for preview/error
             # accounting.  Its boundaries, not the discarded micro-detail's
