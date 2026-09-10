@@ -32,8 +32,14 @@ EVENT_COMBAT_HIT = 0x04
 EVENT_EXIT = 0x80
 USE_RADIUS = 256
 USE_ARRIVAL_RADIUS = 48
-# waypoint_turn's dead-band for a USE press, in 256ths of a circle.
-USE_AIM_SPREAD = 2
+# waypoint_turn's dead-band for a USE press, in 256ths of a circle. Must
+# match the runtime's USE tolerance (waypoint_turn in megaldoom_runner.c):
+# a tighter runtime band looked like the fix for a wrong-surface mispress,
+# but the turn controller can overshoot a 2-unit window every frame and
+# hunt forever without ever pressing C, so the runtime keeps travel's wide
+# 8-unit band for USE too. The accuracy has to come from here instead: pick
+# a pose whose ray resolves to the intended surface across that whole band.
+USE_AIM_SPREAD = 8
 # Momentum can leave the player a few pixels outside a corner cell even after
 # the controller has released thrust.  MOVE is a navigation tolerance, not an
 # interaction tolerance; keep USE narrow while allowing the next certified
@@ -69,6 +75,44 @@ def nearest_index(nodes, target, begin, end):
     return min(range(begin, end), key=lambda index:
                (nodes[index]["x"] - target[0]) ** 2 +
                (nodes[index]["y"] - target[1]) ** 2)
+
+
+def _side(ax, ay, bx, by, px, py):
+    return (bx - ax) * (py - ay) - (by - ay) * (px - ax)
+
+
+def segments_intersect(p1, p2, p3, p4):
+    """True if the closed segments p1-p2 and p3-p4 cross or touch.
+
+    Used to catch a MOVE step that crosses a door's face between two
+    certified points even when the arrival point itself lands past the
+    20-unit clearance radius the point-distance check uses. E1M3 put an
+    unlock press's MOVE at (-1184,2352), 24 units south of door group 14's
+    face at y=2376-2392 -- outside that radius, so nothing flagged it, and
+    the door stayed shut in front of a follower walking straight down from
+    y=2408 into a wall it could never open from the far side it was aimed at.
+    """
+    d1 = _side(*p3, *p4, *p1)
+    d2 = _side(*p3, *p4, *p2)
+    d3 = _side(*p1, *p2, *p3)
+    d4 = _side(*p1, *p2, *p4)
+    if ((d1 > 0 and d2 < 0) or (d1 < 0 and d2 > 0)) and \
+       ((d3 > 0 and d4 < 0) or (d3 < 0 and d4 > 0)):
+        return True
+    # Touching/collinear cases: only relevant here for axis-aligned faces,
+    # so a simple bounding-box overlap after confirming collinearity suffices.
+    def on_segment(a, b, c):
+        return (min(a[0], b[0]) <= c[0] <= max(a[0], b[0]) and
+                min(a[1], b[1]) <= c[1] <= max(a[1], b[1]))
+    if d1 == 0 and on_segment(p3, p4, p1):
+        return True
+    if d2 == 0 and on_segment(p3, p4, p2):
+        return True
+    if d3 == 0 and on_segment(p1, p2, p3):
+        return True
+    if d4 == 0 and on_segment(p1, p2, p4):
+        return True
+    return False
 
 
 def use_angle(x, y, aim_x, aim_y):
@@ -325,7 +369,26 @@ def route_lines(map_data):
             continue
         target = midpoint(map_data.vertices, door)
         before = nearest_index(nodes, target, 0, key_index)
-        after = nearest_index(nodes, target, key_index, len(nodes))
+        # The nearest certified node to the door, by raw distance, can lie
+        # PAST it: the search that proved this route may have crossed this
+        # exact door somewhere else in its exploration before ever walking
+        # the reconstructed path through here, so "nearest" silently picks a
+        # far-side cell.  E1M3 put the unlock press for group 14 at
+        # (-1184,2352), 24 units south of its face at y=2376-2392, and the
+        # follower could never walk there in the first place -- the door was
+        # still shut in front of it.  Walk the path forward from the key
+        # pickup instead and press at the certified node standing right
+        # before the segment that actually steps across the door's face.
+        after = None
+        v1 = map_data.vertices[door["v1"]]
+        v2 = map_data.vertices[door["v2"]]
+        for index in range(key_index + 1, len(nodes)):
+            if segments_intersect((nodes[index - 1]["x"], nodes[index - 1]["y"]),
+                                  (nodes[index]["x"], nodes[index]["y"]), v1, v2):
+                after = index - 1
+                break
+        if after is None:
+            after = nearest_index(nodes, target, key_index, len(nodes))
         if point_segment_dist2(*map_data.vertices[door["v1"]],
                                *map_data.vertices[door["v2"]],
                                nodes[before]["x"],
@@ -357,13 +420,24 @@ def route_lines(map_data):
                 seg["type"] == SEG_DOOR and seg["flags"] & SEG_FLAG_DIRECT_USE):
             controls.setdefault(seg["door_group"], []).append(seg)
 
-    def groups_at(x, y):
+    def groups_at(x, y, from_x=None, from_y=None):
         groups = 0
         for seg in map_data.out_segs:
             if seg["type"] != SEG_DOOR:
                 continue
-            if point_segment_dist2(*map_data.vertices[seg["v1"]],
-                                   *map_data.vertices[seg["v2"]], x, y) <                     E2E_CLEARANCE_RADIUS ** 2:
+            v1 = map_data.vertices[seg["v1"]]
+            v2 = map_data.vertices[seg["v2"]]
+            hit = point_segment_dist2(*v1, *v2, x, y) < E2E_CLEARANCE_RADIUS ** 2
+            # The point check alone misses a node that lands past the door's
+            # face outside that radius but only reaches there by crossing it:
+            # E1M3 put an unlock press's MOVE at (-1184,2352), 24 units south
+            # of group 14's face at y=2376-2392, and nothing flagged it, so
+            # the door stayed shut in front of a follower that could never
+            # walk through it to press from the far side the route named.
+            if not hit and from_x is not None and \
+                    segments_intersect((from_x, from_y), (x, y), v1, v2):
+                hit = True
+            if hit:
                 groups |= 1 << seg["door_group"]
         return groups
 
@@ -379,7 +453,10 @@ def route_lines(map_data):
         # its own press.
         if node["action"] == "use" and node["detail"] is not None:
             opened |= 1 << node["detail"]["door_group"]
-        crossing = groups_at(node["x"], node["y"]) & ~opened
+        previous = nodes[index - 1] if index > 0 else None
+        crossing = groups_at(node["x"], node["y"],
+                             previous["x"] if previous else None,
+                             previous["y"] if previous else None) & ~opened
         while crossing:
             group = (crossing & -crossing).bit_length() - 1
             crossing &= crossing - 1

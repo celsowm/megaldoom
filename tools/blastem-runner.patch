@@ -97,7 +97,7 @@ new file mode 100644
 index 0000000..0000000
 --- /dev/null
 +++ b/megaldoom_runner.c
-@@ -0,0 +1,835 @@
+@@ -0,0 +1,866 @@
 +#include "megaldoom_runner.h"
 +#include "genesis.h"
 +#include "io.h"
@@ -461,14 +461,19 @@ index 0000000..0000000
 +        /* The dead-band has to shrink as the target gets close: 8 units of a
 +         * 256-step circle is 11 degrees, which is a harmless heading error at
 +         * 600 units out and a miss at 40. */
-+        /* A USE is a certified probe: the route's expected target was
-+         * chosen offline for one heading, and bsp_use_in_front picks the
-+         * surface nearest the aim ray. Pressing C with 11 degrees of slop
-+         * resolves a different surface than the one the route declared --
-+         * E1M3 pressed door group 15 where the route named 11. Aim tightly
-+         * before pressing; only travel keeps the wide band. */
++        /* A tighter band for USE looked appealing -- bsp_use_in_front picks
++         * the surface nearest the aim ray, and E1M3 once pressed door group
++         * 15 where the route named 11 -- but the turn controller accelerates
++         * up to 4 angle units per frame (TURN_MAX_FP) and only decelerates
++         * on release, so a 2-unit window is narrower than a single overshoot:
++         * every correction blows past it and the heading oscillates forever,
++         * never firing C. E1M1 hung at its very first USE this way. Keep the
++         * same 8-unit band travel already uses, and get the accuracy this
++         * needs from the route generator picking a use pose whose ray
++         * resolves to the intended surface across that whole band instead
++         * (see USE_AIM_SPREAD in generate-e2e-routes.py). */
 +        const int32_t remaining = (int32_t)state.last_distance;
-+        const int32_t tolerance = travelling ? (remaining < 96 ? 3 : 8) : 2;
++        const int32_t tolerance = (travelling && remaining < 96) ? 3 : 8;
 +        if (error >= -tolerance && error <= tolerance) return 0;
 +    }
 +    if (error > 0) return MD_MASK_RIGHT;
@@ -727,6 +732,20 @@ index 0000000..0000000
 +            waypoint_advance();
 +            return 0;
 +        }
++        /* The approach brakes on the way to this radius, but braking there
++         * only withholds thrust -- it does not undo speed already carried
++         * into the circle. Whatever arrives moving fast still has that
++         * momentum here, and holding MD_MASK_UP as part of the shot cadence
++         * below (kept for the case a target sits just past a 16-unit
++         * collision edge) adds to it. E1M2's FIRE at (-512,-672) sits nearly
++         * on its own approach leg, so the follower ran through it, corrected
++         * heading outside, and ran back in a ~100-unit loop for the rest of
++         * the run's budget without ever standing still long enough to land a
++         * hit. Bleed the momentum down first; only creep and shoot once it
++         * has. */
++        if ((int32_t)vx * vx + (int32_t)vy * vy > 16) {
++            return MD_MASK_DOWN;
++        }
 +        int32_t aim_dx = (int32_t)current->aim_x - mailbox_s16(state.mailbox_raw, 14);
 +        int32_t aim_dy = (int32_t)current->aim_y - mailbox_s16(state.mailbox_raw, 16);
 +        double desired = atan2((double)aim_dy, (double)aim_dx) * (256.0 / (2.0 * M_PI));
@@ -774,11 +793,23 @@ index 0000000..0000000
 +                                      mailbox_s16(state.mailbox_raw, 16),
 +                                      mailbox_u16(state.mailbox_raw, 18), 1);
 +        if (turn) return turn;
-+        if (current->action == WAYPOINT_MOVE) {
++        /* Braking on approach is not a MOVE-only concern: a FIRE or USE
++         * waypoint has its own arrival radius, and holding full thrust right
++         * up to that circle carries the player straight through it and back
++         * out the far side. E1M2's FIRE at (-512,-672) sits almost on top of
++         * its own approach leg, so the follower ran across it, corrected
++         * heading, ran back, and repeated -- distance oscillating between 4
++         * and 119 units for the rest of the run's frame budget without ever
++         * settling inside 48 to take the shot. Only a MOVE gets the corner
++         * lookahead, since that check walks the NEXT move waypoint and a
++         * FIRE/USE has none to walk to. */
++        if (current->action == WAYPOINT_MOVE || current->action == WAYPOINT_FIRE ||
++            current->action == WAYPOINT_USE) {
 +            return waypoint_move_drive((int32_t)state.last_distance,
 +                                       current->radius, dx, dy, vx, vy,
 +                                       have_velocity,
-+                                       waypoint_corner_ahead(current));
++                                       current->action == WAYPOINT_MOVE &&
++                                           waypoint_corner_ahead(current));
 +        }
 +    return MD_MASK_A | MD_MASK_UP;
 +}
