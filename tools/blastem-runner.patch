@@ -97,7 +97,7 @@ new file mode 100644
 index 0000000..0000000
 --- /dev/null
 +++ b/megaldoom_runner.c
-@@ -0,0 +1,866 @@
+@@ -0,0 +1,887 @@
 +#include "megaldoom_runner.h"
 +#include "genesis.h"
 +#include "io.h"
@@ -763,7 +763,28 @@ index 0000000..0000000
 +         * inside the certified FIRE radius.  This avoids a target being
 +         * hidden exactly behind the edge of a 16-unit collision circle while
 +         * preserving the no-teleport and no-C-with-direction contracts. */
-+        return ((frame & 15) < 4) ? (MD_MASK_B | MD_MASK_UP) : MD_MASK_UP;
++        /* That nudge is only tiny if something caps it. A single tick of
++         * MD_MASK_UP from a dead stop is not tiny at all -- it is DOOM's full
++         * per-tick acceleration, and friction alone then takes many ticks to
++         * bleed it back off, carrying the player across that whole span
++         * before it matters again. Holding UP every tick the aim stays
++         * aligned compounds this with nothing to spend it against once the
++         * entry brake above has already zeroed velocity, and for a FIRE
++         * waypoint whose firing line runs along the approach corridor --
++         * E1M2's at (-512,-672) -- "aligned" is also "pointed down the
++         * hallway", so the player ran through the target, out the far side,
++         * all the way around and back for the rest of the run's frame budget
++         * without ever holding still long enough to land a hit. Brake
++         * actively against any velocity the single nudge (or the entry
++         * brake's own overshoot) leaves behind instead of waiting on
++         * friction; only add the forward nudge from a genuine dead stop. The
++         * shot itself (B) still fires on cadence regardless. */
++        {
++            const int32_t speed2 = (int32_t)vx * vx + (int32_t)vy * vy;
++            const uint32_t shoot = ((frame & 15) < 4) ? MD_MASK_B : 0;
++            if (speed2 > 0) return shoot | MD_MASK_DOWN;
++            return shoot | MD_MASK_UP;
++        }
 +    }
 +    if (current->action == WAYPOINT_HURT) {
 +        if (state.mailbox_raw[7]) {

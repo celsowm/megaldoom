@@ -46,6 +46,12 @@ USE_AIM_SPREAD = 8
 # cell to take over without stalling on the diagonal edge of its radius.
 MOVE_ARRIVAL_RADIUS = 80
 MOVE_CORNER_RADIUS = 32
+# billboard_collect_near's touch radius (BILLBOARD_COLLECT_RADIUS) is 128, and
+# the certifier's own PICKUP_RADIUS in doom_map.py matches it -- but the
+# certified cell it records can already be sitting right at that 128-unit
+# edge, so the arrival radius has to be the tightest the MOVE contract allows
+# to avoid stopping short of the real pickup range.
+KEY_ARRIVAL_RADIUS = 16
 ROUTE_SAMPLE_STEP = 64
 # Keep the certified route outside the player's collision footprint at turns;
 # this is deliberately wider than the map proof's default point sample.
@@ -558,8 +564,25 @@ def route_lines(map_data):
         # corner can cut through a wall even though both endpoints are valid.
         # Reached cells advance in one host frame, so fidelity costs little.
         if last is None or needs_position or last != (x, y):
-            move_radius = (USE_ARRIVAL_RADIUS if needs_position else
-                           (MOVE_CORNER_RADIUS if corner else MOVE_ARRIVAL_RADIUS))
+            if node["action"] == "key":
+                # A key is picked up by proximity, not a use-ray, at whatever
+                # cell the certifier's flood fill first came within
+                # PICKUP_RADIUS (128) of it -- and that cell can be the worst
+                # case, exactly 128 away, when the key sits somewhere the
+                # flattened geometry never lets the path approach any closer
+                # (E1M3's blue key: the corridor dead-ends at -160,736, 128
+                # units from the key at -160,864, then backtracks). USE_
+                # ARRIVAL_RADIUS's 48-unit slack let the follower call itself
+                # arrived up to 48 units short of that cell -- as far as 176
+                # from the key, well outside the real pickup radius -- so the
+                # key silently never entered inventory and the door it opens
+                # later reported LOCKED. Use the tightest radius the MOVE
+                # contract allows instead.
+                move_radius = KEY_ARRIVAL_RADIUS
+            elif needs_position:
+                move_radius = USE_ARRIVAL_RADIUS
+            else:
+                move_radius = MOVE_CORNER_RADIUS if corner else MOVE_ARRIVAL_RADIUS
             emit(x, y, x, y, move_radius, "MOVE")
 
         for pose in openings.get(index, ()):
