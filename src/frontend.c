@@ -448,6 +448,7 @@ static const IntermissionNode INTERMISSION_NODES[MEGALDOOM_MAP_COUNT] = {
     { 21, 20,  0,  0 },   // E1M1 - never pointed at; it is where you start
     { 16, 18, 10, 18 },   // E1M2
     {  6, 15,  0, 15 },   // E1M3
+    { 24, 13, 18, 13 },   // E1M4
 };
 
 static const Image *intermission_stats_image(u16 completed_level) {
@@ -455,6 +456,7 @@ static const Image *intermission_stats_image(u16 completed_level) {
         &frontend_intermission_stats,
         &frontend_intermission_stats_e1m2,
         &frontend_intermission_stats_e1m3,
+        &frontend_intermission_stats_e1m4,
     };
     return stats[(completed_level < MEGALDOOM_MAP_COUNT) ? completed_level : 0];
 }
@@ -463,6 +465,7 @@ static const Image *intermission_entering_image(u16 completed_level) {
     static const Image *const entering[MEGALDOOM_MAP_COUNT] = {
         &frontend_intermission_entering_e1m2,
         &frontend_intermission_entering_e1m3,
+        &frontend_intermission_entering_e1m4,
         NULL,
     };
     return (completed_level < MEGALDOOM_MAP_COUNT) ? entering[completed_level] : NULL;
@@ -638,8 +641,10 @@ static void run_intermission_map(u16 completed_level,
     }
     // WIMAP0 node positions, one row per level, in the tile-aligned 224-line
     // frame. E1M1 and E1M2 are the values this screen already shipped with;
-    // E1M3 follows the same WIMAP0 layout. A splat marks every level already
-    // finished, so the map fills in as the campaign advances.
+    // E1M3 and E1M4 follow the same WIMAP0 layout -- x = floor(node/8) - 2,
+    // y = round(node/8), read off Doom's own lnodes table (E1M4 is 209,102).
+    // A splat marks every level already finished, so the map fills in as the
+    // campaign advances.
     for (u16 level = 0; level <= completed_level &&
                         level < MEGALDOOM_MAP_COUNT; level++) {
         draw_marker(&frontend_intermission_splat, tiles->splat,

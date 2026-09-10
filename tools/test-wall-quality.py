@@ -22,6 +22,7 @@ ASSETS_PATH = ROOT / "src" / "bsp" / "generated_assets.h"
 MAP_PATH = ROOT / "src" / "bsp" / "generated_e1m1_map.c"
 MAP2_PATH = ROOT / "src" / "bsp" / "generated_e1m2_map.c"
 MAP3_PATH = ROOT / "src" / "bsp" / "generated_e1m3_map.c"
+MAP4_PATH = ROOT / "src" / "bsp" / "generated_e1m4_map.c"
 LIMITS_PATH = ROOT / "src" / "bsp" / "generated_map_limits.h"
 LEGACY_WORLD_PALETTE = [
     (0x00, 0x00, 0x00), (0x00, 0x00, 0x91), (0x48, 0x00, 0x00),
@@ -89,7 +90,7 @@ def worst_block_churn(rows, active_height, block):
 
 
 def campaign_wall_area_shares():
-    """Share of shipped wall area each texture paints, across all three maps.
+    """Share of shipped wall area each texture paints, across the campaign.
 
     Area-weighted by seg length, not counted per texture: the memory of this
     codebase is that per-texture averages hide which materials actually fill
@@ -103,7 +104,7 @@ def campaign_wall_area_shares():
             r"// (\d+): (\S+) \((\d+)x(\d+)\)", assets):
         atlas[int(index)] = name
     totals = Counter()
-    for path in (MAP_PATH, MAP2_PATH, MAP3_PATH):
+    for path in (MAP_PATH, MAP2_PATH, MAP3_PATH, MAP4_PATH):
         source = path.read_text(errors="ignore")
         vertex_body = re.search(r"bsp_vertices\[\d+\]\s*=\s*\{(.*?)\n\};",
                                 source, re.S)
@@ -306,9 +307,11 @@ def main():
         assert perceptual <= limit, (texture_name, perceptual, baseline)
 
     wall_textures = generated_wall_textures(assets)
-    # 33 after tools/texture_aliases.py folds the rare-material tail onto the
-    # generic head; the campaign is three maps but the atlas is smaller.
-    assert len(wall_textures) == 34
+    # 43 for the four-map campaign, after tools/texture_aliases.py folds the
+    # rare-material tail onto the generic head. It held at 34 through E1M3
+    # because everything that map added had a head to fold onto; E1M4 brought
+    # nine materials that do not, so this is the first map that grew the atlas.
+    assert len(wall_textures) == 43
     # What actually reaches the screen: one texel per displayed pixel, which is
     # what FREEDOOM_WALL_PACKED_PAIRS carries. Every quality contract below is
     # measured on this, and emit_world_assets certifies the very same grids, so
@@ -384,8 +387,13 @@ def main():
     # WALL_TEX_DISPLAY_WIDTH texels per row instead of WALL_TEX_WIDTH.
     # 1835008 for a THREE-map campaign, against 2195456 for the old two-map
     # one: tools/texture_aliases.py folds the rare-material tail onto the
-    # generic head, so E1M3 fits with the atlas shrinking rather than growing.
-    assert packed_pair_bytes == 1835008
+    # generic head, so E1M3 fit with the atlas shrinking rather than growing.
+    # E1M4 does grow it -- 2228224 for 43 wall textures plus 25 door faces,
+    # against 34 + 22 before. Nine materials in it (BIGDOOR1, BRNPOIS,
+    # COMPSPAN, LITE2, NUKE24, PLAT1, STEP2, SW1METAL, SW2BROWN) have no
+    # existing head to fold onto. That is +384 KB of cartridge, and it is the
+    # number to look at first when the next map does not fit.
+    assert packed_pair_bytes == 2228224
 
     curated_metrics = [wall_bake_preview.texture_metrics(name)
                        for name in extractor.TECH_WALL_MATERIALS]
@@ -454,6 +462,16 @@ def main():
     # vertical churn falls 0.435 -> 0.285, inside the ceiling, so it is now held
     # to the same bar as everything else. EXITDOOR remains the one real outlier.
     CHURN_EXEMPT = {"EXITDOOR"}
+    # Vertical only, and for a different reason than EXITDOOR's: STEP2's source
+    # is 32x8. Its bake is not noisy -- horizontal churn 0.038, three flat
+    # bands (bright lip, shadow, brick base) that are the step's shading -- but
+    # with 8 rows there are only 7 vertical sample pairs, so each deliberate
+    # band boundary costs 1/7 and three of them measure 0.426 against a 0.35
+    # ceiling meant for texel-frequency noise. Nothing here can be smoothed
+    # without deleting a band. Kept as a named exemption rather than a height
+    # rule so a second short material has to be looked at rather than
+    # inheriting this one's reasoning.
+    CHURN_EXEMPT_VERTICAL = {"STEP2"}
     for texture_name in sorted(display_textures):
         with Image.open(extractor.texture_path(texture_name)) as image:
             active_height = extractor.sampled_texture_dimensions(
@@ -468,7 +486,9 @@ def main():
         vertical_churn /= max(1, (active_height - 1) * len(rows[0]))
         if texture_name not in CHURN_EXEMPT:
             assert churn <= CHURN_LIMIT, (texture_name, churn)
-            assert vertical_churn <= CHURN_LIMIT, (texture_name, vertical_churn)
+            if texture_name not in CHURN_EXEMPT_VERTICAL:
+                assert vertical_churn <= CHURN_LIMIT, (texture_name,
+                                                       vertical_churn)
 
     # The ceiling above is a texture-wide AVERAGE, and an average has a blind
     # spot big enough to drive the campaign's largest material through. COMPTALL
@@ -543,7 +563,12 @@ def main():
     # Materials whose source really is a near-uniform field: LITE3 is a white
     # light panel, COMPTILE a two-tone tile. Manufacturing spread into them would
     # be inventing detail Doom never drew.
-    UNIFORM_MATERIALS = ("LITE3", "COMPTILE", "DOORSTOP", "STARGR1", "SUPPORT2")
+    # COMPSPAN joined this list with E1M4: its source is a dark computer panel
+    # inside a thin frame -- 85% one index, 12% the frame, 3% the outer edge --
+    # and the 15% that is not the field IS the whole drawing. Spread would be
+    # invented, exactly as for LITE3.
+    UNIFORM_MATERIALS = ("LITE3", "COMPTILE", "COMPSPAN", "DOORSTOP",
+                         "STARGR1", "SUPPORT2")
     SOLID_MATERIALS = {"DOOR1"}
     for texture_name, rows in sorted(display_textures.items()):
         flat = [value for row in rows for value in row]
@@ -657,12 +682,13 @@ def main():
         generated_map = temp_root / "generated_e1m1_map.c"
         generated_map2 = temp_root / "generated_e1m2_map.c"
         generated_map3 = temp_root / "generated_e1m3_map.c"
+        generated_map4 = temp_root / "generated_e1m4_map.c"
         generated_assets = temp_root / "generated_assets.h"
         generated_limits = temp_root / "generated_map_limits.h"
         subprocess.run([
             sys.executable, str(EXTRACTOR_PATH),
             "--wad", str(ROOT / "DOOM1.WAD"),
-            "--maps", "E1M1", "E1M2", "E1M3",
+            "--maps", "E1M1", "E1M2", "E1M3", "E1M4",
             "--map-out-dir", str(temp_root),
             "--assets-out", str(generated_assets),
             "--limits-out", str(generated_limits),
@@ -670,6 +696,7 @@ def main():
         assert generated_map.read_bytes() == MAP_PATH.read_bytes()
         assert generated_map2.read_bytes() == MAP2_PATH.read_bytes()
         assert generated_map3.read_bytes() == MAP3_PATH.read_bytes()
+        assert generated_map4.read_bytes() == MAP4_PATH.read_bytes()
         assert generated_assets.read_bytes() == ASSETS_PATH.read_bytes()
         assert generated_limits.read_bytes() == LIMITS_PATH.read_bytes()
 

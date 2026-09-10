@@ -79,7 +79,8 @@ BOOT_INPUTS = (
     SEGA_FONT,
 )
 INTERMISSION_PATCHES = (
-    "WIMAP0", "WILV00", "WILV01", "WILV02", "WIOSTK", "WIOSTI", "WISCRT2",
+    "WIMAP0", "WILV00", "WILV01", "WILV02", "WILV03", "WIOSTK", "WIOSTI",
+    "WISCRT2",
     "WITIME", "WIPAR", "WISPLAT", "WIURH0", "WIPCNT",
     "WICOLON", "WIF", "WIENTER", *(f"WINUM{i}" for i in range(10)),
 )
@@ -117,7 +118,9 @@ def expected_outputs() -> tuple[str, ...]:
         "sega_s.png", "sega_e.png", "sega_g.png", "sega_a.png",
         "ending_mars.png", "ending_thanks.png", "intermission_stats.png",
         "intermission_stats_e1m2.png", "intermission_stats_e1m3.png",
+        "intermission_stats_e1m4.png",
         "intermission_entering_e1m2.png", "intermission_entering_e1m3.png",
+        "intermission_entering_e1m4.png",
         "intermission_digits.png",
         "intermission_time_digits.png", "intermission_splat.png",
         "intermission_pointer0.png",
@@ -793,8 +796,10 @@ def generate(source: Path, output: Path) -> None:
     intermission_stats = make_intermission_stats(source)
     intermission_stats_e1m2 = make_intermission_stats(source, "WILV01")
     intermission_stats_e1m3 = make_intermission_stats(source, "WILV02")
+    intermission_stats_e1m4 = make_intermission_stats(source, "WILV03")
     intermission_entering = make_intermission_entering(source)
     intermission_entering_e1m3 = make_intermission_entering(source, "WILV02")
+    intermission_entering_e1m4 = make_intermission_entering(source, "WILV03")
     intermission_digits = make_intermission_digits(source)
     intermission_time_digits = make_intermission_time_digits(source)
     intermission_splat = padded_intermission_patch("WISPLAT", 32, 24, source)
@@ -806,8 +811,9 @@ def generate(source: Path, output: Path) -> None:
     palette = build_palette(images)
     ending_mars_palette = build_palette_for_images([
         ending_mars, intermission_stats, intermission_stats_e1m2,
-        intermission_stats_e1m3, intermission_entering,
-        intermission_entering_e1m3,
+        intermission_stats_e1m3, intermission_stats_e1m4,
+        intermission_entering, intermission_entering_e1m3,
+        intermission_entering_e1m4,
         intermission_digits, intermission_time_digits, intermission_splat,
         intermission_pointer0,
     ])
@@ -918,8 +924,10 @@ def generate(source: Path, output: Path) -> None:
         ("intermission_stats.png", intermission_stats),
         ("intermission_stats_e1m2.png", intermission_stats_e1m2),
         ("intermission_stats_e1m3.png", intermission_stats_e1m3),
+        ("intermission_stats_e1m4.png", intermission_stats_e1m4),
         ("intermission_entering_e1m2.png", intermission_entering),
         ("intermission_entering_e1m3.png", intermission_entering_e1m3),
+        ("intermission_entering_e1m4.png", intermission_entering_e1m4),
         ("intermission_digits.png", intermission_digits),
         ("intermission_time_digits.png", intermission_time_digits),
         ("intermission_splat.png", intermission_splat),

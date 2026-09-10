@@ -86,7 +86,7 @@ bool bsp_select_map(u16 level_index) {
     // MEGALDOOM_MAP_COUNT, which the generator emits from the map list it was
     // actually given, so adding a level cannot leave a stale dispatch behind.
     static const BspMapData *const maps[MEGALDOOM_MAP_COUNT] = {
-        &g_e1m1_map, &g_e1m2_map, &g_e1m3_map,
+        &g_e1m1_map, &g_e1m2_map, &g_e1m3_map, &g_e1m4_map,
     };
     if (level_index >= MEGALDOOM_MAP_COUNT) return FALSE;
     g_bsp_map = maps[level_index];

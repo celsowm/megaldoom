@@ -591,8 +591,9 @@ _WALL_BAKE_OVERRIDES = {
         # change; this is an offline facade selection only.
         facade_window=(64, 0, 64, 56),
     ),
-    # COMPTALL is the largest wall material in the campaign -- 203 segs, 14.4%
-    # of all wall area across the three maps -- and every computer panel in the
+    # COMPTALL is the largest wall material in the campaign -- 12.3% of all
+    # wall area across the four maps, 14.4% before E1M4 diluted the total with
+    # brown and starbase walls -- and every computer panel in the
     # game draws it, because texture_aliases folds COMPUTE1/COMPUTE2/COMPUTE3/
     # COMP2/COMPSTA1/COMPTILE onto it. It had no recipe at all until now.
     #

@@ -3,6 +3,7 @@
 XGM2 test_music  "music/d_e1m1.vgm"
 XGM2 e1m2_music  "music/d_e1m2.vgm"
 XGM2 e1m3_music  "music/d_e1m3.vgm"
+XGM2 e1m4_music  "music/d_e1m4.vgm"
 XGM2 intro_music "music/d_intro.vgm"
 XGM2 intermission_music "music/d_inter.vgm"
 
@@ -20,8 +21,10 @@ IMAGE frontend_ending_thanks  "frontend/ending_thanks.png" NONE ALL
 IMAGE frontend_intermission_stats "frontend/intermission_stats.png" NONE ALL
 IMAGE frontend_intermission_stats_e1m2 "frontend/intermission_stats_e1m2.png" NONE ALL
 IMAGE frontend_intermission_stats_e1m3 "frontend/intermission_stats_e1m3.png" NONE ALL
+IMAGE frontend_intermission_stats_e1m4 "frontend/intermission_stats_e1m4.png" NONE ALL
 IMAGE frontend_intermission_entering_e1m2 "frontend/intermission_entering_e1m2.png" NONE ALL
 IMAGE frontend_intermission_entering_e1m3 "frontend/intermission_entering_e1m3.png" NONE ALL
+IMAGE frontend_intermission_entering_e1m4 "frontend/intermission_entering_e1m4.png" NONE ALL
 IMAGE frontend_intermission_digits "frontend/intermission_digits.png" NONE ALL
 IMAGE frontend_intermission_time_digits "frontend/intermission_time_digits.png" NONE ALL
 IMAGE frontend_intermission_splat "frontend/intermission_splat.png" NONE ALL

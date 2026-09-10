@@ -33,6 +33,7 @@ def main():
     e1m1 = generated("e1m1")
     e1m2 = generated("e1m2")
     e1m3 = generated("e1m3")
+    e1m4 = generated("e1m4")
     limits = (ROOT / "src" / "bsp" / "generated_map_limits.h").read_text()
     header = (ROOT / "src" / "bsp" / "bsp_map.h").read_text()
     runtime = (ROOT / "src" / "bsp" / "bsp_map.c").read_text()
@@ -45,7 +46,7 @@ def main():
     bsp_render_internal = (ROOT / "src" / "bsp" / "bsp_render_internal.h").read_text()
 
     for token in (
-        "MEGALDOOM_MAP_COUNT 3", "MEGALDOOM_MAP_MAX_SEGS 968",
+        "MEGALDOOM_MAP_COUNT 4", "MEGALDOOM_MAP_MAX_SEGS 968",
         "MEGALDOOM_MAP_MAX_VERTICES 946", "MEGALDOOM_MAP_MAX_SUBSECTORS 461",
         "MEGALDOOM_MAP_MAX_NODES 460", "MEGALDOOM_MAP_MAX_SECTORS 200",
         "MEGALDOOM_MAP_MAX_ACTIVE_THINGS 317",
@@ -54,12 +55,18 @@ def main():
     assert "const BspMapData g_e1m1_map" in e1m1
     assert "const BspMapData g_e1m2_map" in e1m2
     assert "const BspMapData g_e1m3_map" in e1m3
+    # E1M4 is smaller than E1M2/E1M3 in every dimension, so it rode in under
+    # the existing MAX_* ceilings and cost no work RAM at all -- only
+    # MAP_COUNT moved. Pin its header row so a regeneration that quietly
+    # resized it shows up here rather than as a boot-time heap panic.
+    assert "const BspMapData g_e1m4_map" in e1m4
+    assert "771u, 780u, 355u, 354u, 8u, 254u, 139u, 3u" in e1m4
     assert "961u, 942u, 448u, 447u, 12u, 262u, 200u, 6u" in e1m2
     assert E1M1_HEADER_ROW in e1m1
     assert "typedef struct {" in header and "BspMapData" in header
     assert "bsp_select_map(u16 level_index)" in runtime
     assert "static const BspMapData *const maps[MEGALDOOM_MAP_COUNT]" in runtime
-    assert "&g_e1m1_map, &g_e1m2_map, &g_e1m3_map," in runtime
+    assert "&g_e1m1_map, &g_e1m2_map, &g_e1m3_map, &g_e1m4_map," in runtime
     assert "level_index >= MEGALDOOM_MAP_COUNT) return FALSE" in runtime
 
     bits1 = secret_bits(e1m1, "e1m1")
@@ -102,6 +109,8 @@ def main():
         "frontend_intermission_entering_e1m2",
         "frontend_intermission_entering_e1m3",
         "frontend_intermission_stats_e1m3",
+        "frontend_intermission_entering_e1m4",
+        "frontend_intermission_stats_e1m4",
         "INTERMISSION_NODES[MEGALDOOM_MAP_COUNT]",
     ):
         assert token in frontend
@@ -120,7 +129,7 @@ def main():
     assert "DEBUG_CHECKPOINT_KEY" in main_source
     assert "DEBUG_CHECKPOINT_EXIT" in main_source
 
-    print("ok    campaign: E1M1/E1M2/E1M3 descriptors, carry/rebirth, stats and secrets")
+    print("ok    campaign: E1M1..E1M4 descriptors, carry/rebirth, stats and secrets")
 
 
 if __name__ == "__main__":

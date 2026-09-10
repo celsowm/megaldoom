@@ -67,7 +67,7 @@ def lines(path):
 def main():
     with tempfile.TemporaryDirectory() as temp:
         temp = Path(temp)
-        for name in ("E1M1", "E1M2", "E1M3"):
+        for name in ("E1M1", "E1M2", "E1M3", "E1M4"):
             output = temp / (name.lower() + ".waypoints")
             subprocess.check_call([sys.executable, str(GENERATOR), "--map", name,
                                    "--out", str(output)])
@@ -110,7 +110,10 @@ def main():
             subprocess.check_call([sys.executable, str(GENERATOR), "--map", name,
                                    "--out", str(output), "--check"])
         # A lock scenario is emitted only for a key the certified route really
-        # collects, so E1M1 (no keys at all) has none.  E1M2 and E1M3 must keep
+        # collects, so E1M1 (no keys at all) has none.  Nor does E1M4: it
+        # carries a blue and a yellow key and the doors to match, but its exit
+        # certifies at key mask 0x00 -- the certified path reaches the switch
+        # without ever needing one, so the route collects neither.  E1M2 and E1M3 must keep
         # theirs: E1M3 reaches its blue door only because the route is pinned
         # to the normal exit -- released, it beelines to the secret exit in
         # 4304 units and touches no key -- and that coverage must not vanish
@@ -122,8 +125,9 @@ def main():
             assert len(locked) == len(unlocked) == 1, name
             assert locked[0][7] == "2" and unlocked[0][7] == "3", name
             assert locked[0][8] == unlocked[0][8], name
-        assert not [row for row in lines(temp / "e1m1.waypoints")
-                    if row[5] == "USE" and row[6] in {"20", "40"}]
+        for name in ("E1M1", "E1M4"):
+            assert not [row for row in lines(temp / (name.lower() + ".waypoints"))
+                        if row[5] == "USE" and row[6] in {"20", "40"}]
     print("ok    E2E routes: certified movement, combat, locks, keys and exits")
 
 
