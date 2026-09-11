@@ -173,19 +173,25 @@ function New-WeaponTileSet([int[]]$IdlePixels, [int[]]$FirePixels) {
     }
 }
 
-function New-OverlayOps([string]$Kind, [int]$Color) {
+function New-OverlayOps([string]$Kind, [int]$Color, [int]$PxW, [int]$PxH, [int]$Stride) {
     $masks = @{}
     $values = @{}
 
     function Add-Pixel([int]$X, [int]$Y) {
         # Column-major u32 element offset into the flat g_view_tiles[][8] array.
-        # g_view_tiles is laid out as [tile_x * VIEW_TILE_H + tile_y][row]
-        # (see view_tile_index in renderer_internal.h). Each tile owns 8 u32
-        # rows, so the flat element offset is tile_index*8 + (Y%8), matching
-        # draw_overlay_ops which does (u32*)base + op->dst.
+        # The column pitch is VIEW_TILE_STRIDE == RAY_VIEW_TILE_H_MAX, a
+        # COMPILE-TIME constant, NOT the current viewport height: view_tile_index
+        # in renderer_internal.h is (tile_x * VIEW_TILE_STRIDE + tile_y) so the
+        # multiply stays a shift and a short viewport just leaves each column's
+        # tail unused. This used to read $viewTileH, which was the same number
+        # until 4459217 made the viewport resizable and pinned the stride at the
+        # maximum; after that every op past column 0 was written one tile per
+        # column too low and the damage frame rendered as a red staircase across
+        # the scene. Each tile owns 8 u32 rows, so the flat element offset is
+        # tile_index*8 + (Y%8), matching draw_overlay_ops' (u32*)base + op->dst.
         $tileX = $X -shr 3
         $tileY = $Y -shr 3
-        $tileIndex = ($tileX * $viewTileH) + $tileY
+        $tileIndex = ($tileX * $Stride) + $tileY
         $dst = ($tileIndex * 8) + ($Y % 8)
         $shift = (7 - ($X % 8)) * 4
         $mask = [uint32]0x0F -shl $shift
@@ -199,30 +205,28 @@ function New-OverlayOps([string]$Kind, [int]$Color) {
     }
 
     if ($Kind -eq "damage") {
-        for ($x = 0; $x -lt $viewPxW; $x++) {
+        for ($x = 0; $x -lt $PxW; $x++) {
             for ($t = 0; $t -lt 3; $t++) {
                 Add-Pixel $x $t
-                Add-Pixel $x ($viewPxH - 1 - $t)
+                Add-Pixel $x ($PxH - 1 - $t)
             }
         }
-        for ($y = 0; $y -lt $viewPxH; $y++) {
+        for ($y = 0; $y -lt $PxH; $y++) {
             for ($t = 0; $t -lt 8; $t++) {
                 Add-Pixel $t $y
-                Add-Pixel ($viewPxW - 1 - $t) $y
+                Add-Pixel ($PxW - 1 - $t) $y
             }
         }
     } else {
-        for ($x = 16; $x -le 32; $x++) {
-            Add-Pixel $x 1
-            Add-Pixel $x 2
-            Add-Pixel $x 117
-            Add-Pixel $x 118
-        }
-        for ($x = 127; $x -le 143; $x++) {
-            Add-Pixel $x 1
-            Add-Pixel $x 2
-            Add-Pixel $x 117
-            Add-Pixel $x 118
+        # Two corner marks, anchored to the edges rather than to absolute
+        # coordinates so a wider or taller preset keeps them in the corners.
+        # At the default 160x120 these reproduce the shipped x 16..32 / 127..143
+        # and y 1,2 / 117,118 exactly.
+        foreach ($y in @(1, 2, ($PxH - 3), ($PxH - 2))) {
+            for ($x = 16; $x -le 32; $x++) {
+                Add-Pixel $x $y
+                Add-Pixel ($PxW - 1 - $x) $y
+            }
         }
     }
 
@@ -355,8 +359,33 @@ foreach ($set in $weaponSets) {
         throw "All weapons must bake into the same overlay tile rectangle"
     }
 }
-$damageOps = New-OverlayOps "damage" $damageColor
-$lowHealthOps = New-OverlayOps "low_health" $warningColor
+# One op set per VIEW SIZE preset. The ops are absolute tile offsets into
+# g_view_tiles, so a single baked set can only be right for one viewport: the
+# frame's right and bottom edges live at the viewport's own width and height.
+# Presets and the column stride both come from src/raycast.h so this table
+# cannot drift from the geometry the renderer actually runs.
+$viewStride = [int]([regex]::Match(
+    $RaycastText, '(?m)^#define\s+RAY_VIEW_TILE_H_MAX\s+(\d+)\s*$').Groups[1].Value)
+if ($viewStride -le 0) { throw "RAY_VIEW_TILE_H_MAX is missing from $RaycastPath" }
+$viewSizeCount = [int]([regex]::Match(
+    $RaycastText, '(?m)^#define\s+RAY_VIEW_SIZE_COUNT\s+(\d+)\s*$').Groups[1].Value)
+if ($viewSizeCount -le 0) { throw "RAY_VIEW_SIZE_COUNT is missing from $RaycastPath" }
+$damageOpSets = New-Object System.Collections.Generic.List[object]
+$lowHealthOpSets = New-Object System.Collections.Generic.List[object]
+for ($size = 0; $size -lt $viewSizeCount; $size++) {
+    $sizeW = [int]([regex]::Match(
+        $RaycastText, "(?m)^#define\s+RAY_VIEW_SIZE_${size}_W\s+(\d+)\s*$").Groups[1].Value)
+    $sizeH = [int]([regex]::Match(
+        $RaycastText, "(?m)^#define\s+RAY_VIEW_SIZE_${size}_H\s+(\d+)\s*$").Groups[1].Value)
+    if ($sizeW -le 0 -or $sizeH -le 0) {
+        throw "RAY_VIEW_SIZE_${size}_W/_H is missing from $RaycastPath"
+    }
+    [void]$damageOpSets.Add((New-OverlayOps "damage" $damageColor ($sizeW * 8) ($sizeH * 8) $viewStride))
+    [void]$lowHealthOpSets.Add((New-OverlayOps "low_health" $warningColor ($sizeW * 8) ($sizeH * 8) $viewStride))
+}
+$overlayOpMax = 0
+foreach ($set in $damageOpSets) { if ($set.Count -gt $overlayOpMax) { $overlayOpMax = $set.Count } }
+foreach ($set in $lowHealthOpSets) { if ($set.Count -gt $overlayOpMax) { $overlayOpMax = $set.Count } }
 
 $lines = New-Object System.Collections.Generic.List[string]
 [void]$lines.Add("#ifndef MEGALDOOM_GENERATED_RENDERER_ASSETS_H")
@@ -427,20 +456,34 @@ foreach ($set in $weaponSets) {
 [void]$lines.Add("    u32 value;")
 [void]$lines.Add("} MegalDoomOverlayRowOp;")
 [void]$lines.Add("")
-[void]$lines.Add("#define MEGALDOOM_OVERLAY_OP_MAX 512")
-[void]$lines.Add("static const MegalDoomOverlayRowOp MEGALDOOM_DAMAGE_OVERLAY_OPS[] = {")
-for ($i = 0; $i -lt $damageOps.Count; $i++) {
-    [void]$lines.Add(((Format-OverlayRow $damageOps.Dst $damageOps.Mask $damageOps.Value $i) + ","))
+[void]$lines.Add("// Indexed by the VIEW SIZE preset (raycast_view_size()), because the ops")
+[void]$lines.Add("// are absolute g_view_tiles offsets and the frame sits on the viewport's")
+[void]$lines.Add("// own edges. Rows past MEGALDOOM_OVERLAY_OP_COUNT[size][kind] are padding.")
+[void]$lines.Add("#define MEGALDOOM_OVERLAY_SIZE_COUNT $viewSizeCount")
+[void]$lines.Add("#define MEGALDOOM_OVERLAY_OP_MAX $overlayOpMax")
+foreach ($emit in @(
+    @{ Name = "MEGALDOOM_DAMAGE_OVERLAY_OPS"; Sets = $damageOpSets },
+    @{ Name = "MEGALDOOM_LOW_HEALTH_OVERLAY_OPS"; Sets = $lowHealthOpSets })) {
+    [void]$lines.Add("static const MegalDoomOverlayRowOp $($emit.Name)[MEGALDOOM_OVERLAY_SIZE_COUNT][MEGALDOOM_OVERLAY_OP_MAX] = {")
+    foreach ($set in $emit.Sets) {
+        [void]$lines.Add("  {")
+        for ($i = 0; $i -lt $set.Count; $i++) {
+            [void]$lines.Add(((Format-OverlayRow $set.Dst $set.Mask $set.Value $i) + ","))
+        }
+        for ($pad = $set.Count; $pad -lt $overlayOpMax; $pad++) {
+            [void]$lines.Add("    { 0, 0x00000000, 0x00000000 },")
+        }
+        [void]$lines.Add("  },")
+    }
+    [void]$lines.Add("};")
+    [void]$lines.Add("")
 }
-[void]$lines.Add("};")
-[void]$lines.Add("")
-[void]$lines.Add("static const MegalDoomOverlayRowOp MEGALDOOM_LOW_HEALTH_OVERLAY_OPS[] = {")
-for ($i = 0; $i -lt $lowHealthOps.Count; $i++) {
-    [void]$lines.Add(((Format-OverlayRow $lowHealthOps.Dst $lowHealthOps.Mask $lowHealthOps.Value $i) + ","))
+$countRows = @()
+for ($size = 0; $size -lt $viewSizeCount; $size++) {
+    $countRows += "{$($damageOpSets[$size].Count), $($lowHealthOpSets[$size].Count)}"
 }
-[void]$lines.Add("};")
-[void]$lines.Add("")
-[void]$lines.Add("static const u16 MEGALDOOM_OVERLAY_OP_COUNT[2] = {$($damageOps.Count), $($lowHealthOps.Count)};")
+[void]$lines.Add("static const u16 MEGALDOOM_OVERLAY_OP_COUNT[MEGALDOOM_OVERLAY_SIZE_COUNT][2] = {" +
+                 ($countRows -join ", ") + "};")
 [void]$lines.Add("")
 [void]$lines.Add((("#define MEGALDOOM_CEILING_TILE_COUNT {0}" -f $ceilingTileCount)))
 [void]$lines.Add("static const u32 MEGALDOOM_CEILING_TILES[MEGALDOOM_CEILING_TILE_COUNT][8] = {")

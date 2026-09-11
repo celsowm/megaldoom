@@ -3,6 +3,12 @@
 #include "player_controller.h"
 #include "debug_checkpoint.h"
 
+// The overlay tables are baked one set per VIEW SIZE preset. If a preset is
+// ever added without regenerating them, indexing by raycast_view_size() would
+// read past the table; fail the build instead.
+_Static_assert(MEGALDOOM_OVERLAY_SIZE_COUNT == RAY_VIEW_SIZE_COUNT,
+               "overlay op sets must cover every RAY_VIEW_SIZE preset");
+
 void renderer_scene_init(void) {
     pack_stage_reset();
     frame_overlay_reset();
@@ -112,10 +118,17 @@ void renderer_render_scene(const RayColumn *columns,
     g_cadence_billboard_subticks += getSubTick() - bb_start;
 #endif
     draw_weapon_overlay(weapon_flash);
-    if (damage_flash) {
-        draw_overlay_ops(MEGALDOOM_DAMAGE_OVERLAY_OPS, MEGALDOOM_OVERLAY_OP_COUNT[0]);
-    } else if (low_health_warning) {
-        draw_overlay_ops(MEGALDOOM_LOW_HEALTH_OVERLAY_OPS, MEGALDOOM_OVERLAY_OP_COUNT[1]);
+    // The op sets are absolute g_view_tiles offsets and the frame sits on the
+    // viewport's own edges, so the baked set has to match the preset in use.
+    {
+        const u16 view_size = raycast_view_size();
+        if (damage_flash) {
+            draw_overlay_ops(MEGALDOOM_DAMAGE_OVERLAY_OPS[view_size],
+                             MEGALDOOM_OVERLAY_OP_COUNT[view_size][0]);
+        } else if (low_health_warning) {
+            draw_overlay_ops(MEGALDOOM_LOW_HEALTH_OVERLAY_OPS[view_size],
+                             MEGALDOOM_OVERLAY_OP_COUNT[view_size][1]);
+        }
     }
     renderer_overlay_finish();
 #if DEBUG_PERF

@@ -27,6 +27,66 @@ VIEW_TILE_W, VIEW_TILE_H = raycast_constants.view_tiles()
 VIEW_TILE_STRIDE = raycast_constants.view_tiles_max()[1]
 
 
+def check_damage_overlay_frame(assets):
+    """The damage/low-health ops must land on the viewport edges, per preset.
+
+    Same failure mode as check_overlay_column_mask above, one layout change
+    later. The generator built each op's destination as
+    `tile_x * VIEW_TILE_H + tile_y`, which was the real layout until 4459217
+    made the viewport resizable and pinned the column pitch at
+    VIEW_TILE_STRIDE == RAY_VIEW_TILE_H_MAX. After that every op past column 0
+    was written one tile per column too low: the intended border frame rendered
+    as a red staircase across the scene, 1728 of its 2784 pixels in the wrong
+    place, and nothing failed because no test read this table.
+
+    So re-derive the frame from the geometry -- 3px top/bottom, 8px left/right
+    on the viewport's own edges -- and require the baked ops to paint exactly
+    that set under the runtime's own index rule, for every preset. The op sets
+    are per-preset because they carry absolute g_view_tiles offsets.
+    """
+    size_count = raycast_constants.view_size_count()
+    assert define(assets, "MEGALDOOM_OVERLAY_SIZE_COUNT") == size_count
+    counts = re.search(
+        r"MEGALDOOM_OVERLAY_OP_COUNT\[MEGALDOOM_OVERLAY_SIZE_COUNT\]\[2\]"
+        r"\s*=\s*\{(.*?)\};", assets, re.S)
+    assert counts, "per-preset overlay op counts"
+    counts = [(int(d), int(l)) for d, l in
+              re.findall(r"\{(\d+),\s*(\d+)\}", counts.group(1))]
+    assert len(counts) == size_count, counts
+
+    for name, kind in (("MEGALDOOM_DAMAGE_OVERLAY_OPS", 0),
+                       ("MEGALDOOM_LOW_HEALTH_OVERLAY_OPS", 1)):
+        body = assets[assets.index(name + "[MEGALDOOM_OVERLAY_SIZE_COUNT]"):]
+        body = body[:body.index("\n};")]
+        groups = re.findall(r"\{\n(.*?)\n  \},", body, re.S)
+        assert len(groups) == size_count, (name, len(groups))
+        for size_index, group in enumerate(groups):
+            ops = [(int(d), int(m, 16)) for d, m in
+                   re.findall(r"\{\s*(\d+),\s*0x([0-9A-Fa-f]+),", group)]
+            ops = ops[:counts[size_index][kind]]
+            width, height = raycast_constants.view_pixels(size_index)
+            painted = set()
+            for dst, mask in ops:
+                tile, row = divmod(dst, 8)
+                tile_x, tile_y = divmod(tile, VIEW_TILE_STRIDE)
+                y = tile_y * 8 + row
+                for pixel in range(8):
+                    if (mask >> ((7 - pixel) * 4)) & 0xF:
+                        painted.add((tile_x * 8 + pixel, y))
+            if kind == 0:
+                expected = {(x, edge) for x in range(width) for t in range(3)
+                            for edge in (t, height - 1 - t)}
+                expected |= {(edge, y) for y in range(height) for t in range(8)
+                             for edge in (t, width - 1 - t)}
+            else:
+                expected = {(x, y)
+                            for y in (1, 2, height - 3, height - 2)
+                            for left in range(16, 33)
+                            for x in (left, width - 1 - left)}
+            assert painted == expected, (
+                name, size_index, len(painted - expected), len(expected - painted))
+
+
 def check_overlay_column_mask(overlay, mark_overlay):
     """The overlay column mask must follow the COLUMN-major g_view_tiles layout.
 
@@ -246,6 +306,12 @@ def main():
     mark_overlay = overlay[overlay.index("void renderer_mark_overlay_tile"):]
     assert "g_view_tiles[tile_index][row] = s_snapshot_rows" not in mark_overlay
     check_overlay_column_mask(overlay, mark_overlay)
+    check_damage_overlay_frame(
+        (ROOT / "src/renderer/generated_renderer_assets.h").read_text())
+    # The runtime must pick the set for the preset actually in use.
+    assert "MEGALDOOM_DAMAGE_OVERLAY_OPS[view_size]" in scene
+    assert "MEGALDOOM_OVERLAY_OP_COUNT[view_size][0]" in scene
+    assert "MEGALDOOM_LOW_HEALTH_OVERLAY_OPS[view_size]" in scene
     assert scene.index("renderer_overlay_restore_previous();") < scene.index(
         "draw_projected_billboards(columns, objects, object_count);")
     assert scene.index("renderer_overlay_base_rebuilt();") < scene.index(
