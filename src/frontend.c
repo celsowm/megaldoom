@@ -1,5 +1,6 @@
 #include "frontend.h"
 #include "debug_checkpoint.h"
+#include "debug_light.h"
 #include "game_audio.h"
 // The intermission screens are sized by the campaign length, which the map
 // generator emits alongside the map limits.
@@ -14,12 +15,13 @@
 #define MENU_INPUT (BUTTON_UP | BUTTON_DOWN | BUTTON_LEFT | BUTTON_RIGHT |                     MENU_ACCEPT | MENU_BACK)
 
 // OPTIONS rows, top to bottom. VIEW SIZE selects one of the RAY_VIEW_SIZE_*
-// viewport presets (raycast.h).
+// viewport presets (raycast.h); DEBUG toggles the tester overlay (debug_light.h).
 #define OPTIONS_ROW_MUSIC 0
 #define OPTIONS_ROW_SFX 1
 #define OPTIONS_ROW_VIEW_SIZE 2
-#define OPTIONS_ROW_BACK 3
-#define OPTIONS_ROW_COUNT 4
+#define OPTIONS_ROW_DEBUG 3
+#define OPTIONS_ROW_BACK 4
+#define OPTIONS_ROW_COUNT 5
 #define PANEL_X 8
 #define PANEL_Y 7
 #define MAIN_CURSOR_X 9
@@ -714,43 +716,35 @@ static void load_main_cursor_tiles(u16 tile_base) {
                     (u16)(tile_base + frontend_skull1.tileset->numTile), DMA);
 }
 
-// One pre-rendered panel per (music, sfx, view size, cursor row) combination.
-// The table is indexed rather than branched so adding a viewport preset is a
-// generator change plus one row here, not another nested if-ladder.
-static const Image *const OPTIONS_PANELS[2][2][RAY_VIEW_SIZE_COUNT][OPTIONS_ROW_COUNT] = {
-    { { { &frontend_options_0_0_0_0, &frontend_options_0_0_0_1,
-          &frontend_options_0_0_0_2, &frontend_options_0_0_0_3 },
-        { &frontend_options_0_0_1_0, &frontend_options_0_0_1_1,
-          &frontend_options_0_0_1_2, &frontend_options_0_0_1_3 },
-        { &frontend_options_0_0_2_0, &frontend_options_0_0_2_1,
-          &frontend_options_0_0_2_2, &frontend_options_0_0_2_3 } },
-      { { &frontend_options_0_1_0_0, &frontend_options_0_1_0_1,
-          &frontend_options_0_1_0_2, &frontend_options_0_1_0_3 },
-        { &frontend_options_0_1_1_0, &frontend_options_0_1_1_1,
-          &frontend_options_0_1_1_2, &frontend_options_0_1_1_3 },
-        { &frontend_options_0_1_2_0, &frontend_options_0_1_2_1,
-          &frontend_options_0_1_2_2, &frontend_options_0_1_2_3 } } },
-    { { { &frontend_options_1_0_0_0, &frontend_options_1_0_0_1,
-          &frontend_options_1_0_0_2, &frontend_options_1_0_0_3 },
-        { &frontend_options_1_0_1_0, &frontend_options_1_0_1_1,
-          &frontend_options_1_0_1_2, &frontend_options_1_0_1_3 },
-        { &frontend_options_1_0_2_0, &frontend_options_1_0_2_1,
-          &frontend_options_1_0_2_2, &frontend_options_1_0_2_3 } },
-      { { &frontend_options_1_1_0_0, &frontend_options_1_1_0_1,
-          &frontend_options_1_1_0_2, &frontend_options_1_1_0_3 },
-        { &frontend_options_1_1_1_0, &frontend_options_1_1_1_1,
-          &frontend_options_1_1_1_2, &frontend_options_1_1_1_3 },
-        { &frontend_options_1_1_2_0, &frontend_options_1_1_2_1,
-          &frontend_options_1_1_2_2, &frontend_options_1_1_2_3 } } },
+// One pre-rendered panel per (music, sfx, view size, debug, cursor row)
+// combination. The table is indexed rather than branched so adding a setting
+// is a generator change plus a dimension here, not another nested if-ladder;
+// the macros only spell out the 120 generated resource names.
+#define OPTIONS_PANEL_ROWS(m, s, v, d) {                                   \
+    &frontend_options_##m##_##s##_##v##_##d##_0,                        \
+    &frontend_options_##m##_##s##_##v##_##d##_1,                        \
+    &frontend_options_##m##_##s##_##v##_##d##_2,                        \
+    &frontend_options_##m##_##s##_##v##_##d##_3,                        \
+    &frontend_options_##m##_##s##_##v##_##d##_4 }
+#define OPTIONS_PANEL_DEBUG(m, s, v) \
+    { OPTIONS_PANEL_ROWS(m, s, v, 0), OPTIONS_PANEL_ROWS(m, s, v, 1) }
+#define OPTIONS_PANEL_VIEWS(m, s) \
+    { OPTIONS_PANEL_DEBUG(m, s, 0), OPTIONS_PANEL_DEBUG(m, s, 1), OPTIONS_PANEL_DEBUG(m, s, 2) }
+_Static_assert(RAY_VIEW_SIZE_COUNT == 3,
+               "OPTIONS_PANEL_VIEWS spells out three viewport presets");
+static const Image *const OPTIONS_PANELS[2][2][RAY_VIEW_SIZE_COUNT][2][OPTIONS_ROW_COUNT] = {
+    { OPTIONS_PANEL_VIEWS(0, 0), OPTIONS_PANEL_VIEWS(0, 1) },
+    { OPTIONS_PANEL_VIEWS(1, 0), OPTIONS_PANEL_VIEWS(1, 1) },
 };
 
 static const Image *options_panel(u16 selected) {
     const u16 music = game_audio_music_enabled() ? 1 : 0;
     const u16 sfx = game_audio_sfx_enabled() ? 1 : 0;
+    const u16 debug = debug_light_enabled() ? 1 : 0;
     u16 view = raycast_view_size();
     if (view >= RAY_VIEW_SIZE_COUNT) view = 0;
     if (selected >= OPTIONS_ROW_COUNT) selected = 0;
-    return OPTIONS_PANELS[music][sfx][view][selected];
+    return OPTIONS_PANELS[music][sfx][view][debug][selected];
 }
 
 static const Image *skill_panel(u16 selected) {
@@ -814,11 +808,19 @@ static void run_options(u16 tile_base) {
                 redraw = TRUE;
             }
         }
+        if ((selected == OPTIONS_ROW_DEBUG) &&
+            ((pressed & (BUTTON_LEFT | BUTTON_RIGHT)) != 0)) {
+            debug_light_set_enabled(!debug_light_enabled());
+            redraw = TRUE;
+        }
         if ((pressed & MENU_BACK) != 0) break;
         if ((pressed & MENU_ACCEPT) != 0) {
             if (selected == OPTIONS_ROW_MUSIC) game_audio_toggle_music();
             else if (selected == OPTIONS_ROW_SFX) game_audio_toggle_sfx();
             else if (selected == OPTIONS_ROW_VIEW_SIZE) options_cycle_view_size(1);
+            else if (selected == OPTIONS_ROW_DEBUG) {
+                debug_light_set_enabled(!debug_light_enabled());
+            }
             else break;
             redraw = TRUE;
         }

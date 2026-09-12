@@ -3,7 +3,7 @@
 // Source SHA-256: FF2C301B8719465A6E386A512BFA319931B7F64EA517D337C5A47AFE03951902
 // Flat baseline/final: 386/386 SEGs; curated material: 5 linedefs / 5 SEGs
 // Curated material: start-room-computer-bank source linedef 53 (hint 50) -> targets 42,43,44,55,56, COMPUTE2, 5 retextured, +0 SEGs
-// Certified: exit SEG 376 reachable after 164 states
+// Certified: exit SEG 376 reachable after 1568 states
 // Sky sectors (F_SKY1 ceiling): 7
 // Generated at: source-derived
 #include "bsp_map.h"

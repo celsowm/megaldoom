@@ -2,6 +2,7 @@
 #include "fixed_math.h"
 #include "bsp_map.h"
 #include "billboard.h"
+#include "debug_light.h"
 
 // Player physics. The world geometry and collision now live in the BSP map
 // (bsp_map.c); the old grid DDA raycaster is gone — walls are drawn by
@@ -141,9 +142,33 @@ void player_try_move(PlayerState *player, s16 forward, s16 strafe) {
     }
 }
 
+// Largest per-axis displacement tested as ONE collision query. Walls are
+// zero-thickness lines and collision only looks at the destination, so any hop
+// of 2*PLAYER_COLLISION_RADIUS (32) or more perpendicular to a wall can land
+// clear on its far side. 20 per axis is at most 28.3 units even diagonally,
+// which leaves margin for seg_point_dist2's floored projection shaving the
+// effective radius. Enemy-hit and barrel knockback is 64 per axis in one call
+// and used to throw the player out of the map (tester report, 2026-09-11);
+// tools/test-player-collision.py checks every solid seg of the campaign maps.
+// A running tic (~19 per axis) stays under this, so ordinary movement still
+// pays a single query.
+#define PLAYER_PUSH_MAX_AXIS_STEP 20
+
 void player_apply_world_push(PlayerState *player, s32 dx, s32 dy) {
-    const s32 next_x = player->x + dx;
-    const s32 next_y = player->y + dy;
+    if (dx > PLAYER_PUSH_MAX_AXIS_STEP || dx < -PLAYER_PUSH_MAX_AXIS_STEP ||
+        dy > PLAYER_PUSH_MAX_AXIS_STEP || dy < -PLAYER_PUSH_MAX_AXIS_STEP) {
+        // Halving needs no divide; 64 splits into four 16-unit hops.
+        const s32 half_x = dx >> 1;
+        const s32 half_y = dy >> 1;
+        player_apply_world_push(player, half_x, half_y);
+        player_apply_world_push(player, dx - half_x, dy - half_y);
+        return;
+    }
+
+    const s32 from_x = player->x;
+    const s32 from_y = player->y;
+    const s32 next_x = from_x + dx;
+    const s32 next_y = from_y + dy;
 
     // The common free-space case needs one BSP/prop query. Preserve Doom-like
     // wall sliding with the old per-axis retries only after a combined move is
@@ -151,8 +176,14 @@ void player_apply_world_push(PlayerState *player, s32 dx, s32 dy) {
     if (!is_blocked_at(next_x, next_y)) {
         player->x = next_x;
         player->y = next_y;
+        if (debug_light_enabled()) debug_light_note_hop(from_x, from_y, next_x, next_y);
         return;
     }
-    if (!is_blocked_at(next_x, player->y)) player->x = next_x;
+    if (!is_blocked_at(next_x, from_y)) player->x = next_x;
     if (!is_blocked_at(player->x, next_y)) player->y = next_y;
+    if (debug_light_enabled()) {
+        // A slide is two axis hops; report each leg so neither hides a crossing.
+        debug_light_note_hop(from_x, from_y, player->x, from_y);
+        debug_light_note_hop(player->x, from_y, player->x, player->y);
+    }
 }

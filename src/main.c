@@ -4,6 +4,7 @@
 #include "bsp_map.h"
 #include "bsp_render.h"
 #include "debug_checkpoint.h"
+#include "debug_light.h"
 #include "fixed_math.h"
 #include "frontend.h"
 #include "game_audio.h"
@@ -114,7 +115,11 @@ static s32 g_checkpoint_prev_y;
 
 #if DEBUG_START_E1M1_EXIT
 static void debug_place_e1m1_exit(void) {
-    g_player.x = 3200;
+    // 48 units in front of the exit SEG 376 (x=2912, facing east), aimed at its
+    // centre. The pose used to be (3200, 4768), which is on the far side of
+    // the solid wall at x=3104: it only ever reached the switch because use
+    // ignored walls (fixed 2026-09-11, see bsp_map.c use_surface_visible).
+    g_player.x = 2960;
     g_player.y = 4768;
     g_player.angle = ANGLE_STEPS / 2;
 }
@@ -332,6 +337,8 @@ static void apply_player_damage(u16 total_damage, s16 push_x, s16 push_y,
         frontend_load_death_prompt(renderer_get_menu_tile_base());
         renderer_redraw_request_overlay(redraw, RENDERER_REDRAW_DAMAGE);
     } else {
+        debug_light_note_knockback((s32)push_x * PLAYER_HIT_PUSH_STEP,
+                                   (s32)push_y * PLAYER_HIT_PUSH_STEP);
         player_apply_world_push(&g_player,
                                 (s32)push_x * PLAYER_HIT_PUSH_STEP,
                                 (s32)push_y * PLAYER_HIT_PUSH_STEP);
@@ -368,6 +375,7 @@ static void enter_level(u16 phase_index, DoomSkill skill, bool pistol_start,
      * angle; publish once more at the exact hand-off to gameplay. */
     debug_e2e_pose(g_player.x, g_player.y, g_player.angle);
     automap_reset(&g_automap, &g_player);
+    debug_light_level_start(&g_player);
     g_weapon_flash = 0;
     g_player_damage_flash = 0;
     g_player_invuln = 0;
@@ -549,6 +557,9 @@ int main(bool hard) {
             }
 
             renderer_restore_after_menu();
+            // restore_after_menu cleared BG_B's letterbox, and the menu may
+            // have switched the debug overlay on or off.
+            debug_light_invalidate();
             if (g_automap.active) renderer_set_automap_active(TRUE);
             if (player_dead) {
                 // The pause panel borrowed the same PAIR_TILE_BASE region the
@@ -633,6 +644,11 @@ int main(bool hard) {
             // Keep every test pulse on the exact exit target.
             if (phase_index == 0) debug_place_e1m1_exit();
 #endif
+            if (debug_light_update_rescue(&g_player, system_joy, elapsed_vblanks)) {
+                // Back inside: drop the momentum that carried the player out.
+                player_controller_reset();
+                renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE);
+            }
             const PlayerControlMode control_mode = automap_toggled ?
                 PLAYER_CONTROL_MODE_SUPPRESSED :
                 (g_automap.active ?
@@ -918,6 +934,11 @@ int main(bool hard) {
         sync_hud(frame, phase_index, player_health, player_armor, &arsenal,
                  player_keys, shot_cooldown, action_status, shot_status, level_cleared);
         renderer_draw_hud(&g_hud);
+#if !DEBUG_PERF
+        // Shares BG_B's top letterbox rows with the DEBUG_PERF overlay, so only
+        // one of the two is ever compiled in.
+        debug_light_draw(&g_player, phase_index);
+#endif
 
 #if DEBUG_PERF
         // Once per iteration (SYS_getFPS counts calls/sec). The old

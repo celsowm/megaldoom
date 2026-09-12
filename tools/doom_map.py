@@ -66,6 +66,16 @@ PLAYER_RADIUS = 16
 NAV_STEP = 16
 PICKUP_RADIUS = 128
 USE_RADIUS = 256
+# bsp_map.c BSP_USE_SIGHT_STANDOFF: the use sight ray ends this far in front of
+# the surface so the surface itself never reads as the blocking wall.
+USE_SIGHT_STANDOFF = 4
+# How close a cell must be to a use surface to certify pressing it. The runtime
+# accepts a visible surface up to ~768 units along the aim, but a proof taken at
+# that range is only good for a perfectly aimed press through whatever gap made
+# the surface visible: E1M3's switch for door 4 certified 201 units away, past a
+# wall end, and every pose a step aside hit door 15 or nothing. Inside 128 the
+# search walks up to the surface, which is the press the E2E route can repeat.
+USE_WITNESS_RADIUS = 128
 BILLBOARD_OBJECT_COUNT = 112
 # The one constant slab height every wall projects from. A sky sector taller
 # than this already renders its walls SHORTER than they really are, so the sky
@@ -434,6 +444,68 @@ def certify_flat_progression(vertices, segs, things, start_x, start_y,
         allowed = opened_groups & key_allowed
         return bool(door_groups & ~allowed)
 
+    def sight_cross(ox, oy, qx, qy, rx, ry):
+        return (qx - ox) * (ry - oy) - (qy - oy) * (rx - ox)
+
+    def interaction_visible(interaction, px, py, opened_groups):
+        """bsp_map.c use_surface_visible, as a reachability witness.
+
+        The runtime answers use only from a surface's front side with no solid
+        wall in between. Until 2026-09-11 neither the runtime nor this proof
+        checked that, so the proof happily "opened" E1M2's door 0 by pressing
+        its switch from the room behind the wall. Doors block sight unless
+        their group is already open.
+
+        The witness aims at the surface's CLOSEST point only. Accepting any
+        visible point (midpoint, quarters) let E1M3's door 15 certify from a
+        cell 240 units away whose sight line only grazed past a pillar's
+        corner; the recorded use node was then unpressable by a player
+        facing the door, and the E2E route generator could not find a pose.
+        Requiring the closest point makes the search keep walking until it
+        stands squarely in front of the surface, which is where the route
+        then presses it."""
+        ax, ay = vertices[interaction["v1"]]
+        bx, by = vertices[interaction["v2"]]
+        nx, ny = interaction["nx"], interaction["ny"]
+        if (px - ax) * nx + (py - ay) * ny <= 0:
+            return False
+        dx, dy = bx - ax, by - ay
+        length2 = dx * dx + dy * dy
+        if length2:
+            t = max(0, min(length2, (px - ax) * dx + (py - ay) * dy))
+            ex, ey = ax + (dx * t) // length2, ay + (dy * t) // length2
+        else:
+            ex, ey = ax, ay
+        normal_max = max(abs(nx), abs(ny))
+        if normal_max:
+            ex += int(nx * USE_SIGHT_STANDOFF / normal_max)
+            ey += int(ny * USE_SIGHT_STANDOFF / normal_max)
+        cx0 = max(0, (min(px, ex) - min_x) // broad_cell)
+        cx1 = min(broad_w - 1, (max(px, ex) - min_x) // broad_cell)
+        cy0 = max(0, (min(py, ey) - min_y) // broad_cell)
+        cy1 = min(broad_h - 1, (max(py, ey) - min_y) // broad_cell)
+        seen = set()
+        for cy in range(cy0, cy1 + 1):
+            for cx in range(cx0, cx1 + 1):
+                for index in broad[cy * broad_w + cx]:
+                    if index in seen:
+                        continue
+                    seen.add(index)
+                    seg = segs[index]
+                    if seg["type"] == SEG_TRIGGER:
+                        continue
+                    if (seg["type"] == SEG_DOOR and
+                            opened_groups & (1 << seg["door_group"])):
+                        continue
+                    s0 = vertices[seg["v1"]]
+                    s1 = vertices[seg["v2"]]
+                    if (sight_cross(px, py, ex, ey, *s0) *
+                            sight_cross(px, py, ex, ey, *s1) < 0 and
+                            sight_cross(*s0, *s1, px, py) *
+                            sight_cross(*s0, *s1, ex, ey) < 0):
+                        return False
+        return True
+
     def exit_reached(px, py):
         for exit_index, seg in exits:
             ax, ay = vertices[seg["v1"]]
@@ -554,9 +626,12 @@ def certify_flat_progression(vertices, segs, things, start_x, start_y,
             required = interaction["required_key"]
             if required != KEY_NONE and key_mask & required != required:
                 continue
+            if newly_opened & (1 << interaction["door_group"]):
+                continue
             ax, ay = vertices[interaction["v1"]]
             bx, by = vertices[interaction["v2"]]
-            if point_segment_dist2(ax, ay, bx, by, px, py) <= USE_RADIUS ** 2:
+            if (point_segment_dist2(ax, ay, bx, by, px, py) <= USE_WITNESS_RADIUS ** 2 and
+                    interaction_visible(interaction, px, py, opened_groups)):
                 newly_opened |= 1 << interaction["door_group"]
                 opened_interaction = interaction
         if newly_opened != opened_groups:

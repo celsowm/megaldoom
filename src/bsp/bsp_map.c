@@ -250,7 +250,7 @@ u16 bsp_find_subsector_with_margin(s32 x, s32 y, s32 radius, bool *contained) {
 }
 
 // Squared distance from point (px, py) to the finite segment of seg s.
-static s32 seg_point_dist2(const BspSeg *s, s32 px, s32 py) {
+static void seg_closest_point(const BspSeg *s, s32 px, s32 py, s32 *out_x, s32 *out_y) {
     const BspVertex *a = &bsp_vertices[s->v1];
     const BspVertex *b = &bsp_vertices[s->v2];
     const s32 abx = (s32)b->x - a->x;
@@ -258,26 +258,29 @@ static s32 seg_point_dist2(const BspSeg *s, s32 px, s32 py) {
     const s32 apx = px - a->x;
     const s32 apy = py - a->y;
     const s32 ab2 = bsp_muls_word(abx, abx) + bsp_muls_word(aby, aby);
-    s32 cx, cy;
 
     if (ab2 <= 0) {
-        cx = a->x;
-        cy = a->y;
+        *out_x = a->x;
+        *out_y = a->y;
     } else {
         const s32 dot = bsp_muls_word(apx, abx) + bsp_muls_word(apy, aby);
         if (dot <= 0) {
-            cx = a->x;
-            cy = a->y;
+            *out_x = a->x;
+            *out_y = a->y;
         } else if (dot >= ab2) {
-            cx = b->x;
-            cy = b->y;
+            *out_x = b->x;
+            *out_y = b->y;
         } else {
             const s32 tq = bsp_ratio_q8((u32)dot, (u32)ab2);
-            cx = a->x + (bsp_muls_word(abx, tq) >> FX_SHIFT);
-            cy = a->y + (bsp_muls_word(aby, tq) >> FX_SHIFT);
+            *out_x = a->x + (bsp_muls_word(abx, tq) >> FX_SHIFT);
+            *out_y = a->y + (bsp_muls_word(aby, tq) >> FX_SHIFT);
         }
     }
+}
 
+static s32 seg_point_dist2(const BspSeg *s, s32 px, s32 py) {
+    s32 cx, cy;
+    seg_closest_point(s, px, py, &cx, &cy);
     const s32 dx = px - cx;
     const s32 dy = py - cy;
     return bsp_muls_word(dx, dx) + bsp_muls_word(dy, dy);
@@ -504,6 +507,35 @@ static void toggle_door(u8 door_group) {
     g_door_target_open[door_group] = !g_door_target_open[door_group];
 }
 
+// How far in front of a use surface its line-of-sight ray ends. Ending ON the
+// seg would let the floored closest point sit a unit behind it and count the
+// surface itself (or a collinear neighbour) as the blocking wall.
+#define BSP_USE_SIGHT_STANDOFF 4
+
+// A use surface answers only from its front side -- the side the renderer draws
+// it from -- and only with no solid wall between the player and the point the
+// probe landed on. Neither was checked before 2026-09-11: the probes reach
+// ~768 units, and a tester knocked out of E1M1 pressed its exit switch from
+// behind the wall. It also stops a player standing inside a door's gap, who is
+// behind both of its faces, from closing that door on themselves.
+// tools/generate-e2e-routes.py's use_target mirrors this rule.
+static bool use_surface_visible(const BspSeg *s, s32 x, s32 y, s32 probe_x, s32 probe_y) {
+    const BspVertex *a = &bsp_vertices[s->v1];
+    if (bsp_muls_word(x - a->x, s->nx) + bsp_muls_word(y - a->y, s->ny) <= 0) {
+        return FALSE;
+    }
+    s32 aim_x, aim_y;
+    seg_closest_point(s, probe_x, probe_y, &aim_x, &aim_y);
+    const s16 abs_nx = (s->nx < 0) ? (s16)-s->nx : s->nx;
+    const s16 abs_ny = (s->ny < 0) ? (s16)-s->ny : s->ny;
+    const s16 normal_max = (abs_nx > abs_ny) ? abs_nx : abs_ny;
+    if (normal_max > 0) {
+        aim_x += (s16)((s->nx * BSP_USE_SIGHT_STANDOFF) / normal_max);
+        aim_y += (s16)((s->ny * BSP_USE_SIGHT_STANDOFF) / normal_max);
+    }
+    return !segment_hits_wall(x, y, aim_x, aim_y, FALSE);
+}
+
 BspUseResult bsp_use_in_front(s32 x, s32 y, u16 angle, u8 owned_keys) {
     const s16 dir_x = fx_cos(angle);
     const s16 dir_y = fx_sin(angle);
@@ -544,6 +576,8 @@ BspUseResult bsp_use_in_front(s32 x, s32 y, u16 angle, u8 owned_keys) {
             // it instead of whichever SEG was emitted first.
             if (best == NULL || candidate_dist2 < best_dist2 ||
                 (candidate_dist2 == best_dist2 && dist < best_probe_dist)) {
+                // Only a would-be winner pays for the sight ray.
+                if (!use_surface_visible(s, x, y, px, py)) continue;
                 best = s;
                 best_dist2 = candidate_dist2;
                 best_probe_dist = dist;

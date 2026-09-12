@@ -240,6 +240,21 @@ plane, both closed and moving. The moving overlay carries this variant in its
 otherwise-unused `band_top` byte so `RayDoorOverlay` stays 10 bytes (LOG,
 2026-09-04).
 
+**A move is collision-tested only at its destination, so no hop may reach 32
+units.** Walls are zero-thickness lines and the player a 16-unit circle.
+`player_apply_world_push` halves any displacement until each axis is <=
+`PLAYER_PUSH_MAX_AXIS_STEP` (20). Anything that pushes or teleports the player
+goes through it; `tools/test-player-collision.py` is the check, and its unsplit
+negative control must keep tunnelling or the test proves nothing (LOG,
+2026-09-11).
+
+**Use answers only from a surface's front side and in line of sight, and every
+offline model must agree.** The rule exists three times: `use_surface_visible`
+in `bsp_map.c`, `interaction_visible` in `doom_map.py`'s certificate, and
+`use_surface_visible` in `generate-e2e-routes.py`. A test pose, route or
+certificate that works by pressing through a wall is encoding a bug; three did
+(LOG, 2026-09-11).
+
 ## Dead ends — do not redo without new evidence
 
 Each is measured and written up in [LOG.md](LOG.md); the date locates the entry.

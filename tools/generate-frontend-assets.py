@@ -35,16 +35,17 @@ SEGA_FONT = BOOT_SOURCE / "SEGA.TTF"
 MANIFEST_NAME = ".frontend-assets.json"
 # Bumped whenever the generated set changes shape, so a stale cache is rebuilt
 # rather than silently reused. 12: the OPTIONS panel gained a VIEW SIZE row.
-MANIFEST_VERSION = 13
+# 14: and a DEBUG row.
+MANIFEST_VERSION = 14
 
 sys.path.insert(0, str(ROOT / "tools"))
 import raycast_constants
 
-# The OPTIONS panel offers one row per viewport preset value plus MUSIC, SFX and
-# BACK. Read from raycast.h so adding a preset cannot leave the menu unable to
+# The OPTIONS panel offers one row per viewport preset value plus MUSIC, SFX,
+# DEBUG and BACK. Read from raycast.h so adding a preset cannot leave the menu unable to
 # display it.
 VIEW_SIZE_COUNT = raycast_constants.view_size_count()
-OPTIONS_ROWS = 4
+OPTIONS_ROWS = 5
 
 PATCHES = (
     "TITLEPIC", "M_DOOM", "M_NGAME", "M_OPTION", "M_QUITG",
@@ -127,9 +128,10 @@ def expected_outputs() -> tuple[str, ...]:
     ]
     names.extend(f"main_{selected}_{frame}.png" for selected in range(3) for frame in range(2))
     names.extend(
-        f"options_{music}_{sfx}_{view}_{selected}.png"
+        f"options_{music}_{sfx}_{view}_{debug}_{selected}.png"
         for music in range(2) for sfx in range(2)
-        for view in range(VIEW_SIZE_COUNT) for selected in range(OPTIONS_ROWS)
+        for view in range(VIEW_SIZE_COUNT) for debug in range(2)
+        for selected in range(OPTIONS_ROWS)
     )
     names.extend(f"skill_{selected}.png" for selected in range(5))
     names.extend(f"pause_{selected}.png" for selected in range(3))
@@ -866,24 +868,26 @@ def generate(source: Path, output: Path) -> None:
                 panel.alpha_composite(patch, ((192 - patch.width) // 2 + 8, y))
             assets[f"main_{selected}_{frame}.png"] = (panel, False)
 
-    # OPTIONS gained a VIEW SIZE row, so the panel is one entry taller and the
-    # asset set is the full cross product of the three settings and the cursor
-    # position. That is VIEW_SIZE_COUNT x 2 x 2 x 4 panels; they are cheap ROM
-    # (the budget that matters on this cart is work RAM, not ROM) and it keeps
-    # frontend.c a pure lookup with no runtime text composition.
+    # OPTIONS is the full cross product of its settings (MUSIC, SFX, VIEW SIZE,
+    # DEBUG) and the cursor position: 2 x 2 x VIEW_SIZE_COUNT x 2 x 5 panels.
+    # They are cheap ROM (the budget that matters on this cart is work RAM, not
+    # ROM) and it keeps frontend.c a pure lookup with no runtime text
+    # composition.
     for music in range(2):
         for sfx in range(2):
             for view in range(VIEW_SIZE_COUNT):
-                for selected in range(OPTIONS_ROWS):
-                    panel = submenu_panel(images, selected, rows=OPTIONS_ROWS)
-                    patch = images["M_OPTTTL"]
-                    panel.alpha_composite(patch, ((192 - patch.width) // 2, 0))
-                    centered_doom_text(panel, f"MUSIC {'ON' if music else 'OFF'}", 40, source)
-                    centered_doom_text(panel, f"SFX {'ON' if sfx else 'OFF'}", 64, source)
-                    centered_doom_text(panel, f"VIEW SIZE {view + 1}", 88, source)
-                    centered_doom_text(panel, "BACK", 112, source)
-                    assets[f"options_{music}_{sfx}_{view}_{selected}.png"] = (
-                        screen_overlay(panel), True)
+                for debug in range(2):
+                    for selected in range(OPTIONS_ROWS):
+                        panel = submenu_panel(images, selected, rows=OPTIONS_ROWS)
+                        patch = images["M_OPTTTL"]
+                        panel.alpha_composite(patch, ((192 - patch.width) // 2, 0))
+                        centered_doom_text(panel, f"MUSIC {'ON' if music else 'OFF'}", 40, source)
+                        centered_doom_text(panel, f"SFX {'ON' if sfx else 'OFF'}", 64, source)
+                        centered_doom_text(panel, f"VIEW SIZE {view + 1}", 88, source)
+                        centered_doom_text(panel, f"DEBUG {'ON' if debug else 'OFF'}", 112, source)
+                        centered_doom_text(panel, "BACK", 136, source)
+                        assets[f"options_{music}_{sfx}_{view}_{debug}_{selected}.png"] = (
+                            screen_overlay(panel), True)
 
     for selected in range(5):
         assets[f"skill_{selected}.png"] = (skill_panel(images, selected), False)

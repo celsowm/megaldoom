@@ -88,6 +88,11 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
+& python (Join-Path $PSScriptRoot "test-player-collision.py")
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
 & python (Join-Path $PSScriptRoot "test-door-animation.py")
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE

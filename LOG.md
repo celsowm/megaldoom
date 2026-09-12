@@ -8,6 +8,85 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## Knockback threw the player through walls, and use worked through them (2026-09-11)
+
+A remote tester reported being "stuck behind walls" in E1M1 and E1M3; both
+screenshots show the level from outside its walls. They finished E1M1 by
+pressing the exit switch through a wall. The user then reproduced walking
+through a wall while being shot by a zombieman.
+
+### Knockback tunnelling
+
+`player_apply_world_push` collision-tested only the destination. Doom walls are
+zero-thickness lines and the player is a 16-unit circle, so any single hop of 32
+or more units perpendicular to a wall can land clear on the far side. Enemy-hit
+and barrel knockback is `PLAYER_HIT_PUSH_STEP` = `FX_ONE/4` = 64 units per axis
+in one call.
+
+`tools/test-player-collision.py` mirrors the C (including `seg_point_dist2`'s
+floored Q8 projection) and pushes into every solid seg of the four maps from
+16..48 units away. Unsplit, the push crossed a wall in 25234/69602 (E1M1),
+62043/168062 (E1M2), 56470/162994 (E1M3) and 42808/121672 (E1M4) trials; halved
+until each axis is <= 20 (28.3 units diagonally), 0. The first version tested
+the straight start-to-end line and reported 77 false positives, all legitimate
+slides round convex corners -- the check has to walk each committed hop. A
+running tic (~19 per axis) stays one query, so ordinary movement cost is
+unchanged.
+
+### Use through walls
+
+`bsp_use_in_front` probes 128..512 units along the aim and accepts any use
+surface within 256 units of a probe, with no side or sight test. It now also
+requires the player on the surface's front side (the renderer's facing rule)
+and a clear `segment_hits_wall` from the player to the probed point, ended 4
+units in front of the surface so the surface itself never blocks. Negative
+control: probing each campaign exit face from behind, the old rule accepted
+15 of 15, the new one 0.
+
+Three harnesses had learned the bug:
+
+- `DEBUG_START_E1M1_EXIT`'s pose (3200,4768) is behind the solid wall at x=3104.
+  Moved to (2960,4768); `test-e1m1-exit.ps1` passes (checkpoints 0x8C).
+- The flat-progression certificate opened E1M2's door 0 by pressing its switch
+  (x=96, facing east) from the room west of the wall.
+- The E1M3 route pressed door 15 through wall 940.
+
+The certificate now requires front side and sight to the surface's closest
+point, from within `USE_WITNESS_RADIUS` = 128. Closest point only, because
+accepting any visible point certified E1M3 door 15 along a line grazing a
+pillar corner. 128, because at 256 E1M3's door-4 switch certified from 201
+units past a wall end and no stable E2E pose existed; 192 and 224 fail E1M3
+stability on doors 7 and 4, while 160 and 128 generate all four routes. All
+four maps and E1M6 still certify, and the regenerated maps differ only in the
+`// Certified ... states` comment. `generate-e2e-routes.py` grew a sight grid
+and memo: E1M1 23 s -> 8 s, full `test-e2e-routes.py` 15 min -> ~10 min.
+
+### The locked-door press needed a detour
+
+That cost the E1M2 and E1M3 routes their locked-door press before the key. The
+certified path now collects the key before it passes within 256 units of the
+locked door (913 and 597 units) at every witness radius tried (128, 160, 192,
+224), and `test-e2e-routes.py` failed its `len(locked) == len(unlocked) == 1`
+assertion -- coverage its own comment says must not vanish silently.
+
+`generate-e2e-routes.py` now walks the route out to the door and back
+(`add_lock_detours`). It is a four-neighbour BFS on the certificate's 16-unit
+grid, from any pre-key path cell, keeping 20 units from every solid SEG with
+every door shut (so the detour needs no press of its own), from blocking
+things, and 32 units beyond pickup range of every key. Its goal is a cell
+within 128 units of a door face, in front of it and in sight, and a candidate
+is kept only when `stable_use_pose` resolves the door from it -- the same call
+that emits the press. E1M2 presses group 7 from (-640,-224) at row 44, first
+comes within pickup range of a key at row 208, and unlocks at row 312; E1M3
+presses group 14 from (-1184,2512) at row 27, key at row 228, unlock at 617.
+The widest gap between consecutive rows is 64 units. `test-e2e-routes.py`
+passes again (612 s).
+
+Not verified in the emulator: an actual knockback through a wall (the mirror is
+the evidence), and the debug-light rescue. Also not examined: enemy knockback
+(`push_dummy_on_hit`, up to 64 per axis) goes through a different path and may
+tunnel the same way.
+
 ## The near-plane polygon clip cost up to 8 DIVS.W to stay exact; clamped (2026-09-07)
 
 Chased the lead the entry below closed on: 7.5% of the 254 box calls per rebuild

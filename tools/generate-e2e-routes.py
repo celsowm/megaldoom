@@ -9,14 +9,16 @@ import argparse
 import math
 import re
 import sys
+from collections import deque
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
 from wad_reader import WadFile
-from doom_map import (DOOM_THING_NOT_SINGLE_PLAYER, DOOM_THING_SKILL_MEDIUM,
-                      KEY_NONE, SEG_DOOR, SEG_EXIT, SEG_SWITCH, SEG_TRIGGER,
+from doom_map import (BLOCKING_THING_RADIUS, DOOM_THING_NOT_SINGLE_PLAYER,
+                      DOOM_THING_SKILL_MEDIUM, KEY_NONE, KEY_THING_MASK,
+                      PICKUP_RADIUS, SEG_DOOR, SEG_EXIT, SEG_SWITCH, SEG_TRIGGER,
                       SEG_WALL, SEG_FLAG_DIRECT_USE, certify_flat_progression,
                       load_map, point_segment_dist2)
 
@@ -180,6 +182,79 @@ def fixed_cos(angle):
     return fixed_sin(angle + 64)
 
 
+USE_SIGHT_STANDOFF = 4  # bsp_map.c BSP_USE_SIGHT_STANDOFF
+
+
+def _cross(ox, oy, px, py, qx, qy):
+    return (px - ox) * (qy - oy) - (py - oy) * (qx - ox)
+
+
+SIGHT_CELL = 128
+# One map per generator process; (map_data, cell -> wall lines, sight memo).
+_sight_index = None
+
+
+def _sight_state(map_data):
+    global _sight_index
+    if _sight_index is None or _sight_index[0] is not map_data:
+        grid = {}
+        for other in map_data.out_segs:
+            if other["type"] in (SEG_DOOR, SEG_TRIGGER):
+                continue
+            x0, y0 = map_data.vertices[other["v1"]]
+            x1, y1 = map_data.vertices[other["v2"]]
+            line = (x0, y0, x1, y1)
+            for cx in range(min(x0, x1) // SIGHT_CELL, max(x0, x1) // SIGHT_CELL + 1):
+                for cy in range(min(y0, y1) // SIGHT_CELL, max(y0, y1) // SIGHT_CELL + 1):
+                    grid.setdefault((cx, cy), []).append(line)
+        _sight_index = (map_data, grid, {})
+    return _sight_index[1], _sight_index[2]
+
+
+def _sight_clear(map_data, x, y, ex, ey):
+    grid, memo = _sight_state(map_data)
+    key = (x, y, ex, ey)
+    cached = memo.get(key)
+    if cached is not None:
+        return cached
+    clear = True
+    seen = set()
+    for cx in range(min(x, ex) // SIGHT_CELL, max(x, ex) // SIGHT_CELL + 1):
+        for cy in range(min(y, ey) // SIGHT_CELL, max(y, ey) // SIGHT_CELL + 1):
+            for line in grid.get((cx, cy), ()):
+                if line in seen:
+                    continue
+                seen.add(line)
+                bx0, by0, bx1, by1 = line
+                if (_cross(x, y, ex, ey, bx0, by0) * _cross(x, y, ex, ey, bx1, by1) < 0 and
+                        _cross(bx0, by0, bx1, by1, x, y) * _cross(bx0, by0, bx1, by1, ex, ey) < 0):
+                    clear = False
+                    break
+            if not clear:
+                break
+        if not clear:
+            break
+    memo[key] = clear
+    return clear
+
+
+def use_surface_visible(map_data, seg, x, y, probe_x, probe_y):
+    """bsp_map.c use_surface_visible: front side, and no solid wall between the
+    player and the probed point. Doors are modelled open here: the route
+    presses them open before it looks through them, and a shut door is the
+    runtime's call, not the certificate's."""
+    ax, ay = map_data.vertices[seg["v1"]]
+    if (x - ax) * seg["nx"] + (y - ay) * seg["ny"] <= 0:
+        return False
+    cx, cy = closest_point(map_data.vertices, seg, probe_x, probe_y)
+    normal_max = max(abs(seg["nx"]), abs(seg["ny"]))
+    if normal_max:
+        # C integer division truncates toward zero.
+        cx += int(seg["nx"] * USE_SIGHT_STANDOFF / normal_max)
+        cy += int(seg["ny"] * USE_SIGHT_STANDOFF / normal_max)
+    return _sight_clear(map_data, x, y, cx, cy)
+
+
 def use_target(map_data, x, y, aim_x, aim_y, spread=0):
     """Offline counterpart of bsp_use_in_front's probes and tie-break.
 
@@ -218,7 +293,8 @@ def use_target(map_data, x, y, aim_x, aim_y, spread=0):
                 if distance2 >= USE_RADIUS ** 2:
                     continue
                 candidate = (distance2, dist, index, seg)
-                if best is None or candidate[:2] < best[:2]:
+                if ((best is None or candidate[:2] < best[:2]) and
+                        use_surface_visible(map_data, seg, x, y, px, py)):
                     best = candidate
         if best is None:
             raise AssertionError("no runtime use target at %d,%d angle %d" % (x, y, angle))
@@ -338,6 +414,178 @@ def stable_use_pose(map_data, nodes, index, seg):
     return x, y, aim, action, target, stable_radius, pose_index
 
 
+# A locked-door press before the key used to fall out of the certified path for
+# free, because that path walked past the door on its way to the key. Once use
+# stopped working through walls (2026-09-11) the certificate reached E1M2's and
+# E1M3's keys without ever passing within USE_RADIUS of their locked doors (913
+# and 597 units), and the scenario silently vanished. add_lock_detours walks the
+# route out to the door and back instead.
+NAV_STEP = 16
+# Stand this close to press the locked door: the same witness distance the
+# certificate uses, so the press is the square-on one a player would make.
+LOCK_DETOUR_REACH = 128
+# Stay this far beyond PICKUP_RADIUS from every key while detouring, or the
+# follower could pick the key up on the way and the "locked" press would unlock.
+LOCK_DETOUR_KEY_MARGIN = 32
+LOCK_DETOUR_MAX_CELLS = 200000
+LOCK_DETOUR_POSE_TRIES = 24
+
+
+def _compact_grid_path(cells):
+    """Keep every turn and at least one cell per ROUTE_SAMPLE_STEP of a 4-neighbour
+    grid path -- the shape route_lines compacts the certified path to."""
+    if len(cells) <= 2:
+        return list(cells)
+    kept = [cells[0]]
+    for index in range(1, len(cells) - 1):
+        px, py = cells[index - 1]
+        x, y = cells[index]
+        nx, ny = cells[index + 1]
+        turn = (x - px, y - py) != (nx - x, ny - y)
+        far = abs(x - kept[-1][0]) + abs(y - kept[-1][1]) >= ROUTE_SAMPLE_STEP
+        if turn or far:
+            kept.append(cells[index])
+    kept.append(cells[-1])
+    return kept
+
+
+def _lock_detour(map_data, nodes, key_index, faces):
+    """Insert a walk from the pre-key path to a cell that presses `faces` and back.
+
+    Movement is a breadth-first search over the certificate's 16-unit grid with
+    four-neighbour steps (the controller cannot cut corners), keeping
+    E2E_CLEARANCE_RADIUS from every solid SEG -- every door counts as shut, so the
+    detour never needs a press of its own -- and from blocking things, and
+    staying out of pickup range of every key. Candidate press cells are tried in
+    walking order and kept only when stable_use_pose resolves the locked door
+    from them, exactly as the emitted press will.
+    """
+    vertices = map_data.vertices
+    group = faces[0]["door_group"]
+    cell_size = SIGHT_CELL
+    grid = {}
+    for seg in map_data.out_segs:
+        if seg["type"] == SEG_TRIGGER:
+            continue
+        ax, ay = vertices[seg["v1"]]
+        bx, by = vertices[seg["v2"]]
+        line = (ax, ay, bx, by)
+        pad = E2E_CLEARANCE_RADIUS
+        for cx in range((min(ax, bx) - pad) // cell_size, (max(ax, bx) + pad) // cell_size + 1):
+            for cy in range((min(ay, by) - pad) // cell_size, (max(ay, by) + pad) // cell_size + 1):
+                grid.setdefault((cx, cy), []).append(line)
+    things = list(spawnable_things(map_data.out_things))
+    blockers = [(x, y, BLOCKING_THING_RADIUS[thing_type])
+                for x, y, thing_type, _, _ in things if thing_type in BLOCKING_THING_RADIUS]
+    keys = [(x, y) for x, y, thing_type, _, _ in things if thing_type in KEY_THING_MASK]
+    key_clearance2 = (PICKUP_RADIUS + LOCK_DETOUR_KEY_MARGIN) ** 2
+    memo = {}
+
+    def free(x, y):
+        cached = memo.get((x, y))
+        if cached is not None:
+            return cached
+        ok = True
+        for ax, ay, bx, by in grid.get((x // cell_size, y // cell_size), ()):
+            if point_segment_dist2(ax, ay, bx, by, x, y) < E2E_CLEARANCE_RADIUS ** 2:
+                ok = False
+                break
+        if ok:
+            ok = all((x - ox) ** 2 + (y - oy) ** 2 >= (E2E_CLEARANCE_RADIUS + radius) ** 2
+                     for ox, oy, radius in blockers)
+        if ok:
+            ok = all((x - kx) ** 2 + (y - ky) ** 2 >= key_clearance2 for kx, ky in keys)
+        memo[(x, y)] = ok
+        return ok
+
+    def presses(x, y):
+        for face in faces:
+            ax, ay = vertices[face["v1"]]
+            bx, by = vertices[face["v2"]]
+            if point_segment_dist2(ax, ay, bx, by, x, y) > LOCK_DETOUR_REACH ** 2:
+                continue
+            if (x - ax) * face["nx"] + (y - ay) * face["ny"] <= 0:
+                continue
+            cx, cy = closest_point(vertices, face, x, y)
+            normal_max = max(abs(face["nx"]), abs(face["ny"]))
+            if normal_max:
+                cx += int(face["nx"] * USE_SIGHT_STANDOFF / normal_max)
+                cy += int(face["ny"] * USE_SIGHT_STANDOFF / normal_max)
+            if _sight_clear(map_data, x, y, cx, cy):
+                return True
+        return False
+
+    # Multi-source: whichever pre-key cell is the shortest walk from the door.
+    origin = {}
+    parent = {}
+    queue = deque()
+    for index in range(key_index):
+        cell = (nodes[index]["x"], nodes[index]["y"])
+        if cell not in parent:
+            parent[cell] = None
+            origin[cell] = index
+            queue.append(cell)
+    tries = 0
+    while queue and len(parent) < LOCK_DETOUR_MAX_CELLS and tries < LOCK_DETOUR_POSE_TRIES:
+        cell = queue.popleft()
+        if parent[cell] is not None and presses(*cell):
+            tries += 1
+            path = [cell]
+            while parent[path[-1]] is not None:
+                path.append(parent[path[-1]])
+            path.reverse()
+            source = origin[path[0]]
+            outbound = _compact_grid_path(path)
+            inbound = _compact_grid_path(list(reversed(path)))
+            detour = ([dict(x=x, y=y, action="move", detail=None) for x, y in outbound[1:]] +
+                      [dict(x=x, y=y, action="move", detail=None) for x, y in inbound[1:]])
+            candidate = nodes[:source + 1] + detour + nodes[source + 1:]
+            goal_index = source + len(outbound) - 1
+            try:
+                pose = stable_use_pose(map_data, candidate, goal_index, faces[0])
+            except AssertionError:
+                pose = None
+            if (pose is not None and pose[4] == group and pose[3] == 2 and
+                    source < pose[6] <= source + len(detour)):
+                return candidate
+        for dx, dy in ((NAV_STEP, 0), (-NAV_STEP, 0), (0, NAV_STEP), (0, -NAV_STEP)):
+            step = (cell[0] + dx, cell[1] + dy)
+            if step in parent or not free(*step):
+                continue
+            parent[step] = cell
+            origin[step] = origin[cell]
+            queue.append(step)
+    raise AssertionError("%s: no reachable, stable press for locked door group %d "
+                         "before its key" % (map_data.mapn, group))
+
+
+def add_lock_detours(map_data, nodes):
+    """Make every collected key's locked door reachable for a press before the key.
+
+    Mirrors the selection in route_lines' lock-scenario block: the door is the
+    first SEG carrying that key, and a detour is added only where the certified
+    path never comes within USE_RADIUS of it before the pickup."""
+    faces_by_key = {}
+    for seg in map_data.out_segs:
+        if seg["type"] == SEG_DOOR and seg["required_key"] != KEY_NONE:
+            faces_by_key.setdefault(seg["required_key"], []).append(seg)
+    for required_key in sorted(faces_by_key):
+        key_index = next((index for index, node in enumerate(nodes)
+                          if node["action"] == "key" and node["detail"] & required_key),
+                         None)
+        if key_index is None:
+            continue
+        door = faces_by_key[required_key][0]
+        before = nearest_index(nodes, midpoint(map_data.vertices, door), 0, key_index)
+        if point_segment_dist2(*map_data.vertices[door["v1"]], *map_data.vertices[door["v2"]],
+                               nodes[before]["x"], nodes[before]["y"]) <= USE_RADIUS ** 2:
+            continue
+        faces = [seg for seg in faces_by_key[required_key]
+                 if seg["door_group"] == door["door_group"]]
+        nodes = _lock_detour(map_data, nodes, key_index, faces)
+    return nodes
+
+
 def route_lines(map_data):
     normal_exits = {index for index, seg in enumerate(map_data.out_segs)
                     if seg["type"] == SEG_EXIT and
@@ -378,7 +626,7 @@ def route_lines(map_data):
         previous_direction = direction
     if compact[-1] is not nodes[-1]:
         compact.append(nodes[-1])
-    nodes = compact
+    nodes = add_lock_detours(map_data, compact)
 
     # A locked-door scenario must exercise its physical door on both sides of
     # the key pickup.  Locate concrete certified positions close enough to use

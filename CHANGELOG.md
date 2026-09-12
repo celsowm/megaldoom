@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Fixed: taking a hit (an enemy attack or a barrel blast) could knock the
+  player straight through a wall and out of the map, with no way back in.
+  Knockback is now applied in steps too small for collision to skip a wall.
+- Fixed: switches, doors and the exit could be used from behind a wall. Use now
+  requires facing the surface from its front with nothing solid in between.
+- New **DEBUG** row in the OPTIONS menu, for play-testers. While on, the top of
+  the screen shows the map, position, angle, sector, how many walls the player
+  has been carried through, and the last knockback. If the player ends up
+  outside the map, holding A+B+C for a second puts them back at the last
+  position that was still inside.
+
 - The 3D viewport size is now selectable from a **VIEW SIZE** row in the
   OPTIONS menu (reachable from both the title and the in-game pause menu):
   160x120 as before, 176x120, or 176x128. Left/Right or the accept button

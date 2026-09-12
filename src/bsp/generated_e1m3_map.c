@@ -2,7 +2,7 @@
 // Source: DOOM1.WAD  map: E1M3
 // Source SHA-256: FF2C301B8719465A6E386A512BFA319931B7F64EA517D337C5A47AFE03951902
 // Flat baseline/final: 968/968 SEGs; curated material: 0 linedefs / 0 SEGs
-// Certified: exit SEG 165 reachable after 1593 states
+// Certified: exit SEG 165 reachable after 1380 states
 // Sky sectors (F_SKY1 ceiling): 10
 // Generated at: source-derived
 #include "bsp_map.h"

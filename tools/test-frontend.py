@@ -54,13 +54,14 @@ for selected in range(3):
     for frame in range(2):
         expected[f"main_{selected}_{frame}.png"] = (192, 176)
     expected[f"pause_{selected}.png"] = (320, 224)
-# OPTIONS is the cross product of MUSIC, SFX, the VIEW SIZE preset and the
-# cursor row (MUSIC / SFX / VIEW SIZE / BACK).
+# OPTIONS is the cross product of MUSIC, SFX, the VIEW SIZE preset, DEBUG and
+# the cursor row (MUSIC / SFX / VIEW SIZE / DEBUG / BACK).
 for music in range(2):
     for sfx in range(2):
         for view in range(raycast_constants.view_size_count()):
-            for selected in range(4):
-                expected[f"options_{music}_{sfx}_{view}_{selected}.png"] = (320, 224)
+            for debug in range(2):
+                for selected in range(5):
+                    expected[f"options_{music}_{sfx}_{view}_{debug}_{selected}.png"] = (320, 224)
 for selected in range(5):
     expected[f"skill_{selected}.png"] = (320, 224)
 for selected in range(2):

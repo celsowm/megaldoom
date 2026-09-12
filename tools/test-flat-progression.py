@@ -22,27 +22,34 @@ def load_extractor():
     return module
 
 
-def seg(v1, v2, kind, key=0, group=255, flags=0):
-    return {"v1": v1, "v2": v2, "type": kind,
+def seg(v1, v2, kind, normal, key=0, group=255, flags=0):
+    # `normal` is the front side, the one the runtime draws and answers use
+    # from (bsp_render_columns.c / bsp_map.c use_surface_visible).
+    return {"v1": v1, "v2": v2, "type": kind, "nx": normal[0], "ny": normal[1],
             "required_key": key, "door_group": group, "flags": flags}
 
 
 def fixture(module, key_thing=None, key_position=(256, 512), isolated=False,
-            remote=False, include_exit=True):
+            remote=False, include_exit=True, switch_normal=(1, 0),
+            sight_wall=False):
     # Two 512x1024 rooms. The middle segment is the only connection and the
     # right wall is an exit switch, far outside start interaction range.
     vertices = [(0, 0), (1024, 0), (1024, 1024), (0, 1024),
-                (512, 0), (512, 1024), (0, 448), (0, 576)]
-    walls = [seg(0, 4, module.SEG_WALL), seg(4, 1, module.SEG_WALL),
-             seg(3, 5, module.SEG_WALL), seg(5, 2, module.SEG_WALL),
-             seg(0, 6, module.SEG_WALL), seg(7, 3, module.SEG_WALL)]
+                (512, 0), (512, 1024), (0, 448), (0, 576),
+                (64, 0), (64, 1024)]
+    walls = [seg(0, 4, module.SEG_WALL, (0, 1)), seg(4, 1, module.SEG_WALL, (0, 1)),
+             seg(3, 5, module.SEG_WALL, (0, -1)), seg(5, 2, module.SEG_WALL, (0, -1)),
+             seg(0, 6, module.SEG_WALL, (1, 0)), seg(7, 3, module.SEG_WALL, (1, 0))]
     middle_type = module.SEG_WALL if isolated else module.SEG_DOOR
     middle_flags = 0 if remote else module.SEG_FLAG_DIRECT_USE
-    walls.append(seg(4, 5, middle_type, module.KEY_RED, 0, middle_flags))
+    walls.append(seg(4, 5, middle_type, (-1, 0), module.KEY_RED, 0, middle_flags))
     if include_exit:
-        walls.append(seg(1, 2, module.SEG_EXIT))
+        walls.append(seg(1, 2, module.SEG_EXIT, (-1, 0)))
     if remote:
-        walls.append(seg(6, 7, module.SEG_SWITCH, module.KEY_NONE, 0))
+        walls.append(seg(6, 7, module.SEG_SWITCH, switch_normal, module.KEY_NONE, 0))
+    if sight_wall:
+        # Seals the remote switch's 64-unit alcove off from the start room.
+        walls.append(seg(8, 9, module.SEG_WALL, (1, 0)))
     things = []
     if key_thing is not None:
         things.append((key_position[0], key_position[1], key_thing, 0,
@@ -97,6 +104,14 @@ def main():
     remote_result = module.certify_flat_progression(*remote, 128, 512)
     assert remote_result["opened_groups"] & 1
 
+    # A switch answers only from its front side and in line of sight. The
+    # proof used to open E1M2's door 0 by pressing its switch from the room
+    # behind the wall, which the runtime allowed too (fixed 2026-09-11).
+    expect_failure(module, fixture(module, 13, remote=True, switch_normal=(-1, 0)),
+                   "exit unreachable")
+    expect_failure(module, fixture(module, 13, remote=True, sight_wall=True),
+                   "exit unreachable")
+
     # A failed proof must leave both previously valid artifacts byte-identical.
     with tempfile.TemporaryDirectory() as temp_name:
         temp = Path(temp_name)
@@ -116,7 +131,8 @@ def main():
         assert out_map.read_bytes() == b"valid-map-sentinel\n"
         assert out_assets.read_bytes() == b"valid-assets-sentinel\n"
 
-    print("ok    progression proof: RGB locks, self-lock/wrong-color/isolation, atomic failure")
+    print("ok    progression proof: RGB locks, self-lock/wrong-color/isolation, "
+          "use from front and in sight, atomic failure")
 
 
 if __name__ == "__main__":
