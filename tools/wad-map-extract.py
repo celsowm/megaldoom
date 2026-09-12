@@ -192,11 +192,16 @@ def main():
         combined_usage = Counter()
         for campaign_map in campaign_maps:
             combined_usage.update(campaign_map.texture_usage)
+        # A SECRET door draws from the ordinary wall plane, closed and moving
+        # (bsp_render_columns.c tests !plain_door before any door pair), so
+        # its material needs no 32 KB door-pair entry. Counting it would bake
+        # one for every wall texture doom_map.camouflage_plain_doors lends it.
         door_texture_names = {
             seg["texture_name"]
             for campaign_map in campaign_maps
             for seg in campaign_map.out_segs
-            if seg["type"] == doom_map.SEG_DOOR
+            if seg["type"] == doom_map.SEG_DOOR and
+            not seg["flags"] & doom_map.SEG_FLAG_PLAIN_DOOR
         }
         texture_aliases.assert_alias_table_sound(
             door_texture_names=door_texture_names,
@@ -258,7 +263,8 @@ def main():
     texture_ids, texture_meta, sector_visuals, palette = world_assets.emit_world_assets(
         asset_temp, map_data.texture_usage, map_data.sectors, map_data,
         {seg["texture_name"] for seg in map_data.out_segs
-         if seg["type"] == doom_map.SEG_DOOR})
+         if seg["type"] == doom_map.SEG_DOOR and
+         not seg["flags"] & doom_map.SEG_FLAG_PLAIN_DOOR})
     report = bsp_emit.emit_map_c(map_temp, args.wad, map_data, texture_ids, texture_meta)
     os.replace(asset_temp, args.assets_out)
     os.replace(map_temp, out_path)

@@ -9,7 +9,7 @@ $Source = Join-Path $Root ".externals\blastem"
 $Toolchain = Join-Path $Root ".externals\toolchain"
 $Output = Join-Path $Source "build\windows"
 $RunnerPatch = Join-Path $PSScriptRoot "blastem-runner.patch"
-$RunnerSentinel = "MEGALDOOM_RUNNER_VERSION 7"
+$RunnerSentinel = "MEGALDOOM_RUNNER_VERSION 9"
 
 if ($Setup) { & (Join-Path $PSScriptRoot "setup-blastem-toolchain.ps1"); if ($LASTEXITCODE) { exit $LASTEXITCODE } }
 if (-not (Test-Path (Join-Path $Source "Makefile"))) { throw "BlastEm source is missing at $Source." }

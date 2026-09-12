@@ -8,6 +8,155 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## Secret doors borrow the wall they sit in (2026-09-12)
+
+The user pointed at E1M1's secret door at (2944, 3776..3904): a brown BROWN96
+panel in a green BROWNGRN wall, obvious at a glance. That is faithful to the
+WAD -- Doom's SECRET linedef flag only hides the line on the automap, and the
+author's material seam is the classic tell. `SEG_FLAG_PLAIN_DOOR` already
+dropped the framed door plane; the user wanted the material tell gone too.
+
+`doom_map.camouflage_plain_doors` walks the walls that continue each SECRET
+face's line end to end (same line, same facing, touching, within 64 units).
+A face with no such wall is not flush and is left alone; a face whose own WAD
+material already appears on that line was camouflaged by its author (E1M2's
+COMPTALL door between SUPPORT2 strips) and is left alone; otherwise it takes
+the material covering the most length -- strips under 32 units ignored -- with
+the vertical offset and a continued horizontal phase of the nearest such wall
+(the longer one on a tie: E1M1's two BROWNGRN walls do not agree on phase, so
+only one seam can be continuous). A first version that took any adjacent
+wall picked SUPPORT2 strips for 128-unit doors. Faces changed: E1M1 1
+(BROWN96 -> BROWNGRN), E1M2 3 (groups 6 and 8 -> STARTAN2, 11 -> TEKWALL1),
+E1M3 1 (BROWNHUG -> BROWN144), E1M4 1 (STARTAN3 -> COMPTALL). Faces inside a
+door's own sector keep the WAD material, which is only seen from inside the
+secret passage.
+
+SECRET faces also stopped counting toward `door_texture_names` in
+`wad-map-extract.py` (and `wall_bake_preview.py`, which mirrors it). They never
+sample the 32 KB-per-texture door-pair table -- `bsp_render_columns.c` checks
+`!plain_door` first -- but they used to put their material in it, and
+camouflage would have added every wall material they borrow. The table fell
+from 25 textures to 17: -256 KB of cartridge. `test-wall-quality.py`'s two
+byte counts moved with it (2228224 -> 1966080, preview 720896 -> 688128), and
+`test-sector-map.py`'s negative control now pins exactly which faces may change
+material.
+
+Verified headless with a new test-only `DEBUG_START_POSE` (x, y, angle; skips
+the frontend) at the user's pose (3030, 3882, 131): before, the BROWN96 panel;
+after, one continuous BROWNGRN wall; a USE pulse still opens the door onto the
+BROWN1 passage with no door-pair garbage.
+
+## The DEBUG overlay was black text on a black backdrop (2026-09-11)
+
+The user turned DEBUG on from the title's OPTIONS menu, started a game, and
+saw nothing at the top of the screen. `debug_light_enabled()` and the tile
+content it built were both fine -- confirmed by reading `s_enabled` and the
+40x2 tile buffer straight out of work RAM via `--md-mailbox` while a scripted
+BlastEm route (`--md-route`, raw button masks) drove the real title screen,
+main menu, OPTIONS, and skill select, since the existing E2E harness only
+ever starts gameplay directly (`DEBUG_E2E_START_LEVEL`) and had never
+exercised this path. The tile buffer decoded to the exact expected string;
+the screen showed nothing.
+
+The actual bug: `renderer.c`'s `load_game_palettes()` only sets PAL0[0..9].
+The SGDK stock font paints with PAL0 index 15, which stays whatever colour
+the last frontend PNG left there -- black, in every one of them. This was
+already known and already fixed once, for `DEBUG_PERF`'s perf overlay
+(`PAL_setColor(15, WHITE)`, added when that overlay hit the same black-on-black
+problem) -- but the fix was gated `#if DEBUG_PERF`, and `debug_light.c` uses
+the identical font/palette convention while shipping in release ROMs. A debug
+build that also happened to pass `-DebugPerf`, or one that skipped the
+frontend via `DEBUG_LIGHT_BOOT`, would carry the fix or never need it; a plain
+release ROM reached through the real menu would not. Made the `PAL_setColor`
+unconditional -- it was already documented as a no-op for every other tile.
+Rebuilt and re-ran the same scripted route: the overlay now reads
+"E1M1 X 1056 Y 3616 ANG192 SEC038 / DEBUG ON  WALL CROSS 00  KNOCK+00+00"
+on the first captured gameplay frame. `check-rom.ps1` unchanged: 22,612 bytes
+free work RAM, 3,712 KB ROM.
+
+## Live E2E replay diverged from the offline route model: five real bugs (2026-09-12)
+
+Running the full suite after the DEBUG-overlay fix above surfaced failures in
+`test-level-e2e.ps1` (the live BlastEm replay) that `test-e2e-routes.py` (the
+generator's offline self-check) never caught. A first pass misread them, skipped
+three maps' live replays and documented the cause as "never isolated"; the skips
+are gone and every cause below was reproduced before it was fixed.
+
+**1. The use model assumed every door was open.** E1M2 failed with
+`wrong use ... expected=1:2 got=3:7`: the runtime pressed the red door (group 7,
+221 units away) where the model predicted door group 2 (41 units). Trig, ROM seg
+geometry and distance math all matched bit for bit, which is why it looked
+unexplainable -- the difference was state, not input. `use_surface_visible` in
+the generator skipped every door as a sight blocker ("the route presses them
+open before it looks through them"); `bsp_seg_is_open` blocks a door until its
+lift is fully raised. Group 2's pressable face (-960,-272)-(-832,-272) is only
+reachable through the same door's near face at y=-288. A direct port of
+`bsp_use_in_front` + `segment_hits_wall` run against `generated_e1m2_map.c`
+reproduced both outcomes: all doors open -> group 2, door 2 shut -> group 7.
+`use_target` now takes the door state at the press (and the Q8-floored closest
+point `seg_closest_point` really uses); `stable_use_pose` requires a pose to hold
+both with only the doors the path has already walked through open and with
+every other door open; `verify_use_replay` replays the emitted presses in order
+against the exact state (`toggle_door` is the only thing that moves a door) and
+fails generation if any press would resolve elsewhere -- it caught E1M3 and
+E1M4 poses the estimate alone got wrong.
+
+**2. The runner could never finish a USE whose heading drifted.** E1M4 stopped
+24 units from its exit switch with the exit event already set. Gameplay
+publishes the pose and consumes C in the same tick, after that tick's movement,
+so turn momentum can carry the reported heading past the dead-band; the USE
+branch re-checked alignment before reading the acknowledged press, returned a
+turn mask, and the intermission never applied it. `megaldoom_runner.c` now judges
+an acknowledged pulse first, at any pose (runner version 8). The old E1M4 route
+then completed live, 212/212.
+
+**3. The lock detour was removed on a wrong diagnosis.** The 2026-09-11 detour
+that presses a locked door before its key was blamed for failure 1 and
+deleted, which also emptied E1M2's and E1M3's LOCKED requirement. Restored; live,
+E1M2 now reports locked=04 and unlocked=04. Its UNLOCKED press needed the key
+state the static "requires a key -> LOCKED" guess never modelled: `use_target`
+takes the keys held at the pose.
+
+**4. A door-opening pose could stand past the door.** With failure 1 fixed, the
+only stable pose for E1M2's group 2 was on its far side, and the follower
+walked into the shut door for 6000 ticks. Presses for a door are now chosen
+before the path first touches it; the replay also fails any leg that crosses a
+door still shut at that point. E1M2's group 2 has no stable near-side press at
+all -- the certifier opens it from (-832,-400) along a witness ray that grazes
+the near face's corner vertex, which only one exact heading reproduces -- so
+`add_door_control_detours` walks out to the group's switch at (-592,-1088), the
+way a locked door's press is reached before its key.
+
+**5. A key's certified cell sits on the pickup edge.** E1M3's blue key at
+(-160,864) certifies from (-160,736), exactly `PICKUP_RADIUS` away; the follower
+stops within 16 of it, the key was never collected (keys=00) and the unlock
+press answered LOCKED. `key_pickup_legs` walks straight in through free space
+until a 16-unit miss still collects (to (-160,768), 96 away) and back.
+
+**6. The follower turned back for a cell it had already passed.** With the key
+collected, E1M3 timed out at waypoint 452 (-2384,1504) with the player at
+(-2375,1598) -- 7 units from waypoint 458, 94 units past 452, on the far side
+of the wall corner at (-2384,1584) the path had walked around. Gameplay ticks
+are coarse and the pursuit goal looks ahead, so a 16-unit arrival circle can be
+crossed with no published pose inside it; the previous run on the same route
+got past this spot, which is what timing-dependent looks like. Runner
+version 9 takes a later plain MOVE cell within 16 units of the player as
+reached. That cannot cut through a wall -- certified cells keep 20 units from
+every solid seg and the player's centre 16, so a wall between them means at
+least 36 -- and the scan stops at any USE, FIRE, HURT or EXIT row and at a MOVE
+carrying an event mask, which the generator now sets on a key pickup leg.
+
+**Verification.** Live on runner version 8: E1M1 OK and E1M4 OK (events 0x8F),
+and E1M2 OK for the first time -- 736/736 waypoints, events 0xFF, locked and
+unlocked both 0x04, exit level 1, no deaths. E1M1's and E1M4's final routes
+are byte-identical to the ones replayed. `test-e2e-routes.py` passes with the
+restored locked/unlocked assertions. E1M3 on runner version 9 OK for the first
+time -- 707/707 waypoints, events 0xFF, locked and unlocked both 0x01, exit
+level 2, no deaths. Full `tools/test-windows.ps1` then passed end to end with no
+map skipped, all four live replays on runner version 9 (E1M1 0x8F, E1M2 0xFF,
+E1M3 0xFF, E1M4 0x8F); `check-rom.ps1` unchanged at 22,612 bytes free work RAM
+and 3,712 KB ROM.
+
 ## Knockback threw the player through walls, and use worked through them (2026-09-11)
 
 A remote tester reported being "stuck behind walls" in E1M1 and E1M3; both

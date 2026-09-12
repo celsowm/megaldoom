@@ -51,17 +51,19 @@ static void load_game_palettes(void) {
     // only use indices 2-8, so this is otherwise unclaimed in PAL0.
     PAL_setColor(9, RGB24_TO_VDPCOLOR(0xD80000));
 
-#if DEBUG_PERF
-    // The SGDK stock font paints colour index 15, and nothing in gameplay ever
-    // writes PAL0[10..15] -- so the perf overlay was drawing black glyphs on a
-    // black backdrop, inheriting whatever the last frontend image left there
-    // (0x000000 in every frontend PNG). No shipped tile uses PAL0 index 15
-    // (the status bar stops at 8, the view is PAL3, the face PAL2, the status
-    // numbers PAL1), so this is invisible to everything but the debug text and
-    // SYS_showFrameLoad's scanline cursor. Gated so the release palette upload
-    // stays byte-identical.
+    // The SGDK stock font paints colour index 15, and nothing else in gameplay
+    // writes PAL0[10..15] -- so text drawn with it inherits whatever the last
+    // frontend image left there (0x000000 in every frontend PNG), i.e. black
+    // glyphs on a black backdrop. No shipped tile uses PAL0 index 15 (the
+    // status bar stops at 8, the view is PAL3, the face PAL2, the status
+    // numbers PAL1), so this is invisible to everything but stock-font debug
+    // text. Originally gated to DEBUG_PERF (its perf overlay was the only user
+    // and the guard kept the release palette upload byte-identical), but
+    // debug_light.c reuses the same font/colour convention and ships in
+    // release ROMs -- reached only through the title's OPTIONS menu, so a
+    // route that starts gameplay directly never exercised this. Unconditional
+    // now; still a no-op for every other tile.
     PAL_setColor(15, RGB24_TO_VDPCOLOR(0xFFFFFF));
-#endif
 
     // Palette line 1: native Doom STTNUM/STTPRCNT shading for the transparent
     // BG_A status-number compositor.

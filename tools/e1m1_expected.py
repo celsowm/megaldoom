@@ -37,7 +37,7 @@ E1M1_HEADER_ROW = "%du, %du, %du, %du, %du, %du, %du, %du, %du," % (
 # test-sector-map.py).
 E1M1_WALL_SEG_COUNT = 345
 E1M1_DOOR_SEG_COUNT = 16  # E1M1_DOOR_GROUP_COUNT * 4 faces per group
-E1M1_PLAIN_DOOR_SEG_COUNT = 4  # camouflaged BROWN96 secret-door group
+E1M1_PLAIN_DOOR_SEG_COUNT = 4  # SECRET group 1: BROWN96, flush face borrows BROWNGRN
 E1M1_EXIT_SEG_COUNT = 1
 
 # Doom's three window structures on E1M1 -- the pair looking onto the nukage
@@ -84,4 +84,7 @@ E1M1_CURATED_TARGET_LINEDEFS = (42, 43, 44, 55, 56)
 # materials onto generic ones -- COMPUTE2 and COMPTILE onto COMPTALL among
 # them. E1M1's GEOMETRY is deliberately untouched by aliasing, so every other
 # constant in this file must stay put; only the material count moves.
-E1M1_PREVIEW_PACKED_PAIR_BYTES = 720896
+# 688128 (21 entries) since 2026-09-12: SECRET door faces add no door-pair
+# entry (they sample the wall plane only), and BROWN96 was a door texture in
+# E1M1 solely through the secret door group 1.
+E1M1_PREVIEW_PACKED_PAIR_BYTES = 688128

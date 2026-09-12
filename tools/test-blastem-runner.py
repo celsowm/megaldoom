@@ -40,7 +40,10 @@ def main():
     runner_source = (ROOT / ".externals" / "blastem" / "megaldoom_runner.c").read_text()
     runner_header = (ROOT / ".externals" / "blastem" / "megaldoom_runner.h").read_text()
     blastem_source = (ROOT / ".externals" / "blastem" / "blastem.c").read_text()
-    assert "MEGALDOOM_RUNNER_VERSION 7" in runner_source
+    assert "MEGALDOOM_RUNNER_VERSION 9" in runner_source
+    # A player carried past a 16-unit arrival circle must take the later cell
+    # it stands on rather than turn back through a wall corner (E1M3, wp 452).
+    assert "WAYPOINT_CATCH_UP_RADIUS" in runner_source
     # The follower decides on the GAMEPLAY clock, not the host frame clock.
     # One callback per VDP frame against a gameplay tick that lands every ten
     # to sixty of them meant every budget in the follower expired about an

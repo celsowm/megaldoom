@@ -97,7 +97,7 @@ new file mode 100644
 index 0000000..0000000
 --- /dev/null
 +++ b/megaldoom_runner.c
-@@ -0,0 +1,933 @@
+@@ -0,0 +1,985 @@
 +#include "megaldoom_runner.h"
 +#include "genesis.h"
 +#include "io.h"
@@ -112,7 +112,7 @@ index 0000000..0000000
 +#define M_PI 3.14159265358979323846
 +#endif
 +
-+#define MEGALDOOM_RUNNER_VERSION 7
++#define MEGALDOOM_RUNNER_VERSION 9
 +#define MD_MASK_UP    0x001
 +#define MD_MASK_DOWN  0x002
 +#define MD_MASK_LEFT  0x004
@@ -130,6 +130,10 @@ index 0000000..0000000
 + * "switch recovery phase faster than the player can act on any of them". The
 + * game publishes its tick counter in byte 13 of the E2E mailbox. */
 +#define WAYPOINT_NO_PROGRESS_LIMIT 30
++/* A later plain MOVE cell this close to the player is taken as reached; see
++ * the catch-up block in waypoint_decide for why this cannot cross a wall. */
++#define WAYPOINT_CATCH_UP_RADIUS 16
++#define WAYPOINT_CATCH_UP_WINDOW 32
 +#define WAYPOINT_RECOVERY_PHASE_TICKS 8
 +/* A FIRE waypoint stands still and shoots, so no_progress_ticks (which counts
 + * ticks the pose has not closed on the target) doubles as "ticks spent firing
@@ -244,7 +248,9 @@ index 0000000..0000000
 + * reach: being near a surface must not make a loose navigation pose usable.
 + * ACTION is MOVE, USE, FIRE, HURT or EXIT. EVENT_MASK is hexadecimal and is
 + * checked against byte 0 of DebugE2EState after USE/FIRE/EXIT; HURT waits for
-+ * its god-hit counter (byte 7).  The format deliberately stores world-space
++ * its god-hit counter (byte 7).  On a MOVE it is never checked: a non-zero mask
++ * only marks a row the catch-up scan in waypoint_decide must not skip (a key
++ * pickup leg).  The format deliberately stores world-space
 + * waypoints, never a frame count, so a render-cost change cannot steer a run.
 + */
 +void megaldoom_waypoints_load(const char *path)
@@ -699,6 +705,38 @@ index 0000000..0000000
 +    }
 +    state.last_distance2 = distance2;
 +    state.progress_valid = 1;
++    /* Catch up when the player is already standing on a later stretch of the
++     * certified path. Gameplay ticks are coarse and the pursuit goal looks
++     * ahead, so the player can pass a 16-unit arrival circle without a single
++     * published pose inside it -- and then the follower turns back for a cell
++     * it has left behind. E1M3 did exactly that: 7 units from waypoint 458,
++     * still steering for 452 94 units back, straight into the wall corner at
++     * (-2384,1584) the path had gone around, for 6000 ticks. A cell within
++     * WAYPOINT_CATCH_UP_RADIUS cannot lie across a wall: certified cells keep
++     * E2E_CLEARANCE_RADIUS (20) from every solid seg and the player's centre
++     * stays PLAYER_RADIUS (16) off it, so any wall between them puts them at
++     * least 36 apart. Only plain MOVE rows are skipped -- the scan stops at a
++     * USE, FIRE, HURT or EXIT, and at a MOVE carrying an event mask (a key
++     * pickup leg), so no press, shot or pickup is ever passed over and no
++     * door the route has not opened yet is walked into. */
++    if (current->action == WAYPOINT_MOVE && !current->event_mask) {
++        uint32_t ahead;
++        for (ahead = state.waypoint_index + 1;
++             ahead < state.waypoint_count &&
++             ahead <= state.waypoint_index + WAYPOINT_CATCH_UP_WINDOW; ahead++) {
++            const waypoint *later = &state.waypoints[ahead];
++            int32_t later_dx, later_dy;
++            if (later->action != WAYPOINT_MOVE || later->event_mask) break;
++            later_dx = (int32_t)later->x - px;
++            later_dy = (int32_t)later->y - py;
++            if ((uint32_t)(later_dx * later_dx + later_dy * later_dy) <=
++                (uint32_t)WAYPOINT_CATCH_UP_RADIUS * WAYPOINT_CATCH_UP_RADIUS) {
++                state.waypoint_index = ahead;
++                waypoint_advance();
++                return 0;
++            }
++        }
++    }
 +    if (current->action == WAYPOINT_MOVE &&
 +        distance2 <= (uint32_t)current->radius * current->radius) {
 +        waypoint_advance();
@@ -709,18 +747,19 @@ index 0000000..0000000
 +        return waypoint_recovery_input(dx, dy,
 +                                       mailbox_u16(state.mailbox_raw, 18));
 +    }
-+    if (current->action == WAYPOINT_USE && distance2 <= (uint32_t)current->radius * current->radius) {
-+        uint32_t turn = waypoint_turn(current, mailbox_s16(state.mailbox_raw, 14),
-+                                      mailbox_s16(state.mailbox_raw, 16),
-+                                      mailbox_u16(state.mailbox_raw, 18), 0);
-+        if (turn) return turn;
-+        /* C stays down until gameplay acknowledges its rising edge. It is one
-+         * logical pulse, regardless of how many emulator frames rendering took. */
-+        if (!state.waypoint_use_pulse) {
-+            state.waypoint_use_pulse = 1; state.waypoint_use_serial = state.mailbox_raw[9];
-+            state.waypoint_use_pulses++;
-+        }
-+        if (state.mailbox_raw[9] == state.waypoint_use_serial) return MD_MASK_C;
++    /* A C pulse gameplay has already consumed is judged before anything else,
++     * at whatever pose and heading the player now has. The press and the pose
++     * are published in the same gameplay tick, after that tick's movement, so
++     * the heading gameplay reports alongside the result is not the one the
++     * press was aligned at: turn momentum can carry it past the dead-band.
++     * Re-checking alignment first then returns a turn mask forever -- and when
++     * the press was the EXIT, gameplay is already in the intermission and will
++     * never apply that turn. E1M4 stalled exactly so, 24 units from its exit
++     * switch with the exit event already set, for its whole frame budget. The
++     * same holds outside the arrival radius: momentum can carry the player
++     * out of it on the acknowledging tick. */
++    if (current->action == WAYPOINT_USE && state.waypoint_use_pulse &&
++        state.mailbox_raw[9] != state.waypoint_use_serial) {
 +        if ((current->expected_action != 0xFF && state.mailbox_raw[10] != current->expected_action) ||
 +            (current->expected_target != 0xFF && state.mailbox_raw[11] != current->expected_target) ||
 +            ((state.mailbox_raw[0] & current->event_mask) != current->event_mask)) {
@@ -733,6 +772,19 @@ index 0000000..0000000
 +        }
 +        waypoint_advance();
 +        return 0;
++    }
++    if (current->action == WAYPOINT_USE && distance2 <= (uint32_t)current->radius * current->radius) {
++        uint32_t turn = waypoint_turn(current, mailbox_s16(state.mailbox_raw, 14),
++                                      mailbox_s16(state.mailbox_raw, 16),
++                                      mailbox_u16(state.mailbox_raw, 18), 0);
++        if (turn) return turn;
++        /* C stays down until gameplay acknowledges its rising edge. It is one
++         * logical pulse, regardless of how many emulator frames rendering took. */
++        if (!state.waypoint_use_pulse) {
++            state.waypoint_use_pulse = 1; state.waypoint_use_serial = state.mailbox_raw[9];
++            state.waypoint_use_pulses++;
++        }
++        return MD_MASK_C;
 +    }
 +    if (current->action == WAYPOINT_FIRE && distance2 <= (uint32_t)current->radius * current->radius) {
 +        /* The mailbox bit is cumulative.  A real hit may have happened while

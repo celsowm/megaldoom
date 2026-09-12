@@ -698,6 +698,105 @@ def certify_flat_progression(vertices, segs, things, start_x, start_y,
     raise ValueError(detail)
 
 
+def camouflage_plain_doors(out_segs, vertices, texture_usage):
+    """Give a flush SECRET-door face the material of the wall it sits in.
+
+    Doom's SECRET flag only hides a door on the automap. The WAD often still
+    gives the door its own material, and that seam is how a player spots it:
+    E1M1's group 1 is BROWN96 set into a BROWNGRN wall. SEG_FLAG_PLAIN_DOOR
+    already drops the framed door plane; this also drops the material tell, at
+    the user's request (2026-09-12).
+
+    For each face, walk the walls that continue its line end to end (same
+    line, same facing, touching, within CAMOUFLAGE_REACH of either end):
+    - no such wall: the face is not flush with anything; leave it;
+    - the door's own WAD material is already on that line: its author already
+      camouflaged it, and the narrow strips next to it are deliberate framing
+      (E1M2's COMPTALL door between SUPPORT2 strips); leave it;
+    - otherwise take the material covering the most length, ignoring strips
+      narrower than CAMOUFLAGE_MIN_WALL unless nothing else is there, with the
+      vertical offset and a continued horizontal phase from the nearest wall
+      carrying it, so the pattern runs across the seam. Lengths and phase use
+      bsp_seg_wall_len's |dx|+|dy|, the measure the renderer runs u over.
+    Faces inside the door's own sector have no such line and keep the WAD
+    material -- that is what the player sees from inside the secret passage.
+    Returns the number of faces changed."""
+    CAMOUFLAGE_REACH = 64
+    CAMOUFLAGE_MIN_WALL = 32
+    walls = [seg for seg in out_segs if seg["type"] == SEG_WALL]
+    changed = 0
+    for seg in out_segs:
+        if seg["type"] != SEG_DOOR or not seg["flags"] & SEG_FLAG_PLAIN_DOOR:
+            continue
+        ax, ay = vertices[seg["v1"]]
+        bx, by = vertices[seg["v2"]]
+        dx, dy = bx - ax, by - ay
+        sx = (dx > 0) - (dx < 0)
+        sy = (dy > 0) - (dy < 0)
+        length = abs(dx) + abs(dy)
+
+        def along(point):
+            return (point[0] - ax) * sx + (point[1] - ay) * sy
+
+        line = {}
+        for wall in walls:
+            if (wall["nx"], wall["ny"]) != (seg["nx"], seg["ny"]):
+                continue
+            wa = vertices[wall["v1"]]
+            wb = vertices[wall["v2"]]
+            if ((wa[0] - ax) * dy != (wa[1] - ay) * dx or
+                    (wb[0] - ax) * dy != (wb[1] - ay) * dx):
+                continue
+            low, high = along(wa), along(wb)
+            if low < high:
+                line.setdefault(low, []).append((high, wall))
+        by_high = {}
+        for low, entries in line.items():
+            for high, wall in entries:
+                by_high.setdefault(high, []).append((low, wall))
+
+        chain = []
+        cursor = 0
+        while cursor > -CAMOUFLAGE_REACH and cursor in by_high:
+            low, wall = min(by_high[cursor], key=lambda item: item[0])
+            chain.append((low, cursor, wall))
+            cursor = low
+        cursor = length
+        while cursor < length + CAMOUFLAGE_REACH and cursor in line:
+            high, wall = max(line[cursor], key=lambda item: item[0])
+            chain.append((cursor, high, wall))
+            cursor = high
+        if not chain:
+            continue
+        if any(wall["texture_name"] == seg["texture_name"] for _, _, wall in chain):
+            continue
+        wide = [item for item in chain
+                if item[1] - item[0] >= CAMOUFLAGE_MIN_WALL] or chain
+        coverage = {}
+        for low, high, wall in wide:
+            coverage[wall["texture_name"]] = coverage.get(wall["texture_name"], 0) + high - low
+        name = min(coverage, key=lambda texture: (-coverage[texture], texture))
+        # Nearest wall first; between the two flush neighbours, the longer. The
+        # WAD's own offsets need not agree across a door (E1M1's two BROWNGRN
+        # walls do not), so only one seam can be continuous -- keep the one on
+        # the larger surface.
+        low, high, wall = min(
+            (item for item in wide if item[2]["texture_name"] == name),
+            key=lambda item: (max(item[0] - length, -item[1], 0),
+                              -(item[1] - item[0])))
+        texture_usage[seg["texture_name"]] -= 1
+        if texture_usage[seg["texture_name"]] <= 0:
+            # A zero count would still put the texture in the shared atlas.
+            del texture_usage[seg["texture_name"]]
+        texture_usage[name] += 1
+        seg["texture_name"] = name
+        # u is wall["tex_u_offset"] at `low` and grows by one per unit along the
+        # line, so at this face's own start (along 0) it is offset - low.
+        seg["tex_u_offset"] = wall["tex_u_offset"] - low
+        seg["tex_v_offset"] = wall["tex_v_offset"]
+        changed += 1
+    return changed
+
 def load_map(wad, mapn, apply_recipes=True, apply_windows=True,
              apply_sky_walls=True, apply_plain_doors=True,
              apply_automap=True):
@@ -1244,6 +1343,9 @@ def load_map(wad, mapn, apply_recipes=True, apply_windows=True,
                 texture_usage[FALLBACK_TEXTURE] -= 1
                 texture_usage[replacement] += 1
                 seg["texture_name"] = replacement
+
+    if apply_plain_doors:
+        camouflage_plain_doors(out_segs, vertices, texture_usage)
 
     required_key_mask = KEY_NONE
     for key_mask in group_required_key:

@@ -82,6 +82,12 @@ typedef struct {
 #ifndef DEBUG_START_E1M1_EXIT
 #define DEBUG_START_E1M1_EXIT 0
 #endif
+// Test-only spawn pose for headless screenshots: set DEBUG_START_POSE=1 with
+// DEBUG_START_POSE_X/_Y (map units) and DEBUG_START_POSE_ANGLE (256ths), plus
+// DEBUG_START_LEVEL for a map other than E1M1. Compiled out of release ROMs.
+#ifndef DEBUG_START_POSE
+#define DEBUG_START_POSE 0
+#endif
 
 // One row per campaign level, indexed by phase_index. The length is
 // MEGALDOOM_MAP_COUNT, which tools/wad-map-extract.py emits from the map list
@@ -366,6 +372,11 @@ static void enter_level(u16 phase_index, DoomSkill skill, bool pistol_start,
         debug_place_e1m1_exit();
     }
 #endif
+#if DEBUG_START_POSE
+    g_player.x = DEBUG_START_POSE_X;
+    g_player.y = DEBUG_START_POSE_Y;
+    g_player.angle = DEBUG_START_POSE_ANGLE;
+#endif
     /* Publish the genuine spawn pose before the first host-controlled frame;
      * otherwise a pose-driven runner would steer from the mailbox's zero
      * placeholder while the first gameplay iteration is still initializing. */
@@ -452,7 +463,7 @@ int main(bool hard) {
         u32 prev_vtimer;
         DoomSkill skill;
 
-#if DEBUG_START_E1M1_EXIT || DEBUG_E2E_ACTIVE
+#if DEBUG_START_E1M1_EXIT || DEBUG_E2E_ACTIVE || DEBUG_START_POSE
         // The exit route exercises gameplay only; bypass the time-varying
         // frontend so its single C pulse always lands after the V-Int input
         // latch is armed.  Release builds retain the normal frontend path.

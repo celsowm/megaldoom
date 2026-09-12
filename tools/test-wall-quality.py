@@ -393,7 +393,11 @@ def main():
     # COMPSPAN, LITE2, NUKE24, PLAT1, STEP2, SW1METAL, SW2BROWN) have no
     # existing head to fold onto. That is +384 KB of cartridge, and it is the
     # number to look at first when the next map does not fit.
-    assert packed_pair_bytes == 2228224
+    # 1966080 since 2026-09-12: SECRET door faces no longer enter the door-pair
+    # table (they only ever sample the wall plane), dropping 25 door textures to
+    # 17 -- BROWN96, BROWNHUG, COMPSPAN, COMPTALL, SLADWALL, STARG3, STARTAN1 and
+    # SUPPORT2 were door textures only through secret doors. -256 KB.
+    assert packed_pair_bytes == 1966080
 
     curated_metrics = [wall_bake_preview.texture_metrics(name)
                        for name in extractor.TECH_WALL_MATERIALS]

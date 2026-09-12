@@ -509,8 +509,11 @@ def build_preview(wad_path=DEFAULT_WAD, output_dir=DEFAULT_OUTPUT):
         (profile,), PALETTE, use_wall_bake_recipe=False)
     candidate_textures, candidate_scales = flat_map_preview.build_texture_bank(
         (profile,), PALETTE, use_wall_bake_recipe=True)
+    # Same rule as wad-map-extract.py: a SECRET door samples the wall plane
+    # only, so it adds no door-pair entry.
     door_texture_count = len({seg["texture_name"] for seg in map_data.out_segs
-                              if seg["type"] == doom_map.SEG_DOOR})
+                              if seg["type"] == doom_map.SEG_DOOR and
+                              not seg["flags"] & doom_map.SEG_FLAG_PLAIN_DOOR})
     # One packed byte per PAIR column per row -- it carries two displayed
     # texels, so this total is unchanged by the sub-texel bake.
     pair_columns = world_assets.WALL_TEX_WIDTH

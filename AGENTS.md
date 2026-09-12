@@ -236,7 +236,11 @@ SECRET flag may appear on only one linedef face, so `tools/doom_map.py` promotes
 it to `BSP_SEG_FLAG_PLAIN_DOOR` across the whole physical door group. Keep the
 ordinary `BSP_SEG_DOOR` type, lift state, collision, LOS and interaction; only
 the packed-pair selection changes from the framed door plane to the normal wall
-plane, both closed and moving. The moving overlay carries this variant in its
+plane, both closed and moving. Since 2026-09-12 a face flush with a wall of a
+different material also borrows that wall's texture and continued phase
+(`camouflage_plain_doors`; a door whose WAD material already appears on its
+line is left as authored), and SECRET faces are excluded from the 32 KB
+per-texture door-pair table, which they never sample. The moving overlay carries this variant in its
 otherwise-unused `band_top` byte so `RayDoorOverlay` stays 10 bytes (LOG,
 2026-09-04).
 
@@ -254,6 +258,36 @@ in `bsp_map.c`, `interaction_visible` in `doom_map.py`'s certificate, and
 `use_surface_visible` in `generate-e2e-routes.py`. A test pose, route or
 certificate that works by pressing through a wall is encoding a bug; three did
 (LOG, 2026-09-11).
+
+**A release-mode debug overlay must be verified through the real title ->
+OPTIONS -> gameplay path, not just a `DEBUG_*_BOOT`/`DEBUG_E2E_START_LEVEL`
+bypass.** `debug_light`'s text was correctly computed and correctly written to
+VRAM, but PAL0 index 15 (the SGDK stock font's ink colour) is only ever set to
+white `#if DEBUG_PERF` -- released builds inherit whatever black the last
+frontend PNG left there. A bypass build skips every frontend image and never
+hits this; a capture build that happens to also carry `-DebugPerf` gets the
+fix as a side effect. Script the real path instead with BlastEm's
+`--md-route` (raw per-frame button masks, not the waypoint follower, which
+needs an active player) and confirm with `--md-mailbox` against
+`tools/resolve-symbol.py`-resolved addresses -- work RAM only, never VRAM
+(LOG, 2026-09-11).
+
+**`test-e2e-routes.py` passing does not mean `test-level-e2e.ps1` will.** The
+first only re-runs the Python generator against itself; the second replays
+the generated route against the real ROM in BlastEm. When the offline use
+model and the ROM "agree on every input" and still pick different surfaces,
+look for *state* the model assumes rather than inputs it reads: E1M2's
+`expected=1:2 got=3:7` survived a bit-exact check of trig, ROM seg geometry
+and distance math because the model treated every door as open for the use
+sight ray, and `bsp_seg_is_open` does not (LOG, 2026-09-12). The fastest
+proof was a straight port of `bsp_use_in_front` + `segment_hits_wall` run
+against `generated_<map>_map.c` with the door state as a parameter.
+`use_target` now takes the door state and the key state at the press;
+`verify_use_replay` replays the emitted presses against the exact door state
+and fails generation offline if any press would resolve elsewhere. Two
+mitigations tried before the cause was found -- a "no other usable surface
+within reach" guard and a distance margin -- treated the symptom and are not
+needed.
 
 ## Dead ends — do not redo without new evidence
 

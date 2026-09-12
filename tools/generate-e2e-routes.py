@@ -33,6 +33,7 @@ EVENT_INTERACTION = 0x08
 EVENT_LOCKED = 0x20
 EVENT_UNLOCKED = 0x40
 EVENT_COMBAT_HIT = 0x04
+EVENT_KEY = 0x10
 EVENT_EXIT = 0x80
 USE_RADIUS = 256
 USE_ARRIVAL_RADIUS = 48
@@ -189,8 +190,32 @@ def _cross(ox, oy, px, py, qx, qy):
     return (px - ox) * (qy - oy) - (py - oy) * (qx - ox)
 
 
+def runtime_closest_point(vertices, seg, px, py):
+    """bsp_map.c seg_closest_point, including bsp_ratio_q8's floored Q8
+    projection -- not the exact rational one closest_point computes. The
+    runtime's use selection and its sight-ray endpoint both go through this."""
+    ax, ay = vertices[seg["v1"]]
+    bx, by = vertices[seg["v2"]]
+    abx, aby = bx - ax, by - ay
+    ab2 = abx * abx + aby * aby
+    if ab2 <= 0:
+        return ax, ay
+    dot = (px - ax) * abx + (py - ay) * aby
+    if dot <= 0:
+        return ax, ay
+    if dot >= ab2:
+        return bx, by
+    tq = (dot * 256) // ab2
+    return ax + ((abx * tq) >> 8), ay + ((aby * tq) >> 8)
+
+
+def runtime_dist2(vertices, seg, px, py):
+    cx, cy = runtime_closest_point(vertices, seg, px, py)
+    return (px - cx) ** 2 + (py - cy) ** 2
+
+
 SIGHT_CELL = 128
-# One map per generator process; (map_data, cell -> wall lines, sight memo).
+# One map per generator process; (map_data, cell -> blocking lines, sight memo).
 _sight_index = None
 
 
@@ -199,11 +224,15 @@ def _sight_state(map_data):
     if _sight_index is None or _sight_index[0] is not map_data:
         grid = {}
         for other in map_data.out_segs:
-            if other["type"] in (SEG_DOOR, SEG_TRIGGER):
+            # bsp_seg_is_open: a trigger never blocks, a door only while its
+            # group is fully open.  Doors stay in the index, tagged with their
+            # group, so each query can apply the door state at that press.
+            if other["type"] == SEG_TRIGGER:
                 continue
             x0, y0 = map_data.vertices[other["v1"]]
             x1, y1 = map_data.vertices[other["v2"]]
-            line = (x0, y0, x1, y1)
+            group = other["door_group"] if other["type"] == SEG_DOOR else None
+            line = (x0, y0, x1, y1, group)
             for cx in range(min(x0, x1) // SIGHT_CELL, max(x0, x1) // SIGHT_CELL + 1):
                 for cy in range(min(y0, y1) // SIGHT_CELL, max(y0, y1) // SIGHT_CELL + 1):
                     grid.setdefault((cx, cy), []).append(line)
@@ -211,13 +240,15 @@ def _sight_state(map_data):
     return _sight_index[1], _sight_index[2]
 
 
-def _sight_clear(map_data, x, y, ex, ey):
+def _sight_blockers(map_data, x, y, ex, ey):
+    """(crosses a solid wall, door groups crossed) for the ray x,y -> ex,ey."""
     grid, memo = _sight_state(map_data)
     key = (x, y, ex, ey)
     cached = memo.get(key)
     if cached is not None:
         return cached
-    clear = True
+    solid = False
+    doors = set()
     seen = set()
     for cx in range(min(x, ex) // SIGHT_CELL, max(x, ex) // SIGHT_CELL + 1):
         for cy in range(min(y, ey) // SIGHT_CELL, max(y, ey) // SIGHT_CELL + 1):
@@ -225,43 +256,65 @@ def _sight_clear(map_data, x, y, ex, ey):
                 if line in seen:
                     continue
                 seen.add(line)
-                bx0, by0, bx1, by1 = line
+                bx0, by0, bx1, by1, group = line
                 if (_cross(x, y, ex, ey, bx0, by0) * _cross(x, y, ex, ey, bx1, by1) < 0 and
                         _cross(bx0, by0, bx1, by1, x, y) * _cross(bx0, by0, bx1, by1, ex, ey) < 0):
-                    clear = False
-                    break
-            if not clear:
+                    if group is None:
+                        solid = True
+                        break
+                    doors.add(group)
+            if solid:
                 break
-        if not clear:
+        if solid:
             break
-    memo[key] = clear
-    return clear
+    memo[key] = (solid, frozenset(doors))
+    return memo[key]
 
 
-def use_surface_visible(map_data, seg, x, y, probe_x, probe_y):
-    """bsp_map.c use_surface_visible: front side, and no solid wall between the
-    player and the probed point. Doors are modelled open here: the route
-    presses them open before it looks through them, and a shut door is the
-    runtime's call, not the certificate's."""
+def use_surface_visible(map_data, seg, x, y, probe_x, probe_y, open_groups=frozenset()):
+    """bsp_map.c use_surface_visible: front side, and nothing between the
+    player and the probed point that bsp_seg_is_open would call shut.
+
+    A shut door blocks this ray exactly like a wall.  This used to model every
+    door as open ("the route presses them open before it looks through them"),
+    and that is not what the runtime does: E1M2's door group 2 is pressed from
+    (-832,-400), where its one DIRECT_USE face (-960,-272)-(-832,-272) is only
+    reachable through the same door's other face 16 units nearer.  Offline the
+    press resolved to group 2 at 41 units; in the ROM that nearer face is shut,
+    group 2 is not visible, and the runtime picked the red door (group 7) 221
+    units away -- the live "expected=1:2 got=3:7" nobody could reproduce while
+    the model and the ROM agreed on every other input.  open_groups is the set
+    of door groups the route has opened by the time of this press."""
     ax, ay = map_data.vertices[seg["v1"]]
     if (x - ax) * seg["nx"] + (y - ay) * seg["ny"] <= 0:
         return False
-    cx, cy = closest_point(map_data.vertices, seg, probe_x, probe_y)
+    cx, cy = runtime_closest_point(map_data.vertices, seg, probe_x, probe_y)
     normal_max = max(abs(seg["nx"]), abs(seg["ny"]))
     if normal_max:
         # C integer division truncates toward zero.
         cx += int(seg["nx"] * USE_SIGHT_STANDOFF / normal_max)
         cy += int(seg["ny"] * USE_SIGHT_STANDOFF / normal_max)
-    return _sight_clear(map_data, x, y, cx, cy)
+    solid, doors = _sight_blockers(map_data, x, y, cx, cy)
+    return not solid and doors <= open_groups
 
 
-def use_target(map_data, x, y, aim_x, aim_y, spread=0):
+def use_target(map_data, x, y, aim_x, aim_y, owned_keys=0, spread=0,
+               open_groups=frozenset()):
     """Offline counterpart of bsp_use_in_front's probes and tie-break.
 
     The runtime's deliberate 1.1839 trig gain is 303/256 at this resolution.
     This model checks all +/-3 heading steps accepted by the runner, so an
     emitted waypoint cannot be merely close to a useful surface: it must
     select the declared target at the runner's exact aligned heading.
+
+    owned_keys must be the keys the player actually holds by this point in
+    the route, not just whether the target ever needs one: bsp_use_in_front
+    reports LOCKED only while the key is still missing and UNLOCKED once it
+    is held, and a door crossed twice -- once before its key, once after --
+    is a genuine live route (E1M2's red door, 2026-09-12: the certified path
+    presses door group 7 again after already holding its key, and the old
+    static "requires a key -> LOCKED" guess reported LOCKED both times,
+    mismatching the runtime's own UNLOCKED on the second press).
     """
     declared = []
     base = use_angle(x, y, aim_x, aim_y)
@@ -287,19 +340,25 @@ def use_target(map_data, x, y, aim_x, aim_y, spread=0):
                         (seg["type"] == SEG_DOOR and
                          seg.get("flags", 0) & SEG_FLAG_DIRECT_USE)):
                     continue
-                a = map_data.vertices[seg["v1"]]
-                b = map_data.vertices[seg["v2"]]
-                distance2 = point_segment_dist2(*a, *b, px, py)
+                distance2 = runtime_dist2(map_data.vertices, seg, px, py)
                 if distance2 >= USE_RADIUS ** 2:
                     continue
                 candidate = (distance2, dist, index, seg)
                 if ((best is None or candidate[:2] < best[:2]) and
-                        use_surface_visible(map_data, seg, x, y, px, py)):
+                        use_surface_visible(map_data, seg, x, y, px, py,
+                                            open_groups)):
                     best = candidate
         if best is None:
             raise AssertionError("no runtime use target at %d,%d angle %d" % (x, y, angle))
         _, _, index, seg = best
-        action = 4 if seg["type"] == SEG_EXIT else (2 if seg["required_key"] else 1)
+        if seg["type"] == SEG_EXIT:
+            action = 4
+        elif not seg["required_key"]:
+            action = 1
+        elif (owned_keys & seg["required_key"]) != seg["required_key"]:
+            action = 2
+        else:
+            action = 3
         target = 0 if seg["type"] == SEG_EXIT else seg["door_group"]
         declared.append((action, target))
     if len(set(declared)) != 1:
@@ -307,9 +366,86 @@ def use_target(map_data, x, y, aim_x, aim_y, spread=0):
     return declared[0]
 
 
-def stable_use_pose(map_data, nodes, index, seg):
+def door_groups_at(map_data, x, y, from_x=None, from_y=None):
+    """Bitmask of the door groups a certified node touches."""
+    groups = 0
+    for seg in map_data.out_segs:
+        if seg["type"] != SEG_DOOR:
+            continue
+        v1 = map_data.vertices[seg["v1"]]
+        v2 = map_data.vertices[seg["v2"]]
+        hit = point_segment_dist2(*v1, *v2, x, y) < E2E_CLEARANCE_RADIUS ** 2
+        # The point check alone misses a node that lands past the door's
+        # face outside that radius but only reaches there by crossing it:
+        # E1M3 put an unlock press's MOVE at (-1184,2352), 24 units south
+        # of group 14's face at y=2376-2392, and nothing flagged it, so
+        # the door stayed shut in front of a follower that could never
+        # walk through it to press from the far side the route named.
+        if not hit and from_x is not None and \
+                segments_intersect((from_x, from_y), (x, y), v1, v2):
+            hit = True
+        if hit:
+            groups |= 1 << seg["door_group"]
+    return groups
+
+
+_open_groups_memo = None
+
+
+def open_groups_by_index(map_data, nodes):
+    """Door groups already open when the route stands at each node.
+
+    route_lines presses every door group before the path first touches it and
+    presses each group once (toggle_door would shut it again), so a group the
+    path touched at any earlier node is open from there on.  A group pressed
+    ahead of its first touch is still counted shut in that gap; the replay in
+    verify_use_replay checks every press against the exact door state."""
+    global _open_groups_memo
+    if (_open_groups_memo is None or _open_groups_memo[0] is not map_data or
+            _open_groups_memo[1] is not nodes):
+        result = []
+        touched = 0
+        previous = None
+        for node in nodes:
+            result.append(frozenset(group for group in range(touched.bit_length())
+                                    if touched >> group & 1))
+            touched |= door_groups_at(map_data, node["x"], node["y"],
+                                      previous["x"] if previous else None,
+                                      previous["y"] if previous else None)
+            previous = node
+        _open_groups_memo = (map_data, nodes, result)
+    return _open_groups_memo[2]
+
+
+def use_target_across_doors(map_data, x, y, aim_x, aim_y, owned_keys=0, spread=0,
+                            door_states=(frozenset(),)):
+    """use_target, required to agree under every door state in door_states."""
+    results = {use_target(map_data, x, y, aim_x, aim_y, owned_keys, spread=spread,
+                          open_groups=state)
+               for state in door_states}
+    if len(results) != 1:
+        raise AssertionError("door-state dependent use pose at %d,%d: %r" %
+                             (x, y, sorted(results)))
+    return results.pop()
+
+
+def stable_use_pose(map_data, nodes, index, seg, before=None, first_only=False):
     """Pick a certified path cell whose whole runner aim tolerance hits seg."""
     expected_target = 0 if seg["type"] == SEG_EXIT else seg["door_group"]
+    # The group being pressed is shut until this very press opens it.
+    pressed_group = frozenset() if seg["type"] == SEG_EXIT else frozenset({seg["door_group"]})
+    # Which other doors are open at the press is only settled once every pose
+    # is chosen and the presses are ordered, so a pose has to hold both ways:
+    # with only the doors the path has already walked through open, and with
+    # every other door open too.  E1M4 is why the estimate alone is not
+    # enough: its group 7 press stands right after the group 2 press, before
+    # the path touches door 2, and with that door really open one heading in
+    # the aim spread resolved to group 2's far face.  verify_use_replay then
+    # checks the chosen poses against the exact state.
+    every_group = frozenset(other["door_group"] for other in map_data.out_segs
+                            if other["type"] == SEG_DOOR) - pressed_group
+    door_states_by_index = [(state - pressed_group, every_group)
+                            for state in open_groups_by_index(map_data, nodes)]
     candidates = []
     # The runtime selection is a ray probe, not a nearest-segment query.  The
     # closest point on a door can therefore point at an adjacent door (the
@@ -318,8 +454,25 @@ def stable_use_pose(map_data, nodes, index, seg):
     # certified path node.
     ax, ay = map_data.vertices[seg["v1"]]
     bx, by = map_data.vertices[seg["v2"]]
+    # Keys accumulate monotonically along the certified path; a node that IS a
+    # key pickup already holds it (the player collects on arrival, before any
+    # press from that same spot).
+    owned_keys_by_index = []
+    owned = 0
+    for node in nodes:
+        if node["action"] == "key":
+            owned |= node["detail"]
+        owned_keys_by_index.append(owned)
     for node_index, node in enumerate(nodes):
         x, y = node["x"], node["y"]
+        # A press that opens a door has to stand on the near side of it.  The
+        # door-aware model made E1M2's group 2 resolvable only from its far
+        # face, and the pose landed at (-928,-256) -- past the shut door the
+        # follower then walked into for 6000 ticks.  `before` is the first
+        # node that touches the door, so no candidate reaches it through it.
+        if before is not None and node_index >= before:
+            continue
+        owned_keys = owned_keys_by_index[node_index]
         if point_segment_dist2(*map_data.vertices[seg["v1"]],
                                *map_data.vertices[seg["v2"]], x, y) > USE_RADIUS ** 2:
             continue
@@ -347,7 +500,9 @@ def stable_use_pose(map_data, nodes, index, seg):
             if (aim[0] - x) ** 2 + (aim[1] - y) ** 2 < 32 ** 2:
                 continue
             try:
-                action, target = use_target(map_data, x, y, *aim)
+                action, target = use_target_across_doors(
+                    map_data, x, y, *aim, owned_keys,
+                    door_states=door_states_by_index[node_index])
             except AssertionError:
                 continue
             if target != expected_target:
@@ -382,9 +537,11 @@ def stable_use_pose(map_data, nodes, index, seg):
                     try:
                         # Only the centre carries the heading spread; the edge
                         # samples already vary the angle by moving the origin.
-                        if use_target(map_data, x + ox, y + oy, *aim,
-                                      spread=(USE_AIM_SPREAD if sample_index == 0
-                                              else 0))[1] != expected_target:
+                        if use_target_across_doors(
+                                map_data, x + ox, y + oy, *aim, owned_keys,
+                                spread=(USE_AIM_SPREAD if sample_index == 0 else 0),
+                                door_states=door_states_by_index[node_index]
+                        )[1] != expected_target:
                             good = False
                             break
                     except AssertionError:
@@ -407,6 +564,10 @@ def stable_use_pose(map_data, nodes, index, seg):
                                surface_distance, (node_index - index) ** 2,
                                x, y, aim, action, target, stable_radius,
                                node_index))
+            if first_only:
+                # Existence is all add_door_control_detours asks; ranking every
+                # candidate would double the generator's slowest pass.
+                return x, y, aim, action, target, stable_radius, node_index
     if not candidates:
         raise AssertionError("no stable certified use pose for target %d" % expected_target)
     (_, _, _, _, _, _, x, y, aim, action, target, stable_radius,
@@ -449,7 +610,7 @@ def _compact_grid_path(cells):
     return kept
 
 
-def _lock_detour(map_data, nodes, key_index, faces):
+def _press_detour(map_data, nodes, key_index, faces, expected_action=2):
     """Insert a walk from the pre-key path to a cell that presses `faces` and back.
 
     Movement is a breadth-first search over the certificate's 16-unit grid with
@@ -511,7 +672,9 @@ def _lock_detour(map_data, nodes, key_index, faces):
             if normal_max:
                 cx += int(face["nx"] * USE_SIGHT_STANDOFF / normal_max)
                 cy += int(face["ny"] * USE_SIGHT_STANDOFF / normal_max)
-            if _sight_clear(map_data, x, y, cx, cy):
+            # Every door counts as shut here too: the detour opens nothing.
+            solid, doors = _sight_blockers(map_data, x, y, cx, cy)
+            if not solid and not doors:
                 return True
         return False
 
@@ -545,7 +708,7 @@ def _lock_detour(map_data, nodes, key_index, faces):
                 pose = stable_use_pose(map_data, candidate, goal_index, faces[0])
             except AssertionError:
                 pose = None
-            if (pose is not None and pose[4] == group and pose[3] == 2 and
+            if (pose is not None and pose[4] == group and pose[3] == expected_action and
                     source < pose[6] <= source + len(detour)):
                 return candidate
         for dx, dy in ((NAV_STEP, 0), (-NAV_STEP, 0), (0, NAV_STEP), (0, -NAV_STEP)):
@@ -555,8 +718,8 @@ def _lock_detour(map_data, nodes, key_index, faces):
             parent[step] = cell
             origin[step] = origin[cell]
             queue.append(step)
-    raise AssertionError("%s: no reachable, stable press for locked door group %d "
-                         "before its key" % (map_data.mapn, group))
+    raise AssertionError("%s: no reachable, stable press for door group %d "
+                         "before node %d" % (map_data.mapn, group, key_index))
 
 
 def add_lock_detours(map_data, nodes):
@@ -582,8 +745,122 @@ def add_lock_detours(map_data, nodes):
             continue
         faces = [seg for seg in faces_by_key[required_key]
                  if seg["door_group"] == door["door_group"]]
-        nodes = _lock_detour(map_data, nodes, key_index, faces)
+        nodes = _press_detour(map_data, nodes, key_index, faces)
     return nodes
+
+def key_pickup_legs(map_data, node):
+    """Walk in from a key's certified cell until the pickup cannot be missed.
+
+    The certificate records the first cell its flood fill finds within
+    PICKUP_RADIUS of a key and turns back there, so that cell can sit exactly
+    on the 128-unit edge -- and the follower is only promised to stop within
+    KEY_ARRIVAL_RADIUS of it.  E1M3's blue key at (-160,864) certifies from
+    (-160,736), 128 away with 93 units of open floor around it; live, the
+    follower called itself arrived a few units short, billboard_collect_near
+    never fired, and the blue door answered LOCKED to the unlock press 400
+    waypoints later.  Step straight toward the key through free space (every
+    door counted shut, blocking things kept clear) until even a
+    KEY_ARRIVAL_RADIUS miss stays inside the pickup radius, then come back to
+    the certified cell the rest of the route starts from."""
+    x, y = node["x"], node["y"]
+    keys = [(kx, ky) for kx, ky, thing_type, _, _ in spawnable_things(map_data.out_things)
+            if KEY_THING_MASK.get(thing_type, 0) & node["detail"]]
+    assert keys, "%s: key node at %d,%d has no key thing" % (map_data.mapn, x, y)
+    kx, ky = min(keys, key=lambda key: (key[0] - x) ** 2 + (key[1] - y) ** 2)
+    distance = math.hypot(kx - x, ky - y)
+    target = PICKUP_RADIUS - 2 * KEY_ARRIVAL_RADIUS
+    if distance <= target:
+        return []
+    solid = [seg for seg in map_data.out_segs if seg["type"] != SEG_TRIGGER]
+    blockers = [(bx, by, BLOCKING_THING_RADIUS[thing_type])
+                for bx, by, thing_type, _, _ in spawnable_things(map_data.out_things)
+                if thing_type in BLOCKING_THING_RADIUS]
+
+    def clear(px, py):
+        if any((px - bx) ** 2 + (py - by) ** 2 < (E2E_CLEARANCE_RADIUS + radius) ** 2
+               for bx, by, radius in blockers):
+            return False
+        return all(point_segment_dist2(*map_data.vertices[seg["v1"]],
+                                       *map_data.vertices[seg["v2"]], px, py)
+                   >= E2E_CLEARANCE_RADIUS ** 2 for seg in solid)
+
+    best = None
+    for step in range(4, int(distance) + 1, 4):
+        px = x + round((kx - x) * step / distance)
+        py = y + round((ky - y) * step / distance)
+        if not clear(px, py):
+            break
+        best = (px, py)
+        if math.hypot(kx - px, ky - py) <= target:
+            break
+    assert best is not None and         math.hypot(kx - best[0], ky - best[1]) <= PICKUP_RADIUS - KEY_ARRIVAL_RADIUS, (
+            "%s: no clear approach puts the key at %d,%d safely in pickup range "
+            "from %d,%d" % (map_data.mapn, kx, ky, x, y))
+    return [best, (x, y)]
+
+
+def add_door_control_detours(map_data, nodes):
+    """Walk out to a control for any door the path cannot open from its near side.
+
+    E1M2's door group 2 certifies from (-832,-400), where the witness ray to the
+    door's far face grazes the corner of its shut near face.  That press only
+    resolves at one exact heading -- across the runner's USE dead-band some
+    headings reach the red door instead -- so no stable pose opens the door
+    before the path walks into it.  The group also has a switch at
+    (-592,-1088), 384 units off the path.  Detour to a control that can be
+    pressed stably before the door, the way a locked door's press is reached
+    before its key.  Keyed doors keep their own locked/unlocked pair."""
+    keyed = {seg["door_group"] for seg in map_data.out_segs
+             if seg["type"] == SEG_DOOR and seg["required_key"] != KEY_NONE}
+    controls = {}
+    for seg in map_data.out_segs:
+        if seg["type"] in (SEG_SWITCH, SEG_TRIGGER) or (
+                seg["type"] == SEG_DOOR and seg["flags"] & SEG_FLAG_DIRECT_USE):
+            controls.setdefault(seg["door_group"], []).append(seg)
+    settled = set()
+    while True:
+        first_touch = {}
+        previous = None
+        for index, node in enumerate(nodes):
+            touched = door_groups_at(map_data, node["x"], node["y"],
+                                     previous["x"] if previous else None,
+                                     previous["y"] if previous else None)
+            while touched:
+                group = (touched & -touched).bit_length() - 1
+                touched &= touched - 1
+                first_touch.setdefault(group, index)
+            previous = node
+        missing = None
+        for group, before in sorted(first_touch.items(), key=lambda item: item[1]):
+            if group in keyed or group in settled:
+                continue
+            for control in controls.get(group, ()):
+                try:
+                    stable_use_pose(map_data, nodes, max(0, before - 1), control,
+                                    before=before, first_only=True)
+                except AssertionError:
+                    continue
+                settled.add(group)
+                break
+            if group not in settled:
+                missing = (group, before)
+                break
+        if missing is None:
+            return nodes
+        group, before = missing
+        for control in sorted(controls.get(group, ()),
+                              key=lambda seg: seg["type"] != SEG_SWITCH):
+            try:
+                nodes = _press_detour(map_data, nodes, before, [control],
+                                      expected_action=1)
+            except AssertionError:
+                continue
+            break
+        else:
+            raise AssertionError("%s: door group %d is crossed at node %d and no "
+                                 "control can be pressed stably before it" %
+                                 (map_data.mapn, group, before))
+        settled.add(group)
 
 
 def route_lines(map_data):
@@ -626,7 +903,7 @@ def route_lines(map_data):
         previous_direction = direction
     if compact[-1] is not nodes[-1]:
         compact.append(nodes[-1])
-    nodes = add_lock_detours(map_data, compact)
+    nodes = add_door_control_detours(map_data, add_lock_detours(map_data, compact))
 
     # A locked-door scenario must exercise its physical door on both sides of
     # the key pickup.  Locate concrete certified positions close enough to use
@@ -707,25 +984,7 @@ def route_lines(map_data):
             controls.setdefault(seg["door_group"], []).append(seg)
 
     def groups_at(x, y, from_x=None, from_y=None):
-        groups = 0
-        for seg in map_data.out_segs:
-            if seg["type"] != SEG_DOOR:
-                continue
-            v1 = map_data.vertices[seg["v1"]]
-            v2 = map_data.vertices[seg["v2"]]
-            hit = point_segment_dist2(*v1, *v2, x, y) < E2E_CLEARANCE_RADIUS ** 2
-            # The point check alone misses a node that lands past the door's
-            # face outside that radius but only reaches there by crossing it:
-            # E1M3 put an unlock press's MOVE at (-1184,2352), 24 units south
-            # of group 14's face at y=2376-2392, and nothing flagged it, so
-            # the door stayed shut in front of a follower that could never
-            # walk through it to press from the far side the route named.
-            if not hit and from_x is not None and \
-                    segments_intersect((from_x, from_y), (x, y), v1, v2):
-                hit = True
-            if hit:
-                groups |= 1 << seg["door_group"]
-        return groups
+        return door_groups_at(map_data, x, y, from_x, from_y)
 
     # The keyed pair injected above already presses its own door twice.
     opened = 0
@@ -757,7 +1016,8 @@ def route_lines(map_data):
                     continue
                 for control in controls.get(group, ()):
                     try:
-                        pose = stable_use_pose(map_data, nodes, back, control)
+                        pose = stable_use_pose(map_data, nodes, back, control,
+                                               before=index)
                     except AssertionError:
                         continue
                     if pose[4] != group:
@@ -813,11 +1073,50 @@ def route_lines(map_data):
     combat_target_is_barrel = combat_pick[0] == 0
     combat_index = nodes.index(combat_node)
 
+    # A certificate use node opens its group somewhere before the path walks
+    # through that door, but the witness that proved it only has to see the
+    # surface's closest point -- and that ray may graze a door vertex.  E1M2's
+    # group 2 certifies from (-832,-400) through the corner of the shut face at
+    # y=-288 onto its far face at y=-272; at any real heading the runtime's
+    # aim point moves off that corner and the shut face blocks it, so the only
+    # stable pose for that face was past the door, which the follower cannot
+    # reach.  Press each group from before the path first touches it, trying
+    # the certified face first and then any other control of the same group
+    # (E1M2's group 2 also has a switch).
+    first_touch = {}
+    previous = None
+    for index, node in enumerate(nodes):
+        touched = groups_at(node["x"], node["y"],
+                            previous["x"] if previous else None,
+                            previous["y"] if previous else None)
+        while touched:
+            group = (touched & -touched).bit_length() - 1
+            touched &= touched - 1
+            first_touch.setdefault(group, index)
+        previous = node
+    injected_groups = {door["door_group"] for _, door, _ in injected.values()}
     cert_uses = {}
     for index, node in enumerate(nodes):
         if node["action"] != "use":
             continue
-        pose = stable_use_pose(map_data, nodes, index, node["detail"])
+        certified = node["detail"]
+        group = certified["door_group"]
+        if certified["type"] != SEG_EXIT and group in injected_groups:
+            continue
+        before = None if certified["type"] == SEG_EXIT else first_touch.get(group)
+        pose = None
+        for control in [certified] + [other for other in controls.get(group, ())
+                                      if other is not certified]:
+            try:
+                pose = stable_use_pose(map_data, nodes, index, control, before=before)
+            except AssertionError:
+                continue
+            if pose[4] == group:
+                break
+            pose = None
+        assert pose is not None, (
+            "%s: no control opens door group %d from before node %s" %
+            (map_data.mapn, group, before))
         cert_uses.setdefault(pose[6], []).append(pose)
 
     # bsp_map.c's toggle_door TOGGLES: pressing a group that is already open
@@ -877,6 +1176,13 @@ def route_lines(map_data):
                 move_radius = MOVE_CORNER_RADIUS if corner else MOVE_ARRIVAL_RADIUS
             emit(x, y, x, y, move_radius, "MOVE")
 
+        if node["action"] == "key":
+            for leg_index, (leg_x, leg_y) in enumerate(key_pickup_legs(map_data, node)):
+                # The inward leg carries the key bit so the runner's catch-up
+                # never skips the pickup it exists for; the runner does not
+                # otherwise read a MOVE's event mask.
+                emit(leg_x, leg_y, leg_x, leg_y, KEY_ARRIVAL_RADIUS, "MOVE",
+                     EVENT_KEY if leg_index == 0 else 0)
         for pose in openings.get(index, ()):
             ux, uy, aim, expected_action, expected_target, radius, _ = pose
             if expected_target in pressed:
@@ -889,9 +1195,13 @@ def route_lines(map_data):
             x, y, aim, expected_action, expected_target, radius, _ = stable_use_pose(
                 map_data, nodes, index, door)
             required_action = 2 if event == EVENT_LOCKED else 3
-            assert expected_target == door["door_group"] and expected_action == 2
-            # The static selector sees a locked door; after the key the runtime
-            # changes only the action result, never the target identity.
+            # Same physical door on both sides of the key; only the result
+            # changes, and stable_use_pose now models which one from the keys
+            # held at the pose it picked.
+            assert expected_target == door["door_group"] and expected_action == required_action, (
+                "%s: %s press for door group %d resolves to action %d" %
+                (map_data.mapn, "locked" if event == EVENT_LOCKED else "unlocked",
+                 door["door_group"], expected_action))
             emit(x, y, aim[0], aim[1], radius, action, event,
                  required_action, expected_target)
         if index == combat_index:
@@ -922,7 +1232,67 @@ def route_lines(map_data):
     emit(exit_x, exit_y, exit_aim[0], exit_aim[1], exit_radius,
          "USE", EVENT_EXIT, expected_action, expected_target, 3600)
     emit(exit_x, exit_y, exit_x, exit_y, MOVE_ARRIVAL_RADIUS, "EXIT", EVENT_EXIT, -1, -1, 3600)
-    return "\n".join(clearance_radii(map_data, clamp_arrival_radii(lines))) + "\n"
+    lines = clearance_radii(map_data, clamp_arrival_radii(lines))
+    verify_use_replay(map_data, lines)
+    return "\n".join(lines) + "\n"
+
+
+def verify_use_replay(map_data, lines):
+    """Replay the emitted presses in order against the door state the runtime
+    will actually hold at each one.
+
+    stable_use_pose can only estimate that state (open_groups_by_index), since
+    which press lands first is decided after every pose is chosen.  Here the
+    order is final: bsp_map.c toggle_door flips a group on every TOGGLED or
+    UNLOCKED press and nothing else moves a door, so the state is exact.  Each
+    press must still resolve to its declared target across the arrival disc and
+    aim spread it promises, or the generator fails here rather than in a live
+    replay hundreds of thousands of frames in."""
+    open_groups = frozenset()
+    doors = [seg for seg in map_data.out_segs if seg["type"] == SEG_DOOR]
+    previous = None
+    for line in lines:
+        if line.startswith("#"):
+            continue
+        fields = line.split(" ")
+        # The follower walks to every row's position in order, so no leg may
+        # cross a door face that is still shut at that point in the presses.
+        position = (int(fields[0]), int(fields[1]))
+        if previous is not None and previous != position:
+            for door in doors:
+                if door["door_group"] in open_groups:
+                    continue
+                if segments_intersect(previous, position,
+                                      map_data.vertices[door["v1"]],
+                                      map_data.vertices[door["v2"]]):
+                    raise AssertionError(
+                        "%s: leg %r -> '%s' crosses shut door group %d" %
+                        (map_data.mapn, previous, line, door["door_group"]))
+        previous = position
+        if fields[5] != "USE":
+            continue
+        x, y, aim_x, aim_y, radius = (int(value) for value in fields[:5])
+        expected_action, expected_target = int(fields[7]), int(fields[8])
+        corner = int(radius * 0.7071)
+        samples = ((0, 0), (radius, 0), (-radius, 0), (0, radius), (0, -radius),
+                   (corner, corner), (corner, -corner),
+                   (-corner, corner), (-corner, -corner))
+        for sample_index, (ox, oy) in enumerate(samples):
+            try:
+                _, target = use_target(
+                    map_data, x + ox, y + oy, aim_x, aim_y,
+                    spread=(USE_AIM_SPREAD if sample_index == 0 else 0),
+                    open_groups=open_groups)
+            except AssertionError as error:
+                raise AssertionError("%s: press '%s' with doors %s open: %s" %
+                                     (map_data.mapn, line, sorted(open_groups),
+                                      error)) from error
+            assert target == expected_target, (
+                "%s: press '%s' resolves to target %d at offset %d,%d with "
+                "doors %s open" % (map_data.mapn, line, target, ox, oy,
+                                   sorted(open_groups)))
+        if expected_action in (1, 3):
+            open_groups = open_groups ^ {expected_target}
 
 
 def clearance_radii(map_data, lines):
