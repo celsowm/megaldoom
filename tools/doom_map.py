@@ -47,12 +47,18 @@ SEG_FLAG_PLAIN_DOOR = 0x02
 # recess you can see over but not walk through. Doom's E1M1 windows are exactly
 # that shape, and today they render as blank walls.
 #
-# Reclassifying one does NOT add, move or remove a SEG: the emitted geometry,
-# the blockmap and the navigation certificate are byte-identical, and the
-# runtime still treats a window as solid for collision and line of sight. Only
-# the type byte and the two band bytes below change, so this is not the
-# forbidden "promote a portal band to a flat wall" transform -- nothing that
-# was passable becomes solid, and nothing solid moves.
+# Reclassifying one does not move or remove solid geometry: the union of solid
+# segments on every linedef, the blockmap coverage and the navigation
+# certificate are unchanged, and the runtime still treats a window as solid for
+# collision and line of sight. This is not the forbidden "promote a portal band
+# to a flat wall" transform -- nothing that was passable becomes solid.
+#
+# Since 2026-09-12 a window keeps at most WINDOW_MAX_OPENING units of opening,
+# centred on its linedef; the rest of the line splits off into collinear
+# SEG_WALL pieces. The door/window compositor repaints the whole slab height on
+# every column an opening covers, so its cost scales with on-screen WIDTH (a
+# shorter band saves nothing), and E1M1-E1M3 ship openings up to 296 units wide.
+WINDOW_MAX_OPENING = 64
 
 KEY_NONE = 0
 KEY_BLUE = 1
@@ -803,9 +809,11 @@ def load_map(wad, mapn, apply_recipes=True, apply_windows=True,
     """Flatten one Doom map.
 
     apply_windows=False is the negative control for the window
-    reclassification: it must produce the SAME segs in the same order with the
-    same geometry, differing only in the type byte. tools/test-sector-map.py
-    relies on that to prove windows never move geometry.
+    reclassification: every linedef must cover exactly the same solid
+    interval either way; a window only differs by its type byte, its band
+    bytes and the collinear wall pieces that cap its opening at
+    WINDOW_MAX_OPENING. tools/test-sector-map.py relies on that to prove
+    windows never move geometry.
 
     apply_sky_walls=False is the same negative control for the sky-wall
     reclassification below: a one-sided line is already forced solid by
@@ -872,39 +880,6 @@ def load_map(wad, mapn, apply_recipes=True, apply_windows=True,
             "<HHHHHHH", lines_raw, i * 14)
         linedefs.append(dict(v1=v1, v2=v2, flags=flags, special=special,
                              tag=tag, right=right, left=left))
-
-    # Keep one visual record per original WAD linedef.  The flat BSP may split
-    # one linedef into several SEGs, but the automap must never show those
-    # implementation seams.  Priority follows Doom's automap semantics: a
-    # special remains visually distinct even when it is also a solid door.
-    automap_lines = []
-    linedef_automap_indices = [0xFFFF] * len(linedefs)
-    for line_id, ld in enumerate(linedefs) if apply_automap else ():
-        if ld["flags"] & LINE_FLAG_DONTDRAW:
-            continue
-        front_sector = sidedefs[ld["right"]]["sector"] if ld["right"] != 0xFFFF else 0xFF
-        back_sector = sidedefs[ld["left"]]["sector"] if ld["left"] != 0xFFFF else 0xFF
-        kind = None
-        if front_sector == 0xFF or back_sector == 0xFF or \
-                (ld["flags"] & LINE_FLAG_SECRET):
-            kind = AUTOMAP_LINE_SOLID
-        elif ld["special"] != 0:
-            kind = AUTOMAP_LINE_SPECIAL
-        else:
-            front = sectors[front_sector]
-            back = sectors[back_sector]
-            if front["floor"] != back["floor"]:
-                kind = AUTOMAP_LINE_FLOOR
-            elif front["ceiling"] != back["ceiling"]:
-                kind = AUTOMAP_LINE_CEILING
-        if kind is None:
-            continue
-        linedef_automap_indices[line_id] = len(automap_lines)
-        automap_lines.append(dict(
-            v1=ld["v1"], v2=ld["v2"],
-            front_sector=front_sector, back_sector=back_sector,
-            kind=kind, flags=0,
-        ))
 
     material_transfers = resolve_flat_material_transfers(
         mapn, vertices, linedefs, sidedefs, sectors) if apply_recipes else {}
@@ -1256,6 +1231,69 @@ def load_map(wad, mapn, apply_recipes=True, apply_windows=True,
     out_ssectors = []   # (first_seg, count)
     out_ssector_sectors = []
     texture_usage = Counter()
+    vertex_index = {}
+    for index, xy in enumerate(vertices):
+        vertex_index.setdefault(xy, index)
+
+    def lattice_vertex(x, y):
+        index = vertex_index.get((x, y))
+        if index is None:
+            index = len(vertices)
+            vertices.append((x, y))
+            vertex_index[(x, y)] = index
+        return index
+
+    def narrow_window(seg, window_seg):
+        """Split a window seg so its line keeps one centred opening.
+
+        The opening is [cut_a, cut_b] along the linedef, at most
+        WINDOW_MAX_OPENING wide and symmetric, so it is the same interval from
+        either side. Both cuts sit on integer lattice points of the line, which
+        keeps the pieces exactly collinear with no crack at the joins. Pieces
+        outside the opening become plain walls with a continued texture phase.
+        """
+        ld = linedefs[seg["ld"]]
+        origin, other = ((ld["v1"], ld["v2"]) if seg["direction"] == 0
+                         else (ld["v2"], ld["v1"]))
+        ox, oy = vertices[origin]
+        dx, dy = vertices[other][0] - ox, vertices[other][1] - oy
+        length2 = dx * dx + dy * dy
+        steps = math.gcd(abs(dx), abs(dy))
+        if steps == 0 or length2 <= WINDOW_MAX_OPENING * WINDOW_MAX_OPENING:
+            return [window_seg]
+        k = 0
+        while (2 * k < steps and
+               (steps - 2 * k) ** 2 * length2 >
+               (WINDOW_MAX_OPENING * steps) ** 2):
+            k += 1
+        if steps - 2 * k < 1:
+            return [window_seg]
+        length = math.sqrt(length2)
+        sx, sy = dx // steps, dy // steps
+        cut_a = k * length / steps
+        cut_b = (steps - k) * length / steps
+
+        def along(vertex):
+            x, y = vertices[vertex]
+            return ((x - ox) * dx + (y - oy) * dy) / length
+
+        s0, s1 = along(seg["v1"]), along(seg["v2"])
+        assert s0 < s1, (seg, s0, s1)
+        points = [(s0, seg["v1"])]
+        for cut, steps_from_origin in ((cut_a, k), (cut_b, steps - k)):
+            if s0 + 1e-6 < cut < s1 - 1e-6:
+                points.append((cut, lattice_vertex(ox + steps_from_origin * sx,
+                                                   oy + steps_from_origin * sy)))
+        points.append((s1, seg["v2"]))
+        pieces = []
+        for (start, v1), (end, v2) in zip(points, points[1:]):
+            piece = dict(window_seg, v1=v1, v2=v2,
+                         tex_u_offset=window_seg["tex_u_offset"] + round(start - s0))
+            if not cut_a - 1e-6 <= (start + end) / 2 <= cut_b + 1e-6:
+                piece.update(type=SEG_WALL, door_group=DOOR_GROUP_NONE,
+                             required_key=KEY_NONE)
+            pieces.append(piece)
+        return pieces
 
     for (count, first) in ssectors:
         source_seg = segs[first] if count else None
@@ -1282,13 +1320,15 @@ def load_map(wad, mapn, apply_recipes=True, apply_windows=True,
             # geometry, collision, LOS and door grouping are untouched.
             texture_name = resolve_texture_alias(texture_name)
             texture_usage[texture_name] += 1
-            out_segs.append(dict(v1=seg["v1"], v2=seg["v2"],
-                                nx=nx, ny=ny, texture_name=texture_name,
-                                source_linedef=seg["ld"],
-                                curated_material=seg["ld"] in material_transfers,
-                                tex_u_offset=tex_u_offset, tex_v_offset=tex_v_offset,
-                                type=stype, door_group=door_group,
-                                required_key=required_key, flags=flags))
+            out_seg = dict(v1=seg["v1"], v2=seg["v2"],
+                           nx=nx, ny=ny, texture_name=texture_name,
+                           source_linedef=seg["ld"],
+                           curated_material=seg["ld"] in material_transfers,
+                           tex_u_offset=tex_u_offset, tex_v_offset=tex_v_offset,
+                           type=stype, door_group=door_group,
+                           required_key=required_key, flags=flags)
+            out_segs.extend(narrow_window(seg, out_seg) if stype == SEG_WINDOW
+                            else (out_seg,))
         out_ssectors.append((start, len(out_segs) - start))
 
     if len(out_segs) > 2048:
@@ -1346,6 +1386,35 @@ def load_map(wad, mapn, apply_recipes=True, apply_windows=True,
 
     if apply_plain_doors:
         camouflage_plain_doors(out_segs, vertices, texture_usage)
+
+    # One automap record per original WAD linedef, drawn from what the FLAT map
+    # actually contains -- not from the WAD's floor and ceiling heights. A line
+    # the flattener turned into an open gap (stairs, lifts, ledges) emitted no
+    # seg and has no record; every line that still stands does, even an
+    # impassable same-height one Doom's automap would skip. The flat BSP may
+    # split a linedef into several segs, but the automap shows the whole line.
+    automap_lines = []
+    linedef_automap_indices = [0xFFFF] * len(linedefs)
+    seg_types_by_line = {}
+    for seg in out_segs:
+        seg_types_by_line.setdefault(seg["source_linedef"], set()).add(seg["type"])
+    for line_id, ld in enumerate(linedefs) if apply_automap else ():
+        seg_types = seg_types_by_line.get(line_id)
+        if not seg_types or ld["flags"] & LINE_FLAG_DONTDRAW:
+            continue
+        interactive = seg_types & {SEG_DOOR, SEG_SWITCH, SEG_TRIGGER, SEG_EXIT}
+        # SECRET keeps Doom's meaning: the line reads as wall, matching the
+        # camouflaged material camouflage_plain_doors gives it in 3D.
+        kind = (AUTOMAP_LINE_SPECIAL
+                if interactive and not ld["flags"] & LINE_FLAG_SECRET
+                else AUTOMAP_LINE_SOLID)
+        linedef_automap_indices[line_id] = len(automap_lines)
+        automap_lines.append(dict(
+            v1=ld["v1"], v2=ld["v2"],
+            front_sector=sidedefs[ld["right"]]["sector"] if ld["right"] != 0xFFFF else 0xFF,
+            back_sector=sidedefs[ld["left"]]["sector"] if ld["left"] != 0xFFFF else 0xFF,
+            kind=kind, flags=0,
+        ))
 
     required_key_mask = KEY_NONE
     for key_mask in group_required_key:

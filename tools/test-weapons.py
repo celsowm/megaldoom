@@ -75,12 +75,20 @@ assert len(counts) == len(WEAPON_ORDER), counts
 assert max(counts) == max_tiles, (counts, max_tiles)
 
 # WEAPON_TILE_BASE is a chain of defines; resolve it the same way the C does.
+# Until 2026-09-12 this used a 20x15 view and the whole 258-tile face atlas,
+# neither of which renderer_internal.h reserves any more (the view banks are
+# sized to RAY_VIEW_TILE_W_MAX x _H_MAX, and the face is a 16-tile streaming
+# window) -- stale in opposite directions, and it tripped when the 4 key tiles
+# landed even though the C guard below had 137 tiles of room.
+RAYCAST_H = (ROOT / "src/raycast.h").read_text()
 tile_base = (16                                                    # TILE_USER_INDEX
-             + 20 * 15 * 2                                         # VIEW_DYNAMIC_TILE_COUNT
+             + 2 * define(RAYCAST_H, "RAY_VIEW_TILE_W_MAX")
+                 * define(RAYCAST_H, "RAY_VIEW_TILE_H_MAX")        # VIEW_DYNAMIC_TILE_COUNT
              + define(INTERNAL, "PAIR_TILE_COUNT")
              + define(HUD_ASSETS, "FREEDOOM_HUD_TILE_COUNT")
-             + define(HUD_ASSETS, "FREEDOOM_FACE_TILE_COUNT")
-             + 78)                                                 # HUD_NUMBER_TILE_COUNT
+             + define(HUD_ASSETS, "FREEDOOM_FACE_FRAME_TILES")     # FACE_VRAM_TILE_COUNT
+             + 78                                                  # HUD_NUMBER_TILE_COUNT
+             + define(INTERNAL, "HUD_KEY_TILE_COUNT"))
 limit = define(INTERNAL, "HUD_VRAM_SAFE_TILE_LIMIT")
 assert tile_base + max_tiles <= limit, (
     f"weapon window {tile_base}..{tile_base + max_tiles} overruns the SGDK font "

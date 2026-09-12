@@ -88,6 +88,11 @@ typedef struct {
 #ifndef DEBUG_START_POSE
 #define DEBUG_START_POSE 0
 #endif
+// Test-only key bits (BSP_KEY_*) granted at level entry, so a headless
+// screenshot can show the status-bar key cards without walking a route.
+#ifndef DEBUG_START_KEYS
+#define DEBUG_START_KEYS 0
+#endif
 
 // One row per campaign level, indexed by phase_index. The length is
 // MEGALDOOM_MAP_COUNT, which tools/wad-map-extract.py emits from the map list
@@ -406,6 +411,9 @@ static void enter_level(u16 phase_index, DoomSkill skill, bool pistol_start,
     }
     weapon_reset_damage_roll();
     *player_keys = BSP_KEY_NONE;
+#if DEBUG_START_KEYS
+    *player_keys = (u8)DEBUG_START_KEYS;
+#endif
     *frame = 0;
     level_progress_reset(progress);
     level_progress_visit(progress, g_player.x, g_player.y);

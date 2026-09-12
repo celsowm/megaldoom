@@ -105,6 +105,41 @@ def main() -> int:
     assert "FREEDOOM_HUD_DIGIT_PALETTE" in renderer
     assert "HUD number tiles overlap the SGDK font VRAM region" in internal
 
+    # Key cards: Doom's STKEYS icons in the STBAR key box. The armor field owns
+    # window tiles 22..29 and its percent sign reaches x=234, so the icons get
+    # their own tile column 30 at x=240 -- one pixel right of Doom's 239, still
+    # inside the box interior (x 236..246).
+    assert numeric_define(assets, "FREEDOOM_HUD_KEY_COUNT") == 3
+    key_w = numeric_define(assets, "FREEDOOM_HUD_KEY_W")
+    key_h = numeric_define(assets, "FREEDOOM_HUD_KEY_H")
+    assert (key_w, key_h) == (7, 5)
+    key_x = numeric_define(hud, "HUD_KEY_PIXEL_X")
+    key_tile_x = numeric_define(hud, "HUD_KEY_TILE_X")
+    assert key_tile_x * 8 <= key_x and key_x + key_w <= (key_tile_x + 1) * 8
+    assert 236 <= key_x and key_x + key_w - 1 <= 246
+    assert max(armor) < key_tile_x * 8
+    key_rows = [int(value) for value in re.findall(
+        r"HUD_KEY_PIXEL_Y\[FREEDOOM_HUD_KEY_COUNT\] = \{\s*([\d,\s]+)\}", hud)[0].split(",")]
+    assert key_rows == [3, 13, 23]
+    assert max(key_rows) + key_h <= numeric_define(internal, "HUD_KEY_TILE_COUNT") * 8
+    keys_match = re.search(
+        r"FREEDOOM_HUD_KEYS\s*\[FREEDOOM_HUD_KEY_COUNT\]\s*\[FREEDOOM_HUD_KEY_H\]\s*"
+        r"\[FREEDOOM_HUD_KEY_W\] = \{(.*?)\n\};", assets, re.S)
+    assert keys_match
+    key_indices = [int(value) for value in re.findall(r"\d+", keys_match.group(1))]
+    assert len(key_indices) == 3 * key_w * key_h
+    first = numeric_define(assets, "FREEDOOM_HUD_KEY_PALETTE_FIRST")
+    count = numeric_define(assets, "FREEDOOM_HUD_KEY_PALETTE_COUNT")
+    # 15 is the stock-font white; every opaque key index is either one renderer.c
+    # already loads for STBAR/death prompt (1..9) or one of the key colours.
+    assert (first, count) == (10, 5)
+    assert max(key_indices) < first + count
+    assert set(key_indices) & set(range(first, first + count))
+    assert "FREEDOOM_HUD_KEY_PALETTE[i]" in renderer
+    assert "state->key_mask != s_last_keys" in hud
+    assert "s_last_keys = 0xFF;" in hud
+    assert "HUD key tiles overlap the SGDK font VRAM region" in internal
+
     print("ok    native 320x32 HUD: flush edges, exact face centre, proportional Doom digits")
     return 0
 

@@ -75,7 +75,20 @@ def main():
     original = [struct.unpack_from("<hh", raw, offset)
                 for offset in range(0, len(raw), 4)]
     expected = [(x, -y) for x, y in original]
-    assert generated_vertices(generated) == expected
+    vertices = generated_vertices(generated)
+    # The WAD's vertices ship unscaled and in order. Since 2026-09-12 the list
+    # may continue past them with the lattice points doom_map.narrow_window cuts
+    # a wide window at; each of those must sit exactly on a WAD linedef.
+    assert vertices[:len(expected)] == expected
+    lines = wad.map_lump("E1M1", "LINEDEFS")
+    segments = [(expected[v1], expected[v2]) for v1, v2 in
+                (struct.unpack_from("<HH", lines, offset)
+                 for offset in range(0, len(lines), 14))]
+    for x, y in vertices[len(expected):]:
+        assert any((bx - ax) * (y - ay) == (by - ay) * (x - ax) and
+                   min(ax, bx) <= x <= max(ax, bx) and
+                   min(ay, by) <= y <= max(ay, by)
+                   for (ax, ay), (bx, by) in segments), (x, y)
 
     # Subsector material ownership must cover the original subsector set and
     # refer only to emitted E1M1 sectors.

@@ -17,8 +17,11 @@ consumer picks it up automatically.
 
 # BspMapData's numeric row, in the exact order tools/bsp_emit.py emits it.
 E1M1_ROOT_NODE_INDEX = 235
-E1M1_SEG_COUNT = 386
-E1M1_VERTEX_COUNT = 467
+# 386 segs / 467 vertices until 2026-09-12, when windows wider than
+# doom_map.WINDOW_MAX_OPENING split into a centred opening plus collinear wall
+# pieces: +28 segs and +14 lattice vertices, no solid geometry moved.
+E1M1_SEG_COUNT = 414
+E1M1_VERTEX_COUNT = 481
 E1M1_SUBSECTOR_COUNT = 237
 E1M1_NODE_COUNT = 236
 E1M1_DOOR_GROUP_COUNT = 4
@@ -35,18 +38,20 @@ E1M1_HEADER_ROW = "%du, %du, %du, %du, %du, %du, %du, %du, %du," % (
 # SEG_WINDOW/SEG_SKY_WALL), summing to E1M1_SEG_COUNT. This WAD's E1M1 has no
 # remote-trigger door lines, so SEG_TRIGGER is absent rather than zero (see
 # test-sector-map.py).
-E1M1_WALL_SEG_COUNT = 345
+E1M1_WALL_SEG_COUNT = 374  # 345 + the wall pieces cut off window openings
 E1M1_DOOR_SEG_COUNT = 16  # E1M1_DOOR_GROUP_COUNT * 4 faces per group
 E1M1_PLAIN_DOOR_SEG_COUNT = 4  # SECRET group 1: BROWN96, flush face borrows BROWNGRN
 E1M1_EXIT_SEG_COUNT = 1
 
 # Doom's three window structures on E1M1 -- the pair looking onto the nukage
 # courtyard, the three in the exit room, and the east one -- reach the ROM as
-# SEG_WINDOW. These 15 segs come from exactly 7 linedefs (26, 29, 117, 119,
+# SEG_WINDOW. These segs come from exactly 7 linedefs (26, 29, 117, 119,
 # 121, 275, 276); the BSP splits some of them. They were SEG_WALL before, and
 # the reclassification is required to be geometry-neutral, which
-# test-sector-map.py checks rather than assumes.
-E1M1_WINDOW_SEG_COUNT = 15
+# test-sector-map.py checks rather than assumes. 15 window segs until
+# 2026-09-12; capping every opening at 64 units leaves 14 (the rest of each
+# line is now SEG_WALL, counted above).
+E1M1_WINDOW_SEG_COUNT = 14
 E1M1_WINDOW_LINEDEF_COUNT = 7
 
 # One-sided walls bounding a LOW F_SKY1 sector -- the parapets along the south
@@ -65,8 +70,11 @@ E1M1_SKY_WALL_SEG_COUNT = 9
 E1M1_SKY_WALL_LINEDEF_COUNT = 9
 
 # doom_map.load_map(..., apply_recipes=True) certificate/BFS result.
-E1M1_EXIT_SEG_INDEX = 376
-E1M1_CERTIFICATE_STATES = 164
+E1M1_EXIT_SEG_INDEX = 404  # 376 before the window wall pieces preceded it
+# 164 until ae62ebe (2026-09-11) reworked certify_flat_progression; the maps it
+# generated say 1568, and this constant was left behind (test-flat-map-recipes
+# failed on that commit). Window splitting on 2026-09-12 does not move it.
+E1M1_CERTIFICATE_STATES = 1568
 
 # The "start-room-computer-bank" curated material transfer (see
 # flat_map_recipes.FLAT_MATERIAL_TRANSFER_RECIPES["E1M1"]) matches by

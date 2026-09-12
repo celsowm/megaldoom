@@ -146,6 +146,56 @@ static void draw_hud_number_tilemap(void) {
     }
 }
 
+// Doom's key-card box, right of the armor field. Doom draws the icons at x=239,
+// but the armor field owns window tiles 22..29 and its percent sign reaches
+// x=234, so the icons take tile column 30 alone, one pixel right (still inside
+// the box interior, x 236..246). Rows are Doom's ST_KEY0Y..2Y minus the bar top.
+#define HUD_KEY_TILE_X 30
+#define HUD_KEY_PIXEL_X 240
+static const u8 HUD_KEY_PIXEL_Y[FREEDOOM_HUD_KEY_COUNT] = { 3, 13, 23 };
+static const u8 HUD_KEY_MASKS[FREEDOOM_HUD_KEY_COUNT] = {
+    BSP_KEY_BLUE, BSP_KEY_YELLOW, BSP_KEY_RED
+};
+
+// Recomposes the whole column from transparent each time, so a level reset that
+// clears the keys also clears the icons. The 128-byte canvas is on the stack
+// for the same heap reason as the number scratch above.
+static void draw_hud_keys(u8 key_mask) {
+    u32 scratch[HUD_KEY_TILE_COUNT][8];
+    for (u16 tile = 0; tile < HUD_KEY_TILE_COUNT; tile++) {
+        for (u16 row = 0; row < 8; row++) {
+            scratch[tile][row] = 0;
+        }
+    }
+    const u16 local_x = (u16)(HUD_KEY_PIXEL_X - (HUD_KEY_TILE_X * 8));
+    for (u16 key = 0; key < FREEDOOM_HUD_KEY_COUNT; key++) {
+        if (!(key_mask & HUD_KEY_MASKS[key])) {
+            continue;
+        }
+        for (u16 py = 0; py < FREEDOOM_HUD_KEY_H; py++) {
+            const u16 y = (u16)(HUD_KEY_PIXEL_Y[key] + py);
+            for (u16 px = 0; px < FREEDOOM_HUD_KEY_W; px++) {
+                const u8 color = FREEDOOM_HUD_KEYS[key][py][px];
+                if (color == 0) {
+                    continue;
+                }
+                const u16 shift = (u16)((7 - (local_x + px)) * 4);
+                scratch[y >> 3][y & 7] |= (u32)color << shift;
+            }
+        }
+    }
+    VDP_loadTileData((const u32 *)scratch, HUD_KEY_TILE_BASE, HUD_KEY_TILE_COUNT, DMA);
+}
+
+static void draw_hud_key_tilemap(void) {
+    for (u16 y = 0; y < HUD_KEY_TILE_COUNT; y++) {
+        VDP_setTileMapXY(WINDOW,
+                         TILE_ATTR_FULL(PAL0, FALSE, FALSE, FALSE,
+                                        (u16)(HUD_KEY_TILE_BASE + y)),
+                         HUD_KEY_TILE_X, (u16)(HUD_PANEL_Y + y));
+    }
+}
+
 void renderer_hud_window_setup(void) {
     // The window spans the black gutter under the centred view AND the status
     // bar (VIEW_WINDOW_TILE_H rows), not just the status bar. Plane A is
@@ -157,6 +207,7 @@ void renderer_hud_window_setup(void) {
                         VIEW_WINDOW_TILE_H);
     VDP_setWindowOnBottom(VIEW_WINDOW_TILE_H);
     draw_hud_number_tilemap();
+    draw_hud_key_tilemap();
 }
 
 void renderer_hud_window_suspend(void) {
@@ -254,6 +305,8 @@ static u16 s_last_ammo = 0xFFFF;
 static u16 s_last_health = 0xFFFF;
 static u16 s_last_frags = 0xFFFF;
 static u16 s_last_armor = 0xFFFF;
+// Key bits last composed; 0xFF is never a real mask (BSP_KEY_ALL is 0x07).
+static u8 s_last_keys = 0xFF;
 
 void renderer_draw_static_screen(void) {
     draw_hud_backdrop();
@@ -264,6 +317,7 @@ void renderer_draw_static_screen(void) {
     s_last_health = 0xFFFF;
     s_last_frags = 0xFFFF;
     s_last_armor = 0xFFFF;
+    s_last_keys = 0xFF;
     draw_hud_face((u16)FACE_FRAME_ST(0, 1));
 }
 
@@ -287,6 +341,10 @@ void renderer_draw_hud(const RendererHudState *state) {
     if (state->armor != s_last_armor) {
         draw_hud_number(&HUD_ARMOR_FIELD, state->armor);
         s_last_armor = state->armor;
+    }
+    if (state->key_mask != s_last_keys) {
+        draw_hud_keys(state->key_mask);
+        s_last_keys = state->key_mask;
     }
 
     draw_hud_face(compute_face_frame(state));

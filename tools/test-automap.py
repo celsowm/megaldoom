@@ -12,9 +12,12 @@ import doom_map
 from wad_reader import WadFile
 
 
+# Since 2026-09-12 the automap draws the FLAT map: one record per linedef that
+# still emits a seg, SOLID or SPECIAL only. The FLOOR/CEILING kinds (stairs,
+# ledges, lifts the flattener erased) are never emitted.
 EXPECTED = {
-    "E1M1": (451, Counter({0: 303, 1: 97, 2: 35, 3: 16})),
-    "E1M2": (1015, Counter({0: 755, 1: 194, 2: 39, 3: 27})),
+    "E1M1": (323, Counter({0: 315, 3: 8})),
+    "E1M2": (810, Counter({0: 790, 3: 20})),
 }
 
 
@@ -49,6 +52,25 @@ def check_conversion(wad, map_name):
     for seg in mapped.out_segs:
         expected = mapped.linedef_automap_indices[seg["source_linedef"]]
         assert 0 <= expected <= 0xFFFF
+
+    # Faithful to the flat map in both directions: a line is drawn exactly when
+    # it still stands, and it is SPECIAL exactly when it is interactive.
+    seg_types = {}
+    for seg in mapped.out_segs:
+        seg_types.setdefault(seg["source_linedef"], set()).add(seg["type"])
+    interactive = {doom_map.SEG_DOOR, doom_map.SEG_SWITCH,
+                   doom_map.SEG_TRIGGER, doom_map.SEG_EXIT}
+    for line_id, linedef in enumerate(mapped.linedefs):
+        index = mapped.linedef_automap_indices[line_id]
+        standing = line_id in seg_types
+        hidden = bool(linedef["flags"] & doom_map.LINE_FLAG_DONTDRAW)
+        assert (index != 0xFFFF) == (standing and not hidden), line_id
+        if index == 0xFFFF:
+            continue
+        special = bool(seg_types[line_id] & interactive) and \
+            not linedef["flags"] & doom_map.LINE_FLAG_SECRET
+        assert mapped.automap_lines[index]["kind"] == (
+            doom_map.AUTOMAP_LINE_SPECIAL if special else doom_map.AUTOMAP_LINE_SOLID)
     return mapped
 
 
@@ -121,11 +143,14 @@ def main():
     assert "sizeof(BspAutomapLine) == 8" in header
     assert "sizeof(BspSeg) == 16" in header
     assert "sizeof(RayDoorOverlay) == 10" in (ROOT / "src/raycast.h").read_text()
-    assert "MEGALDOOM_MAP_MAX_AUTOMAP_LINES 1015" in limits
+    assert "MEGALDOOM_MAP_MAX_AUTOMAP_LINES 810" in limits
     assert "bsp_automap_mark_seg(seg_index);" in render
-    assert "bsp_automap_mark_sector(sector);" in (ROOT / "src/bsp/bsp_render.c").read_text()
-    assert "BSP_AUTOMAP_LINE_FLOOR" in runtime and "BSP_AUTOMAP_LINE_CEILING" in runtime
-    assert [len(m.automap_lines) for m in maps] == [451, 1015]
+    # Discovery is render-only now: no line kind is revealed by visiting a
+    # sector, so neither the sector bits nor the sector branch may come back.
+    assert "bsp_automap_mark_sector" not in (ROOT / "src/bsp/bsp_render.c").read_text()
+    assert "bsp_automap_mark_sector" not in runtime and "bsp_automap_mark_sector" not in header
+    assert "BSP_AUTOMAP_LINE_FLOOR" not in runtime and "BSP_AUTOMAP_LINE_CEILING" not in runtime
+    assert [len(m.automap_lines) for m in maps] == [323, 810]
     route = (ROOT / "tools/routes/automap-e1m1.txt").read_text().splitlines()
     events = [tuple(part for part in line.split()) for line in route if line.strip()]
     assert ("2100", "400") in events  # six-button Z opens

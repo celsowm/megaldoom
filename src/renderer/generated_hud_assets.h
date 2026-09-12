@@ -33,6 +33,11 @@
 #define FREEDOOM_HUD_DIGIT_PERCENT 10
 #define FREEDOOM_HUD_DIGIT_CANVAS_W 16
 #define FREEDOOM_HUD_DIGIT_CANVAS_H 16
+#define FREEDOOM_HUD_KEY_COUNT 3
+#define FREEDOOM_HUD_KEY_W 7
+#define FREEDOOM_HUD_KEY_H 5
+#define FREEDOOM_HUD_KEY_PALETTE_FIRST 10
+#define FREEDOOM_HUD_KEY_PALETTE_COUNT 5
 
 // Portrait frame indices (order matches the baker's frame list and
 // compute_face_frame() in renderer_hud.c). Bracket 0 = high HP, 4 = low HP.
@@ -421,6 +426,37 @@ static const u8 FREEDOOM_HUD_DIGITS
         {2, 8, 7, 2, 1, 0, 0, 0, 2, 7, 9, 9, 2, 1, 0, 0},
         {2, 2, 2, 1, 0, 0, 0, 0, 0, 2, 2, 2, 1, 1, 0, 0},
         {0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0}
+    }
+};
+
+// STKEYS0..2 (blue, yellow, red key cards) as PAL0 indices, 0 transparent. The
+// key colours load into PAL0[FREEDOOM_HUD_KEY_PALETTE_FIRST..]; every other index
+// is the STBAR ramp or the death-prompt red renderer.c already loads.
+static const u32 FREEDOOM_HUD_KEY_PALETTE[FREEDOOM_HUD_KEY_PALETTE_COUNT] = { 0x0000B4, 0x4848FC, 0xD0A830, 0x884808, 0x780000 };
+static const u8 FREEDOOM_HUD_KEYS
+    [FREEDOOM_HUD_KEY_COUNT]
+    [FREEDOOM_HUD_KEY_H]
+    [FREEDOOM_HUD_KEY_W] = {
+    {
+        {0, 11, 11, 11, 10, 10, 10},
+        {11, 10, 2, 10, 2, 10, 2},
+        {10, 10, 10, 10, 10, 10, 10},
+        {2, 2, 10, 10, 10, 10, 10},
+        {0, 0, 2, 2, 2, 2, 2}
+    },
+    {
+        {0, 12, 12, 12, 12, 12, 12},
+        {12, 12, 2, 12, 2, 12, 2},
+        {12, 12, 12, 12, 12, 12, 12},
+        {13, 13, 12, 12, 12, 12, 12},
+        {0, 0, 13, 13, 13, 13, 13}
+    },
+    {
+        {0, 9, 9, 9, 9, 9, 9},
+        {9, 9, 2, 9, 2, 9, 2},
+        {9, 9, 9, 9, 9, 9, 9},
+        {14, 14, 14, 9, 9, 9, 9},
+        {0, 0, 14, 14, 14, 14, 14}
     }
 };
 

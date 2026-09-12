@@ -7,7 +7,8 @@ from pathlib import Path
 
 from e1m1_expected import (E1M1_HEADER_ROW, E1M1_SEG_COUNT,
                            E1M1_WALL_SEG_COUNT, E1M1_DOOR_SEG_COUNT,
-                           E1M1_EXIT_SEG_COUNT, E1M1_DOOR_GROUP_COUNT,
+                           E1M1_EXIT_SEG_COUNT, E1M1_EXIT_SEG_INDEX,
+                           E1M1_DOOR_GROUP_COUNT,
                            E1M1_PLAIN_DOOR_SEG_COUNT,
                            E1M1_WINDOW_SEG_COUNT, E1M1_WINDOW_LINEDEF_COUNT,
                            E1M1_SKY_WALL_SEG_COUNT, E1M1_SKY_WALL_LINEDEF_COUNT)
@@ -78,28 +79,59 @@ def main():
                      doom_map.SEG_WINDOW: E1M1_WINDOW_SEG_COUNT,
                      doom_map.SEG_SKY_WALL: E1M1_SKY_WALL_SEG_COUNT}, types
 
-    # Windows: reclassified from SEG_WALL, never newly emitted. Re-running the
-    # converter with the window rule disabled has to produce the SAME segs in
-    # the SAME order with the same geometry -- that is what lets a window skip
-    # bsp_mark_sample_solid without touching collision, LOS, the blockmap or
-    # the navigation certificate. Proved here rather than asserted in a comment.
+    # Windows: reclassified from SEG_WALL, never adding or removing solid
+    # geometry. Re-running the converter with the window rule disabled has to
+    # cover EXACTLY the same solid interval on every linedef face -- that is
+    # what lets a window skip bsp_mark_sample_solid without touching collision,
+    # LOS, the blockmap or the navigation certificate. The only structural
+    # difference allowed is the collinear SEG_WALL pieces that cap an opening at
+    # WINDOW_MAX_OPENING (2026-09-12). Proved here rather than asserted in a
+    # comment.
     window_rows = [row for row in rows if row[7] == doom_map.SEG_WINDOW]
     assert len(window_rows) == E1M1_WINDOW_SEG_COUNT
+    shipped = doom_map.load_map(wad_reader.WadFile(campaign_wad), "E1M1")
     plain = doom_map.load_map(wad_reader.WadFile(campaign_wad), "E1M1",
                               apply_windows=False)
-    assert len(plain.out_segs) == len(rows), (len(plain.out_segs), len(rows))
-    for index, (row, seg) in enumerate(zip(rows, plain.out_segs)):
-        geometry = (seg["v1"], seg["v2"], seg["nx"], seg["ny"],
-                    seg["tex_u_offset"])
-        assert tuple(row[0:5]) == geometry, (index, row[0:5], geometry)
-        if row[7] == doom_map.SEG_WINDOW:
-            assert seg["type"] == doom_map.SEG_WALL, index
-        else:
-            assert seg["type"] == row[7], (index, seg["type"], row[7])
-    assert len({seg["source_linedef"] for seg in
-                (s for s in doom_map.load_map(
-                    wad_reader.WadFile(campaign_wad), "E1M1").out_segs
-                 if s["type"] == doom_map.SEG_WINDOW)}) == E1M1_WINDOW_LINEDEF_COUNT
+    assert [tuple(row[0:5]) for row in rows] == [
+        (seg["v1"], seg["v2"], seg["nx"], seg["ny"], seg["tex_u_offset"])
+        for seg in shipped.out_segs]
+
+    def solid_cover(map_data):
+        faces = {}
+        for seg in map_data.out_segs:
+            ends = sorted((map_data.vertices[seg["v1"]], map_data.vertices[seg["v2"]]))
+            faces.setdefault((seg["source_linedef"], seg["nx"], seg["ny"]),
+                             []).append(tuple(ends))
+        merged = {}
+        for face, spans in faces.items():
+            runs = []
+            for start, end in sorted(spans):
+                if runs and runs[-1][1] == start:
+                    runs[-1] = (runs[-1][0], end)
+                else:
+                    runs.append((start, end))
+            merged[face] = runs
+        return merged
+
+    assert solid_cover(shipped) == solid_cover(plain)
+    window_lines = {seg["source_linedef"] for seg in shipped.out_segs
+                    if seg["type"] == doom_map.SEG_WINDOW}
+    assert len(window_lines) == E1M1_WINDOW_LINEDEF_COUNT
+    for seg in plain.out_segs:
+        if seg["source_linedef"] in window_lines:
+            assert seg["type"] == doom_map.SEG_WALL, seg
+    assert ([seg["type"] for seg in shipped.out_segs
+             if seg["source_linedef"] not in window_lines] ==
+            [seg["type"] for seg in plain.out_segs
+             if seg["source_linedef"] not in window_lines])
+    opening = Counter()
+    for seg in shipped.out_segs:
+        if seg["type"] == doom_map.SEG_WINDOW:
+            (ax, ay), (bx, by) = (shipped.vertices[seg["v1"]],
+                                  shipped.vertices[seg["v2"]])
+            opening[(seg["source_linedef"], seg["nx"], seg["ny"])] += \
+                ((ax - bx) ** 2 + (ay - by) ** 2) ** 0.5
+    assert max(opening.values()) <= doom_map.WINDOW_MAX_OPENING, opening
 
     # Sky walls: same proof, same reason -- a one-sided line is already forced
     # solid unconditionally (line_solid_without_recipe). Classification may
@@ -292,11 +324,14 @@ def main():
     # no global priority: a door remains a door until the exit is aimed at.
     exit_index = next(index for index, row in enumerate(rows)
                       if row[7] == doom_map.SEG_EXIT)
-    assert exit_index == 376
+    assert exit_index == E1M1_EXIT_SEG_INDEX
     nearby_earlier_doors = [index for index, row in enumerate(rows[:exit_index])
                             if row[7] == doom_map.SEG_DOOR and
                             row[10] & doom_map.SEG_FLAG_DIRECT_USE]
-    assert {367, 370, 371} <= set(nearby_earlier_doors)
+    # Door group 2's faces (linedefs 324/325). 367/370/371 until 2026-09-12,
+    # when the collinear wall pieces cut off the window openings landed ahead
+    # of them in storage order -- the same +28 the exit moved.
+    assert {395, 398, 399} <= set(nearby_earlier_doors)
     assert "const BspSeg *best = NULL;" in runtime
     assert "candidate_dist2 < best_dist2" in runtime
     assert "if (best->type == BSP_SEG_EXIT)" in runtime

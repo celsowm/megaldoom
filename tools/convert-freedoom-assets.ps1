@@ -1086,6 +1086,68 @@ foreach ($name in $HudDigitNames) {
     }
 }
 
+# Doom's key-card icons for the status-bar key box, in STKEYS order: blue,
+# yellow, red. They ride the WINDOW plane in PAL0 on top of STBAR, so they are
+# quantised against PAL0 exactly as renderer.c's load_game_palettes() loads it:
+# indices 1..8 are the STBAR ramp, 9 the death-prompt red, and 10..14 the five
+# key colours below, which nothing else in gameplay uses. PAL1 has no room --
+# the status digits use all 15 of its opaque slots. Index 0 is transparent.
+$HudKeyNames = @("STKEYS0", "STKEYS1", "STKEYS2")
+$HudKeyW = 7
+$HudKeyH = 5
+$HudKeyPaletteFirst = 10
+$hudKeyColors = @(
+    @(0x00, 0x00, 0xB4),
+    @(0x48, 0x48, 0xFC),
+    @(0xD0, 0xA8, 0x30),
+    @(0x88, 0x48, 0x08),
+    @(0x78, 0x00, 0x00)
+)
+$hudKeyPalette = @(
+    @(0x00, 0x00, 0x00),
+    @(0xD8, 0xD8, 0xD8),
+    @(0x18, 0x14, 0x10),
+    @(0x38, 0x30, 0x30),
+    @(0x58, 0x50, 0x48),
+    @(0x88, 0x80, 0x78),
+    @(0xB4, 0xAC, 0xA0),
+    @(0x40, 0x40, 0x20),
+    @(0x30, 0x1E, 0x10),
+    @(0xD8, 0x00, 0x00)
+) + $hudKeyColors
+$hudKeyBlocks = New-Object System.Collections.Generic.List[string]
+foreach ($name in $HudKeyNames) {
+    $path = Join-Path $Root (Join-Path $FaceGraphicsDir "$name.png")
+    if (-not (Test-Path $path)) {
+        throw "HUD key source not found: $path"
+    }
+    $image = [System.Drawing.Bitmap]::new($path)
+    try {
+        if ($image.Width -ne $HudKeyW -or $image.Height -ne $HudKeyH) {
+            throw "HUD key $name is $($image.Width)x$($image.Height), expected ${HudKeyW}x${HudKeyH}"
+        }
+        $rows = New-Object System.Collections.Generic.List[string]
+        for ($y = 0; $y -lt $HudKeyH; $y++) {
+            $values = New-Object System.Collections.Generic.List[string]
+            for ($x = 0; $x -lt $HudKeyW; $x++) {
+                $pixel = $image.GetPixel($x, $y)
+                $index = 0
+                if ($pixel.A -ge 128) {
+                    $index = Get-NearestOpaqueIndexInPalette $pixel $hudKeyPalette
+                }
+                $values.Add($index.ToString())
+            }
+            $rows.Add("        {" + ($values -join ", ") + "}")
+        }
+        $hudKeyBlocks.Add("    {`r`n" + ($rows -join ",`r`n") + "`r`n    }")
+    } finally {
+        $image.Dispose()
+    }
+}
+$hudKeyColorsRgb = ($hudKeyColors | ForEach-Object {
+    "0x{0:X2}{1:X2}{2:X2}" -f $_[0], $_[1], $_[2]
+}) -join ", "
+
 $weaponIdleBlocks = New-Object System.Collections.Generic.List[string]
 $weaponFireBlocks = New-Object System.Collections.Generic.List[string]
 $weaponSourceComments = New-Object System.Collections.Generic.List[string]
@@ -1428,6 +1490,11 @@ $hudContent = @"
 #define FREEDOOM_HUD_DIGIT_PERCENT 10
 #define FREEDOOM_HUD_DIGIT_CANVAS_W $HudDigitCanvasW
 #define FREEDOOM_HUD_DIGIT_CANVAS_H $HudDigitCanvasH
+#define FREEDOOM_HUD_KEY_COUNT $($HudKeyNames.Count)
+#define FREEDOOM_HUD_KEY_W $HudKeyW
+#define FREEDOOM_HUD_KEY_H $HudKeyH
+#define FREEDOOM_HUD_KEY_PALETTE_FIRST $HudKeyPaletteFirst
+#define FREEDOOM_HUD_KEY_PALETTE_COUNT $($hudKeyColors.Count)
 
 // Portrait frame indices (order matches the baker's frame list and
 // compute_face_frame() in renderer_hud.c). Bracket 0 = high HP, 4 = low HP.
@@ -1461,6 +1528,17 @@ static const u8 FREEDOOM_HUD_DIGITS
     [FREEDOOM_HUD_DIGIT_CANVAS_H]
     [FREEDOOM_HUD_DIGIT_CANVAS_W] = {
 $($hudDigitBlocks -join ",`r`n")
+};
+
+// STKEYS0..2 (blue, yellow, red key cards) as PAL0 indices, 0 transparent. The
+// key colours load into PAL0[FREEDOOM_HUD_KEY_PALETTE_FIRST..]; every other index
+// is the STBAR ramp or the death-prompt red renderer.c already loads.
+static const u32 FREEDOOM_HUD_KEY_PALETTE[FREEDOOM_HUD_KEY_PALETTE_COUNT] = { $hudKeyColorsRgb };
+static const u8 FREEDOOM_HUD_KEYS
+    [FREEDOOM_HUD_KEY_COUNT]
+    [FREEDOOM_HUD_KEY_H]
+    [FREEDOOM_HUD_KEY_W] = {
+$($hudKeyBlocks -join ",`r`n")
 };
 
 // Deduplicated Doom-guy portrait tiles. The frame map preserves each 4x4 cell

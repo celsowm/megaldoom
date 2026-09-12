@@ -46,8 +46,12 @@ def main():
     bsp_render_internal = (ROOT / "src" / "bsp" / "bsp_render_internal.h").read_text()
 
     for token in (
-        "MEGALDOOM_MAP_COUNT 4", "MEGALDOOM_MAP_MAX_SEGS 968",
-        "MEGALDOOM_MAP_MAX_VERTICES 946", "MEGALDOOM_MAP_MAX_SUBSECTORS 461",
+        # MAX_SEGS/MAX_VERTICES were 968/946 until 2026-09-12: capping window
+        # openings at 64 units split E1M2's 38 window lines into collinear wall
+        # pieces (1089 segs, 1006 lattice-extended vertices). That is 121 bytes
+        # of seg query bits and 300 of vertex cache in work RAM.
+        "MEGALDOOM_MAP_COUNT 4", "MEGALDOOM_MAP_MAX_SEGS 1089",
+        "MEGALDOOM_MAP_MAX_VERTICES 1006", "MEGALDOOM_MAP_MAX_SUBSECTORS 461",
         "MEGALDOOM_MAP_MAX_NODES 460", "MEGALDOOM_MAP_MAX_SECTORS 200",
         "MEGALDOOM_MAP_MAX_ACTIVE_THINGS 317",
     ):
@@ -60,8 +64,8 @@ def main():
     # MAP_COUNT moved. Pin its header row so a regeneration that quietly
     # resized it shows up here rather than as a boot-time heap panic.
     assert "const BspMapData g_e1m4_map" in e1m4
-    assert "771u, 780u, 355u, 354u, 8u, 254u, 139u, 3u" in e1m4
-    assert "961u, 942u, 448u, 447u, 12u, 262u, 200u, 6u" in e1m2
+    assert "779u, 784u, 355u, 354u, 8u, 254u, 139u, 3u" in e1m4
+    assert "1089u, 1006u, 448u, 447u, 12u, 262u, 200u, 6u" in e1m2
     assert E1M1_HEADER_ROW in e1m1
     assert "typedef struct {" in header and "BspMapData" in header
     assert "bsp_select_map(u16 level_index)" in runtime

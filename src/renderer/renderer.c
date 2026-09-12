@@ -50,9 +50,16 @@ static void load_game_palettes(void) {
     // frontend_load_death_prompt / frontend_death_prompt asset). The HUD tiles
     // only use indices 2-8, so this is otherwise unclaimed in PAL0.
     PAL_setColor(9, RGB24_TO_VDPCOLOR(0xD80000));
+    // Indices 10..14: the status-bar key cards. convert-freedoom-assets.ps1
+    // quantises STKEYS against exactly this PAL0 (1..9 above plus these), and
+    // no other gameplay tile samples them.
+    for (u16 i = 0; i < FREEDOOM_HUD_KEY_PALETTE_COUNT; i++) {
+        PAL_setColor((u16)(FREEDOOM_HUD_KEY_PALETTE_FIRST + i),
+                     RGB24_TO_VDPCOLOR(FREEDOOM_HUD_KEY_PALETTE[i]));
+    }
 
     // The SGDK stock font paints colour index 15, and nothing else in gameplay
-    // writes PAL0[10..15] -- so text drawn with it inherits whatever the last
+    // writes PAL0[15] -- so text drawn with it inherits whatever the last
     // frontend image left there (0x000000 in every frontend PNG), i.e. black
     // glyphs on a black backdrop. No shipped tile uses PAL0 index 15 (the
     // status bar stops at 8, the view is PAL3, the face PAL2, the status

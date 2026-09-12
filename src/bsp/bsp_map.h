@@ -277,10 +277,10 @@ bool bsp_sector_is_secret(u16 sector_index);
 bool bsp_sector_is_sky(u16 sector_index);
 
 // Progressive automap discovery. A source linedef becomes mapped only after a
-// corresponding solid SEG actually contributes to a 3D cast. Floor/ceiling
-// transitions also become visible after either adjacent sector is visited.
+// corresponding solid SEG actually contributes to a 3D cast. Only lines that
+// still stand in the flat map are emitted (tools/doom_map.py), so the automap
+// never shows the stairs and ledges the flattener erased.
 void bsp_automap_mark_seg(u16 seg_index);
-void bsp_automap_mark_sector(u16 sector_index);
 bool bsp_automap_line_visible(u16 line_index);
 
 // Window band accessors, Q8 of the drawn slab from its top. Meaningful only

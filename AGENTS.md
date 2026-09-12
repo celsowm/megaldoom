@@ -212,11 +212,28 @@ The rule above is about ADDING geometry for a band the flattener erased. Giving
 a line the flattener ALREADY emits as a solid wall a new seg type -- as
 `BSP_SEG_WINDOW` does for Doom's windows (2026-08-29) -- adds nothing, moves
 nothing and keeps the line solid for collision and LOS, so none of the failure
-modes above apply. The bar for it is that the emitted seg set stays
-byte-identical: `tools/doom_map.py`'s `load_map(..., apply_windows=False)` is
-the negative control, and `tools/test-sector-map.py` diffs the two and fails on
-any change outside the type byte. Reuse that pattern rather than inventing a
-new one, and keep the geometry proof in the test.
+modes above apply. The bar for it is that the SOLID COVER stays identical:
+`tools/doom_map.py`'s `load_map(..., apply_windows=False)` is the negative
+control, and `tools/test-sector-map.py` merges each linedef face's segs from both
+runs and fails if any face covers a different interval. Reuse that pattern
+rather than inventing a new one, and keep the geometry proof in the test.
+
+**A window opening is at most `WINDOW_MAX_OPENING` (64) units wide.** Since
+2026-09-12 a wider window line splits into a centred SEG_WINDOW piece and
+collinear SEG_WALL pieces, cut at integer lattice points of the line so the join
+has no crack. The overlay compositor repaints the whole slab height on every
+column an opening covers, so its cost follows on-screen WIDTH; a shorter band
+saves nothing. Do not widen the cap to make a window "look like Doom" without a
+pose-locked `perf-sweep.ps1 -Variant base,stub` at the widest one (LOG,
+2026-09-12: the 248-unit E1M1 nukage windows went 15.87 -> 12.08 vblanks).
+
+**The automap draws the flat map, not the WAD.** A linedef gets an automap
+record exactly when it still emits a seg: SPECIAL if any of its segs is a door,
+switch, trigger or exit (unless SECRET), SOLID otherwise, and DONTDRAW stays
+hidden. The flattener's erased height transitions (stairs, ledges, lifts) have
+no record, so never reintroduce WAD floor/ceiling deltas as a line kind, and
+there is no sector-visit reveal rule any more -- a line appears when one of its
+segs is drawn. `tools/test-automap.py` checks both directions.
 
 **Anything that writes a wall texel reads the baked pair table.**
 `packed_wall_column()` + `wall_packed_y()` is the only sanctioned path: the pair

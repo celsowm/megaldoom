@@ -8,6 +8,81 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## Narrower windows, key cards on the HUD, a flat-faithful automap (2026-09-12)
+
+Three requests from play: windows cost too much, the HUD never showed picked-up
+keys, and the automap showed stairs and elevations this one-level engine does
+not have.
+
+### Windows: one centred opening of at most 64 units
+
+Where the cost is: `draw_door_overlays` paints the frame post above the band,
+the sky post and the frame post below it on EVERY sampled column the window
+covers, so the compositor follows the opening's on-screen width. A shorter band
+only turns sky rows into frame rows and saves nothing. The shipped maps had
+openings up to 296 units (E1M2 ld 445/479), 256 (E1M3), and 248 (E1M1's nukage
+yard, ld 275/276).
+
+`doom_map.narrow_window` now splits a window line wider than
+`WINDOW_MAX_OPENING = 64` into a centred SEG_WINDOW piece plus collinear SEG_WALL
+pieces, in the same subsector, texture phase continued. Cuts sit on integer
+lattice points of the line (step = length / gcd(|dx|, |dy|)), so a diagonal line
+still joins without a crack; the interval is symmetric, so both faces of a window
+agree. No runtime code changed. Maps: E1M1 386 -> 414 segs, E1M2 961 -> 1089,
+E1M3 968 -> 1013, E1M4 771 -> 779; MAX_SEGS/MAX_VERTICES 968/946 -> 1089/1006, i.e.
+121 bytes of seg query bits and 300 bytes of vertex cache in work RAM. The
+navigation certificates keep their state counts; only exit seg indices move.
+`test-sector-map.py`'s window proof is now "every linedef face covers the same
+solid interval as `apply_windows=False`", plus no opening wider than 64.
+
+Pose-locked `perf-sweep.ps1 -Variant base,stub`, HEAD vs this change:
+
+| pose | frame | cast | pack | compositor (base-stub) |
+|---|---:|---:|---:|---:|
+| (1300,3300) a0, 96-unit windows, HEAD | 17.56 vb | 11118 | 8403 | 3869 |
+| same, narrowed | 16.24 vb | 9809 | 7949 | 3406 |
+| (2600,3236) a0, 248-unit nukage windows, HEAD | 15.87 vb | 9602 | 7143 | 3436 |
+| same, narrowed | **12.08 vb** | 6597 | 5807 | **938** |
+
+Cast moves too, and legitimately: the wall pieces close columns that used to be
+open, so traversal stops sooner (nodes 80 -> 51, billboards behind the glass
+469 -> 8 subticks at the nukage pose). Within each build, base and stub cast
+agree to 0.2%, so the compositor column is a valid control. Captures of both
+poses show one centred opening in an unbroken wall.
+
+### Key cards in the status bar
+
+`g_hud.key_mask` was filled every frame and never drawn. The icons are Doom's
+STKEYS0..2, baked by `convert-freedoom-assets.ps1` as `FREEDOOM_HUD_KEYS`
+against PAL0 exactly as `load_game_palettes` loads it. PAL1 is full (the digits
+use all 15 opaque slots), so five key colours went into PAL0 10..14, which no
+gameplay tile samples; the red card reuses 9 (the death-prompt red) and the
+outline reuses 2. `draw_hud_keys` composes one window-plane tile column (4 VRAM
+tiles, `HUD_KEY_TILE_BASE`, ahead of the weapon window) only when the mask
+changes. Doom draws the cards at x=239, but the armor field owns window tiles
+22..29 and its percent sign reaches x=234, so the column is tile 30 and the
+cards sit at x=240, one pixel right, still inside the box interior.
+
+`test-weapons.py`'s VRAM chain was stale in two directions (a 20x15 view and
+the whole 258-tile face atlas instead of the 22x16 banks and the 16-tile face
+window) and reported an overrun the C guard does not have: the weapon window
+now runs 1234..1303 of 1440. Fixed to mirror renderer_internal.h.
+
+### Automap from the flat map
+
+The automap had been classified from WAD floor/ceiling deltas: 125-190 lines
+per map were height transitions the flattener opens up, and impassable
+same-height lines the flat map keeps solid (6 on E1M1) had no record. Records
+are now built after the segs: a line is on the automap exactly when it emits a
+seg, SPECIAL when any seg is interactive and it is not SECRET, SOLID otherwise.
+FLOOR/CEILING are never emitted, so the sector-visit reveal rule and its bits
+went too (`bsp_automap_mark_sector`). E1M1 451 -> 323 lines, E1M2 1015 -> 810.
+
+### Also fixed on the way
+
+`E1M1_CERTIFICATE_STATES` still said 164 although ae62ebe's certificate rework
+generated 1568; test-flat-map-recipes had been failing since that commit.
+
 ## Secret doors borrow the wall they sit in (2026-09-12)
 
 The user pointed at E1M1's secret door at (2944, 3776..3904): a brown BROWN96

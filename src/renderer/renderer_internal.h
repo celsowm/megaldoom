@@ -98,7 +98,11 @@ _Static_assert((VIEW_TILE_STRIDE & (VIEW_TILE_STRIDE - 1)) == 0,
 #define HUD_NUMBER_ARMOR_TILE_COUNT (HUD_NUMBER_ARMOR_TILE_W * HUD_NUMBER_TILE_H)
 #define HUD_NUMBER_TILE_COUNT (HUD_NUMBER_AMMO_TILE_COUNT + HUD_NUMBER_HEALTH_TILE_COUNT + HUD_NUMBER_FRAGS_TILE_COUNT + HUD_NUMBER_ARMOR_TILE_COUNT)
 #define HUD_NUMBER_MAX_FIELD_TILES HUD_NUMBER_ARMOR_TILE_COUNT
-#define WEAPON_TILE_BASE (HUD_NUMBER_TILE_BASE + HUD_NUMBER_TILE_COUNT)
+// Doom's key-card box: one window-plane tile column of the status bar, four
+// rows tall, composed by draw_hud_keys() in renderer_hud.c.
+#define HUD_KEY_TILE_BASE (HUD_NUMBER_TILE_BASE + HUD_NUMBER_TILE_COUNT)
+#define HUD_KEY_TILE_COUNT 4
+#define WEAPON_TILE_BASE (HUD_KEY_TILE_BASE + HUD_KEY_TILE_COUNT)
 #define HUD_VRAM_SAFE_TILE_LIMIT 1440
 // The 3D view is CENTRED on the screen, horizontally across all 40 tiles and
 // vertically in the play area above the status bar. Both are now derived from
@@ -165,6 +169,9 @@ _Static_assert((VIEW_TILE_STRIDE & (VIEW_TILE_STRIDE - 1)) == 0,
 #endif
 #if (HUD_NUMBER_TILE_BASE + HUD_NUMBER_TILE_COUNT) > HUD_VRAM_SAFE_TILE_LIMIT
 #error "HUD number tiles overlap the SGDK font VRAM region"
+#endif
+#if (HUD_KEY_TILE_BASE + HUD_KEY_TILE_COUNT) > HUD_VRAM_SAFE_TILE_LIMIT
+#error "HUD key tiles overlap the SGDK font VRAM region"
 #endif
 
 // The three checks that used to live here -- view vertically centred, window
