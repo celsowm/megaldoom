@@ -91,7 +91,8 @@ static u8 map_thing_type(u16 doom_type, u8 *visual) {
         // Decorative THINGS are deliberately omitted on the Mega Drive. They
         // consume projection, LOS, draw and collision time without gameplay.
         case 2035: *visual = BILLBOARD_VISUAL_BARREL; return BILLBOARD_TYPE_BARREL;
-        case 9: case 3001: case 3004: *visual = BILLBOARD_VISUAL_DUMMY; return BILLBOARD_TYPE_DUMMY;
+        case 9: case 3004: *visual = BILLBOARD_VISUAL_DUMMY; return BILLBOARD_TYPE_DUMMY;
+        case 3001: *visual = BILLBOARD_VISUAL_IMP; return BILLBOARD_TYPE_DUMMY;
         default: return 0xFF;
     }
 }
@@ -103,6 +104,10 @@ const BillboardType *billboard_get_type(u8 type_id) {
 u8 billboard_get_object_visual_id(const BillboardObject *object, const BillboardType *type) {
     (void)type;
     if (object->type_id == BILLBOARD_TYPE_KEY) return object->hp;
+    if (object->type_id == BILLBOARD_TYPE_DUMMY) {
+        return (object->visual_id == BILLBOARD_VISUAL_IMP) ?
+            BILLBOARD_VISUAL_IMP : BILLBOARD_VISUAL_DUMMY;
+    }
     if ((object->type_id == BILLBOARD_TYPE_BARREL) && (object->life_state != ENEMY_ALIVE)) {
         return BILLBOARD_VISUAL_BARREL_EXPLODING;
     }
@@ -191,6 +196,7 @@ static void billboard_get_geometry(const BillboardObject *object,
                                    const BillboardType *type,
                                    BillboardGeometry *geometry) {
     u8 visual_id = billboard_get_object_visual_id(object, type);
+    const bool is_imp = (visual_id == BILLBOARD_VISUAL_IMP);
     if (visual_id == BILLBOARD_VISUAL_BARREL_EXPLODING) {
         const u8 frame = billboard_get_object_frame(object);
         const s16 *source = FREEDOOM_BILLBOARD_BARREL_EXPLOSION_GEOMETRY[frame];
@@ -227,8 +233,14 @@ static void billboard_get_geometry(const BillboardObject *object,
     // the pose's own box reproduces the patch at the right size and height.
     {
         const u8 frame = billboard_get_object_frame(object);
-        const s16 *source =
-            ENEMY_FRAME_GEOMETRY[(frame < ENEMY_FRAME_GEOMETRY_COUNT) ? frame : 0];
+        const s16 *source;
+        if (is_imp) {
+            source = IMP_FRAME_GEOMETRY[
+                (frame < IMP_FRAME_GEOMETRY_COUNT) ? frame : 0];
+        } else {
+            source = ENEMY_FRAME_GEOMETRY[
+                (frame < ENEMY_FRAME_GEOMETRY_COUNT) ? frame : 0];
+        }
         geometry->source_w = source[0];
         geometry->source_h = source[1];
         geometry->left_offset = source[2];
@@ -352,11 +364,12 @@ void billboard_init(u16 phase_index, DoomSkill skill) {
         object->x = bsp_things[i].x;
         object->y = bsp_things[i].y;
         object->type_id = type;
-        object->hp = visual; // key color is carried as its visual ID.
+        object->visual_id = visual;
         object->active = TRUE;
         object->home_x = object->x;
         object->home_y = object->y;
-        if (type != BILLBOARD_TYPE_KEY) object->hp = billboard_get_type(type)->hit_points;
+        object->hp = (type == BILLBOARD_TYPE_KEY) ? visual :
+                     billboard_get_type(type)->hit_points;
         billboard_registry_add(object_index);
         if (type == BILLBOARD_TYPE_DUMMY) g_level_kill_total++;
         if ((type == BILLBOARD_TYPE_BONUS) ||

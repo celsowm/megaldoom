@@ -58,6 +58,8 @@ def span_visible(forward: int, left: int, right: int, depths: list[int]) -> bool
 # $EnemyFrameNames in tools/convert-freedoom-assets.ps1.
 ENEMY_FRAME_NAMES = ["POSSA1", "POSSB1", "POSSC1", "POSSD1", "POSSF1",
                      "POSSH0", "POSSI0", "POSSJ0", "POSSK0", "POSSL0"]
+IMP_FRAME_NAMES = ["TROOA1", "TROOB1", "TROOC1", "TROOD1", "TROOF1",
+                   "TROOH1", "TROOI0", "TROOJ0", "TROOK0", "TROOL0"]
 SPRITE_OFFSETS = ROOT / "res" / "originaldoom" / "sprites" / "_offsets.json"
 
 
@@ -67,7 +69,7 @@ def _scale_round(value: int, num: int, den: int) -> int:
     return sign * ((abs(value) * num * 2 + den) // (den * 2))
 
 
-def expected_enemy_frame_geometry() -> list[tuple[int, int, int, int]]:
+def expected_frame_geometry(frame_names: list[str]) -> list[tuple[int, int, int, int]]:
     """Re-derive ENEMY_FRAME_GEOMETRY from the Doom picture headers.
 
     Enemy poses are projected through the shared WAD-origin path, so each pose
@@ -85,7 +87,7 @@ def expected_enemy_frame_geometry() -> list[tuple[int, int, int, int]]:
     anchor = ref["height"] - ref["topOffset"]   # 5 native units below origin
 
     rows = []
-    for name in ENEMY_FRAME_NAMES:
+    for name in frame_names:
         patch = offsets[name]
         source_w = _scale_round(patch["width"], sx_num, sx_den)
         top_offset = _scale_round(patch["topOffset"] + anchor, sy_num, sy_den)
@@ -95,17 +97,33 @@ def expected_enemy_frame_geometry() -> list[tuple[int, int, int, int]]:
     return rows
 
 
-def extract_enemy_frame_geometry(source: str) -> list[tuple[int, int, int, int]]:
+def expected_enemy_frame_geometry() -> list[tuple[int, int, int, int]]:
+    return expected_frame_geometry(ENEMY_FRAME_NAMES)
+
+
+def expected_imp_frame_geometry() -> list[tuple[int, int, int, int]]:
+    return expected_frame_geometry(IMP_FRAME_NAMES)
+
+
+def extract_frame_geometry(source: str, table_name: str) -> list[tuple[int, int, int, int]]:
     match = re.search(
-        r"ENEMY_FRAME_GEOMETRY\[ENEMY_FRAME_GEOMETRY_COUNT\]\[4\]\s*=\s*\{(.*?)\n\};",
+        re.escape(table_name) + r"\[[A-Z_]+_COUNT\]\[4\]\s*=\s*\{(.*?)\n\};",
         source, re.S)
     if match is None:
-        raise ValueError("ENEMY_FRAME_GEOMETRY table not found in billboard_internal.h")
+        raise ValueError(f"{table_name} table not found in billboard_internal.h")
     rows = []
     for row in re.finditer(r"\{\s*(-?\d+),\s*(-?\d+),\s*(-?\d+),\s*(-?\d+)\s*\}",
                            match.group(1)):
         rows.append(tuple(int(g) for g in row.groups()))
     return rows
+
+
+def extract_enemy_frame_geometry(source: str) -> list[tuple[int, int, int, int]]:
+    return extract_frame_geometry(source, "ENEMY_FRAME_GEOMETRY")
+
+
+def extract_imp_frame_geometry(source: str) -> list[tuple[int, int, int, int]]:
+    return extract_frame_geometry(source, "IMP_FRAME_GEOMETRY")
 
 
 def check_enemy_frame_geometry(billboard_internal: str) -> None:
@@ -124,6 +142,17 @@ def check_enemy_frame_geometry(billboard_internal: str) -> None:
     corpse = actual[9]
     if corpse[1] - corpse[3] != 0:
         raise ValueError("the POSSL0 corpse no longer rests exactly on the floor line")
+
+
+def check_imp_frame_geometry(billboard_internal: str) -> None:
+    if "#define IMP_FRAME_GEOMETRY_COUNT 10" not in billboard_internal:
+        raise ValueError("IMP_FRAME_GEOMETRY_COUNT no longer covers the 10 imp poses")
+    actual = extract_imp_frame_geometry(billboard_internal)
+    expected = expected_imp_frame_geometry()
+    if actual != expected:
+        raise ValueError(
+            "IMP_FRAME_GEOMETRY drifted from the Doom picture headers:\n"
+            f"  expected {expected}\n  actual   {actual}")
 
 
 def projected_q12(value: int, scale: int) -> int:
@@ -239,9 +268,17 @@ def main() -> int:
     # all ten poses is exactly what left corpses floating at standing height.
     if "uses_wad_origin" in billboard or "uses_wad_origin" in billboard_internal:
         raise ValueError("a second billboard projection branch has reappeared")
-    if "ENEMY_FRAME_GEOMETRY[(frame < ENEMY_FRAME_GEOMETRY_COUNT) ? frame : 0]" not in billboard:
+    if ("ENEMY_FRAME_GEOMETRY[" not in billboard or
+            "IMP_FRAME_GEOMETRY[" not in billboard):
         raise ValueError("enemy geometry is no longer selected per pose")
     check_enemy_frame_geometry(billboard_internal)
+    check_imp_frame_geometry(billboard_internal)
+    if "case 3001: *visual = BILLBOARD_VISUAL_IMP; return BILLBOARD_TYPE_DUMMY;" not in billboard:
+        raise ValueError("Doom 3001 THINGs are not mapped to the imp visual")
+    assets = (ROOT / "src" / "billboard" / "generated_billboard_assets.h").read_text(
+        encoding="utf-8")
+    if "FREEDOOM_BILLBOARD_IMP_FRAMES" not in assets:
+        raise ValueError("generated imp billboard frames are missing")
     if "#define BILLBOARD_ENEMY_ATLAS_WIDTH 24" not in billboard_internal or \
             "#define BILLBOARD_ENEMY_ATLAS_HEIGHT 48" not in billboard_internal:
         raise ValueError("enemy atlas art dimensions changed unexpectedly")

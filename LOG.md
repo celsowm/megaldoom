@@ -8,6 +8,16 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## E1M1 imp sprites (2026-09-13)
+
+E1M1 already contains four Doom THINGs of type 3001 (the imp); the runtime
+mapped 3001 together with the 3004 zombieman and rendered both through the
+POSS sprite frames. The map and skill flags were therefore correct, but the
+imp was visually indistinguishable from the zombie. Type 3001 now carries a
+separate TROO frame set and source-derived pose geometry while retaining the
+existing shared enemy combat/AI class. `test-billboard-projection.py` checks the
+mapping, generated frames, and both geometry tables.
+
 ## Narrower windows, key cards on the HUD, a flat-faithful automap (2026-09-12)
 
 Three requests from play: windows cost too much, the HUD never showed picked-up

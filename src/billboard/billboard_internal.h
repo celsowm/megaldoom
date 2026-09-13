@@ -177,6 +177,23 @@ static const s16 ENEMY_FRAME_GEOMETRY[ENEMY_FRAME_GEOMETRY_COUNT][4] = {
     { 62,  33, 31,  33},  // 9 POSSL0 corpse 47x17 ty12  (top_offset == source_h
 };                        //                              => flat on the floor)
 
+// Imps use the same shared projection path and animation slots as the
+// zombieman, but keep their own source-derived pose boxes. Their native TROO
+// patches are a little taller and have different collapse proportions.
+#define IMP_FRAME_GEOMETRY_COUNT 10
+static const s16 IMP_FRAME_GEOMETRY[IMP_FRAME_GEOMETRY_COUNT][4] = {
+    { 54, 112, 27, 112},  // 0 TROOA1 walk   41x57 ty52
+    { 51, 110, 26, 110},  // 1 TROOB1 walk   39x56 ty51
+    { 51, 118, 26, 118},  // 2 TROOC1 walk   39x60 ty55
+    { 49, 112, 25, 112},  // 3 TROOD1 walk   37x57 ty52
+    { 58, 108, 29, 108},  // 4 TROOF1 attack 44x55 ty50
+    { 54, 108, 27, 108},  // 5 TROOH1 death  41x55 ty50
+    { 55, 122, 28, 122},  // 6 TROOI0 death  42x62 ty57
+    { 54, 116, 27, 116},  // 7 TROOJ0 death  41x59 ty54
+    { 53, 106, 27, 116},  // 8 TROOK0 death  40x54 ty54  (airborne)
+    { 63,  90, 32,  98},  // 9 TROOL0 corpse 48x46 ty45
+};
+
 // Animation cadence: 4 tics/pose, matching Doom's own POSS walk-state hold.
 #define ENEMY_WALK_HOLD 4
 // The death sequence, like every other AI timer in this file (see the block
@@ -221,6 +238,9 @@ typedef struct {
     s16 last_seen_x;
     s16 last_seen_y;
     u8 type_id;
+    // Map THING visual identity. Enemy behaviour remains shared by DUMMY,
+    // while this selects the source sprite family (POSS or TROO).
+    u8 visual_id;
     u8 hp;
     u8 active : 1;
     u8 saw_player : 1;

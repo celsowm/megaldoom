@@ -19,6 +19,7 @@ param(
     [string]$BillboardKeyPath = "res\originaldoom\sprites\BKEYA0.png",
     [string]$BillboardDecorPath = "res\originaldoom\sprites\BAR1A0.png",
     [string]$BillboardEnemyPath = "res\originaldoom\sprites\POSSA1.png",
+    [string]$BillboardImpPath = "res\originaldoom\sprites\TROOA1.png",
     [int]$BillboardEnemyW = 24,
     [int]$BillboardEnemyH = 48,
     [switch]$BillboardOnly
@@ -45,6 +46,7 @@ $BillboardSourcePath = Join-Path $Root $BillboardPath
 $BillboardKeySourcePath = Join-Path $Root $BillboardKeyPath
 $BillboardDecorSourcePath = Join-Path $Root $BillboardDecorPath
 $BillboardEnemySourcePath = Join-Path $Root $BillboardEnemyPath
+$BillboardImpSourcePath = Join-Path $Root $BillboardImpPath
 # Generated headers live beside the module that consumes them (src/<group>/),
 # not at the src/ root -- keep these in sync with the real tree or a
 # regeneration silently drops stale copies next to the hand-written headers.
@@ -152,6 +154,9 @@ if (-not (Test-Path $BillboardDecorSourcePath)) {
 }
 if (-not (Test-Path $BillboardEnemySourcePath)) {
     throw "Billboard enemy source not found: $BillboardEnemySourcePath"
+}
+if (-not (Test-Path $BillboardImpSourcePath)) {
+    throw "Billboard imp source not found: $BillboardImpSourcePath"
 }
 
 # Curated E1M1 item/prop atlas. Every entry is baked into the same compact 24x48
@@ -1244,6 +1249,8 @@ foreach ($spec in $BillboardWorldSpecs) {
 #   0..3 walk (POSSA1..D1), 4 attack (POSSF1), 5..9 death (POSSH0..L0, L0 = corpse).
 $EnemyFrameNames = @("POSSA1", "POSSB1", "POSSC1", "POSSD1", "POSSF1",
                      "POSSH0", "POSSI0", "POSSJ0", "POSSK0", "POSSL0")
+$ImpFrameNames = @("TROOA1", "TROOB1", "TROOC1", "TROOD1", "TROOF1",
+                   "TROOH1", "TROOI0", "TROOJ0", "TROOK0", "TROOL0")
 $EnemySpritesDir = "res\originaldoom\sprites"
 $enemyFrameBlocks = New-Object System.Collections.Generic.List[string]
 foreach ($name in $EnemyFrameNames) {
@@ -1253,6 +1260,15 @@ foreach ($name in $EnemyFrameNames) {
     }
     $enemyFrameRows = Convert-Image $enemyFramePath $BillboardEnemyW $BillboardEnemyH $true
     $enemyFrameBlocks.Add("    {" + "`r`n" + ($enemyFrameRows -join ",`r`n") + "`r`n    }")
+}
+$impFrameBlocks = New-Object System.Collections.Generic.List[string]
+foreach ($name in $ImpFrameNames) {
+    $impFramePath = Join-Path $Root (Join-Path $EnemySpritesDir "$name.png")
+    if (-not (Test-Path $impFramePath)) {
+        throw "Imp frame source not found: $impFramePath"
+    }
+    $impFrameRows = Convert-Image $impFramePath $BillboardEnemyW $BillboardEnemyH $true
+    $impFrameBlocks.Add("    {" + "`r`n" + ($impFrameRows -join ",`r`n") + "`r`n    }")
 }
 # Native Doom impact/explosion frames live in fixed transparent canvases while
 # retaining their individual picture-header geometry. This keeps later BEXP
@@ -1302,6 +1318,7 @@ foreach ($name in $BloodFrameNames) {
 }
 
 $enemyFrameCount = $EnemyFrameNames.Count
+$impFrameCount = $ImpFrameNames.Count
 $relativeSource = $TexturePath.Replace("\", "/")
 $relativeWallBrownSource = $WallBrownTexturePath.Replace("\", "/")
 $relativeWallGraySource = $WallGrayTexturePath.Replace("\", "/")
@@ -1320,6 +1337,7 @@ $relativeBillboardSource = $BillboardPath.Replace("\", "/")
 $relativeBillboardKeySource = $BillboardKeyPath.Replace("\", "/")
 $relativeBillboardDecorSource = $BillboardDecorPath.Replace("\", "/")
 $relativeBillboardEnemySource = $BillboardEnemyPath.Replace("\", "/")
+$relativeBillboardImpSource = $BillboardImpPath.Replace("\", "/")
 $generatedAt = "source-derived"
 
 $billboardContent = @"
@@ -1333,6 +1351,7 @@ $billboardContent = @"
 // Key billboard source: $relativeBillboardKeySource
 // Decor billboard source: $relativeBillboardDecorSource
 // Enemy billboard frames: $($EnemyFrameNames -join ", ") (from $EnemySpritesDir)
+// Imp billboard frames: $($ImpFrameNames -join ", ") (from $EnemySpritesDir)
 // Generated at: $generatedAt
 // Palette index 0 is transparent for billboard rendering.
 static const u8 FREEDOOM_BILLBOARD_BONUS_TEXTURE[16][16] = {
@@ -1380,6 +1399,15 @@ static const u8 FREEDOOM_BILLBOARD_PICKUP_USE_POSTS
 // Enemy poses indexed by frame: 0..3 walk, 4 attack, 5..9 death (9 = corpse).
 static const u8 FREEDOOM_BILLBOARD_ENEMY_FRAMES[FREEDOOM_BILLBOARD_ENEMY_FRAME_COUNT][$BillboardEnemyH][$BillboardEnemyW] = {
 $($enemyFrameBlocks -join ",`r`n")
+};
+
+#define FREEDOOM_BILLBOARD_IMP_W $BillboardEnemyW
+#define FREEDOOM_BILLBOARD_IMP_H $BillboardEnemyH
+#define FREEDOOM_BILLBOARD_IMP_FRAME_COUNT $impFrameCount
+
+// Imp poses indexed by frame: 0..3 walk, 4 attack, 5..9 death (9 = corpse).
+static const u8 FREEDOOM_BILLBOARD_IMP_FRAMES[FREEDOOM_BILLBOARD_IMP_FRAME_COUNT][$BillboardEnemyH][$BillboardEnemyW] = {
+$($impFrameBlocks -join ",`r`n")
 };
 
 // Back-compat alias: frame 0 is the standing/idle pose (POSSA1).
