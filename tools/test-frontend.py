@@ -55,13 +55,18 @@ for selected in range(3):
         expected[f"main_{selected}_{frame}.png"] = (192, 176)
     expected[f"pause_{selected}.png"] = (320, 224)
 # OPTIONS is the cross product of MUSIC, SFX, the VIEW SIZE preset, DEBUG and
-# the cursor row (MUSIC / SFX / VIEW SIZE / DEBUG / BACK).
+# the cursor row (MUSIC / SFX / VIEW SIZE / DEBUG / CONTROLS / BACK).
 for music in range(2):
     for sfx in range(2):
         for view in range(raycast_constants.view_size_count()):
             for debug in range(2):
-                for selected in range(5):
+                for selected in range(6):
                     expected[f"options_{music}_{sfx}_{view}_{debug}_{selected}.png"] = (320, 224)
+# CONTROLS is one label panel per cursor row (six actions, DEFAULTS, BACK) plus
+# the A B C X Y Z sheet frontend.c stamps into the value column at runtime.
+for selected in range(8):
+    expected[f"controls_{selected}.png"] = (320, 224)
+expected["controls_buttons.png"] = (96, 8)
 for selected in range(5):
     expected[f"skill_{selected}.png"] = (320, 224)
 for selected in range(2):
@@ -253,6 +258,23 @@ pause_tiles = max(
 )
 pause_end = pair_base + pause_tiles
 assert pause_end < 1440, "pause overlay exceeds the reloadable VRAM region"
+# CONTROLS loads its A B C X Y Z sheet right after the panel's own tiles.
+controls_end = pair_base + max(
+    unique_tiles(path) for path in ASSETS.glob("controls_[0-9].png")
+) + unique_tiles(ASSETS / "controls_buttons.png")
+assert controls_end < 1440, "CONTROLS panel plus button glyphs exceed the reloadable VRAM region"
+# From the title, OPTIONS (and so CONTROLS) loads after the main menu and skull.
+title_controls_end = controls_end - pair_base + 16 + unique_tiles(ASSETS / "main_menu.png") + \
+    unique_tiles(ASSETS / "skull1.png")
+assert title_controls_end < 1440, "CONTROLS from the title menu exceeds user VRAM"
+for token in ("#define CONTROLS_VALUE_X 28", "#define CONTROLS_FIRST_ROW_Y 7",
+              "#define CONTROLS_ROW_STEP 2", "run_controls", "controls_cycle"):
+    assert token in FRONTEND, token
+GENERATOR = (ROOT / "tools/generate-frontend-assets.py").read_text()
+assert "#define CONTROLS_GLYPH_W 2" in FRONTEND
+for token in ("CONTROLS_VALUE_X_PX = 224", "CONTROLS_FIRST_ROW_Y_PX = 56",
+              "CONTROLS_ROW_PITCH = 16", "CONTROLS_BUTTON_CELL_PX = 16"):
+    assert token in GENERATOR, f"frontend.c CONTROLS tile geometry no longer matches: {token}"
 
 for token in (
     "frontend_run", "frontend_run_pause", "frontend_prompt", "FRONTEND_PAUSE_QUIT_TO_TITLE",

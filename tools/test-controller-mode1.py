@@ -27,9 +27,14 @@ def main():
 
     assert "BUTTON_C | BUTTON_START" in AUTOMAP
     assert "BUTTON_A | BUTTON_START" in AUTOMAP
-    assert "pressed & BUTTON_Z" in AUTOMAP
-    assert "pressed & BUTTON_X" in AUTOMAP
-    assert "pressed & BUTTON_Y" in AUTOMAP
+    # 6-button automap keys follow OPTIONS > CONTROLS (Z/X/Y by default); the
+    # 3-button chords above stay on the physical buttons.
+    assert "controls_button(CONTROL_AUTOMAP)" in AUTOMAP
+    assert "pressed & map_button" in AUTOMAP
+    assert "pressed & follow_button" in AUTOMAP
+    assert "pressed & full_button" in AUTOMAP
+    assert "controls_to_logical(JOY_readJoypad(JOY_1))" in SOURCE
+    assert "latched_pressed = controls_to_logical(latched_pressed);" in SOURCE
     assert "AutomapInput" in AUTOMAP
     assert "consumed_buttons" in AUTOMAP
     assert "gameplay_pressed" in MAIN

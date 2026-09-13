@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- New **CONTROLS** submenu under OPTIONS (title and pause menu): FIRE, USE/STRAFE
+  and RUN can be moved between A, B and C, and PREV WEAPON, NEXT WEAPON and
+  AUTOMAP between X, Y and Z. Choosing a button that is already taken swaps the
+  two actions, so nothing is ever left unbound; DEFAULTS restores the original
+  layout. The choice lasts for the session.
 - Fixed: taking a hit (an enemy attack or a barrel blast) could knock the
   player straight through a wall and out of the map, with no way back in.
   Knockback is now applied in steps too small for collision to skip a wall.

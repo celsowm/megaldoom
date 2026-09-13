@@ -1,4 +1,5 @@
 #include "frontend.h"
+#include "controls.h"
 #include "debug_checkpoint.h"
 #include "debug_light.h"
 #include "game_audio.h"
@@ -20,8 +21,22 @@
 #define OPTIONS_ROW_SFX 1
 #define OPTIONS_ROW_VIEW_SIZE 2
 #define OPTIONS_ROW_DEBUG 3
-#define OPTIONS_ROW_BACK 4
-#define OPTIONS_ROW_COUNT 5
+#define OPTIONS_ROW_CONTROLS 4
+#define OPTIONS_ROW_BACK 5
+#define OPTIONS_ROW_COUNT 6
+// CONTROLS rows: one per ControlAction (controls.h), then DEFAULTS and BACK.
+// The bound button letter is stamped per action row from
+// frontend_controls_buttons (glyphs A B C X Y Z), in tiles; these mirror
+// CONTROLS_VALUE_X_PX / CONTROLS_FIRST_ROW_Y_PX / CONTROLS_ROW_PITCH in
+// tools/generate-frontend-assets.py.
+#define CONTROLS_ROW_DEFAULTS CONTROL_ACTION_COUNT
+#define CONTROLS_ROW_BACK (CONTROL_ACTION_COUNT + 1)
+#define CONTROLS_ROW_COUNT (CONTROL_ACTION_COUNT + 2)
+#define CONTROLS_VALUE_X 28
+#define CONTROLS_FIRST_ROW_Y 7
+#define CONTROLS_ROW_STEP 2
+// Each letter occupies two tiles of the sheet (CONTROLS_BUTTON_CELL_PX = 16).
+#define CONTROLS_GLYPH_W 2
 #define PANEL_X 8
 #define PANEL_Y 7
 #define MAIN_CURSOR_X 9
@@ -719,13 +734,15 @@ static void load_main_cursor_tiles(u16 tile_base) {
 // One pre-rendered panel per (music, sfx, view size, debug, cursor row)
 // combination. The table is indexed rather than branched so adding a setting
 // is a generator change plus a dimension here, not another nested if-ladder;
-// the macros only spell out the 120 generated resource names.
+// the macros only spell out the 144 generated resource names.
 #define OPTIONS_PANEL_ROWS(m, s, v, d) {                                   \
     &frontend_options_##m##_##s##_##v##_##d##_0,                        \
     &frontend_options_##m##_##s##_##v##_##d##_1,                        \
     &frontend_options_##m##_##s##_##v##_##d##_2,                        \
     &frontend_options_##m##_##s##_##v##_##d##_3,                        \
-    &frontend_options_##m##_##s##_##v##_##d##_4 }
+    &frontend_options_##m##_##s##_##v##_##d##_4,                        \
+    &frontend_options_##m##_##s##_##v##_##d##_5 }
+_Static_assert(OPTIONS_ROW_COUNT == 6, "OPTIONS_PANEL_ROWS spells out six cursor rows");
 #define OPTIONS_PANEL_DEBUG(m, s, v) \
     { OPTIONS_PANEL_ROWS(m, s, v, 0), OPTIONS_PANEL_ROWS(m, s, v, 1) }
 #define OPTIONS_PANEL_VIEWS(m, s) \
@@ -780,6 +797,103 @@ static void options_cycle_view_size(s16 delta) {
     raycast_set_view_size(next);
 }
 
+// CONTROLS is not a cross product like OPTIONS: 36 layouts x 8 cursor rows
+// would be 288 full-screen panels. Each panel carries the labels and the skull
+// only; the bound button of every action row is one glyph tile stamped from
+// frontend_controls_buttons, whose tiles load straight after the panel's own.
+static const Image *const CONTROLS_PANELS[CONTROLS_ROW_COUNT] = {
+    &frontend_controls_0, &frontend_controls_1, &frontend_controls_2,
+    &frontend_controls_3, &frontend_controls_4, &frontend_controls_5,
+    &frontend_controls_6, &frontend_controls_7,
+};
+_Static_assert(CONTROLS_ROW_COUNT == 8, "CONTROLS_PANELS spells out eight cursor rows");
+
+static void draw_controls_values(u16 glyph_base) {
+    for (u16 row = 0; row < CONTROL_ACTION_COUNT; row++) {
+        VDP_setTileMapEx(BG_A, frontend_controls_buttons.tilemap,
+                         TILE_ATTR_FULL(PAL0, TRUE, FALSE, FALSE, glyph_base),
+                         CONTROLS_VALUE_X,
+                         (u16)(CONTROLS_FIRST_ROW_Y + row * CONTROLS_ROW_STEP),
+                         (u16)(controls_button_glyph((ControlAction)row) * CONTROLS_GLYPH_W),
+                         0, CONTROLS_GLYPH_W, 1, CPU);
+    }
+}
+
+static u16 controls_glyph_base(u16 selected, u16 tile_base) {
+    return (u16)(tile_base + CONTROLS_PANELS[selected]->tileset->numTile);
+}
+
+// draw_panel() plus the glyph sheet and the value column, inside the same
+// display-off / XGM2-suspended window so the letters never flash in late.
+static void draw_controls_panel(u16 selected, u16 tile_base) {
+    const u16 glyph_base = controls_glyph_base(selected, tile_base);
+    game_audio_suspend_for_video();
+    VDP_waitVSync();
+    VDP_setEnable(FALSE);
+    VDP_drawImageEx(BG_A, CONTROLS_PANELS[selected],
+                    TILE_ATTR_FULL(PAL0, TRUE, FALSE, FALSE, tile_base),
+                    0, 0, TRUE, TRUE);
+    VDP_loadTileSet(frontend_controls_buttons.tileset, glyph_base, CPU);
+    draw_controls_values(glyph_base);
+    VDP_setEnable(TRUE);
+    game_audio_resume_after_video();
+}
+
+// Menu navigation stays on the physical MENU_ACCEPT / MENU_BACK buttons, so no
+// layout can lock the player out of this screen. LEFT/RIGHT step an action
+// through its button group and ACCEPT steps forward, like VIEW SIZE; a clash
+// swaps the two actions (controls_cycle), so the layout is always complete.
+static void run_controls(u16 tile_base) {
+    u16 selected = 0;
+    u16 previous;
+
+    draw_controls_panel(selected, tile_base);
+    wait_for_release(MENU_INPUT);
+    previous = JOY_readJoypad(JOY_1);
+    while (TRUE) {
+        const u16 pressed = read_pressed(&previous);
+        bool redraw = FALSE;
+        bool values_changed = FALSE;
+        if ((pressed & BUTTON_UP) != 0) {
+            selected = (u16)((selected + CONTROLS_ROW_COUNT - 1) % CONTROLS_ROW_COUNT);
+            redraw = TRUE;
+        }
+        if ((pressed & BUTTON_DOWN) != 0) {
+            selected = (u16)((selected + 1) % CONTROLS_ROW_COUNT);
+            redraw = TRUE;
+        }
+        if (selected < CONTROL_ACTION_COUNT) {
+            if ((pressed & BUTTON_LEFT) != 0) {
+                controls_cycle((ControlAction)selected, -1);
+                values_changed = TRUE;
+            }
+            if ((pressed & BUTTON_RIGHT) != 0) {
+                controls_cycle((ControlAction)selected, 1);
+                values_changed = TRUE;
+            }
+        }
+        if ((pressed & MENU_BACK) != 0) break;
+        if ((pressed & MENU_ACCEPT) != 0) {
+            if (selected < CONTROL_ACTION_COUNT) {
+                controls_cycle((ControlAction)selected, 1);
+            } else if (selected == CONTROLS_ROW_DEFAULTS) {
+                controls_reset_defaults();
+            } else {
+                break;
+            }
+            values_changed = TRUE;
+        }
+        if (redraw) {
+            draw_controls_panel(selected, tile_base);
+        } else if (values_changed) {
+            // The glyph tiles are already loaded; only the value column moves.
+            draw_controls_values(controls_glyph_base(selected, tile_base));
+        }
+        VDP_waitVSync();
+    }
+    wait_for_release(MENU_INPUT);
+}
+
 static void run_options(u16 tile_base) {
     u16 selected = 0;
     u16 previous;
@@ -820,6 +934,12 @@ static void run_options(u16 tile_base) {
             else if (selected == OPTIONS_ROW_VIEW_SIZE) options_cycle_view_size(1);
             else if (selected == OPTIONS_ROW_DEBUG) {
                 debug_light_set_enabled(!debug_light_enabled());
+            }
+            else if (selected == OPTIONS_ROW_CONTROLS) {
+                // Same hand-off as the pause menu's OPTIONS row: the submenu
+                // owns the planes and the pad until it returns.
+                run_controls(tile_base);
+                previous = JOY_readJoypad(JOY_1);
             }
             else break;
             redraw = TRUE;

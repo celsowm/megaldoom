@@ -69,8 +69,9 @@ with tempfile.TemporaryDirectory(prefix="megaldoom-build-test-") as folder:
     # preset updates it here instead of failing with a bare number mismatch.
     # The fixed count carries one stats panel and one "ENTERING" card per
     # campaign level, so it grows by two whenever a level is added: 44 for the
-    # three-map campaign, 46 with E1M4.
-    assert len(frontend.EXPECTED_OUTPUTS) == 46 + (
+    # three-map campaign, 46 with E1M4. The CONTROLS submenu adds one label panel
+    # per cursor row plus the button-letter sheet.
+    assert len(frontend.EXPECTED_OUTPUTS) == 46 + (frontend.CONTROLS_ROWS + 1) + (
         2 * 2 * frontend.VIEW_SIZE_COUNT * 2 * frontend.OPTIONS_ROWS)
     for name in frontend.CACODEMON_BOOT_FRAMES:
         assert frontend.SPRITE_SOURCE / f"{name}.png" in frontend.source_paths(source)

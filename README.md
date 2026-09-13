@@ -64,6 +64,16 @@ pickups, doors, switches and the classic Doom front-end experience.
 - A + Start: show the full map / restore the previous view
 - Start alone: pause
 
+### Customising the controls
+
+OPTIONS > CONTROLS (from the title or the pause menu) remaps the gameplay
+buttons. FIRE, USE (which is also the strafe and weapon-chord modifier) and RUN
+can each go on A, B or C; PREV WEAPON, NEXT WEAPON and AUTOMAP on X, Y or Z.
+Picking a button already in use swaps the two actions, and DEFAULTS restores the
+layout above. On a 6-button pad the automap's follow and full-view keys move
+with PREV and NEXT WEAPON. Menu keys and the 3-button automap chords are fixed.
+The layout lasts until the console is switched off.
+
 ## Build from source
 
 The project uses [SGDK](https://github.com/Stephane-D/SGDK) and can be built on

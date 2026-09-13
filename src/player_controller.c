@@ -1,4 +1,5 @@
 #include "player_controller.h"
+#include "controls.h"
 #include "fixed_math.h"
 
 // Turning uses a fixed-point ramp that is scaled by the real elapsed-vblank count
@@ -252,7 +253,13 @@ u16 player_controller_consume_latched(void) {
 
 u16 player_controller_update(PlayerState *player, u16 elapsed_frames,
                              u16 latched_pressed, PlayerControlMode mode) {
-    const u16 joy = JOY_readJoypad(JOY_1);
+    // OPTIONS > CONTROLS remaps the face buttons. Translate the cached pad and
+    // the ISR latch back to the default layout's bits once, here, so the rest of
+    // this function keeps reading A as run, B as fire, C as use/strafe and X/Y
+    // as previous/next weapon. The latch itself stays physical (see main.c's
+    // automap consumption mask), so this is the only translation point.
+    const u16 joy = controls_to_logical(JOY_readJoypad(JOY_1));
+    latched_pressed = controls_to_logical(latched_pressed);
     const bool six_button_pad = (JOY_getJoypadType(JOY_1) == JOY_TYPE_PAD6);
     const bool gameplay = (bool)(mode == PLAYER_CONTROL_MODE_GAMEPLAY);
     const bool map_follow = (bool)(mode == PLAYER_CONTROL_MODE_AUTOMAP_FOLLOW);

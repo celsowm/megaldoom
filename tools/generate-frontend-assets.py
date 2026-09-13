@@ -35,17 +35,38 @@ SEGA_FONT = BOOT_SOURCE / "SEGA.TTF"
 MANIFEST_NAME = ".frontend-assets.json"
 # Bumped whenever the generated set changes shape, so a stale cache is rebuilt
 # rather than silently reused. 12: the OPTIONS panel gained a VIEW SIZE row.
-# 14: and a DEBUG row.
-MANIFEST_VERSION = 14
+# 14: and a DEBUG row. 15: a CONTROLS row and the CONTROLS submenu.
+MANIFEST_VERSION = 15
 
 sys.path.insert(0, str(ROOT / "tools"))
 import raycast_constants
 
 # The OPTIONS panel offers one row per viewport preset value plus MUSIC, SFX,
-# DEBUG and BACK. Read from raycast.h so adding a preset cannot leave the menu unable to
+# DEBUG, CONTROLS and BACK. Read from raycast.h so adding a preset cannot leave the menu unable to
 # display it.
 VIEW_SIZE_COUNT = raycast_constants.view_size_count()
-OPTIONS_ROWS = 5
+OPTIONS_ROWS = 6
+
+# CONTROLS submenu. Unlike OPTIONS it is NOT a cross product: 36 layouts x 8
+# cursor rows would be 288 full-screen panels. Each panel carries only the labels
+# and the skull, and frontend.c stamps the bound button letter for every action
+# row from controls_buttons.png at runtime, so the value column and every row
+# must sit on 8px tile boundaries. frontend.c mirrors these as CONTROLS_VALUE_X
+# (tiles), CONTROLS_FIRST_ROW_Y (tiles) and CONTROLS_ROW_STEP (tiles).
+# Row order matches the ControlAction enum in src/controls.h.
+CONTROLS_LABELS = (
+    "FIRE", "USE", "RUN", "PREV WEAPON", "NEXT WEAPON", "AUTOMAP", "DEFAULTS", "BACK",
+)
+CONTROLS_ROWS = len(CONTROLS_LABELS)
+CONTROLS_BUTTONS = "ABCXYZ"
+CONTROLS_BOX = (64, 16, 192, 184)   # x, y, w, h on the 320x224 screen
+CONTROLS_TITLE_Y = 28
+CONTROLS_FIRST_ROW_Y_PX = 56
+CONTROLS_ROW_PITCH = 16             # Doom's own menu LINEHEIGHT
+CONTROLS_LABEL_X = 112
+CONTROLS_VALUE_X_PX = 224
+CONTROLS_BUTTON_CELL_PX = 16        # two tiles per letter: STCFN's X is 9px wide
+CONTROLS_SKULL_X = 88
 
 PATCHES = (
     "TITLEPIC", "M_DOOM", "M_NGAME", "M_OPTION", "M_QUITG",
@@ -62,6 +83,7 @@ DOOM_FONT_TEXT = (
     "BUILT FOR THE 16-BIT ERA", "SOFTWARE DEVELOPMENT KIT", "FOLLOW THE PROJECT",
     "GITHUB.COM/CELSOWM/MEGALDOOM", "X.COM/PROFCELSOFONTES", "THANKS FOR PLAYING",
     "EPISODE COMPLETE", "THE INVASION CONTINUES...", "VERSION 0.2", "PRESS START",
+    "CONTROLS", *CONTROLS_LABELS, CONTROLS_BUTTONS,
 )
 GLYPHS = tuple(sorted({
     f"STCFN{ord(character):03d}"
@@ -136,6 +158,8 @@ def expected_outputs() -> tuple[str, ...]:
     names.extend(f"skill_{selected}.png" for selected in range(5))
     names.extend(f"pause_{selected}.png" for selected in range(3))
     names.extend(f"confirm_{selected}.png" for selected in range(2))
+    names.extend(f"controls_{selected}.png" for selected in range(CONTROLS_ROWS))
+    names.append("controls_buttons.png")
     return tuple(names)
 
 
@@ -449,6 +473,54 @@ def screen_overlay(panel: Image.Image) -> Image.Image:
     screen = transparent_canvas(320, 224)
     screen.alpha_composite(panel, ((320 - panel.width) // 2, (224 - panel.height) // 2))
     return screen
+
+
+def controls_panel(images: dict[str, Image.Image], selected: int,
+                   source: Path = SOURCE) -> Image.Image:
+    """One CONTROLS panel: title, every row label and the skull on `selected`.
+
+    The bound-button column is left blank; frontend.c stamps one glyph tile from
+    controls_buttons.png per action row, so that column and every row have to
+    land on 8px tile boundaries.
+    """
+    box_x, box_y, box_w, box_h = CONTROLS_BOX
+    for value in (*CONTROLS_BOX, CONTROLS_FIRST_ROW_Y_PX, CONTROLS_ROW_PITCH,
+                  CONTROLS_VALUE_X_PX):
+        assert value % 8 == 0, "CONTROLS geometry must stay on 8px tile boundaries"
+    last_row_y = CONTROLS_FIRST_ROW_Y_PX + (CONTROLS_ROWS - 1) * CONTROLS_ROW_PITCH
+    assert box_x + box_w <= 320 and last_row_y + 8 <= box_y + box_h <= 224
+    assert box_x < CONTROLS_VALUE_X_PX and CONTROLS_VALUE_X_PX + 8 <= box_x + box_w
+
+    screen = transparent_canvas(320, 224)
+    screen.alpha_composite(Image.new("RGBA", (box_w, box_h), (0, 0, 0, 255)), (box_x, box_y))
+    centered_doom_text(screen, "CONTROLS", CONTROLS_TITLE_Y, source)
+    for row, label in enumerate(CONTROLS_LABELS):
+        text = doom_text(label, source)
+        assert CONTROLS_LABEL_X + text.width <= CONTROLS_VALUE_X_PX - 8, \
+            f"CONTROLS label {label!r} runs into the button column"
+        screen.alpha_composite(text, (CONTROLS_LABEL_X, CONTROLS_FIRST_ROW_Y_PX + row * CONTROLS_ROW_PITCH))
+    # Doom draws its skull 5px above a 16px-pitch menu line; the skull is taller
+    # than the pitch but only overlaps the next row in its own left-hand column.
+    skull = images["M_SKULL1"]
+    skull_y = CONTROLS_FIRST_ROW_Y_PX + selected * CONTROLS_ROW_PITCH - 5
+    assert CONTROLS_SKULL_X + skull.width <= CONTROLS_LABEL_X
+    assert box_y <= skull_y and skull_y + skull.height <= box_y + box_h
+    screen.alpha_composite(skull, (CONTROLS_SKULL_X, skull_y))
+    return screen
+
+
+def controls_buttons(source: Path = SOURCE) -> Image.Image:
+    """The A B C X Y Z value glyphs, one opaque two-tile (16x8) cell each, in the
+    order controls_button_glyph() indexes them. STCFN's X is wider than a tile,
+    so every letter gets two tiles and is centred in them."""
+    cell = CONTROLS_BUTTON_CELL_PX
+    assert CONTROLS_VALUE_X_PX + cell <= CONTROLS_BOX[0] + CONTROLS_BOX[2]
+    sheet = Image.new("RGBA", (cell * len(CONTROLS_BUTTONS), 8), (0, 0, 0, 255))
+    for index, letter in enumerate(CONTROLS_BUTTONS):
+        glyph = doom_text(letter, source)
+        assert glyph.width <= cell, f"button glyph {letter} is wider than its cell"
+        sheet.alpha_composite(glyph, (index * cell + (cell - glyph.width) // 2, 0))
+    return sheet
 
 
 def boot_background() -> Image.Image:
@@ -885,7 +957,8 @@ def generate(source: Path, output: Path) -> None:
                         centered_doom_text(panel, f"SFX {'ON' if sfx else 'OFF'}", 64, source)
                         centered_doom_text(panel, f"VIEW SIZE {view + 1}", 88, source)
                         centered_doom_text(panel, f"DEBUG {'ON' if debug else 'OFF'}", 112, source)
-                        centered_doom_text(panel, "BACK", 136, source)
+                        centered_doom_text(panel, "CONTROLS", 136, source)
+                        centered_doom_text(panel, "BACK", 160, source)
                         assets[f"options_{music}_{sfx}_{view}_{debug}_{selected}.png"] = (
                             screen_overlay(panel), True)
 
@@ -911,6 +984,12 @@ def generate(source: Path, output: Path) -> None:
         centered_doom_text(panel, "YES", 52, source)
         centered_doom_text(panel, "NO", 76, source)
         assets[f"confirm_{selected}.png"] = (screen_overlay(panel), True)
+
+    # CONTROLS: labels + skull per cursor row; frontend.c stamps the bound
+    # button letters from controls_buttons.png at runtime.
+    for selected in range(CONTROLS_ROWS):
+        assets[f"controls_{selected}.png"] = (controls_panel(images, selected, source), True)
+    assets["controls_buttons.png"] = (controls_buttons(source), False)
     for filename, (image, transparent) in assets.items():
         if filename == "boot_sega.png":
             # The SEGA card is already literal indexed PAL0 art.  Do not send

@@ -1,5 +1,6 @@
 #include "automap.h"
 #include "bsp_map.h"
+#include "controls.h"
 
 #define AUTOMAP_PAN_PIXELS_PER_VBLANK 2
 
@@ -73,7 +74,14 @@ AutomapInput automap_update_input(AutomapState *state, const PlayerState *player
     const bool three_toggle = (bool)(!six_button_pad &&
         ((chord_state & (BUTTON_C | BUTTON_START)) == (BUTTON_C | BUTTON_START)) &&
         ((pressed & (BUTTON_C | BUTTON_START)) != 0));
-    const bool six_toggle = (bool)(six_button_pad && (pressed & BUTTON_Z));
+    // On a 6-button pad the automap keys follow OPTIONS > CONTROLS: the toggle is
+    // whatever AUTOMAP is bound to, and follow / full view sit on the buttons
+    // PREV / NEXT WEAPON hold (Z, X and Y by default), so the three can never
+    // collide. The 3-button chords and the A/B/C keys below stay physical.
+    const u16 map_button = controls_button(CONTROL_AUTOMAP);
+    const u16 follow_button = controls_button(CONTROL_PREV_WEAPON);
+    const u16 full_button = controls_button(CONTROL_NEXT_WEAPON);
+    const bool six_toggle = (bool)(six_button_pad && (pressed & map_button));
 
     if (three_toggle || six_toggle) {
         state->active = (bool)!state->active;
@@ -81,7 +89,7 @@ AutomapInput automap_update_input(AutomapState *state, const PlayerState *player
         state->center_y = player->y;
         state->full_view = FALSE;
         result.flags |= AUTOMAP_INPUT_REDRAW | AUTOMAP_INPUT_TOGGLED;
-        result.consumed_buttons = three_toggle ? (BUTTON_C | BUTTON_START) : BUTTON_Z;
+        result.consumed_buttons = three_toggle ? (BUTTON_C | BUTTON_START) : map_button;
         return result;
     }
     if (!state->active) return result;
@@ -96,18 +104,18 @@ AutomapInput automap_update_input(AutomapState *state, const PlayerState *player
     }
 
     if (six_button_pad) {
-        if (pressed & BUTTON_X) {
+        if (pressed & follow_button) {
             state->follow = (bool)!state->follow;
             state->full_view = FALSE;
             state->center_x = player->x;
             state->center_y = player->y;
             result.flags |= AUTOMAP_INPUT_REDRAW;
-            result.consumed_buttons |= BUTTON_X;
+            result.consumed_buttons |= follow_button;
         }
-        if (pressed & BUTTON_Y) {
+        if (pressed & full_button) {
             automap_toggle_full(state, player);
             result.flags |= AUTOMAP_INPUT_REDRAW;
-            result.consumed_buttons |= BUTTON_Y;
+            result.consumed_buttons |= full_button;
         }
         if (pressed & BUTTON_C) {
             state->grid = (bool)!state->grid;
