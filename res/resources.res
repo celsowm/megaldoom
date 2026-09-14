@@ -31,6 +31,8 @@ IMAGE frontend_intermission_splat "frontend/intermission_splat.png" NONE ALL
 IMAGE frontend_intermission_pointer0 "frontend/intermission_pointer0.png" NONE ALL
 SPRITE frontend_cacodemon     "frontend/cacodemon.png" 6 7 FAST 0
 SPRITE frontend_cacodemon_projectile "frontend/cacodemon_projectile.png" 7 6 FAST 0
+SPRITE frontend_sonic_nono    "frontend/sonic_nono.png" 4 5 FAST 0
+SPRITE frontend_sonic_dies    "frontend/sonic_dies.png" 4 5 FAST 0
 SPRITE frontend_sega_s        "frontend/sega_s.png" 4 6 FAST 0
 SPRITE frontend_sega_e        "frontend/sega_e.png" 4 6 FAST 0
 SPRITE frontend_sega_g        "frontend/sega_g.png" 4 6 FAST 0

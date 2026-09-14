@@ -36,7 +36,8 @@ MANIFEST_NAME = ".frontend-assets.json"
 # Bumped whenever the generated set changes shape, so a stale cache is rebuilt
 # rather than silently reused. 12: the OPTIONS panel gained a VIEW SIZE row.
 # 14: and a DEBUG row. 15: a CONTROLS row and the CONTROLS submenu.
-MANIFEST_VERSION = 15
+# 16: the SEGA card gained Sonic's PAL3 sprite sheets.
+MANIFEST_VERSION = 16
 
 sys.path.insert(0, str(ROOT / "tools"))
 import raycast_constants
@@ -96,9 +97,12 @@ CACODEMON_BOOT_FRAMES = (
     "HEADA1", "HEADB1", "HEADC1", "HEADD1", "HEADE1", "HEADF1",
 )
 CACODEMON_PROJECTILE_FRAMES = ("BAL2A0", "BAL2B0", "BAL2C0", "BAL2D0", "BAL2E0")
+SONIC_NONO_FRAMES = ("sonic_nono_1.png", "sonic_nono_2.png")
+SONIC_DIES_FRAME = "sonic_dies.png"
 BOOT_INPUTS = (
     *(SPRITE_SOURCE / f"{name}.png" for name in CACODEMON_BOOT_FRAMES),
     *(SPRITE_SOURCE / f"{name}.png" for name in CACODEMON_PROJECTILE_FRAMES),
+    *(BOOT_SOURCE / name for name in (*SONIC_NONO_FRAMES, SONIC_DIES_FRAME)),
     SEGA_FONT,
 )
 INTERMISSION_PATCHES = (
@@ -137,7 +141,7 @@ def expected_outputs() -> tuple[str, ...]:
         "title.png", "prompt.png", "death_prompt.png", "main_menu.png", "logo.png",
         "options.png", "skull1.png", "skull2.png",
         "boot_disclaimer.png", "boot_sega.png", "boot_social.png", "cacodemon.png",
-        "cacodemon_projectile.png",
+        "cacodemon_projectile.png", "sonic_nono.png", "sonic_dies.png",
         "sega_s.png", "sega_e.png", "sega_g.png", "sega_a.png",
         "ending_mars.png", "ending_thanks.png", "intermission_stats.png",
         "intermission_stats_e1m2.png", "intermission_stats_e1m3.png",
@@ -380,6 +384,44 @@ def build_cacodemon_palette(image: Image.Image) -> list[tuple[int, int, int]]:
     # palette, with useful ramps instead of uninitialized palette entries.
     for color in ((109, 72, 36), (182, 72, 36), (255, 145, 109),
                   (36, 36, 36), (219, 219, 219), (72, 109, 36)):
+        if color not in colors:
+            colors.append(color)
+    return [(0, 0, 0), *colors[:15]]
+
+
+def build_sonic_palette(images: list[Image.Image]) -> list[tuple[int, int, int]]:
+    """Quantize Sonic's blue, skin, shoe and glove ramps into boot PAL3."""
+    opaque = [
+        (r, g, b)
+        for image in images
+        for r, g, b, a in image.convert("RGBA").get_flattened_data()
+        if a >= 128
+    ]
+    sample = Image.new("RGB", (len(opaque), 1))
+    sample.putdata(opaque)
+    quantized = sample.quantize(colors=8, method=Image.Quantize.MEDIANCUT)
+    raw = quantized.getpalette()
+
+    def genesis_level(channel: int) -> int:
+        return (round(channel * 7 / 255) * 255) // 7
+
+    # Keep the semantic ramps before filling the remaining entries from the
+    # downloaded frames: median cut alone can lose the red shoes or skin tone
+    # when the blue silhouette dominates the sheet.
+    colors: list[tuple[int, int, int]] = []
+    for color in (
+        (0, 0, 72), (36, 36, 182), (72, 72, 255), (109, 109, 255),
+        (182, 109, 72), (255, 182, 145),
+        (145, 0, 0), (255, 0, 0),
+        (72, 72, 72), (182, 182, 182), (255, 255, 255),
+    ):
+        if color not in colors:
+            colors.append(color)
+    for index in range(8):
+        color = tuple(genesis_level(channel) for channel in raw[index * 3:index * 3 + 3])
+        if color != (0, 0, 0) and color not in colors:
+            colors.append(color)
+    for color in ((72, 36, 36), (219, 145, 109), (36, 36, 109), (219, 219, 219)):
         if color not in colors:
             colors.append(color)
     return [(0, 0, 0), *colors[:15]]
@@ -701,6 +743,37 @@ def make_cacodemon_projectile() -> Image.Image:
     return sheet
 
 
+def sonic_cell(source_name: str) -> Image.Image:
+    """Fit a downloaded Sonic pose to the SEGA wordmark's visual height.
+
+    The source is intentionally preserved as pixel art: crop transparent
+    padding, scale only with nearest-neighbour, then bottom-align its 36px
+    silhouette inside a 32x40 tile-aligned cell.
+    """
+    source = Image.open(BOOT_SOURCE / source_name).convert("RGBA")
+    alpha = source.getchannel("A")
+    bbox = alpha.getbbox()
+    if bbox is None:
+        raise ValueError(f"{source_name} contains no visible pixels")
+    pose = source.crop(bbox)
+    pose.thumbnail((32, 36), Image.Resampling.NEAREST)
+    cell = transparent_canvas(32, 40)
+    cell.alpha_composite(pose, ((32 - pose.width) // 2, 40 - pose.height))
+    return cell
+
+
+def make_sonic_nono() -> Image.Image:
+    """Pack the two refusal poses into one 4x5-cell SGDK animation sheet."""
+    sheet = transparent_canvas(32 * len(SONIC_NONO_FRAMES), 40)
+    for frame_index, source_name in enumerate(SONIC_NONO_FRAMES):
+        sheet.alpha_composite(sonic_cell(source_name), (frame_index * 32, 0))
+    return sheet
+
+
+def make_sonic_dies() -> Image.Image:
+    return sonic_cell(SONIC_DIES_FRAME)
+
+
 def build_projectile_palette(image: Image.Image) -> list[tuple[int, int, int]]:
     """Quantize the fireball into a dedicated Genesis PAL2 red/yellow ramp."""
     rgba = image.convert("RGBA")
@@ -861,6 +934,8 @@ def generate(source: Path, output: Path) -> None:
     boot_social = make_boot_social()
     cacodemon = make_cacodemon()
     cacodemon_projectile = make_cacodemon_projectile()
+    sonic_nono = make_sonic_nono()
+    sonic_dies = make_sonic_dies()
     sega_letters = {
         letter: make_sega_letter(letter)
         for letter in "sega"
@@ -880,6 +955,7 @@ def generate(source: Path, output: Path) -> None:
     intermission_pointer0 = padded_intermission_patch("WIURH0", 64, 16, source)
     cacodemon_palette = build_cacodemon_palette(cacodemon)
     projectile_palette = build_projectile_palette(cacodemon_projectile)
+    sonic_palette = build_sonic_palette([sonic_nono, sonic_dies])
     # Keep the original Doom title/menu palette selection stable; boot cards
     # are quantized into that same four-line palette afterward.
     palette = build_palette(images)
@@ -1026,6 +1102,12 @@ def generate(source: Path, output: Path) -> None:
         output / "cacodemon.png", optimize=False)
     indexed_fixed_palette(cacodemon_projectile, projectile_palette, 0, True).save(
         output / "cacodemon_projectile.png", optimize=False)
+    # PAL3 is free on the otherwise black SEGA card. Keeping both Sonic
+    # definitions in one palette means the pose swap cannot flicker colours.
+    indexed_fixed_palette(sonic_nono, sonic_palette, 0, True).save(
+        output / "sonic_nono.png", optimize=False)
+    indexed_fixed_palette(sonic_dies, sonic_palette, 0, True).save(
+        output / "sonic_dies.png", optimize=False)
     # These tiles must retain the boot card's literal PAL0 indices because
     # frontend.c cycles them for the sheen and impact flash.
     for letter, image in sega_letters.items():

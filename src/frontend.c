@@ -49,6 +49,8 @@
 #define BOOT_CARD_VISIBLE_FRAMES (BOOT_CARD_FRAMES - (BOOT_FADE_FRAMES * 2))
 #define BOOT_SEGA_VISIBLE_FRAMES (BOOT_SEGA_CARD_FRAMES - (BOOT_FADE_FRAMES * 2))
 #define BOOT_SEGA_LOGO_Y 128
+#define BOOT_SONIC_X 76
+#define BOOT_SONIC_Y 124
 #define BOOT_CACODEMON_X 136
 #define BOOT_CACODEMON_Y 60
 #define BOOT_CACODEMON_ENTRY_X 320
@@ -59,9 +61,17 @@
 #define BOOT_PROJECTILE_START 228
 #define BOOT_PROJECTILE_IMPACT 270
 #define BOOT_PROJECTILE_EXPLOSION_END 318
-#define BOOT_SEGA_LETTERS_FLIGHT_END 438
+#define BOOT_SEGA_LETTERS_FLIGHT_START BOOT_PROJECTILE_IMPACT
+#define BOOT_SEGA_LETTERS_FLIGHT_END 390
 #define BOOT_CACODEMON_LAUGH_END 540
-#define BOOT_SEGA_SPRITE_VRAM_TILES 192
+#define BOOT_PROJECTILE_START_X 132
+#define BOOT_PROJECTILE_START_Y 80
+#define BOOT_PROJECTILE_IMPACT_X 76
+#define BOOT_PROJECTILE_IMPACT_Y 123
+#define BOOT_CACODEMON_OPEN_MOUTH_FRAME 2
+#define BOOT_SONIC_DEATH_LAUNCH_SPEED 6
+#define BOOT_SONIC_DEATH_GRAVITY_DIVISOR 6
+#define BOOT_SEGA_SPRITE_VRAM_TILES 240
 #define ENDING_PROMPT_BLINK_MASK 0x3F
 #define ENDING_PROMPT_ON_FRAMES 48
 // Generated at y=176 and centred at x=114.  This is the exact 12-tile span
@@ -203,19 +213,25 @@ static void animate_sega_shimmer(u16 frame, bool attack, bool impact) {
 }
 
 static void fade_sega_card_in(const Image *image) {
-    /* PAL0 is the logo, PAL1 the Cacodemon and PAL2 the fireball. */
-    u16 palette[48];
+    /* PAL0 is the logo, PAL1 the Cacodemon, PAL2 the fireball and PAL3 Sonic. */
+    u16 palette[64];
     for (u16 index = 0; index < 16; index++) {
         palette[index] = image->palette->data[index];
         palette[16 + index] = frontend_cacodemon.palette->data[index];
         palette[32 + index] = frontend_cacodemon_projectile.palette->data[index];
+        palette[48 + index] = frontend_sonic_nono.palette->data[index];
     }
-    PAL_fadeIn(0, 47, palette, BOOT_FADE_FRAMES, FALSE);
+    PAL_fadeIn(0, 63, palette, BOOT_FADE_FRAMES, FALSE);
 }
 
 static u16 sega_cacodemon_frame(u16 frame) {
     if (frame >= BOOT_CACODEMON_ATTACK_START && frame < BOOT_CACODEMON_ATTACK_END) {
         return (u16)(2 + (((frame - BOOT_CACODEMON_ATTACK_START) >> 3) & 3));
+    }
+    /* The fireball is still in flight: hold the open mouth that launched it
+     * until it simultaneously catches Sonic and the SEGA wordmark. */
+    if (frame >= BOOT_PROJECTILE_START && frame < BOOT_PROJECTILE_IMPACT) {
+        return BOOT_CACODEMON_OPEN_MOUTH_FRAME;
     }
     /* The open/closed attack faces, paired with a wider bob, read as a cruel
      * laugh once the logo has vanished. */
@@ -237,7 +253,7 @@ static void animate_sega_letters(Sprite *const letters[4], u16 frame) {
     static const s16 s_velocity_x[4] = { -3, -2, 2, 3 };
     static const s16 s_velocity_y[4] = { 0, -3, 2, 0 };
 
-    if (frame < BOOT_PROJECTILE_EXPLOSION_END) {
+    if (frame < BOOT_SEGA_LETTERS_FLIGHT_START) {
         for (u16 index = 0; index < 4; index++) {
             if (letters[index] != NULL) {
                 SPR_setPosition(letters[index], s_sega_letter_start_x[index],
@@ -252,7 +268,7 @@ static void animate_sega_letters(Sprite *const letters[4], u16 frame) {
         return;
     }
 
-    const s16 travel = (s16)(frame - BOOT_PROJECTILE_EXPLOSION_END);
+    const s16 travel = (s16)(frame - BOOT_SEGA_LETTERS_FLIGHT_START);
     const s16 gravity = (s16)(((s32)travel * travel) / 160);
     for (u16 index = 0; index < 4; index++) {
         const s16 x = (s16)(s_sega_letter_start_x[index] +
@@ -267,9 +283,33 @@ static void animate_sega_letters(Sprite *const letters[4], u16 frame) {
     }
 }
 
+static void animate_sonic(Sprite *nono, Sprite *dies, u16 frame) {
+    if (frame < BOOT_PROJECTILE_IMPACT) {
+        if (nono != NULL) {
+            SPR_setPosition(nono, BOOT_SONIC_X, BOOT_SONIC_Y);
+            SPR_setFrame(nono, (s16)((frame >> 3) & 1));
+            SPR_setVisibility(nono, VISIBLE);
+        }
+        if (dies != NULL) SPR_setVisibility(dies, HIDDEN);
+        return;
+    }
+    if (nono != NULL) SPR_setVisibility(nono, HIDDEN);
+    if (dies != NULL) {
+        const s16 travel = (s16)(frame - BOOT_PROJECTILE_IMPACT);
+        const s16 y = (s16)(BOOT_SONIC_Y - BOOT_SONIC_DEATH_LAUNCH_SPEED * travel +
+                             ((s32)travel * travel) / BOOT_SONIC_DEATH_GRAVITY_DIVISOR);
+        SPR_setPosition(dies, BOOT_SONIC_X, y);
+        /* Reproduce the classic Sonic death arc: the launched sprite rises,
+         * then drops through the bottom edge instead of becoming a static prop. */
+        SPR_setVisibility(dies, y < 224 ? VISIBLE : HIDDEN);
+    }
+}
+
 static void run_boot_card(const Image *image, bool show_cacodemon) {
     Sprite *cacodemon = NULL;
     Sprite *projectile = NULL;
+    Sprite *sonic_nono = NULL;
+    Sprite *sonic_dies = NULL;
     Sprite *sega_letters[4] = { NULL, NULL, NULL, NULL };
     u16 previous;
     u16 cacodemon_frame = 0;
@@ -278,17 +318,24 @@ static void run_boot_card(const Image *image, bool show_cacodemon) {
 
     draw_boot_card(image);
     if (show_cacodemon) {
-        /* Four wordmark pieces, the smaller Cacodemon and its 56x48 fireball
-         * all fit below the Genesis per-line sprite limit at their overlaps. */
-        /* 42 Cacodemon tiles + 42 projectile tiles + four 24-tile letters
-         * require 180 cached tiles. Keep a small margin so every semantic
-         * letter is allocated before the first visible frame. */
+        /* Sonic's 32x40 frames sit beside the wordmark. Their two definitions
+         * stay allocated so the impact can swap them without a SAT hiccup. */
+        /* 42 Cacodemon tiles + 42 projectile tiles + four 24-tile letters +
+         * two 20-tile Sonic definitions require 220 cached tiles. */
         SPR_initEx(BOOT_SEGA_SPRITE_VRAM_TILES);
+        /* Genesis SAT priority is reverse creation order here: allocate the
+         * fireball first so it renders in front of the Cacodemon's mouth as it
+         * launches, never as a shape hidden behind the monster. */
+        projectile = SPR_addSprite(&frontend_cacodemon_projectile,
+                                   BOOT_PROJECTILE_START_X, BOOT_PROJECTILE_START_Y,
+                                   TILE_ATTR(PAL2, TRUE, FALSE, FALSE));
         cacodemon = SPR_addSprite(&frontend_cacodemon, BOOT_CACODEMON_ENTRY_X,
                                   BOOT_CACODEMON_ENTRY_Y,
                                   TILE_ATTR(PAL1, TRUE, FALSE, FALSE));
-        projectile = SPR_addSprite(&frontend_cacodemon_projectile, 132, 72,
-                                   TILE_ATTR(PAL2, TRUE, FALSE, FALSE));
+        sonic_nono = SPR_addSprite(&frontend_sonic_nono, BOOT_SONIC_X, BOOT_SONIC_Y,
+                                   TILE_ATTR(PAL3, TRUE, FALSE, FALSE));
+        sonic_dies = SPR_addSprite(&frontend_sonic_dies, BOOT_SONIC_X, BOOT_SONIC_Y,
+                                   TILE_ATTR(PAL3, TRUE, FALSE, FALSE));
         for (u16 index = 0; index < 4; index++) {
             sega_letters[index] = SPR_addSprite(s_sega_letter_defs[index],
                                                  s_sega_letter_start_x[index],
@@ -300,6 +347,7 @@ static void run_boot_card(const Image *image, bool show_cacodemon) {
             if (sega_letters[index] != NULL) SPR_setFrame(sega_letters[index], 0);
         }
         if (projectile != NULL) SPR_setVisibility(projectile, HIDDEN);
+        if (sonic_dies != NULL) SPR_setVisibility(sonic_dies, HIDDEN);
         SPR_update();
     }
 
@@ -331,6 +379,7 @@ static void run_boot_card(const Image *image, bool show_cacodemon) {
             }
             animate_sega_shimmer(frame, attack, impact);
             animate_sega_letters(sega_letters, frame);
+            animate_sonic(sonic_nono, sonic_dies, frame);
             if (cacodemon != NULL) {
                 s16 bob = s_boot_cacodemon_bob[(frame >> 1) & 15];
                 if (frame >= BOOT_SEGA_LETTERS_FLIGHT_END) bob *= 2;
@@ -343,15 +392,21 @@ static void run_boot_card(const Image *image, bool show_cacodemon) {
             if (projectile != NULL) {
                 if (frame >= BOOT_PROJECTILE_START && frame < BOOT_PROJECTILE_IMPACT) {
                     const u16 travel = (u16)(frame - BOOT_PROJECTILE_START);
-                    const s16 x = (s16)(132 + (((travel >> 1) & 3) - 1) * 2);
-                    const s16 y = (s16)(80 + ((u32)travel * 43u) /
-                                         (BOOT_PROJECTILE_IMPACT - BOOT_PROJECTILE_START - 1));
+                    const s16 x = (s16)(BOOT_PROJECTILE_START_X +
+                                        ((s32)travel * (BOOT_PROJECTILE_IMPACT_X -
+                                                        BOOT_PROJECTILE_START_X)) /
+                                        (BOOT_PROJECTILE_IMPACT - BOOT_PROJECTILE_START - 1));
+                    const s16 y = (s16)(BOOT_PROJECTILE_START_Y +
+                                        ((u32)travel * (BOOT_PROJECTILE_IMPACT_Y -
+                                                        BOOT_PROJECTILE_START_Y)) /
+                                        (BOOT_PROJECTILE_IMPACT - BOOT_PROJECTILE_START - 1));
                     SPR_setFrame(projectile, (s16)((travel >> 3) & 1));
                     SPR_setPosition(projectile, x, y);
                     SPR_setVisibility(projectile, VISIBLE);
                 } else if (impact) {
                     SPR_setFrame(projectile, (s16)(2 + ((frame - BOOT_PROJECTILE_IMPACT) >> 4)));
-                    SPR_setPosition(projectile, 132, 123);
+                    SPR_setPosition(projectile, BOOT_PROJECTILE_IMPACT_X,
+                                    BOOT_PROJECTILE_IMPACT_Y);
                     SPR_setVisibility(projectile, VISIBLE);
                 } else {
                     SPR_setVisibility(projectile, HIDDEN);
@@ -377,9 +432,11 @@ static void run_boot_card(const Image *image, bool show_cacodemon) {
     }
 
     if (show_cacodemon) {
-        PAL_fadeOut(0, 47, BOOT_FADE_FRAMES, FALSE);
+        PAL_fadeOut(0, 63, BOOT_FADE_FRAMES, FALSE);
         if (cacodemon != NULL) SPR_releaseSprite(cacodemon);
         if (projectile != NULL) SPR_releaseSprite(projectile);
+        if (sonic_nono != NULL) SPR_releaseSprite(sonic_nono);
+        if (sonic_dies != NULL) SPR_releaseSprite(sonic_dies);
         for (u16 index = 0; index < 4; index++) {
             if (sega_letters[index] != NULL) SPR_releaseSprite(sega_letters[index]);
         }

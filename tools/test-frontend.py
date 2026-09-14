@@ -37,6 +37,8 @@ expected = {
     "boot_social.png": (320, 224),
     "cacodemon.png": (288, 56),
     "cacodemon_projectile.png": (280, 48),
+    "sonic_nono.png": (64, 40),
+    "sonic_dies.png": (32, 40),
     "sega_s.png": (32, 48),
     "sega_e.png": (32, 48),
     "sega_g.png": (32, 48),
@@ -84,6 +86,7 @@ for name, size in expected.items():
             assert len({value >> 4 for value in tile.get_flattened_data()}) == 1, \
                 f"{name} tile ({x // 8},{y // 8}) mixes VDP palettes"
     if name not in ("cacodemon.png", "boot_sega.png", "cacodemon_projectile.png",
+                    "sonic_nono.png", "sonic_dies.png",
                     "sega_s.png", "sega_e.png", "sega_g.png", "sega_a.png",
                     "ending_mars.png"):
         palettes.append(tuple(image.getpalette()[:192]))
@@ -156,8 +159,8 @@ assert 90 <= logo_width <= 105 and 30 <= logo_height <= 36, \
 sprite_vram_match = re.search(r"#define BOOT_SEGA_SPRITE_VRAM_TILES (\d+)", FRONTEND)
 assert sprite_vram_match, "SEGA boot sprite VRAM reservation is missing"
 sprite_vram_tiles = int(sprite_vram_match.group(1))
-required_sprite_tiles = (6 * 7) + (7 * 6) + (4 * 4 * 6)
-assert required_sprite_tiles == 180
+required_sprite_tiles = (6 * 7) + (7 * 6) + (4 * 4 * 6) + (2 * 4 * 5)
+assert required_sprite_tiles == 220
 assert sprite_vram_tiles >= required_sprite_tiles, \
     f"SEGA boot sprites need {required_sprite_tiles} tiles, only {sprite_vram_tiles} reserved"
 
@@ -193,6 +196,26 @@ for frame in range(6):
         for x in range(0, 48, 8)
     }
     assert len(tiles) <= 96, f"Cacodemon frame {frame} exceeds reserved sprite VRAM"
+
+sonic_nono = Image.open(ASSETS / "sonic_nono.png")
+sonic_dies = Image.open(ASSETS / "sonic_dies.png")
+assert sonic_nono.info.get("transparency") == 0
+assert sonic_dies.info.get("transparency") == 0
+assert set(sonic_nono.get_flattened_data()) <= set(range(16))
+assert set(sonic_dies.get_flattened_data()) <= set(range(16))
+assert sonic_nono.getpalette() == sonic_dies.getpalette(), \
+    "Sonic's animation and death frame must share PAL3"
+sonic_palette = sonic_nono.getpalette()[:48]
+assert any(sonic_palette[index + 2] > sonic_palette[index]
+           and sonic_palette[index + 2] > sonic_palette[index + 1]
+           for index in range(3, 48, 3)), "Sonic palette lost its blue ramp"
+assert any(sonic_palette[index] > sonic_palette[index + 1]
+           and sonic_palette[index] > sonic_palette[index + 2]
+           for index in range(3, 48, 3)), "Sonic palette lost its red shoes"
+for frame in range(2):
+    frame_image = sonic_nono.crop((frame * 32, 0, (frame + 1) * 32, 40))
+    assert any(value != 0 for value in frame_image.get_flattened_data()), \
+        f"Sonic refusal frame {frame} is blank"
 
 title_tiles = unique_tiles(ASSETS / "title.png")
 prompt_tiles = unique_tiles(ASSETS / "prompt.png")
@@ -286,18 +309,22 @@ for token in (
     "BOOT_SEGA_VISIBLE_FRAMES", "BOOT_CACODEMON_X", "s_sega_letter_start_x",
     "BOOT_CACODEMON_ENTRY_X 320", "BOOT_CACODEMON_ENTRY_Y 8",
     "frontend_boot_disclaimer", "frontend_boot_sega", "frontend_boot_social", "frontend_cacodemon",
-    "frontend_cacodemon_projectile", "s_sega_letter_defs", "sfx_cacodemon_fire",
+    "frontend_cacodemon_projectile", "frontend_sonic_nono", "frontend_sonic_dies",
+    "BOOT_SONIC_X 76", "BOOT_SONIC_Y 124", "BOOT_CACODEMON_OPEN_MOUTH_FRAME 2",
+    "BOOT_SONIC_DEATH_LAUNCH_SPEED 6", "BOOT_SONIC_DEATH_GRAVITY_DIVISOR 6",
+    "s_sega_letter_defs", "sfx_cacodemon_fire",
     "frontend_sega_s", "frontend_sega_e", "frontend_sega_g", "frontend_sega_a",
     "sfx_cacodemon_impact", "sfx_cacodemon_laugh",
     "frontend_ending_mars", "frontend_ending_thanks", "frontend_run_intermission",
     "FrontendIntermissionStats", "intermission_percent", "INTERMISSION_INPUT",
-    "BOOT_SEGA_SPRITE_VRAM_TILES 192", "SPR_initEx(BOOT_SEGA_SPRITE_VRAM_TILES)",
-    "SPR_end()", "animate_sega_shimmer", "animate_sega_letters",
+    "BOOT_SEGA_SPRITE_VRAM_TILES 240", "SPR_initEx(BOOT_SEGA_SPRITE_VRAM_TILES)",
+    "SPR_end()", "animate_sega_shimmer", "animate_sega_letters", "animate_sonic",
     "fade_sega_card_in", "PAL_setColors(12", "SPR_setFrame", "BOOT_CACODEMON_ATTACK_START",
     "SPR_setFrame(sega_letters[index], 0)",
-    "BOOT_PROJECTILE_EXPLOSION_END 318", "BOOT_SEGA_LETTERS_FLIGHT_END 438",
-    "BOOT_CACODEMON_LAUGH_END 540", "s_velocity_x", "s_velocity_y",
-    "frontend_cacodemon.palette->data", "SYS_doVBlankProcess();",
+    "BOOT_PROJECTILE_EXPLOSION_END 318", "BOOT_SEGA_LETTERS_FLIGHT_START BOOT_PROJECTILE_IMPACT",
+    "BOOT_SEGA_LETTERS_FLIGHT_END 390", "BOOT_CACODEMON_LAUGH_END 540",
+    "s_velocity_x", "s_velocity_y", "frontend_cacodemon.palette->data",
+    "frontend_sonic_nono.palette->data", "SYS_doVBlankProcess();",
 ):
     assert token in FRONTEND
 assert "frontend_intermission_time_digits" in FRONTEND
@@ -309,6 +336,16 @@ assert re.search(r"SPR_end\(\);\s*// SPR_end queues the cleared SAT.*?\s*"
     "boot sprites must commit their queued SAT clear before the VBlank-only menu"
 assert "u16 caco_x = BOOT_CACODEMON_X;" in FRONTEND
 assert "u16 caco_y = BOOT_CACODEMON_Y;" in FRONTEND
+assert re.search(
+    r"if \(frame >= BOOT_PROJECTILE_START && frame < BOOT_PROJECTILE_IMPACT\) \{\s*"
+    r"return BOOT_CACODEMON_OPEN_MOUTH_FRAME;",
+    FRONTEND,
+), "Cacodemon must hold its open mouth until impact"
+assert "const s16 travel = (s16)(frame - BOOT_SEGA_LETTERS_FLIGHT_START);" in FRONTEND
+assert "SPR_setVisibility(nono, HIDDEN);" in FRONTEND
+assert "SPR_setPosition(dies, BOOT_SONIC_X, y);" in FRONTEND
+assert "SPR_setVisibility(dies, y < 224 ? VISIBLE : HIDDEN);" in FRONTEND
+assert "SPR_setPosition(projectile, BOOT_PROJECTILE_IMPACT_X," in FRONTEND
 assert re.search(
     r"caco_x = \(u16\)\(BOOT_CACODEMON_ENTRY_X\s*-\s*"
     r"\(\(u32\)frame \* \(BOOT_CACODEMON_ENTRY_X - BOOT_CACODEMON_X\)\)",
@@ -324,7 +361,8 @@ for token in (
     "centered_doom_text", "PRESS FIRE", "doom_text_mask",
     "HEADA1", "HEADB1", "HEADC1", "HEADD1", "HEADE1", "HEADF1",
     "make_boot_disclaimer", "make_boot_sega", "make_boot_social", "make_cacodemon",
-    "make_cacodemon_projectile", "make_sega_letter", "indexed_fixed_palette", "build_cacodemon_palette",
+    "make_cacodemon_projectile", "make_sonic_nono", "make_sonic_dies", "sonic_cell",
+    "make_sega_letter", "indexed_fixed_palette", "build_cacodemon_palette", "build_sonic_palette",
     "build_projectile_palette", "SEGA_BOOT_PALETTE", "paletted_sega_canvas",
     "SEGA.TTF", "ImageFont.truetype",
     "WIMAP0", "make_ending_mars", "indexed_ending_mars", "make_ending_thanks",
@@ -369,6 +407,8 @@ assert 'SPRITE frontend_sega_s        "frontend/sega_s.png" 4 6 FAST 0' in RESOU
 assert 'SPRITE frontend_sega_e        "frontend/sega_e.png" 4 6 FAST 0' in RESOURCES
 assert 'SPRITE frontend_sega_g        "frontend/sega_g.png" 4 6 FAST 0' in RESOURCES
 assert 'SPRITE frontend_sega_a        "frontend/sega_a.png" 4 6 FAST 0' in RESOURCES
+assert 'SPRITE frontend_sonic_nono    "frontend/sonic_nono.png" 4 5 FAST 0' in RESOURCES
+assert 'SPRITE frontend_sonic_dies    "frontend/sonic_dies.png" 4 5 FAST 0' in RESOURCES
 assert 'WAV sfx_cacodemon_laugh  "sound/dscacsit.wav" XGM2' in RESOURCES
 assert "XGM2_playPCM" not in MAIN
 assert "if (s_sfx_enabled) XGM2_playPCM" in AUDIO

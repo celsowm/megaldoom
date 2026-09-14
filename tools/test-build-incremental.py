@@ -64,19 +64,22 @@ with tempfile.TemporaryDirectory(prefix="megaldoom-build-test-") as folder:
         frontend.generate = real_generate
     assert frontend.complete_outputs(output)
     assert (output / frontend.MANIFEST_NAME).is_file()
-    # 46 fixed cards plus the OPTIONS cross product (MUSIC x SFX x VIEW SIZE x
+    # 48 fixed cards plus the OPTIONS cross product (MUSIC x SFX x VIEW SIZE x
     # DEBUG x cursor row). Derived rather than written out so adding a viewport
     # preset updates it here instead of failing with a bare number mismatch.
     # The fixed count carries one stats panel and one "ENTERING" card per
     # campaign level, so it grows by two whenever a level is added: 44 for the
-    # three-map campaign, 46 with E1M4. The CONTROLS submenu adds one label panel
-    # per cursor row plus the button-letter sheet.
-    assert len(frontend.EXPECTED_OUTPUTS) == 46 + (frontend.CONTROLS_ROWS + 1) + (
+    # three-map campaign, 46 with E1M4; Sonic's two boot sprite sheets make 48.
+    # The CONTROLS submenu adds one label panel per cursor row plus the
+    # button-letter sheet.
+    assert len(frontend.EXPECTED_OUTPUTS) == 48 + (frontend.CONTROLS_ROWS + 1) + (
         2 * 2 * frontend.VIEW_SIZE_COUNT * 2 * frontend.OPTIONS_ROWS)
     for name in frontend.CACODEMON_BOOT_FRAMES:
         assert frontend.SPRITE_SOURCE / f"{name}.png" in frontend.source_paths(source)
     for name in frontend.CACODEMON_PROJECTILE_FRAMES:
         assert frontend.SPRITE_SOURCE / f"{name}.png" in frontend.source_paths(source)
+    for name in (*frontend.SONIC_NONO_FRAMES, frontend.SONIC_DIES_FRAME):
+        assert frontend.BOOT_SOURCE / name in frontend.source_paths(source)
     assert frontend.BOOT_SOURCE / "SEGA.TTF" in frontend.source_paths(source)
     assert source / "WIMAP0.png" in frontend.source_paths(source)
 
