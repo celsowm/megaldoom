@@ -298,6 +298,53 @@ def use_surface_visible(map_data, seg, x, y, probe_x, probe_y, open_groups=froze
     return not solid and doors <= open_groups
 
 
+# One map per generator process: (map_data, usable segs with bounding boxes,
+# probe point -> in-range candidates).
+_use_index = None
+
+
+def _use_candidates(map_data, px, py):
+    """(distance2, index, seg) of every usable SEG within USE_RADIUS of px,py,
+    in SEG order -- exactly what walking out_segs with runtime_dist2 yields.
+
+    route generation probes ~250k points against every SEG; this was ~97% of
+    the generator's run time. A SEG whose bounding box lies more than
+    USE_RADIUS from the point is skipped without the distance: the runtime's
+    floored closest point never leaves the SEG's own bounding box, so its
+    distance could only have been larger still."""
+    global _use_index
+    if _use_index is None or _use_index[0] is not map_data:
+        usable = []
+        for index, seg in enumerate(map_data.out_segs):
+            # Mirror bsp_use_in_front exactly: only these four answer to
+            # use.  Modelling windows as candidates made this generator
+            # predict poses the runtime resolves differently.
+            if not (seg["type"] in (SEG_EXIT, SEG_SWITCH, SEG_TRIGGER) or
+                    (seg["type"] == SEG_DOOR and
+                     seg.get("flags", 0) & SEG_FLAG_DIRECT_USE)):
+                continue
+            ax, ay = map_data.vertices[seg["v1"]]
+            bx, by = map_data.vertices[seg["v2"]]
+            usable.append((min(ax, bx) - USE_RADIUS, max(ax, bx) + USE_RADIUS,
+                           min(ay, by) - USE_RADIUS, max(ay, by) + USE_RADIUS,
+                           index, seg))
+        _use_index = (map_data, usable, {})
+    _, usable, memo = _use_index
+    key = (px, py)
+    cached = memo.get(key)
+    if cached is None:
+        cached = []
+        radius2 = USE_RADIUS ** 2
+        for x0, x1, y0, y1, index, seg in usable:
+            if px < x0 or px > x1 or py < y0 or py > y1:
+                continue
+            distance2 = runtime_dist2(map_data.vertices, seg, px, py)
+            if distance2 < radius2:
+                cached.append((distance2, index, seg))
+        memo[key] = cached
+    return cached
+
+
 def use_target(map_data, x, y, aim_x, aim_y, owned_keys=0, spread=0,
                open_groups=frozenset()):
     """Offline counterpart of bsp_use_in_front's probes and tie-break.
@@ -332,17 +379,7 @@ def use_target(map_data, x, y, aim_x, aim_y, owned_keys=0, spread=0,
         for dist in range(128, 513, 128):
             px = x + ((fixed_cos(angle) * dist) >> 8)
             py = y + ((fixed_sin(angle) * dist) >> 8)
-            for index, seg in enumerate(map_data.out_segs):
-                # Mirror bsp_use_in_front exactly: only these four answer to
-                # use.  Modelling windows as candidates made this generator
-                # predict poses the runtime resolves differently.
-                if not (seg["type"] in (SEG_EXIT, SEG_SWITCH, SEG_TRIGGER) or
-                        (seg["type"] == SEG_DOOR and
-                         seg.get("flags", 0) & SEG_FLAG_DIRECT_USE)):
-                    continue
-                distance2 = runtime_dist2(map_data.vertices, seg, px, py)
-                if distance2 >= USE_RADIUS ** 2:
-                    continue
+            for distance2, index, seg in _use_candidates(map_data, px, py):
                 candidate = (distance2, dist, index, seg)
                 if ((best is None or candidate[:2] < best[:2]) and
                         use_surface_visible(map_data, seg, x, y, px, py,

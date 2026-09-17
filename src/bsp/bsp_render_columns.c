@@ -12,7 +12,11 @@ void bsp_seed_column_default(RayColumn *col) {
     col->flags = 0;
 }
 
-void bsp_draw_seg(u16 seg_index) {
+// always_facing is a promise from the baked visibility program: the seg's
+// front half-plane holds the whole subsector the player stands in, so the
+// facing test below cannot fail and is skipped.
+static inline __attribute__((always_inline)) void draw_seg(u16 seg_index,
+                                                           bool always_facing) {
     if (bsp_seg_is_open(seg_index)) {
         return;
     }
@@ -37,10 +41,12 @@ void bsp_draw_seg(u16 seg_index) {
 
     // Backface / one-sided cull: draw only when the camera is on the seg's
     // front side (the side its normal points toward).
-    const s32 facing = bsp_render_mul(g_px - a->x, seg->nx) +
-                       bsp_render_mul(g_py - a->y, seg->ny);
-    if (facing <= 0) {
-        return;
+    if (!always_facing) {
+        const s32 facing = bsp_render_mul(g_px - a->x, seg->nx) +
+                           bsp_render_mul(g_py - a->y, seg->ny);
+        if (facing <= 0) {
+            return;
+        }
     }
 
     // Transform both endpoints into view space (depth = forward, lat = right).
@@ -279,6 +285,16 @@ void bsp_draw_seg(u16 seg_index) {
         BSP_DBG_INC(segments_drawn);
     }
 }
+
+void bsp_draw_seg(u16 seg_index) {
+    draw_seg(seg_index, FALSE);
+}
+
+#if BSP_VIS_LIST
+void bsp_draw_seg_facing(u16 seg_index) {
+    draw_seg(seg_index, TRUE);
+}
+#endif
 
 // Fill only the samples left open by the front-to-back wall pass. The normal
 // E1M1 view closes all samples; this remains the correct sky/floor fallback.

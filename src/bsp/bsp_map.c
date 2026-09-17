@@ -1,5 +1,6 @@
 #include "bsp_map.h"
 #include "fixed_math.h"
+#include "level_bank.h"
 
 #if BSP_USE_HAND_MAP
 extern const BspMapData g_hand_map;
@@ -89,6 +90,7 @@ bool bsp_select_map(u16 level_index) {
     };
     if (level_index >= MEGALDOOM_MAP_COUNT) return FALSE;
     g_bsp_map = maps[level_index];
+    level_bank_select(level_index);
     return TRUE;
 #endif
 }

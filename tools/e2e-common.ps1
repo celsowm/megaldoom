@@ -47,6 +47,7 @@ function Invoke-MegalDoomRoute {
         [Parameter(Mandatory = $true)][int]$Frames,
         [Parameter(Mandatory = $true)][string]$Report,
         [Parameter(Mandatory = $true)][string]$Mailbox,
+        [string]$PerfMailbox = "",
         [string]$RequireCheckpoints = "",
         [string]$Trace = "",
         [int]$TraceEvery = 0
@@ -58,6 +59,7 @@ function Invoke-MegalDoomRoute {
         Mailbox = $Mailbox
     }
     if ($Route) { $runnerParams.Route = $Route }
+    if ($PerfMailbox) { $runnerParams.PerfMailbox = $PerfMailbox }
     if ($Waypoints) { $runnerParams.Waypoints = $Waypoints }
     if ($RequireCheckpoints) {
         $runnerParams.RequireCheckpoints = $RequireCheckpoints

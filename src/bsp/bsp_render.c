@@ -23,6 +23,13 @@ u8 g_node_side_generation[BSP_MAX_NODES];
 u8 g_position_generation;
 s32 g_node_cache_px, g_node_cache_py;
 bool g_node_cache_valid;
+#if BSP_VIS_CULL
+const u8 *g_vis_row;
+#endif
+#if BSP_VIS_LIST
+const u16 *g_vis_program;
+u16 g_vis_program_length;
+#endif
 
 #if DEBUG_PERF
 u16 g_bsp_dbg_nodes_visited;
@@ -55,6 +62,51 @@ void bsp_init(void) {
     for (u16 i = 0; i < BSP_MAX_VERTICES; i++) g_vertex_generation[i] = 0;
 }
 
+#if BSP_VIS_ORACLE
+// Host-read mailbox (tools/test-bsp-vis-oracle.ps1): every frame that has a
+// baked program is cast twice -- program, then the node traversal -- and the
+// two column sets must agree. The traversal's result is the one displayed.
+volatile BspVisOracleState g_bsp_vis_oracle;
+static RayColumn s_oracle_columns[BSP_SAMPLE_COLS_MAX];
+
+static bool oracle_column_equal(const RayColumn *a, const RayColumn *b) {
+    if (a->height != b->height || a->projected_height != b->projected_height ||
+        a->depth != b->depth || a->tex_x != b->tex_x || a->tex_y != b->tex_y ||
+        a->texture_id != b->texture_id || a->shade != b->shade ||
+        a->flags != b->flags || a->door.height != b->door.height) {
+        return FALSE;
+    }
+    // The other overlay fields are only written, and only read, with height.
+    return (bool)(a->door.height == 0 ||
+        (a->door.depth == b->door.depth && a->door.lift == b->door.lift &&
+         a->door.tex_x == b->door.tex_x && a->door.tex_y == b->door.tex_y &&
+         a->door.texture_id == b->door.texture_id &&
+         a->door.shade == b->door.shade &&
+         a->door.band_top == b->door.band_top &&
+         a->door.band_bottom == b->door.band_bottom));
+}
+#endif
+
+static void bsp_reset_cast_state(RayColumn *columns) {
+    // Clear occlusion and seed every column with a far/empty default so columns
+    // no wall covers still render (as distant, mostly sky/floor).
+    g_solid_count = 0;
+    for (u16 i = 0; i < BSP_SOLID_WORD_COUNT; i++) {
+        g_solid_words[i] = 0;
+    }
+    // Only door.height needs clearing up front: it is the sentinel every door
+    // consumer short-circuits on (draw_seg here, draw_door_overlays and
+    // column_door_active in the pack stage), and draw_seg writes the whole
+    // RayDoorOverlay whenever it writes height, so the other six door fields are
+    // never read while height is 0. The wall fields are deferred to
+    // bsp_seed_unclaimed_columns below.
+    for (u16 sample = 0; sample < BSP_SAMPLE_COLS; sample++) {
+        g_next_open[sample] = (u8)sample;
+        columns[sample].door.height = 0;
+    }
+    g_next_open[BSP_SAMPLE_COLS] = BSP_SAMPLE_COLS;
+}
+
 void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColors *scene_colors) {
     g_columns = columns;
 
@@ -66,6 +118,13 @@ void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColor
 
     const u16 subsector = bsp_find_subsector(player->x, player->y);
     u16 sector = (subsector < bsp_subsector_count) ? bsp_subsector_sector[subsector] : 0;
+#if BSP_VIS_CULL
+    g_vis_row = bsp_vis_row(bsp_current_map(), subsector);
+#endif
+#if BSP_VIS_LIST
+    g_vis_program = bsp_vis_program(bsp_current_map(), subsector,
+                                    &g_vis_program_length);
+#endif
     if (sector >= FREEDOOM_SECTOR_VISUAL_COUNT) sector = 0;
     const u8 *visual = FREEDOOM_SECTOR_VISUALS[sector];
     scene_colors->ceiling = (RayFlatColor){visual[0], visual[1], visual[2]};
@@ -84,26 +143,47 @@ void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColor
     scene_colors->sky_offset =
         (u8)((((u16)player->angle & ANGLE_MASK) * 5u) >> 4);
 
-    // Clear occlusion and seed every column with a far/empty default so columns
-    // no wall covers still render (as distant, mostly sky/floor).
-    g_solid_count = 0;
-    for (u16 i = 0; i < BSP_SOLID_WORD_COUNT; i++) {
-        g_solid_words[i] = 0;
-    }
-    // Only door.height needs clearing up front: it is the sentinel every door
-    // consumer short-circuits on (draw_seg here, draw_door_overlays and
-    // column_door_active in the pack stage), and draw_seg writes the whole
-    // RayDoorOverlay whenever it writes height, so the other six door fields are
-    // never read while height is 0. The wall fields are deferred to
-    // bsp_seed_unclaimed_columns below.
-    for (u16 sample = 0; sample < BSP_SAMPLE_COLS; sample++) {
-        g_next_open[sample] = (u8)sample;
-        columns[sample].door.height = 0;
-    }
-    g_next_open[BSP_SAMPLE_COLS] = BSP_SAMPLE_COLS;
-
+    bsp_reset_cast_state(columns);
     bsp_traverse_front_to_back(player);
     bsp_seed_unclaimed_columns(columns);
+
+#if BSP_VIS_ORACLE
+    static u16 s_oracle_phase;
+    if (g_vis_program && (u16)(++s_oracle_phase % BSP_VIS_ORACLE_EVERY) == 0) {
+        for (u16 sample = 0; sample < BSP_SAMPLE_COLS; sample++) {
+            s_oracle_columns[sample] = columns[sample];
+        }
+        const u16 *const program = g_vis_program;
+        g_vis_program = NULL;
+        bsp_reset_cast_state(columns);
+        bsp_traverse_front_to_back(player);
+        bsp_seed_unclaimed_columns(columns);
+        g_vis_program = program;
+
+        g_bsp_vis_oracle.frames++;
+        for (u16 sample = 0; sample < BSP_SAMPLE_COLS; sample++) {
+            if (!oracle_column_equal(&s_oracle_columns[sample], &columns[sample])) {
+                if (g_bsp_vis_oracle.mismatch_frames == 0) {
+                    g_bsp_vis_oracle.first_subsector = subsector;
+                    g_bsp_vis_oracle.first_x = (s16)player->x;
+                    g_bsp_vis_oracle.first_y = (s16)player->y;
+                    g_bsp_vis_oracle.first_angle = (u16)player->angle;
+                    g_bsp_vis_oracle.first_sample = sample;
+                    g_bsp_vis_oracle.program_depth = s_oracle_columns[sample].depth;
+                    g_bsp_vis_oracle.traversal_depth = columns[sample].depth;
+                    g_bsp_vis_oracle.program_texture = s_oracle_columns[sample].texture_id;
+                    g_bsp_vis_oracle.traversal_texture = columns[sample].texture_id;
+                    g_bsp_vis_oracle.program_door_height = s_oracle_columns[sample].door.height;
+                    g_bsp_vis_oracle.traversal_door_height = columns[sample].door.height;
+                }
+                g_bsp_vis_oracle.mismatch_frames++;
+                break;
+            }
+        }
+    } else {
+        g_bsp_vis_oracle.unprogrammed_frames++;
+    }
+#endif
 }
 
 #if DEBUG_PERF || BILLBOARD_VISIBLE_SUBSECTOR_CULL

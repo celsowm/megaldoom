@@ -8,6 +8,150 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## Banked ROM, baked visibility, generated scalers (2026-09-17)
+
+`docs/DREAD_RENDERER_COMPARISON.md` listed three things Dread does that we did
+not: visibility baked offline, inner loops generated rather than hand-written,
+and per-size span layouts precomputed. The developer who ported Dread to the
+Genesis put the first one sharply: "Any successful FPS port on a 68000 will
+require a PVS. List walking is infinitely cheaper than per-frame traversal."
+All three are now in, in that order, because the first paid for the others.
+
+The prerequisite was ROM. We were at 3.93 MB of a flat 4 MB with 1.97 MB of it
+in two monolithic wall/door pair tables, so no precompute of any size was
+affordable. Phase 0 was done *in order to* make Phase 2 possible, not for its
+own sake.
+
+### Phase 0: SSF banking, per-level wall packs
+
+`rom_head.c` declares "SEGA SSF" (BlastEm `MAPPER_SEGA_MED_V2`), a project copy
+of SGDK's linker script (`tools/md_banked.ld`) keeps everything resident below
+`0x280000` and puts each level's wall pack in an `OVERLAY` at the `0x280000`
+window, and `level_bank_select()` maps that level's three banks **once per level
+load**. Because the overlay sections share a VMA, pointers into a pack are plain
+absolute addresses: the pixel-rate wall read costs exactly what the flat ROM
+read did, and there is no `FAR()` anywhere on a hot path.
+
+The packs are per-level subsets — only the pair columns that level actually
+draws — so the four together are smaller than the two monolithic tables they
+replace, and the resident image fell from 3.93 MB to 1.93 MB. Image 8.5 MB.
+~686 KB resident headroom, which is the number to look at before calling a
+precompute unaffordable; the image size is not a budget.
+
+One regression worth recording: the first cut looked up a per-column slot byte
+to find the pack block, and pack got 0.7% *slower*. Replacing it with a resident
+per-texture block-address table (`g_level_wall_bases[]`, indexed by global
+texture id) removed the indirection and pack matched baseline. A banked layout
+is free only if the address arithmetic stays as cheap as it was.
+
+Verified: 17 pose-locked frames byte-identical to the pre-banking captures, full
+suite green, and a negative control that maps the wrong bank for one level does
+fail both the captures and the tests.
+
+### Phase 1: baked per-leaf draw programs (the list walk)
+
+`tools/bsp_vis.py` computes a 2D portal-flow PVS (Quake-vis style, with
+separator clipping) over true convex subsector regions, then bakes each leaf's
+surviving BSP into a flat u16 program: SEG, BRANCH and GROUP words, with
+`ALWAYS_FACING` on segs whose front half-plane contains the whole leaf.
+`bsp_run_vis_program()` walks it instead of recursing the tree. Programs live in
+the level's banked window beside its wall pack; only the offset/length tables
+are resident.
+
+Group boxes (K) are the knob: a GROUP word box-tests K or more segs at once and
+skips them all when the box is fully occluded. Measured pure/4/8/16/32; **K = 8**
+won and shipped.
+
+Cast over all 17 poses, traversal → list walk:
+
+| Vantage | Headings | Cast before → after |
+|---|---|---|
+| E1M1 (−285, 3295) | 233 | 13,512 → 7,857 (−41.9%) |
+| E1M1 | 9 | 12,183 → 7,679 (−37.0%) |
+| E1M1 | 249 | 12,191 → 7,819 (−35.9%) |
+| E1M1 | 217 | 8,199 → 5,898 (−28.1%) |
+| E1M2 (−590, −2196) | 0 | 7,947 → 6,958 (−12.4%) |
+| E1M3 (−1952, 2448) | 192 | 7,470 → 6,516 (−12.8%) |
+| worst case | E1M3 / 64 | 4,544 → 4,682 (+3.0%) |
+
+Total cast across the 17 poses −17.3%. The frame at the courtyard hall went
+18.61 → 13.93 vblanks at heading 233 and 18.15 → 14.43 at heading 9.
+
+The shape of that table is the finding: the win is concentrated exactly where
+the frame was worst — open, seg-dense views — and is ~0 in the closed corridors
+that were already fast. Three poses regress by up to 3%, the cost of walking a
+list that is barely shorter than the tree. That is the trade, and it is a good
+one, but "infinitely cheaper" it is not: traversal was 6–13% of a frame at the
+cheap poses to begin with.
+
+**The bake was wrong four times before it was right**, and every one was caught
+by the oracle (`BSP_VIS_ORACLE`: cast both ways on the same frame, compare
+`RayColumn` bytes), not by looking at the screen:
+
+* Portals matched by exact integer line key missed split linedefs (E1M2 130/133,
+  0.36 units apart) → near-collinear matching.
+* Zero-area leaves have no portals at all (E1M2 leaf 45) → empty leaves are
+  visible from everywhere.
+* TRIGGER segs were treated as occluders although they are always open at
+  runtime (E1M3: 190 bad frames → 7).
+* Facing/side was classified from the clipped region instead of the BSP cell, so
+  a player standing exactly on a region boundary disagreed with the runtime.
+
+A fifth attempt — adding angular slack to absorb pixel-rounding slivers —
+exploded the PVS (E1M1 median 100% visible, 125 overflow leaves, 2.3 h bake) and
+was reverted in favour of a runtime fallback: if a program finishes with columns
+still open, the frame falls back to full traversal. Conservative in the only
+direction that is safe.
+
+All four campaign routes are frame-identical under the oracle, and the
+`--negative-control-drop-every` bake does fail it.
+
+### Phase 2: generated wall scalers
+
+For a centred column the visible rows are fully determined by the projected
+sample height S, so `tools/gen_wall_scalers.py` emits one routine per S — nothing
+but its stores, in reverse row order:
+
+```
+    move.b  ty_{n-1}(a5),4*(n-1)(a6)
+    ...
+    move.b  ty_0(a5),0(a6)
+    rts
+```
+
+A column of height h enters at `end − 6h` and runs exactly rows h−1..0, so one
+routine serves every viewport size and every clipped height with no
+self-modifying code (ROM cannot be patched). ~20 cycles per wall byte against
+the generic DDA post's ~56. 640 routines, 69,660 rows, 419,240 bytes resident —
+affordable only because of Phase 0.
+
+| Pose | Pack before → after | Frame |
+|---|---|---|
+| E1M1 hall, 9 | 5,571 → 4,304 (−22.7%) | 14.43 → 13.42 |
+| E1M2, 192 | 6,746 → 5,610 (−16.8%) | 15.20 → 14.26 |
+| E1M1 hall, 233 | 4,812 → 4,373 (−9.1%) | 13.93 → 13.67 |
+| E1M3, 128 | 4,895 → 4,480 (−8.5%) | 27.91 → 27.45 |
+
+Columns keep the generic post when the texture offset could wrap vertically,
+when the wall is floor-aligned (sky), and when the height exceeds the DDA
+table's 120 rows.
+
+The harness matters here more than the numbers: `npm run asm-diff` compares the
+generated asm against an independent C reference that reads the DDA table
+directly — 624 tiles, 0 mismatches. The negative control
+(`--negative-control-corrupt-height 0`) produces 64 mismatches, which is the
+only reason to believe the 0 means anything: it proves 64 of those 624 tiles
+really do go through the new path rather than silently falling back.
+
+### Known, not fixed
+
+`MEGALDOOM_WALL_TEX_Y_BY_HEIGHT` is `[641][120]`, but the 128-row viewport
+preset indexes rows 120..127, and S = 640 indexes past the last row entirely.
+The generic post has always done this; the generated scalers deliberately stop
+at 120 rows rather than bake the out-of-bounds read into 419 KB of code, which
+is why those columns fall back. The read itself is still live in the generic
+path.
+
 ## E1M1 imp sprites (2026-09-13)
 
 E1M1 already contains four Doom THINGs of type 3001 (the imp); the runtime

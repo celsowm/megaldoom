@@ -126,7 +126,7 @@ def main():
     assert "from wad_source import EXPECTED_CAMPAIGN_WAD_SHA256" in generator
     wad_source = (ROOT / "tools" / "wad_source.py").read_text()
     assert EXPECTED_SHA256 in wad_source
-    assert rom_header.count("0x003FFFFF") >= 2
+    assert "SEGA SSF" in rom_header and "0x003FFFFF" in rom_header
     assert "static u8 g_query_seen_generation[BSP_MAX_SEGS]" in runtime
     assert "u8 g_node_side_generation[BSP_MAX_NODES]" in bsp_render
     assert "extern u8 g_node_side_generation[BSP_MAX_NODES]" in bsp_render_internal

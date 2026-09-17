@@ -2,6 +2,8 @@
 #include "debug_checkpoint.h"
 #include "renderer_perf.h"
 #include "generated_assets.h"
+#include "level_bank.h"
+#include "generated_wall_scalers.h"
 
 // Wall shading, off by default (see WALL_SHADE_MODE below). When on: walls are
 // darkened in discrete steps the farther they are. Level 0 is identity; each
@@ -11,7 +13,7 @@
 //
 // The level count is a property of the baked asset, not of the renderer: it is
 // how many shade planes tools/world_assets.py emitted into
-// FREEDOOM_WALL_PACKED_PAIRS. Deriving it here means changing the bake cannot
+// the level wall packs. Deriving it here means changing the bake cannot
 // leave the runtime indexing planes that were never generated.
 #define SHADE_LEVELS FREEDOOM_WORLD_SHADE_LEVELS
 // depth (world units) >> FOG_SHIFT picks the base fog level. Tuned so mid-room
@@ -19,7 +21,7 @@
 #define FOG_SHIFT 9
 // 2 = distance fog + N/S side shading (Doom-like), 1 = side shading only,
 // 0 = flat, every wall at full brightness. Costs nothing either way: the shade
-// is baked into FREEDOOM_WALL_PACKED_PAIRS and picked once per column.
+// is baked into the level wall packs and picked once per column.
 // The shade chain never darkens into the ceiling or floor colour (see
 // build_shade_map's `reserved` in tools/world_assets.py), so distance fog can
 // no longer make a far wall merge into a flat -- it now does the opposite, and
@@ -36,17 +38,25 @@
 // never skip against stale cached descriptors. See build_bsp_tilemap().
 static bool s_coherence_valid = FALSE;
 
+_Static_assert(WALL_TEX_HEIGHT == 1 << 7 && WALL_TEX_WIDTH == 1 << 6 &&
+               FREEDOOM_WORLD_SHADE_LEVELS == 4 &&
+               MEGALDOOM_LEVEL_PACK_BLOCK_BYTES == 1L << 15,
+               "packed_wall_column's shifts encode the pack block layout");
+
+// Reads the banked pack of the loaded level (src/bsp/level_bank.c). A block is
+// [shade][tex_x][tex_y] with 64 columns of 128 rows, so a column starts at
+// (shade * 64 + tex_x) * 128 -- the offset the old monolithic
+// [shade][texture][tex_x] table had within one texture.
 const u8 *packed_wall_column(const WallColumnDescriptor *descriptor) {
+    const u32 column = ((u32)descriptor->shade_level << 13) +
+                       ((u32)descriptor->tex_x << 7);
     if (descriptor->flags & RAY_COLUMN_FLAG_DOOR) {
-        const u8 door_index = FREEDOOM_WALL_DOOR_TEXTURE_INDEX[
-            descriptor->texture_id];
-        if (door_index != 0xFF) {
-            return FREEDOOM_WALL_DOOR_PACKED_PAIRS[
-                descriptor->shade_level][door_index][descriptor->tex_x];
+        const u8 *const door = g_level_door_bases[descriptor->texture_id];
+        if (door != NULL) {
+            return door + column;
         }
     }
-    return FREEDOOM_WALL_PACKED_PAIRS[
-        descriptor->shade_level][descriptor->texture_id][descriptor->tex_x];
+    return g_level_wall_bases[descriptor->texture_id] + column;
 }
 
 #if PERF_FIXED_POSE
@@ -143,12 +153,29 @@ static WallColumnDescriptor describe_textured_column(u16 wall_h,
     // is a +0 for every ordinary wall.
     ty_table += top - full_top;
     const u8 tex_x = (u8)(tex_x_value & WALL_TEX_WIDTH_MASK);
-    const u8 texture_height = (u8)FREEDOOM_WALL_TEXTURE_HEIGHT[tid];
-    const u16 v_scale_q12 = FREEDOOM_WALL_TEXTURE_VSCALE_Q12[tid];
+    // A generated scaler is the column's whole wall unrolled: it writes rows
+    // wall_h-1..0 of MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[sample_height] at a fixed
+    // tex_y. Every assumption it makes is decided here, once per column:
+    //   * centred, so its DDA starts at row 0 (top == full_top);
+    //   * within the table's own rows, which the 128-row viewport preset can
+    //     otherwise index past (see tools/gen_wall_scalers.py);
+    //   * tex_y cannot wrap, so the offset folds into the column pointer.
+    // Anything else keeps the generic post.
+    u16 scaler_height = 0;
+    if (!(flags & RAY_COLUMN_FLAG_FLOOR_ALIGNED) && top == full_top) {
+        const u16 rows = (u16)(bottom - top);
+        if (rows != 0 && rows <= sample_height &&
+            rows <= MEGALDOOM_WALL_SCALER_ROWS &&
+            sample_height < MEGALDOOM_WALL_SCALER_HEIGHTS &&
+            (u16)(tex_y_value + MEGALDOOM_WALL_SCALER_MAX_TY[sample_height]) <
+                WALL_TEX_HEIGHT) {
+            scaler_height = sample_height;
+        }
+    }
 
     return (WallColumnDescriptor){top, bottom, ty_table,
                                   tex_x, tex_y_value, tid, (u8)fog_level, flags,
-                                  texture_height, v_scale_q12};
+                                  scaler_height};
 }
 
 WallColumnDescriptor describe_wall_column(const RayColumn *column) {
@@ -233,7 +260,7 @@ static inline bool column_door_active(const RayColumn *columns, u16 base_sample)
 
 #if RAY_COL_STRIDE == 4
 // Stride-4 mixed tile: two sampled columns per tile, each covering two
-// adjacent byte lanes. Reuses the stride-2 FREEDOOM_WALL_PACKED_PAIRS table —
+// adjacent byte lanes. Reuses the stride-2 level wall packs —
 // each u8 holds one shaded texel replicated across 2px, so storing it to both
 // bytes of the lane pair replicates it across this stride's 4px. Same
 // run-splitting structure as the stride-2 C reference below; there is no asm

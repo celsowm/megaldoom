@@ -35,6 +35,13 @@ extern u8 g_node_side_generation[BSP_MAX_NODES];
 extern u8 g_position_generation;
 extern s32 g_node_cache_px, g_node_cache_py;
 extern bool g_node_cache_valid;
+#if BSP_VIS_CULL
+extern const u8 *g_vis_row;
+#endif
+#if BSP_VIS_LIST
+extern const u16 *g_vis_program;
+extern u16 g_vis_program_length;
+#endif
 
 #if DEBUG_PERF
 extern u16 g_bsp_dbg_nodes_visited;
@@ -88,6 +95,9 @@ void bsp_mark_sample_solid(u16 sample);
 bool bsp_solid_sample_range_filled(u16 left_sample, u16 right_sample);
 void bsp_seed_column_default(RayColumn *col);
 void bsp_draw_seg(u16 seg_index);
+#if BSP_VIS_LIST
+void bsp_draw_seg_facing(u16 seg_index);
+#endif
 void bsp_seed_unclaimed_columns(RayColumn *columns);
 
 bool bsp_project_box_range(const BspBox *box, s16 *left, s16 *right);

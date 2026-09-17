@@ -81,7 +81,6 @@ bool bsp_project_box_range(const BspBox *box, s16 *left, s16 *right) {
     // Do not re-add a per-corner near division without a measurement.
     const s32 min_depth = (box_min_depth < BSP_NEAR) ? BSP_NEAR : box_min_depth;
     if (box_min_depth < BSP_NEAR) {
-        BSP_DBG_INC(near_fallbacks);
     }
 
     // A cheap half-plane reject used to sit in front of the two divisions
@@ -143,6 +142,18 @@ void bsp_render_boxed_child(u16 child, const BspBox *box) {
     if (bsp_view_fully_closed()) {
         return;
     }
+
+#if BSP_VIS_CULL
+    // One bit replaces a box projection for any subtree the bake proved
+    // invisible from the player's subsector (tools/bsp_vis.py).
+    if (g_vis_row) {
+        const u16 bit = BSP_CHILD_IS_SUBSECTOR(child) ?
+            (u16)(bsp_node_count + BSP_CHILD_INDEX(child)) : child;
+        if ((g_vis_row[bit >> 3] & (u8)(1u << (bit & 7))) == 0) {
+            return;
+        }
+    }
+#endif
 
 #if DEBUG_PERF
     const u32 projection_start = g_bsp_dbg_measure_box ? getSubTick() : 0;
@@ -232,6 +243,80 @@ void bsp_render_node(u16 child) {
     }
 }
 
+#if BSP_VIS_LIST
+// Walks one baked draw program (tools/bsp_vis.py leaf_program). Returns TRUE
+// once every sample is closed, so enclosing runs stop too.
+static bool bsp_run_vis_program(const u16 *pc, u16 length) {
+    const u16 *const end = pc + length;
+    while (pc < end) {
+        const u16 word = *pc++;
+        if ((word & 0xC000u) == 0xC000u) {
+            // GROUP: one box test for a whole run (bsp_render_boxed_child's
+            // projection and coverage test, on the same node child box).
+            const u16 ref = (u16)(word & 0x3FFFu);
+            const u16 run_length = *pc++;
+            const u16 *const run = pc;
+            pc += run_length;
+            const BspNode *n = &bsp_nodes[ref >> 1];
+            s16 left;
+            s16 right;
+            if (!bsp_project_box_range((ref & 1u) ? &n->back_box : &n->front_box,
+                                       &left, &right)) {
+                continue;
+            }
+            const u16 left_sample = (u16)((left + RAY_COL_STRIDE - 1) / RAY_COL_STRIDE);
+            const u16 right_sample = (u16)(right / RAY_COL_STRIDE);
+            if (left_sample > right_sample ||
+                bsp_solid_sample_range_filled(left_sample, right_sample)) {
+                continue;
+            }
+            if (bsp_run_vis_program(run, run_length)) {
+                return TRUE;
+            }
+        } else if (word & 0x8000u) {
+            const u16 node = (u16)(word & 0x3FFFu);
+            const u16 front_length = *pc++;
+            const u16 back_length = *pc++;
+            BSP_DBG_INC(nodes_visited);
+            const BspNode *n = &bsp_nodes[node];
+            const u8 side_bit = (u8)(1u << (node & 7));
+            if (g_node_side_generation[node] != g_position_generation) {
+                const s32 cross = bsp_render_mul(g_px - n->px, n->dy) -
+                                  bsp_render_mul(g_py - n->py, n->dx);
+                if (cross >= 0) g_node_side_bits[node >> 3] |= side_bit;
+                else g_node_side_bits[node >> 3] &= (u8)~side_bit;
+                g_node_side_generation[node] = g_position_generation;
+            }
+            const u16 *const front = pc;
+            const u16 *const back = pc + front_length;
+            pc = back + back_length;
+            if (g_node_side_bits[node >> 3] & side_bit) {
+                if (bsp_run_vis_program(front, front_length) ||
+                    bsp_run_vis_program(back, back_length)) {
+                    return TRUE;
+                }
+            } else {
+                if (bsp_run_vis_program(back, back_length) ||
+                    bsp_run_vis_program(front, front_length)) {
+                    return TRUE;
+                }
+            }
+        } else {
+            const u16 seg = (u16)(word & 0x3FFFu);
+            if (word & 0x4000u) {
+                bsp_draw_seg_facing(seg);
+            } else {
+                bsp_draw_seg(seg);
+            }
+            if (bsp_view_fully_closed()) {
+                return TRUE;
+            }
+        }
+    }
+    return FALSE;
+}
+#endif
+
 void bsp_traverse_front_to_back(const PlayerState *player) {
     BSP_DBG_RESET();
     g_fwx = fx_cos(player->angle);
@@ -267,6 +352,20 @@ void bsp_traverse_front_to_back(const PlayerState *player) {
         g_node_cache_valid = TRUE;
     }
 
+#if BSP_VIS_LIST
+    if (g_vis_program) {
+        // The bake is exact 2D visibility, but the projection rounds wall ends
+        // to pixels and samples every other column, so a wall the geometry
+        // hides can still claim one edge column (E1M2/E1M3 oracle, 2026-09-17).
+        // In these closed maps a finished frame closes every sample; if the
+        // program left any open, the traversal fills them. Its coverage test
+        // rejects everything over closed columns, so this costs one compare in
+        // the normal case and a cheap partial walk otherwise.
+        if (bsp_run_vis_program(g_vis_program, g_vis_program_length)) {
+            return;
+        }
+    }
+#endif
     bsp_render_node(bsp_root_node);
 }
 

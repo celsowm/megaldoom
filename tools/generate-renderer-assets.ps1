@@ -501,3 +501,8 @@ foreach ($tile in $ceilingTiles) {
 
 Set-Content -Path $OutPath -Value ($lines -join "`r`n") -NoNewline
 Write-Host "Generated $OutPath from $HudPath" -ForegroundColor Green
+
+# The per-height wall scalers ARE the table above, unrolled into code, so they
+# are regenerated with it rather than by a separate step someone must remember.
+& python (Join-Path $PSScriptRoot "gen_wall_scalers.py")
+if ($LASTEXITCODE -ne 0) { throw "wall scaler generation failed" }

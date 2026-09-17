@@ -154,6 +154,12 @@ class MapData:
     curated_material_reports: list
     required_key_mask: int
     certificate: dict
+    # Original WAD SEGS (v1, v2 in engine y-down vertex indices, including
+    # two-sided segs the flattener drops) and SSECTORS (count, first). The
+    # visibility bake (tools/bsp_vis.py) needs them to recover each
+    # subsector's true convex region; nothing is emitted from them.
+    source_segs: list = None
+    source_ssectors: list = None
 
 
 def clean_name(raw):
@@ -1476,4 +1482,6 @@ def load_map(wad, mapn, apply_recipes=True, apply_windows=True,
         curated_material_reports=curated_material_reports,
         required_key_mask=required_key_mask,
         certificate=certificate,
+        source_segs=[(seg["v1"], seg["v2"]) for seg in segs],
+        source_ssectors=ssectors,
     )

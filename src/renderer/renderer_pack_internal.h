@@ -36,7 +36,7 @@ typedef struct {
     u16 bottom;
     // No `texture`/`shade_map` here. Both were raw pointers into
     // FREEDOOM_WALL_TEXTURES and a runtime shade LUT, kept from before the pack
-    // stage moved to the pre-shaded FREEDOOM_WALL_PACKED_PAIRS table; nothing
+    // stage moved to the pre-shaded level wall packs; nothing
     // read either, and that LUT is gone too. Dropping them takes this struct
     // 24 -> 16 bytes, which
     // is one shift instead of a multiply everywhere a lane is indexed, two
@@ -48,8 +48,11 @@ typedef struct {
     u8 texture_id;
     u8 shade_level;
     u8 flags;
-    u8 texture_height;
-    u16 v_scale_q12;
+    // 0, or the sample height whose generated scaler draws this column. Set
+    // only for a centred, unclipped, non-wrapping column: see
+    // describe_textured_column, which owns every condition the routine
+    // assumes, and renderer_hotpath.s, which jumps into it.
+    u16 scaler_height;
 } WallColumnDescriptor;
 
 // renderer_hotpath.s indexes this struct by the offsets in renderer_pack_abi.h.
@@ -64,22 +67,11 @@ _Static_assert(__builtin_offsetof(WallColumnDescriptor, vertical_samples) ==
                "asm wall post reads the DDA at WALL_DESC_OFF_VERTICAL_SAMPLES");
 _Static_assert(__builtin_offsetof(WallColumnDescriptor, tex_y) == WALL_DESC_OFF_TEX_Y,
                "asm wall post reads tex_y at WALL_DESC_OFF_TEX_Y");
+_Static_assert(__builtin_offsetof(WallColumnDescriptor, scaler_height) ==
+                   WALL_DESC_OFF_SCALER_HEIGHT,
+               "asm wall post reads the scaler height at WALL_DESC_OFF_SCALER_HEIGHT");
 _Static_assert(sizeof(WallColumnDescriptor) == WALL_DESC_SIZE,
                "asm advances one lane by WALL_DESC_SIZE");
-
-static inline u16 wall_source_y(const WallColumnDescriptor *descriptor,
-                                u16 rel_y) {
-    u16 tex_y = (u16)(((u32)descriptor->vertical_samples[rel_y] *
-                       descriptor->v_scale_q12) >> 12);
-    const u16 offset = (u16)(((u32)descriptor->tex_y *
-                              descriptor->v_scale_q12) >> 12);
-    tex_y = (u16)(tex_y + offset);
-    if (descriptor->texture_height == WALL_TEX_HEIGHT) return tex_y;
-    if (tex_y >= descriptor->texture_height) {
-        tex_y = (u16)(tex_y - descriptor->texture_height);
-    }
-    return tex_y;
-}
 
 static inline u16 wall_packed_y(const WallColumnDescriptor *descriptor,
                                 u16 rel_y) {

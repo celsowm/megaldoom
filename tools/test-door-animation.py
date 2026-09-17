@@ -195,16 +195,16 @@ def main():
     # hidden in the remaining slab but visible in the lower opening; a nearer
     # object remains visible over the door.
     # The framing itself is no longer re-derived per pixel in C: the overlay
-    # reads FREEDOOM_WALL_DOOR_PACKED_PAIRS through the same packed_wall_column()
+    # reads the level pack's door blocks through the same packed_wall_column()
     # the wall post uses, and that table's bake carries the frame/safety rules.
     # Check them where they now live, and check the C side selects the door
     # table -- otherwise a door would composite as plain wall art.
     bake = (ROOT / "tools" / "world_assets.py").read_text()
-    assert "FREEDOOM_WALL_DOOR_PACKED_PAIRS" in bake
+    assert "def door_pair_block" in bake
     assert "WORLD_COLOR_WARNING" in bake
     assert "border = WALL_TEX_WIDTH // 16" in bake
     assert "source_y >= source_height - safety" in bake
-    assert "RAY_COLUMN_FLAG_DOOR" in SCENE and "FREEDOOM_WALL_DOOR_TEXTURE_INDEX" in SCENE
+    assert "RAY_COLUMN_FLAG_DOOR" in SCENE and "g_level_door_bases" in SCENE
     assert "packed_wall_column(&descriptor)" in SCENE
     assert "door_overlay_blocks_pixel" in SCENE
     door_top = 0

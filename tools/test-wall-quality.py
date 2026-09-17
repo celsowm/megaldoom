@@ -247,18 +247,18 @@ def main():
     # ...and the bake reads that same header rather than carrying its own copy.
     assert (extractor.WALL_TEX_WIDTH, extractor.WALL_TEX_HEIGHT) == \
         raycast_constants.wall_tex_dims()
-    assert "FREEDOOM_WALL_PACKED_PAIRS" in assets
-    assert "FREEDOOM_WALL_PACKED_PAIRS[" in renderer
+    assert "#define MEGALDOOM_LEVEL_PACK_BLOCK_BYTES" in assets
+    assert "g_level_wall_bases[descriptor->texture_id]" in renderer
     # The door's frame/safety-stripe silhouette used to be re-derived per pixel
     # by style_wall_texel() in renderer_doors.c; it is now baked into
-    # FREEDOOM_WALL_DOOR_PACKED_PAIRS, which the overlay reads through the same
+    # each level pack's door blocks, which the overlay reads through the same
     # packed_wall_column() the wall post uses. So the rule is checked where it
     # now lives -- in the bake -- and the C side is checked for reading the
     # baked table rather than for carrying its own copy of the rule.
     bake = (ROOT / "tools" / "world_assets.py").read_text()
     assert "border = WALL_TEX_WIDTH // 16" in bake
-    assert 'safety = texture_meta[name]["height"] // 8' in bake
-    assert "FREEDOOM_WALL_DOOR_PACKED_PAIRS" in assets
+    assert "safety = source_height // 8" in bake
+    assert "megaldoom_level_door_bases" in (ROOT / "src" / "bsp" / "generated_wall_packs.s").read_text()
     assert "packed_wall_column(&descriptor)" in renderer
 
     palette = generated_palette(assets)
@@ -398,6 +398,15 @@ def main():
     # 17 -- BROWN96, BROWNHUG, COMPSPAN, COMPTALL, SLADWALL, STARG3, STARTAN1 and
     # SUPPORT2 were door textures only through secret doors. -256 KB.
     assert packed_pair_bytes == 1966080
+    # Since 2026-09-17 the cartridge does not carry that atlas: each level's
+    # banked pack holds only the textures it draws (tools/md_banked.ld), so
+    # a texture used by several levels is stored once per level. 4423680 is
+    # what the four packs actually occupy; each must also fit the 1.5 MB
+    # window, which the extractor enforces.
+    pack_bytes = [(ROOT / "src" / "bsp" / ("generated_wallpack_e1m%d.dat" % level)).stat().st_size
+                  for level in range(1, 5)]
+    assert sum(pack_bytes) == 4423680, pack_bytes
+    assert max(pack_bytes) <= extractor.LEVEL_PACK_WINDOW_BYTES, pack_bytes
 
     curated_metrics = [wall_bake_preview.texture_metrics(name)
                        for name in extractor.TECH_WALL_MATERIALS]
@@ -703,6 +712,9 @@ def main():
         assert generated_map4.read_bytes() == MAP4_PATH.read_bytes()
         assert generated_assets.read_bytes() == ASSETS_PATH.read_bytes()
         assert generated_limits.read_bytes() == LIMITS_PATH.read_bytes()
+        for generated in ["generated_wall_packs.s"] + [
+                "generated_wallpack_e1m%d.dat" % level for level in range(1, 5)]:
+            assert (temp_root / generated).read_bytes() ==                 (ROOT / "src" / "bsp" / generated).read_bytes(), generated
 
         # Exercise the CLI's complete artifact contract in a disposable tree:
         # one atlas per curated material, exact-renderer scene pairs (including

@@ -125,6 +125,40 @@ renderer_write_mixed_stride2_span_asm:
 .Lwall_ready:
     cmp.w   d2,d0
     bcc.s   .Lfloor_setup
+
+    /* Generated scaler (tools/gen_wall_scalers.py): the column's whole wall as
+     * straight stores, ~20 cycles per byte against the 56 below. It draws rows
+     * wall_h-1..0 of its own sample height, so it may only run when this post
+     * IS the whole wall: it starts at `top` and end_y does not clip `bottom`.
+     * describe_textured_column owns every other condition and reports the
+     * height (0 = keep the generic post). The routine reads (a5) and writes
+     * (a6) by displacement and touches no register, so a6 is advanced here. */
+    move.w  WALL_DESC_OFF_SCALER_HEIGHT(a1),d5
+    beq.s   .Lwall_generic
+    cmp.w   d3,d0                  /* post starts at top? */
+    bne.s   .Lwall_generic
+    cmp.w   d4,d2                  /* ...and runs to bottom, unclipped? */
+    bne.s   .Lwall_generic
+    lsl.w   #2,d5                  /* sample height * 4 */
+    lea     megaldoom_wall_scaler_ends,a4
+    movea.l 0(a4,d5.w),a4          /* that height's routine ends here */
+    sub.w   d0,d2                  /* wall_h */
+    move.w  d2,d5
+    add.w   d5,d5
+    add.w   d2,d5
+    add.w   d5,d5                  /* 6 bytes per row */
+    suba.w  d5,a4                  /* ...so entering here draws wall_h rows */
+    moveq   #0,d5
+    move.b  WALL_DESC_OFF_TEX_Y(a1),d5
+    adda.w  d5,a5                  /* fold tex_y in; it cannot wrap here */
+    add.w   d2,d0                  /* y after the post */
+    jsr     (a4)
+    move.w  d2,d5
+    lsl.w   #2,d5
+    adda.w  d5,a6                  /* PACK_TILE_ROW_BYTES per row written */
+    bra.s   .Lfloor_setup
+
+.Lwall_generic:
     movea.l WALL_DESC_OFF_VERTICAL_SAMPLES(a1),a4 /* vertical sample DDA */
     move.w  d0,d5
     sub.w   d3,d5                  /* y - top: where this tile enters the DDA */
@@ -177,7 +211,7 @@ renderer_write_mixed_stride2_span_asm:
  * .Lwall_loop above, and deliberately so: draw_door_overlays composites a near
  * slab into ONE byte lane of one tile column, and every texel it writes has to
  * be the byte an ordinary wall two pixels to its left would have produced. It
- * already reads the same FREEDOOM_WALL_PACKED_PAIRS column (2026-08-30); this
+ * already reads the same wall pack column (2026-08-30); this
  * makes it the same instructions as well, so the two cannot drift.
  *
  * `dst` is the byte address of the post's FIRST row -- col_base + 4*y_start,

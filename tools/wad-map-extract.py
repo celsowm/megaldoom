@@ -128,13 +128,29 @@ def emit_limits(path, maps):
         handle.write("\n".join(lines))
 
 
+def level_door_texture_names(map_data):
+    # A SECRET door draws from the ordinary wall plane, closed and moving
+    # (bsp_render_columns.c tests !plain_door before any door pair), so
+    # its material needs no 32 KB door-pair entry. Counting it would bake
+    # one for every wall texture doom_map.camouflage_plain_doors lends it.
+    return {
+        seg["texture_name"]
+        for seg in map_data.out_segs
+        if seg["type"] == doom_map.SEG_DOOR and
+        not seg["flags"] & doom_map.SEG_FLAG_PLAIN_DOOR
+    }
+
+
+def wall_pack_path(map_out_dir, mapn):
+    return os.path.join(map_out_dir, "generated_wallpack_%s.dat" % mapn.lower())
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--wad", default=DEFAULT_WAD)
     ap.add_argument("--map", default="E1M1")
     ap.add_argument("--maps", nargs="+", default=None,
                     help="atomically emit a shared atlas and multiple map descriptors")
-    ap.add_argument("--out", default=None)
     ap.add_argument("--assets-out", default=DEFAULT_ASSET_OUT)
     ap.add_argument("--limits-out", default=DEFAULT_LIMITS_OUT)
     ap.add_argument("--map-out-dir", default=DEFAULT_MAP_OUT_DIR,
@@ -147,9 +163,6 @@ def main():
 
     wad = WadFile(args.wad)
     mapn = args.map.upper()
-    out_path = args.out or os.path.join(
-        DEFAULT_MAP_OUT_DIR, "generated_%s_map.c" % mapn.lower()
-    )
 
     map_data = doom_map.load_map(wad, mapn, apply_recipes=not args.no_recipes)
 
@@ -192,17 +205,9 @@ def main():
         combined_usage = Counter()
         for campaign_map in campaign_maps:
             combined_usage.update(campaign_map.texture_usage)
-        # A SECRET door draws from the ordinary wall plane, closed and moving
-        # (bsp_render_columns.c tests !plain_door before any door pair), so
-        # its material needs no 32 KB door-pair entry. Counting it would bake
-        # one for every wall texture doom_map.camouflage_plain_doors lends it.
-        door_texture_names = {
-            seg["texture_name"]
-            for campaign_map in campaign_maps
-            for seg in campaign_map.out_segs
-            if seg["type"] == doom_map.SEG_DOOR and
-            not seg["flags"] & doom_map.SEG_FLAG_PLAIN_DOOR
-        }
+        door_texture_names = set().union(
+            *(level_door_texture_names(campaign_map)
+              for campaign_map in campaign_maps))
         texture_aliases.assert_alias_table_sound(
             door_texture_names=door_texture_names,
             known_texture_names=combined_usage)
@@ -212,6 +217,19 @@ def main():
         asset_temp = args.assets_out + ".tmp"
         limits_temp = args.limits_out + ".tmp"
         temp_paths.extend((asset_temp, limits_temp))
+        pack_asm = os.path.join(args.map_out_dir, "generated_wall_packs.s")
+        temp_paths.append(pack_asm + ".tmp")
+        level_packs = []
+        for campaign_map in campaign_maps:
+            target = wall_pack_path(args.map_out_dir, campaign_map.mapn)
+            temp_paths.append(target + ".tmp")
+            level_packs.append((
+                campaign_map.mapn,
+                set(campaign_map.texture_usage).union(
+                    seg["texture_name"] for seg in campaign_map.out_segs),
+                level_door_texture_names(campaign_map),
+                target + ".tmp",
+                "src/bsp/" + os.path.basename(target)))
         map_outputs = []
         for campaign_map in campaign_maps:
             target = os.path.join(
@@ -225,7 +243,7 @@ def main():
 
         texture_ids, texture_meta, _, palette = world_assets.emit_world_assets(
             asset_temp, combined_usage, sector_owner.sectors, None,
-            door_texture_names)
+            door_texture_names, level_packs, pack_asm + ".tmp")
         reports = []
         for campaign_map, _, temp in map_outputs:
             reports.append(bsp_emit.emit_map_c(
@@ -234,6 +252,9 @@ def main():
 
         os.replace(asset_temp, args.assets_out)
         os.replace(limits_temp, args.limits_out)
+        os.replace(pack_asm + ".tmp", pack_asm)
+        for _, _, _, temp, _ in level_packs:
+            os.replace(temp, temp[:-len(".tmp")])
         for _, target, temp in map_outputs:
             os.replace(temp, target)
 
@@ -255,61 +276,10 @@ def main():
             "%02X%02X%02X" % color for color in palette))
         return
 
-    asset_temp = args.assets_out + ".tmp"
-    map_temp = out_path + ".tmp"
-    for temp_path in (asset_temp, map_temp):
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-    texture_ids, texture_meta, sector_visuals, palette = world_assets.emit_world_assets(
-        asset_temp, map_data.texture_usage, map_data.sectors, map_data,
-        {seg["texture_name"] for seg in map_data.out_segs
-         if seg["type"] == doom_map.SEG_DOOR and
-         not seg["flags"] & doom_map.SEG_FLAG_PLAIN_DOOR})
-    report = bsp_emit.emit_map_c(map_temp, args.wad, map_data, texture_ids, texture_meta)
-    os.replace(asset_temp, args.assets_out)
-    os.replace(map_temp, out_path)
-
-    print("Wrote %s" % out_path)
-    print("  vertices : %d" % len(map_data.vertices))
-    print("  segs     : %d flat solid/interactive (of %d source)" %
-          (len(map_data.out_segs), map_data.source_seg_count))
-    print("  linedefs : %d" % len(map_data.linedefs))
-    print("  sectors  : %d" % len(map_data.sectors))
-    print("  textures : %d exact + fallback" % (len(texture_ids) - 1))
-    print("  palette  : %s" % " ".join("%02X%02X%02X" % color for color in palette))
-    print("  assets   : %s" % args.assets_out)
-    print("  subsectors: %d" % len(map_data.out_ssectors))
-    print("  nodes    : %d (root=%d)" % (len(map_data.nodes), report.root))
-    print("  blockmap : %dx%d, %d refs, %d validation queries" %
-          (report.grid_width, report.grid_height, report.grid_ref_count,
-           report.spatial_checks))
-    print("  player   : (%d,%d) angle_deg=%d -> %d" % (
-        map_data.start_x, map_data.start_y, map_data.start_angle_deg,
-        map_data.start_angle))
-    print("  things   : %d raw, %d curated, %d skipped" %
-          (len(map_data.out_things), map_data.supported_things,
-           len(map_data.out_things) - map_data.supported_things))
-    print("  doors    : %d groups, faces=%s, fallback faces=%d" %
-          (map_data.next_door_group, dict(sorted(map_data.door_face_counts.items())),
-           map_data.fallback_door_faces))
-    print("  source   : SHA-256 %s" % map_data.wad_sha256)
-    print("  material : baseline/final=%d/%d, targets=%s (%d retextured SEGs)" %
-          (map_data.baseline_seg_count, len(map_data.out_segs),
-           map_data.curated_material_linedefs,
-           map_data.curated_material_segs))
-    for transfer in map_data.curated_material_reports:
-        print("             %s source %d (hint %d) -> %s, %s, +%d SEGs" %
-              (transfer["name"], transfer["source_linedef"],
-               transfer["source_linedef_hint"],
-               transfer["target_linedefs"], transfer["texture"],
-               transfer["added_segs"]))
-    print("  keys     : available=0x%02X required=0x%02X reached=%s" %
-          (map_data.certificate["available_keys"], map_data.required_key_mask,
-           map_data.certificate["reached_masks"]))
-    print("  certified: exit seg %d reachable with key mask=0x%02X after %d states" %
-          (map_data.certificate["exit_index"], map_data.certificate["key_mask"],
-           map_data.certificate["states"]))
-
+    # Wall pixels live in per-level banked packs built from the whole
+    # campaign; one map on its own cannot emit a consistent set.
+    raise SystemExit("single-map extraction was removed with the banked wall "
+                     "packs; use --maps E1M1 E1M2 E1M3 E1M4")
 
 if __name__ == "__main__":
     main()

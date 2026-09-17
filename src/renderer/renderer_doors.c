@@ -28,7 +28,7 @@ void renderer_write_overlay_sky_post_asm(u8 *dst, u16 row_count,
 // The door's interactive silhouette -- a dark metal frame plus a yellow/black
 // moving safety edge around the real WAD texture -- used to be re-derived here
 // per pixel by a style_wall_texel() helper. It is not gone, it moved: the same
-// rules are baked into FREEDOOM_WALL_DOOR_PACKED_PAIRS by tools/world_assets.py,
+// rules are baked into the level packs' door blocks by tools/world_assets.py,
 // which packed_wall_column() selects for a RAY_COLUMN_FLAG_DOOR descriptor. The
 // overlay now reads that table, so the frame costs one indexed byte load instead
 // of two software 32-bit multiplies, a 2-D texture index and a branch chain.

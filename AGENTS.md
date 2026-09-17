@@ -176,19 +176,28 @@ that filtering alone cannot repair an oversized semantic panel: preserve its
 world repeat but select/compose a readable source-derived 64x64 facade, and
 always audit the close oblique checkpoint (LOG, 2026-08-22).
 
-**Budgets: 64 KB work RAM, 4 MB ROM.** The work-RAM guardrail is the binding
-one. Treat `tools/check-rom.ps1`'s **20480-byte recommendation as the floor**,
-not its 16 KB error line: a build with 18076 bytes free boots into a wild read
-during the frontend fade (a `MEM_alloc` for a boot card failing), and it does
-NOT produce SGDK's "not enough memory to reset VDP" panic — that message marks
-~13.7 KB, well below where things actually break. 19728 bytes completed the
-route (LOG, 2026-09-07). Always run a route, not just the guardrail, after
-adding static data. ROM is *not* tight: `.text` is ~1.39 MB against a 4 MB cap, so
-there is ~2.6 MB of headroom. The 1408 KB figure some notes used is just where
-`sizebnd` pads `out/rom.bin`, not a limit. Check `size.exe out/rom.out` against
-the 4 MB cap before ever calling a precompute-vs-compute tradeoff unaffordable.
-`ENABLE_BANK_SWITCH` (SSF mapper, 12 MB) exists but its `0x300000` window is for
-cold bulk assets — never put a table sampled at pixel rate behind it.
+**Budgets: 64 KB work RAM; 2.5 MB resident ROM plus a 1.5 MB banked level
+window.** The work-RAM guardrail is the binding one. Treat `tools/check-rom.ps1`'s
+**20480-byte recommendation as the floor**, not its 16 KB error line: a build
+with 18076 bytes free boots into a wild read during the frontend fade (a
+`MEM_alloc` for a boot card failing), and it does NOT produce SGDK's "not enough
+memory to reset VDP" panic — that message marks ~13.7 KB, well below where
+things actually break. 19728 bytes completed the route (LOG, 2026-09-07). Always
+run a route, not just the guardrail, after adding static data.
+
+The cartridge is **Sega SSF-banked** (2026-09-17): `src/boot/rom_head.c` says
+"SEGA SSF", `tools/md_banked.ld` links everything resident below `0x280000`,
+and each level's wall pack (`src/bsp/generated_wallpack_<map>.dat`: only the
+pair columns that level draws) is linked at the `0x280000–0x3FFFFF` window and
+loaded at its own physical banks (pack N at banks 5+3N..7+3N).
+`level_bank_select()` maps a level's banks **once per level load**; the window
+is never switched mid-frame, so the pixel-rate wall reads cost exactly what a
+flat ROM read did. Invariants: nothing but `.wallpackN` may occupy the window
+(check-rom fails otherwise); `level_bank.c` is the only writer of the mapper
+registers; SGDK's `ENABLE_BANK_SWITCH` / `FAR()` stay unused — do not put a
+table behind SGDK's transient `FAR()` windows, which remap per access. Resident
+headroom is what `check-rom` prints (~700 KB after banking the pair tables);
+look there, not at the image size, before calling a precompute unaffordable.
 
 **Fidelity tradeoffs need the user judging motion.** A static screenshot
 approval does not survive real gameplay; the stride-4 revert (LOG, 2026-07-27)
@@ -237,7 +246,7 @@ segs is drawn. `tools/test-automap.py` checks both directions.
 
 **Anything that writes a wall texel reads the baked pair table.**
 `packed_wall_column()` + `wall_packed_y()` is the only sanctioned path: the pair
-byte in `FREEDOOM_WALL_PACKED_PAIRS` / `FREEDOOM_WALL_DOOR_PACKED_PAIRS` already
+byte in the level's banked wall/door pack blocks already
 carries the v-scale, the shade level, the door frame/safety silhouette and BOTH
 horizontal texels. The door/window overlay spent years re-deriving that per pixel
 through `wall_source_y` (two `__mulsi3` calls, since the 68000 has no 32x32
@@ -260,6 +269,35 @@ line is left as authored), and SECRET faces are excluded from the 32 KB
 per-texture door-pair table, which they never sample. The moving overlay carries this variant in its
 otherwise-unused `band_top` byte so `RayDoorOverlay` stays 10 bytes (LOG,
 2026-09-04).
+
+**Baked visibility is a claim about the bake, so prove it with the oracle, not
+the screen.** `tools/bsp_vis.py` bakes a per-leaf draw program (SEG/BRANCH/GROUP
+words, group threshold K = 8) that `bsp_run_vis_program` walks instead of
+recursing the BSP. Four separate bake bugs shipped past visual inspection and
+were caught only by `BSP_VIS_ORACLE` (cast both ways on one frame, compare
+`RayColumn` bytes) — near-collinear split linedefs, zero-area leaves with no
+portals, TRIGGER segs treated as occluders, and facing classified from the
+clipped region instead of the BSP cell. Rules that follow:
+
+* **Vis-solid seg types must match the `bsp_mark_sample_solid` callers.** DOOR
+  and WINDOW are always open to the bake, so door state can never invalidate it;
+  TRIGGER belongs with them.
+* **A program that finishes with columns still open falls back to full
+  traversal.** Never close that gap by widening the bake: angular slack to
+  absorb pixel slivers took E1M1 to 100% median PVS and a 2.3 h bake.
+* **Run `tools/test-bsp-vis-oracle.ps1` with its `-ExpectMismatch` negative
+  control** (`--negative-control-drop-every`) after touching either side, and
+  require the routes to complete — an incomplete route is a failure, not a pass.
+
+**Generated code must be checked against an independent implementation with a
+negative control.** `tools/gen_wall_scalers.py` emits one unrolled routine per
+projected sample height (419 KB resident, entered at `end - 6h` so one routine
+serves every clipped height). `npm run asm-diff` compares it against the C
+reference that reads the DDA table directly; `--negative-control-corrupt-height
+0` must trip it, which is what proves the path is exercised rather than silently
+falling back to the generic post. Anything baked into those displacements — the
+`PACK_TILE_ROW_BYTES` stride, the table's 120-row width — is asserted at
+assembly time; do not replace a guard with a comment.
 
 **A move is collision-tested only at its destination, so no hop may reach 32
 units.** Walls are zero-thickness lines and the player a 16-unit circle.

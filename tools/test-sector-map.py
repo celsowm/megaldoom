@@ -278,12 +278,15 @@ def main():
     # Textured rendering remains the only path, including arbitrary Doom widths.
     assert "FREEDOOM_WALL_TEXTURES" in assets
     assert "FREEDOOM_WALL_TEXTURE_USCALE_Q12" in assets
-    assert "FREEDOOM_WALL_PACKED_PAIRS" in assets
-    assert "[FREEDOOM_WORLD_SHADE_LEVELS][FREEDOOM_WALL_TEXTURE_COUNT]" in assets
-    assert "FREEDOOM_WALL_DOOR_PACKED_PAIRS" in assets
-    assert "FREEDOOM_WALL_PACKED_PAIRS[" in renderer_scene
+    # Pair planes are banked per level (src/bsp/level_bank.c); the renderer
+    # reaches them through the level's resident slot tables.
+    packs = (ROOT / "src" / "bsp" / "generated_wall_packs.s").read_text()
+    assert "#define MEGALDOOM_LEVEL_PACK_COUNT" in assets
+    assert "megaldoom_level_wall_bases:" in packs and "megaldoom_level_door_bases:" in packs
+    assert "static const u8 FREEDOOM_WALL_PACKED_PAIRS" not in assets
+    assert "g_level_wall_bases[descriptor->texture_id]" in renderer_scene
     assert "packed_wall_column" in renderer_scene
-    assert "FREEDOOM_WALL_DOOR_TEXTURE_INDEX" in renderer_scene
+    assert "g_level_door_bases[descriptor->texture_id]" in renderer_scene
     assert "FREEDOOM_WALL_DOOR_TEXTURE_COUNT" in world_assets_source
     # Both packed tables go through packed_pair_byte, and a byte carries the
     # two pixels of one stride-2 sample as independent nibbles (high = even

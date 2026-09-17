@@ -228,6 +228,72 @@ extern const BspMapData *g_bsp_map;
 bool bsp_select_map(u16 level_index);
 const BspMapData *bsp_current_map(void);
 
+// Baked per-subsector visibility (tools/bsp_vis.py -> generated_bsp_vis.c).
+// Experimental and off by default: when on, the BSP walk rejects any child
+// whose subtree holds no leaf visible from the player's subsector before it
+// projects that child's box. Returns NULL for a map with no baked rows, which
+// disables the cull for that map. Row bit i < node_count is node i; bit
+// node_count + k is subsector k.
+#ifndef BSP_VIS_CULL
+#define BSP_VIS_CULL 0
+#endif
+#if BSP_VIS_CULL
+const u8 *bsp_vis_row(const BspMapData *map, u16 subsector);
+#endif
+
+// The shipped walk (2026-09-17): the player's subsector selects a baked draw
+// program -- its potentially visible segs in BSP front-to-back order, with a
+// runtime side test only where a partition crosses the subsector's BSP cell --
+// which replaces the per-frame node traversal and most box projections. Cast
+// fell 17% over the 17-pose sweep and 28-42% at the E1M1 courtyard-hall
+// headings; worst case +3.1%. Word format in tools/bsp_vis.py (leaf_program);
+// correctness is proven by tools/test-bsp-vis-oracle.ps1, not by screenshots.
+// Set to 0 to fall back to the full node traversal, which is still the
+// reference the oracle compares against.
+#ifndef BSP_VIS_LIST
+#define BSP_VIS_LIST 1
+#endif
+#if BSP_VIS_LIST
+const u16 *bsp_vis_program(const BspMapData *map, u16 subsector, u16 *length);
+#endif
+
+// Differential check for BSP_VIS_LIST (tools/test-bsp-vis-oracle.ps1): cast
+// every frame both ways and count frames whose columns differ.
+#ifndef BSP_VIS_ORACLE
+#define BSP_VIS_ORACLE 0
+#endif
+#if BSP_VIS_ORACLE
+#if !BSP_VIS_LIST
+#error "BSP_VIS_ORACLE checks BSP_VIS_LIST; build with both"
+#endif
+// BSP_VIS_ORACLE_EVERY frames with a program are cast once; the next is cast
+// twice and compared. Checking every frame doubles cast and shifts the E2E
+// follower's timing enough to change where it presses a door (E1M3 waypoint
+// 79), so the route never reaches the poses the check exists for.
+#ifndef BSP_VIS_ORACLE_EVERY
+#define BSP_VIS_ORACLE_EVERY 4
+#endif
+typedef struct {
+    u32 frames;
+    u32 mismatch_frames;
+    u16 unprogrammed_frames;
+    u16 first_subsector;
+    s16 first_x;
+    s16 first_y;
+    u16 first_angle;
+    u16 first_sample;
+    // The first mismatched column as each path produced it.
+    u16 program_depth;
+    u16 traversal_depth;
+    u8 program_texture;
+    u8 traversal_texture;
+    u8 program_door_height;
+    u8 traversal_door_height;
+} BspVisOracleState;
+_Static_assert(sizeof(BspVisOracleState) == 28, "oracle mailbox is 28 bytes");
+extern volatile BspVisOracleState g_bsp_vis_oracle;
+#endif
+
 // Compatibility aliases keep the renderer/collision hot paths readable while
 // making every access resolve through the selected ROM descriptor.
 #define bsp_vertices (g_bsp_map->vertices)

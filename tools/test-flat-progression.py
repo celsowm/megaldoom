@@ -116,20 +116,23 @@ def main():
     with tempfile.TemporaryDirectory() as temp_name:
         temp = Path(temp_name)
         bad_wad = temp / "no-exit.wad"
-        out_map = temp / "map.c"
+        out_map = temp / "generated_e1m1_map.c"
         out_assets = temp / "assets.h"
         wad_without_e1m1_exit(ROOT / "DOOM1.WAD", bad_wad)
         out_map.write_bytes(b"valid-map-sentinel\n")
         out_assets.write_bytes(b"valid-assets-sentinel\n")
         process = subprocess.run(
             [sys.executable, str(EXTRACTOR), "--wad", str(bad_wad),
-             "--map", "E1M1", "--out", str(out_map),
-             "--assets-out", str(out_assets)],
+             "--maps", "E1M1", "E1M2", "E1M3", "E1M4",
+             "--map-out-dir", str(temp),
+             "--assets-out", str(out_assets),
+             "--limits-out", str(temp / "limits.h")],
             text=True, capture_output=True)
         assert process.returncode != 0, process.stdout
         assert "no supported exit" in (process.stdout + process.stderr)
         assert out_map.read_bytes() == b"valid-map-sentinel\n"
         assert out_assets.read_bytes() == b"valid-assets-sentinel\n"
+        assert not list(temp.glob("generated_wallpack_*.dat"))
 
     print("ok    progression proof: RGB locks, self-lock/wrong-color/isolation, "
           "use from front and in sight, atomic failure")

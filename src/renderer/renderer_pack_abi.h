@@ -27,6 +27,9 @@
 #define WALL_DESC_OFF_BOTTOM 2
 #define WALL_DESC_OFF_VERTICAL_SAMPLES 4
 #define WALL_DESC_OFF_TEX_Y 9
+// 0, or the projected sample height whose generated scaler draws this column
+// (src/renderer/generated_wall_scalers.s, tools/gen_wall_scalers.py).
+#define WALL_DESC_OFF_SCALER_HEIGHT 14
 #define WALL_DESC_SIZE 16
 
 // PackedFlatRows: two u32 row tables indexed by screen row, stepping by
