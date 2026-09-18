@@ -562,8 +562,8 @@ def pvs_rows(vm, pvs):
 #                                child's box and skips the run when it is off
 #                                screen or already covered, as
 #                                bsp_render_boxed_child does. Emitted only
-#                                around runs of at least group_min segs, where
-#                                one box test can pay for many seg tests.
+#                                where the box test is expected to pay for
+#                                itself: see group_pays_off().
 # Everything else is resolved offline: a partition the whole region lies on
 # one side of has a fixed near/far order, subtrees with no PVS leaf vanish, and
 # a seg whose front half-plane misses the region can never face the player.
@@ -574,18 +574,75 @@ PROGRAM_INDEX_MASK = 0x3FFF
 SIDE_MARGIN = 2.0
 
 
+# Group choice (2026-09-18). A GROUP costs one box projection (~26 subticks,
+# LOG 2026-07-30) every time the program reaches it and saves the run's seg
+# tests only when the box is skipped. A fixed threshold (the old --group-min K)
+# cannot see where that happens: K=8 lost to no groups at all at some poses and
+# beat it by ~20% at others. So each candidate is priced per leaf: P_off is the
+# fraction of (viewpoint over the leaf's region) x (16 headings) samples for
+# which the child's box lies wholly outside the 90-degree frustum, and the group
+# is kept iff P_off * segs * GROUP_SEG_COST > GROUP_BOX_COST. Occlusion skips are
+# invisible offline, so P_off is a lower bound on the runtime skip rate. The
+# costs are calibrated, not derived: over the 17 sweep poses GROUP_SEG_COST 5
+# gave cast -3.5% against K=8 and -4.3% against no groups, with no pose worse
+# than the better of the two by more than 2% (8 gave -1.3%, 3 gave -0.5%).
+GROUP_BOX_COST = 26.0
+GROUP_SEG_COST = 5.0
+GROUP_MIN_SEGS = 2
+GROUP_HEADINGS = 16
+GROUP_NEAR = 16.0
+
+
+def _group_sample_points(poly):
+    cx, cy = centroid(poly)
+    return (list(poly) + [(cx, cy)] +
+            [((cx + x) / 2.0, (cy + y) / 2.0) for x, y in poly])
+
+
+def _box_off_screen_share(box, points):
+    x0, y0, x1, y1 = box
+    corners = ((x0, y0), (x1, y0), (x0, y1), (x1, y1))
+    off = 0
+    total = 0
+    for px, py in points:
+        rel = [(cx - px, cy - py) for cx, cy in corners]
+        for h in range(GROUP_HEADINGS):
+            a = 2.0 * math.pi * h / GROUP_HEADINGS
+            dx, dy = math.cos(a), math.sin(a)
+            fs = [rx * dx + ry * dy for rx, ry in rel]
+            ls = [-rx * dy + ry * dx for rx, ry in rel]
+            total += 1
+            if (all(f < GROUP_NEAR for f in fs) or
+                    all(l > f for f, l in zip(fs, ls)) or
+                    all(l < -f for f, l in zip(fs, ls))):
+                off += 1
+    return off / total if total else 0.0
+
+
+def group_pays_off(box, points, segs, seg_cost=None):
+    """Keep a GROUP around a run of `segs` seg tests behind `box`?"""
+    if segs < GROUP_MIN_SEGS or points is None:
+        return False
+    cost = GROUP_SEG_COST if seg_cost is None else seg_cost
+    return _box_off_screen_share(box, points) * segs * cost > GROUP_BOX_COST
+
+
 def _classify(poly, f):
     lo = min(f(x, y) for x, y in poly)
     hi = max(f(x, y) for x, y in poly)
     return lo, hi
 
 
-def leaf_program(vm, leaf, pvs, group_min=None, drop_every=None):
+def leaf_program(vm, leaf, pvs, group_min=None, drop_every=None, group_seg_cost=None):
+    """group_min=None prices each GROUP with group_pays_off(); an integer keeps
+    the old fixed threshold (every run of at least that many segs), for A/B."""
     md = vm.m
     v = vm.vertices
     poly = vm.leaf_cell[leaf]
     if poly is None or len(poly) < 3:
         poly = None  # no usable cell: branch everywhere, test every facing
+    region = vm.leaf_poly[leaf] or poly
+    points = _group_sample_points(region) if region else None
 
     def seg_words(sub):
         first, count = md.out_ssectors[sub]
@@ -622,8 +679,16 @@ def leaf_program(vm, leaf, pvs, group_min=None, drop_every=None):
         return count
 
     def grouped(node, back_side, words):
-        if (group_min is None or not words or seg_count(words) < group_min):
+        if not words:
             return words
+        if group_min is not None:
+            if seg_count(words) < group_min:
+                return words
+        else:
+            nd = vm.nodes[node]
+            box = nd["back_box"] if back_side else nd["front_box"]
+            if not group_pays_off(box, points, seg_count(words), group_seg_cost):
+                return words
         ref = node * 2 + (1 if back_side else 0)
         assert ref <= PROGRAM_INDEX_MASK and len(words) <= 0xFFFF
         return [PROGRAM_GROUP | ref, len(words)] + words
@@ -778,7 +843,11 @@ def main():
     ap.add_argument("--probe", nargs=2, type=int, action="append", default=[],
                     metavar=("X", "Y"), help="report the PVS of the leaf at X Y")
     ap.add_argument("--group-min", type=int, default=None,
-                    help="wrap program runs of at least this many segs in a box test")
+                    help="A/B only: wrap every run of at least this many segs in a "
+                         "box test (the pre-2026-09-18 rule; default prices each "
+                         "group with group_pays_off)")
+    ap.add_argument("--no-groups", action="store_true",
+                    help="A/B only: emit no GROUP words at all")
     ap.add_argument("--negative-control-drop-every", type=int, default=None,
                     help="NEGATIVE CONTROL: omit every Nth seg from the programs "
                          "so tools/test-bsp-vis-oracle.ps1 must fail")
@@ -858,7 +927,8 @@ def main():
         with open(args.pvs_cache, "w") as fh:
             json.dump(cache, fh)
     if args.emit_c:
-        emit_c(args.emit_c, entries, args.group_min,
+        emit_c(args.emit_c, entries,
+               (1 << 30) if args.no_groups else args.group_min,
                args.negative_control_drop_every)
         print("wrote %s" % args.emit_c)
 

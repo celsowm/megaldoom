@@ -275,6 +275,15 @@ extern u32 g_cadence_bb_setup_subticks;
 extern u32 g_cadence_bb_rows_subticks;
 extern u32 g_cadence_bb_max_bytes;
 extern u32 g_cadence_bb_max_subticks;
+/* Row-loop subticks and slots (bytes x rows) per object class, for attributing
+ * the row loop. Classes overlap: an object can be door-tested, post-tested and
+ * magnified at once. Filled only under CADENCE_BB_SPLIT. */
+extern u32 g_cadence_bb_door_subticks;
+extern u32 g_cadence_bb_door_slots;
+extern u32 g_cadence_bb_post_subticks;
+extern u32 g_cadence_bb_post_slots;
+extern u32 g_cadence_bb_mag_subticks;
+extern u32 g_cadence_bb_mag_slots;
 /* Split of the pack stage into the per-column prologue (four
  * describe_wall_column calls plus the coherence compare, which every column
  * pays even when it is then skipped) vs the 15-tile write loop. Deliberately
@@ -287,6 +296,23 @@ extern u32 g_cadence_bb_max_subticks;
 #endif
 extern u32 g_cadence_pack_desc_subticks;
 extern u32 g_cadence_pack_tiles_subticks;
+/* Wall rows per rebuild by why they did or did not get a generated scaler
+ * (renderer_pack.c, describe_wall_column). Adds a classification to every
+ * describe call, so OFF by default; opt in with -DCADENCE_WALL_REASONS=1. */
+#ifndef CADENCE_WALL_REASONS
+#define CADENCE_WALL_REASONS 0
+#endif
+enum {
+    CADENCE_WALL_SCALER,
+    CADENCE_WALL_EMPTY,
+    CADENCE_WALL_FLOOR_ALIGNED,
+    CADENCE_WALL_TOO_TALL,
+    CADENCE_WALL_CLIP_DELTA,
+    CADENCE_WALL_SCALER_WRAPPED,  /* scaler, drawn twice around a tex_y wrap */
+    CADENCE_WALL_OTHER,           /* tex_y >= 128 (unreachable today) */
+    CADENCE_WALL_REASON_COUNT
+};
+extern u32 g_cadence_wall_rows[CADENCE_WALL_REASON_COUNT];
 #else
 #define CADENCE_STAGE_PROBE 0
 #endif

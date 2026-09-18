@@ -215,6 +215,15 @@ Two rules fall out:
   baked one. Gating on `clip_delta == 0` instead silently drops every close wall
   at the default preset back to the generic post -- a large perf regression
   inside what looks like a correctness fix.
+* **A tex_y wrap is handled in `renderer_hotpath.s`, not in the eligibility
+  test.** The dispatch reads the column's largest sample from the routine's
+  entry instruction and, if `tex_y + sample` reaches 128, splits the column at
+  the one row where it does and draws in two passes. That is exact only because
+  every row of the DDA table is raw, below 128 and non-decreasing;
+  `tools/gen_wall_scalers.py` refuses to emit otherwise. Putting that work in
+  `describe_textured_column` instead cost every column +2% pack in register
+  pressure (LOG, 2026-09-18). Keep per-column C lean. Rare-path work belongs
+  in the asm, which pays only when it runs.
 * **A failing E2E route is a regression until proven otherwise.** That
   eligibility bug surfaced only as an E1M3 waypoint-79 stall, and "the routes are
   timing-fragile" was the wrong first answer: pack really was slower. If a route
@@ -313,7 +322,8 @@ otherwise-unused `band_top` byte so `RayDoorOverlay` stays 10 bytes (LOG,
 
 **Baked visibility is a claim about the bake, so prove it with the oracle, not
 the screen.** `tools/bsp_vis.py` bakes a per-leaf draw program (SEG/BRANCH/GROUP
-words, group threshold K = 8) that `bsp_run_vis_program` walks instead of
+words; each GROUP kept only where `group_pays_off` prices it as a win, since
+2026-09-18 -- `--group-min K` and `--no-groups` remain for A/B) that `bsp_run_vis_program` walks instead of
 recursing the BSP. Four separate bake bugs shipped past visual inspection and
 were caught only by `BSP_VIS_ORACLE` (cast both ways on one frame, compare
 `RayColumn` bytes) — near-collinear split linedefs, zero-area leaves with no
@@ -404,6 +414,12 @@ Each is measured and written up in [LOG.md](LOG.md); the date locates the entry.
   buy ~1% for +736 KB (2026-08-04).
 - **Applying the billboard gather/apply row cache unconditionally** — +44% on
   `stationary-combat`. It is gated on magnification for a reason (2026-08-04).
+  Both row paths are now superseded by the column rasterizer
+  (`draw_sprite_columns`, 2026-09-18, -41% billboard) and are compiled only
+  under `-DBILLBOARD_COLUMN_RASTER=0` as its A/B baseline. It rests on every
+  `MEGALDOOM_BILLBOARD_REMAP` row sending 0→0 and non-zero→non-zero, and every
+  sprite texel being ≤ 15; `tools/test-billboard-posts.py` pins both. A remap
+  that makes an opaque index render as 0 breaks the keep-mask table silently.
 - **Turning GCSE back on** — SGDK compiles with `-fno-web -fno-gcse`, and that is
   correct for this code: `#pragma GCC optimize("gcse","web",...)` on the five BSP
   translation units made cast **2.1% worse** on identical pose-locked workload.

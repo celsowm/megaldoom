@@ -403,6 +403,40 @@ void draw_door_overlays(const RayColumn *columns,
 #endif /* PERF_STUB_DOOR_OVERLAYS */
 }
 
+// The rows door_overlay_blocks_pixel() answers TRUE for, as at most two
+// half-open [begin, end) intervals in rows[0..3]; returns how many. The column
+// billboard rasterizer asks once per byte column instead of once per pixel.
+// Deliberately NOT used to define door_overlay_blocks_pixel(): that per-pixel
+// predicate is what the BILLBOARD_RASTER_VERIFY reference rasterizer calls, so
+// keeping the two independent is what lets the differential check this one.
+u16 door_overlay_blocked_rows(const RayColumn *column, u16 object_depth,
+                              u16 rows[4]) {
+    const RayDoorOverlay *door = &column->door;
+    if (door->height == 0 || door->depth >= column->depth ||
+        object_depth < door->depth) {
+        return 0;
+    }
+    const u16 top = (u16)((VIEW_PIXEL_H - door->height) / 2);
+    const u16 bottom = (u16)(top + door->height);
+    if (ray_overlay_is_window(door)) {
+        u16 band_top, band_bottom;
+        window_band_rows(top, bottom, door, &band_top, &band_bottom);
+        // window_band_rows can leave a band entirely below the slab (it only
+        // orders the pair); clamp so both intervals stay inside [top, bottom).
+        if (band_top > bottom) band_top = bottom;
+        if (band_bottom < band_top) band_bottom = band_top;
+        rows[0] = top;
+        rows[1] = band_top;
+        rows[2] = band_bottom;
+        rows[3] = bottom;
+        return 2;
+    }
+    const u16 lift_pixels = (u16)(((u32)door->height * door->lift) >> 8);
+    rows[0] = top;
+    rows[1] = (u16)(bottom - lift_pixels);
+    return 1;
+}
+
 bool door_overlay_blocks_pixel(const RayColumn *column,
                                u16 object_depth,
                                u16 y) {

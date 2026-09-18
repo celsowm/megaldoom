@@ -1083,6 +1083,13 @@ int main(bool hard) {
                 u32 bb_max_subticks;
                 u32 pack_desc_subticks;
                 u32 pack_tiles_subticks;
+                u32 bb_door_subticks;
+                u32 bb_door_slots;
+                u32 bb_post_subticks;
+                u32 bb_post_slots;
+                u32 bb_mag_subticks;
+                u32 bb_mag_slots;
+                u32 wall_rows[CADENCE_WALL_REASON_COUNT];
             } CadenceSnapshot;
             static CadenceSnapshot s_cadence;
             const u16 vb = (u16)(vtimer - cur_vtimer);
@@ -1129,6 +1136,15 @@ int main(bool hard) {
             s_cadence.bb_max_subticks = g_cadence_bb_max_subticks;
             s_cadence.pack_desc_subticks = g_cadence_pack_desc_subticks;
             s_cadence.pack_tiles_subticks = g_cadence_pack_tiles_subticks;
+            s_cadence.bb_door_subticks = g_cadence_bb_door_subticks;
+            s_cadence.bb_door_slots = g_cadence_bb_door_slots;
+            s_cadence.bb_post_subticks = g_cadence_bb_post_subticks;
+            s_cadence.bb_post_slots = g_cadence_bb_post_slots;
+            s_cadence.bb_mag_subticks = g_cadence_bb_mag_subticks;
+            s_cadence.bb_mag_slots = g_cadence_bb_mag_slots;
+            for (u16 r = 0; r < CADENCE_WALL_REASON_COUNT; r++) {
+                s_cadence.wall_rows[r] = g_cadence_wall_rows[r];
+            }
             debug_checkpoint_publish_perf(&s_cadence, sizeof(s_cadence));
         }
 #endif

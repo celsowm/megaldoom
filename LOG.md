@@ -8,6 +8,163 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## Wrapping wall columns take the generated scalers too: pack -10% (2026-09-18)
+
+**Measured first.** A new opt-in counter, `-DCADENCE_WALL_REASONS=1`, classifies
+every `describe_wall_column` call by the first scaler-eligibility clause it
+fails. Over the 17 sweep poses, only one reason matters: `tex_y + MAX_TY[S]`
+reaching 128. That clause sent a wall row to the 56-cycle generic post at:
+
+| pose | E1M4 a64 | E1M4 a192 | E1M4 a0 | E1M4 a128 | E1M3 a128 | E1M3 a192 |
+|---|---|---|---|---|---|---|
+| wrap share | 100% | 100% | 64% | 46% | 43% | 33% |
+
+This is why E1M4 a64/a192 got ~5% *slower* with the scalers: no column
+qualified. Floor-aligned mattered only at E1M2 a64 (54%). Everything else was
+below 1%.
+
+**Two fixes rejected on data.**
+
+- *Doubled columns* (store 256 bytes so `a5 + tex_y + ty` never wraps). E1M3
+  and E1M4 wall packs are already 1.34 MB of the 1.5 MB window, so this cannot
+  fit.
+- *Bake-time rotation*: rotate each texture by its most common `tex_v` and
+  subtract that from its segs, zero ROM. Non-zero `tex_v` is only 1.3-8.2% of
+  wall length per level, and per-texture rotation barely moves it (E1M4 8.2% ->
+  7.9%). The wrapping walls use textures whose common offset is 0.
+
+**Fix: split the column at its one wrap, inside the asm dispatch.** Every row of
+`MEGALDOOM_WALL_TEX_Y_BY_HEIGHT` is raw, below 128 and non-decreasing, so
+`tex_y + sample` crosses 128 exactly once, at row k. `gen_wall_scalers.py` now
+refuses to emit if that stops holding.
+
+- The routine's entry instruction is row `wall_h-1`'s `move.b ty(a5),...`, and
+  its source displacement word is the column's largest sample. So one `add.w
+  2(a4)` plus a compare detects the wrap with no table.
+- A wrapping column binary-searches the routine's own displacement words for
+  k. It then runs the routine twice: all rows from the column's -128 alias
+  (right for rows >= k), then rows k-1..0 from the column itself.
+- That is n + k stores at ~20 cycles against n at 56. The block sits out of
+  line after the `rts`.
+
+**The first version put k in C, and that was a mistake worth recording.** It
+kept a descriptor byte and did the search in `describe_textured_column`. E1M1,
+which almost never wraps, paid +2% pack (prologue +73 subticks per rebuild,
+tile loop unchanged). Moving the search out of line did not help: the cost was
+the extra live state in every column's descriptor build. With the test in the
+asm, C *loses* its `MAX_TY` lookup entirely, and E1M1 ends up cheaper than
+before.
+
+**Paired A/B, same session** (`-DMEGALDOOM_NO_SCALER_WRAP=1` restores the old
+C rule):
+
+| pose | pack | frame |
+|---|---|---|
+| E1M4 a0 / a64 / a128 / a192 | -15.0 / **-20.3** / -9.2 / -16.0% | 11.85->11.10, 14.36->13.17, 12.52->12.15, 13.51->12.63 vb |
+| E1M3 a128 / a192 | -3.2 / -3.0% | -0.1 vb |
+| E1M1 a73 / a233 | -1.1 / -1.5% | ~0 |
+| **8 poses** | **43633 -> 39229 (-10.1%)** | |
+
+segs and cast match per pose. E1M3 gains less than its wrap share suggests
+because its wrapping columns are short (the binary search and the second pass
+are a larger fraction there).
+
+**Correctness.** `check-asm-diff.ps1` (asm vs the C reference packer, which
+masks every sample) gives 720/0 at E1M4 a64 (all wrap), 682/0 at E1M3 a128 and
+624/0 at the default pose. The negative control,
+`-DWALL_SCALER_WRAP_NEGATIVE_CONTROL=1` (skip pass 2), gives 600/600
+mismatches at E1M4 a64.
+
+## Billboards drawn by byte column: -41% billboard, up to -8 vb a frame (2026-09-18)
+
+**The premise was wrong, and the sweep said so.** The plan after Phase 2 was to
+find the next whole vblank in the pack tile loop or in cast. Decoding the
+existing 17-pose `scalfull` sweep first showed that at the worst poses neither
+dominates -- **billboards** do, and they run on every scene frame, not just
+rebuilds:
+
+| pose | frame | cast | pack | billboard |
+|---|---|---|---|---|
+| E1M3 (-1952,2448) a128 | 31.1 vb | 4.8 | 3.5 | **14.0** |
+| E1M2 (-590,-2196) a0 | 27.4 vb | 5.4 | 4.1 | **13.6** |
+| E1M3 a192 | 28.3 vb | 5.0 | 3.4 | **8.9** |
+
+**Attribution before any fix.** `CADENCE_BB_SPLIT` put 97-98% in the row loop,
+not per-object setup. New per-class counters (row-loop subticks and slots for
+door-tested, pickup-post and magnified objects; overlapping classes) then said:
+
+- the **magnified** gather/apply path -- the "fast" path -- was 64-95% of the
+  row loop at three of the four poses, at ~380-480 cycles per packed byte;
+- the door test on top of it (E1M2 a0) made it ~850 cycles/byte;
+- pickup posts were ~12% at E1M3 a128/a192;
+- `-DBILLBOARD_MAGNIFIED_STEP=0` (raster path only) was worse still, ~700
+  cycles/byte. The 2026-08-04 point-blank numbers (8.6 subticks/byte raster,
+  4 magnified) match, so this was never a regression -- both paths were just
+  expensive, and route averages had hidden it.
+
+The plan's guesses (posts, door test, the 2x magnification gate) were each a
+minority. The common cause was structural: everything the row loops did per
+screen row -- tile index, destination, door test, post walk, tile mark -- is
+really per byte *column*.
+
+**Fix: `draw_sprite_columns`.** Walk each byte column top to bottom. The view
+tilemap is column-major, so one row down is always +4 bytes, even across a tile
+boundary (the wall posts' identity). Per object: a row-offset table (same DDA
+and clamp as before, so identical `tex_y` per row) and a 16-entry high-nibble
+table. Per byte column: two source pointers, two nibble tables (a hidden side
+points at an all-zero table), and the door/window slab as at most two blocked
+row intervals from the new `door_overlay_blocked_rows()`. Per byte: two texel
+loads, two table lookups, and `*dst = (*dst & BB_KEEP_MASK[v]) | v`. Tiles are
+marked before their first write, exactly as before.
+
+Two facts make the per-pixel tests unnecessary, and both are now pinned by
+`tools/test-billboard-posts.py`:
+
+- every `MEGALDOOM_BILLBOARD_REMAP` row maps 0 to 0 and every other index to
+  non-zero, so a nibble is opaque iff its value is non-zero and the keep-mask
+  is a pure function of the packed byte (a 256-byte ROM table);
+- the pickup posts equal `texel != 0` exactly (the test already asserted this
+  per pixel), so the per-pixel post walk only repeated the texel test. **The
+  posts were a pessimization all along**; the column path drops them.
+
+**Paired A/B, same session** (`-DBILLBOARD_COLUMN_RASTER=0` vs default; segs and
+nodes identical per pose, object/byte counts within enemy drift):
+
+| pose | billboard | frame |
+|---|---|---|
+| E1M1 a9 / a217 / a233 / a249 | -37 / -36 / -35 / -32% | -1.1 to -1.8 vb |
+| E1M2 a0 | 17379 -> 6919 (**-60%**) | 27.6 -> 19.4 vb |
+| E1M2 a192 | -45% | 16.3 -> 15.2 vb |
+| E1M3 a0 | -17% | 22.2 -> 20.8 vb |
+| E1M3 a128 | 17973 -> 11397 (-37%) | 31.3 -> 25.8 vb |
+| E1M3 a192 | -49% | 28.5 -> 24.0 vb |
+| **9 poses with sprites** | **81308 -> 48062 (-40.9%)** | sum 188.5 -> 162.1 vb |
+
+No pose regressed. The E1M1 small-sprite poses were the risk (per-column setup
+instead of per-row) and they improved too. Poses without sprites cannot move.
+
+**Correctness.**
+- On target, `-DBILLBOARD_RASTER_VERIFY=1` (object-by-object against the
+  pre-2026-08-03 per-pixel reference, which still does the post walk and the
+  per-pixel door test): **0 mismatches** at all four worst poses.
+- Negative controls, both caught at E1M2 a0:
+  `-DBILLBOARD_COLUMN_NEGATIVE_CONTROL=1` (flip a texel bit) gives 606
+  mismatches, and `=2` (ignore door/window cuts) gives 46.
+- `tools/test-billboard-raster.py` gained a column model and window slabs in
+  the fuzz. Swapping in a helper without the band clamp is caught (fuzz case
+  42), and so is one treating windows as doors (case 1). The first control is
+  also why `door_overlay_blocked_rows` clamps the band into the slab:
+  `window_band_rows` only orders the pair, so a band below the slab would
+  otherwise have unblocked rows the per-pixel predicate blocks.
+
+**Not done, and worth knowing.** The GCC inner loop is ~20 instructions with
+one pointer reloaded from the stack per byte (~170 cycles). A hand-written loop
+is ~140 opaque / ~90 transparent, perhaps another 15-20% of billboard. The old
+row paths and their 260 bytes of static RAM are compiled only for the A/B
+baseline. Separately, the sweep shows **billboard projection** at 4.3-7.1k
+subticks/frame on E1M3 (more than cast at a192). It is not in this plan, but it
+is the next stage to attribute.
+
 ## Deleted the stride-4 paths (2026-09-18)
 
 `RAY_COL_STRIDE` has been 2 since the stride-4 revert (LOG, 2026-07-27) and
@@ -44,6 +201,11 @@ three provably-dead clauses, so a single changed pixel would have meant one of
 them was reachable), full suite green.
 
 ## The scaler eligibility test costs register pressure, not arithmetic (2026-09-18)
+
+*Update, same day: the wrap clause this entry measures is gone from C. The
+asm dispatch now tests the wrap and splits the column, and both E1M4 poses
+below gained 16-20% pack. See "Wrapping wall columns take the generated
+scalers too" above.*
 
 Two E1M4 poses pay ~5% more pack with the scalers enabled than without, at poses
 where NO column qualifies, so the cost is the test that says no.

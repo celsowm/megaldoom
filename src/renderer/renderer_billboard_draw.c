@@ -22,6 +22,12 @@
 #define BILLBOARD_RASTER_VERIFY 0
 #endif
 
+// 1 (default): draw_sprite_columns below. 0: the pre-2026-09-18 row paths
+// (raster_sprite_row / gather+apply), kept compiled out as the A/B baseline.
+#ifndef BILLBOARD_COLUMN_RASTER
+#define BILLBOARD_COLUMN_RASTER 1
+#endif
+
 // Flat billboard-texture descriptor. Storing the pixels as a plain const u8* (a
 // [rows][cols] array decays cleanly) lets one draw loop sample sprites of any size:
 // world sprites and enemies are 24x48. Index as pixels[y*w + x].
@@ -193,6 +199,7 @@ typedef struct {
 // One packed tile is 8 rows of u32.
 #define VIEW_TILE_BYTES ((s16)sizeof(g_view_tiles[0]))
 
+#if !BILLBOARD_COLUMN_RASTER
 // Rasterize one sprite row into the packed tile buffer.
 //
 // A packed tile row is a u32 holding 8 nibbles, pixel `col` living at bit
@@ -309,9 +316,11 @@ static u32 s_tile_word[RAY_VIEW_TILE_W_MAX];
 // Overridable so an A/B can disable this path in the same source:
 // EXTRA_FLAGS="... -DBILLBOARD_MAGNIFIED_STEP=0" sends everything down
 // raster_sprite_row.
+#endif  // !BILLBOARD_COLUMN_RASTER (continues below)
 #ifndef BILLBOARD_MAGNIFIED_STEP
 #define BILLBOARD_MAGNIFIED_STEP 0x8000u
 #endif
+#if !BILLBOARD_COLUMN_RASTER
 
 static void gather_sprite_row(const BillboardRasterJob *job,
                               const u8 *tex_row, u8 tex_y) {
@@ -420,6 +429,142 @@ static void apply_sprite_row(const BillboardRasterJob *job, u16 y) {
         tile_row += (u16)(VIEW_TILE_STRIDE * 8);
     }
 }
+
+#endif  // !BILLBOARD_COLUMN_RASTER
+
+// ---------------------------------------------------------------------------
+// Column rasterizer (default since 2026-09-18).
+//
+// The row paths above were measured at ~700 cycles per packed byte (raster) and
+// ~400 (magnified) at the worst sweep poses -- 8.9-14.7 vblanks of billboard in
+// one frame at E1M2/E1M3. Walking a sprite by BYTE COLUMN instead makes every
+// per-row cost a per-column one, the same trick the wall posts use: the view
+// tilemap is column-major, so screen row y of byte lane L is 4*y + L from the
+// top of its tile column and one row down is always +4 bytes, even across a
+// tile boundary. Per byte what is left is two texel loads through a
+// precomputed row offset, two nibble-table lookups and one read-modify-write.
+//
+// Two facts, both pinned by tests, make the per-pixel tests unnecessary:
+//   * every MEGALDOOM_BILLBOARD_REMAP row maps index 0 to 0 and every other
+//     index to a non-zero colour, so a nibble is opaque iff its value is
+//     non-zero and the byte's keep-mask is a pure function of the byte;
+//   * the pickup posts describe exactly the non-zero texels
+//     (tools/test-billboard-posts.py asserts post_opaque == source_opaque), so
+//     testing them per pixel only repeated the texel test.
+// Door/window slabs become at most two blocked row ranges per byte column.
+// Differential negative controls for BILLBOARD_RASTER_VERIFY: 1 corrupts a
+// texel bit, 2 ignores door/window slabs. Both must produce mismatches.
+#ifndef BILLBOARD_COLUMN_NEGATIVE_CONTROL
+#define BILLBOARD_COLUMN_NEGATIVE_CONTROL 0
+#endif
+
+#if BILLBOARD_COLUMN_RASTER
+// ~mask of a packed byte: keep the destination nibbles the byte leaves clear.
+#define BB_KEEP(v) ((u8)~((((v) & 0xF0) ? 0xF0 : 0) | (((v) & 0x0F) ? 0x0F : 0)))
+#define BB_KEEP4(v) BB_KEEP(v), BB_KEEP((v) + 1), BB_KEEP((v) + 2), BB_KEEP((v) + 3)
+#define BB_KEEP16(v) BB_KEEP4(v), BB_KEEP4((v) + 4), BB_KEEP4((v) + 8), BB_KEEP4((v) + 12)
+#define BB_KEEP64(v) BB_KEEP16(v), BB_KEEP16((v) + 16), BB_KEEP16((v) + 32), BB_KEEP16((v) + 48)
+static const u8 BB_KEEP_MASK[256] = {
+    BB_KEEP64(0), BB_KEEP64(64), BB_KEEP64(128), BB_KEEP64(192)
+};
+// Nibble table for a column side that is clipped or wall-hidden: always clear.
+static const u8 BB_CLEAR_NIBBLE[16] = {0};
+
+// Draw rows [y, end) of one byte column. `off` is the row-offset table already
+// advanced to row y. Marks each tile before its first write: the overlay
+// restore replays that snapshot to erase the sprite next frame.
+static void draw_sprite_column_rows(u8 *dst, u16 tile_index, u16 y, u16 end,
+                                    const s16 *off,
+                                    const u8 *src_hi, const u8 *src_lo,
+                                    const u8 *tab_hi, const u8 *tab_lo) {
+    while (y < end) {
+        u16 chunk_end = (u16)((y | 7) + 1);
+        if (chunk_end > end) chunk_end = end;
+        u16 n = (u16)(chunk_end - y);
+        bool marked = FALSE;
+        y = chunk_end;
+        do {
+            const s16 o = *off++;
+#if BILLBOARD_COLUMN_NEGATIVE_CONTROL == 1
+            // NEGATIVE CONTROL: BILLBOARD_RASTER_VERIFY must report mismatches.
+            const u8 v = (u8)((tab_hi[src_hi[o]] | tab_lo[src_lo[o]]) ^ 0x01);
+#else
+            const u8 v = (u8)(tab_hi[src_hi[o]] | tab_lo[src_lo[o]]);
+#endif
+            if (v != 0) {
+                if (!marked) {
+                    renderer_mark_overlay_tile(tile_index);
+                    marked = TRUE;
+                }
+                *dst = (u8)((*dst & BB_KEEP_MASK[v]) | v);
+                BB_INC(commits);
+            }
+            dst += 4;
+        } while (--n != 0);
+        tile_index++;
+    }
+}
+
+static void __attribute__((noinline)) draw_sprite_columns(
+        const BillboardRasterJob *job, const u8 *pixels, u16 tex_w,
+        u32 tex_y_acc, u32 tex_y_step, u8 atlas_y_last, u16 y0, u16 y1) {
+    s16 row_offset[VIEW_PIXEL_H_MAX];
+    u8 hi[16];
+    const u8 *lut = job->lut;
+    const u16 end = (u16)(y1 + 1);
+
+    for (u16 t = 0; t < 16; t++) hi[t] = (u8)(lut[t] << 4);
+    // Same DDA, same clamp, as the row paths: identical tex_y per screen row.
+    for (u16 y = y0; y < end; y++) {
+        u8 tex_y = (u8)(tex_y_acc >> 16);
+        if (tex_y > atlas_y_last) tex_y = atlas_y_last;
+        tex_y_acc += tex_y_step;
+        row_offset[y - y0] = (s16)scene_mulu_word(tex_y, tex_w);
+    }
+    BB_ADD(rows, end - y0);
+    BB_ADD(bytes, scene_mulu_word((u16)(job->last_byte - job->first_byte + 1),
+                                   (u16)(end - y0)));
+
+    const u8 *sc = &job->tex_x_by_col[job->first_byte << 1];
+    for (u16 b = job->first_byte; b <= job->last_byte; b++, sc += 2) {
+        const u8 tx0 = sc[0];
+        const u8 tx1 = sc[1];
+        if ((tx0 & tx1) == 0xFF) continue;       // both sides hidden
+        const u8 *src_hi = pixels + ((tx0 != 0xFF) ? tx0 : tx1);
+        const u8 *src_lo = pixels + ((tx1 != 0xFF) ? tx1 : tx0);
+        const u8 *tab_hi = (tx0 != 0xFF) ? hi : BB_CLEAR_NIBBLE;
+        const u8 *tab_lo = (tx1 != 0xFF) ? lut : BB_CLEAR_NIBBLE;
+        // Visible row intervals: [y0, end) minus the door/window rows.
+        u16 cuts[4];
+        u16 cut_count = 0;
+        if (job->has_door_overlay && BILLBOARD_COLUMN_NEGATIVE_CONTROL != 2) {
+            cut_count = door_overlay_blocked_rows(
+                &job->columns[RAY_SAMPLE_OF(b << 1)], job->depth, cuts);
+        }
+        const u16 tile_x = (u16)(b >> 2);
+        u16 from = y0;
+        for (u16 c = 0; c <= cut_count; c++) {
+            u16 to = end;
+            u16 next = end;
+            if (c < cut_count) {
+                to = cuts[c * 2];
+                next = cuts[c * 2 + 1];
+                if (to > end) to = end;
+                if (to < from) to = from;
+            }
+            if (to > from) {
+                const u16 tile_index = view_tile_index(tile_x, (u16)(from >> 3));
+                u8 *dst = (u8 *)&g_view_tiles[tile_index][from & 7] + (b & 3);
+                draw_sprite_column_rows(dst, tile_index, from, to,
+                                        &row_offset[from - y0],
+                                        src_hi, src_lo, tab_hi, tab_lo);
+            }
+            if (next > from) from = next;
+            if (from >= end) break;
+        }
+    }
+}
+#endif
 
 // Draw projected billboards object-by-object in painter order, pixel-exact in
 // texture and depth decisions.
@@ -550,6 +695,12 @@ static void draw_billboards_bytewise(const RayColumn *columns,
         g_cadence_bb_setup_subticks += getSubTick() - setup_start;
         const u32 rows_start = getSubTick();
 #endif
+#if BILLBOARD_COLUMN_RASTER
+        draw_sprite_columns(&job, tex.pixels, tex.w, tex_y_acc, tex_y_step,
+                            atlas_y_last, (u16)y0, (u16)y1);
+#else
+        // Pre-2026-09-18 row paths, kept only as the A/B baseline
+        // (-DBILLBOARD_COLUMN_RASTER=0).
         if ((tex_y_step <= BILLBOARD_MAGNIFIED_STEP) &&
             (job.last_byte - job.first_byte) >= 3) {
             // 0x100 cannot collide with a u8 tex_y, so the first row gathers.
@@ -578,8 +729,27 @@ static void draw_billboards_bytewise(const RayColumn *columns,
                                   tex_y, (u16)y);
             }
         }
+#endif
 #if CADENCE_BB_SPLIT
-        g_cadence_bb_rows_subticks += getSubTick() - rows_start;
+        {
+            const u32 row_cost = getSubTick() - rows_start;
+            const u32 slots = (u32)(job.last_byte - job.first_byte + 1) *
+                              (u32)(y1 - y0 + 1);
+            g_cadence_bb_rows_subticks += row_cost;
+            if (job.has_door_overlay) {
+                g_cadence_bb_door_subticks += row_cost;
+                g_cadence_bb_door_slots += slots;
+            }
+            if (job.post_offsets != NULL) {
+                g_cadence_bb_post_subticks += row_cost;
+                g_cadence_bb_post_slots += slots;
+            }
+            if ((tex_y_step <= BILLBOARD_MAGNIFIED_STEP) &&
+                (job.last_byte - job.first_byte) >= 3) {
+                g_cadence_bb_mag_subticks += row_cost;
+                g_cadence_bb_mag_slots += slots;
+            }
+        }
 #endif
 #if DEBUG_PERF
         if (measure_pickup_posts && use_pickup_posts) {

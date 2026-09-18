@@ -130,6 +130,13 @@ u32 g_cadence_bb_setup_subticks;
 u32 g_cadence_bb_rows_subticks;
 u32 g_cadence_bb_max_bytes;
 u32 g_cadence_bb_max_subticks;
+u32 g_cadence_wall_rows[CADENCE_WALL_REASON_COUNT];
+u32 g_cadence_bb_door_subticks;
+u32 g_cadence_bb_door_slots;
+u32 g_cadence_bb_post_subticks;
+u32 g_cadence_bb_post_slots;
+u32 g_cadence_bb_mag_subticks;
+u32 g_cadence_bb_mag_slots;
 u32 g_cadence_pack_desc_subticks;
 u32 g_cadence_pack_tiles_subticks;
 #endif

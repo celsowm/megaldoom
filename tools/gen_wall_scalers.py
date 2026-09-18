@@ -126,7 +126,16 @@ def main():
         if base + n > rows:
             raise SystemExit("S=%d: clip delta %d + %d rows exceeds the table's %d" %
                              (s, base, n, rows))
-        samples = [table[s][base + i] & TEX_MASK for i in range(n)]
+        raw = [table[s][base + i] for i in range(n)]
+        # renderer_pack.c folds tex_y into the column pointer and, when
+        # tex_y + a sample reaches 128, splits the column at the ONE row where
+        # that first happens (a binary search, then two passes of this
+        # routine). That is only exact while each row's samples are raw
+        # (unmasked), below the texture height and non-decreasing.
+        if max(raw) > TEX_MASK or any(b < a for a, b in zip(raw, raw[1:])):
+            raise SystemExit("S=%d: samples wrap or decrease; the runtime's "
+                             "single-wrap split in renderer_pack.c is invalid" % s)
+        samples = [value & TEX_MASK for value in raw]
         if args.negative_control_corrupt_height in (s, 0):
             samples[n // 2] = (samples[n // 2] + 1) & TEX_MASK
         max_ty[s] = max(samples)

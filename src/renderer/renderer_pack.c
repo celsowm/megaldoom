@@ -178,16 +178,23 @@ static WallColumnDescriptor describe_textured_column(u16 wall_h,
     //     where both deltas are 0. A 128-row preset's CLIPPED columns start
     //     4 rows earlier in the table than the routines assume, so they keep
     //     the generic post;
-    //   * within the table's own rows (see tools/gen_wall_scalers.py);
-    //   * tex_y cannot wrap, so the offset folds into the column pointer.
+    //   * within the table's own rows (see tools/gen_wall_scalers.py).
+    // tex_y is folded into the column pointer, and a read that wraps past the
+    // texture height is renderer_hotpath.s's business, not this function's:
+    // it tests the routine's own last sample and splits the column there.
+    // Until 2026-09-18 a wrapping column kept the generic post (33-100% of
+    // wall rows at six of the 17 sweep poses), and the MAX_TY lookup that
+    // decided it cost every column. tex_y < 128 is what the asm's split
+    // assumes (tex_y + sample < 256); every non-floor-aligned column has it.
     // Anything else keeps the generic post.
     // MEGALDOOM_NO_WALL_SCALERS=1 forces every column onto the generic post, so
     // a sweep can measure the scalers against an otherwise byte-identical build
     // at the same pose. Measurement only; never define it in a shipping build.
     u16 scaler_height = 0;
 #if !MEGALDOOM_NO_WALL_SCALERS
-    // Ordered cheapest-first: `rows` is already in registers, the two table
-    // loads are not. Three clauses that used to be here are gone because they
+    // Ordered cheapest-first: `rows` is already in registers, the clip-delta
+    // load is not. (The tex_y-wrap clause and its MAX_TY load moved into the
+    // asm dispatch on 2026-09-18.) Three clauses that used to be here are gone because they
     // cannot fail -- `rows <= sample_height` (height is min(projected,
     // RAY_VIEW_ROWS) and projected_height is min(projected, 640), and
     // RAY_VIEW_ROWS <= 128 < 640) and `sample_height < SCALER_HEIGHTS`
@@ -197,9 +204,15 @@ static WallColumnDescriptor describe_textured_column(u16 wall_h,
         const u16 rows = (u16)(bottom - top);
         if (rows != 0 && rows <= MEGALDOOM_WALL_SCALER_ROWS &&
             clip_delta == MEGALDOOM_WALL_CLIP_DELTA[0][sample_height] &&
-            (u16)(tex_y_value + MEGALDOOM_WALL_SCALER_MAX_TY[sample_height]) <
-                WALL_TEX_HEIGHT) {
+            tex_y_value < WALL_TEX_HEIGHT) {
             scaler_height = sample_height;
+#if MEGALDOOM_NO_SCALER_WRAP
+            // A/B baseline only: the pre-2026-09-18 rule, generic post.
+            if ((u16)(tex_y_value + MEGALDOOM_WALL_SCALER_MAX_TY[sample_height]) >=
+                WALL_TEX_HEIGHT) {
+                scaler_height = 0;
+            }
+#endif
         }
     }
 #endif
@@ -210,10 +223,34 @@ static WallColumnDescriptor describe_textured_column(u16 wall_h,
 }
 
 WallColumnDescriptor describe_wall_column(const RayColumn *column) {
+#if CADENCE_WALL_REASONS
+    const WallColumnDescriptor d = describe_textured_column(
+        column->height, column->projected_height, column->depth,
+        column->texture_id, column->tex_x, column->tex_y, column->shade,
+        column->flags);
+    // Why this column's wall rows do or do not take a generated scaler, in
+    // the eligibility test's own order (first failing clause wins).
+    const u16 rows = (u16)(d.bottom - d.top);
+    const u16 s = column_sample_height(column->projected_height);
+    u16 reason;
+    if (d.scaler_height != 0) {
+        reason = ((u16)(d.tex_y + MEGALDOOM_WALL_SCALER_MAX_TY[d.scaler_height]) >=
+                  WALL_TEX_HEIGHT) ? CADENCE_WALL_SCALER_WRAPPED : CADENCE_WALL_SCALER;
+    }
+    else if (rows == 0) reason = CADENCE_WALL_EMPTY;
+    else if (d.flags & RAY_COLUMN_FLAG_FLOOR_ALIGNED) reason = CADENCE_WALL_FLOOR_ALIGNED;
+    else if (rows > MEGALDOOM_WALL_SCALER_ROWS) reason = CADENCE_WALL_TOO_TALL;
+    else if (MEGALDOOM_WALL_CLIP_DELTA[VIEW_PIXEL_H >> 7][s] !=
+             MEGALDOOM_WALL_CLIP_DELTA[0][s]) reason = CADENCE_WALL_CLIP_DELTA;
+    else reason = CADENCE_WALL_OTHER;
+    g_cadence_wall_rows[reason] += rows;
+    return d;
+#else
     return describe_textured_column(column->height, column->projected_height,
                                     column->depth,
                                     column->texture_id, column->tex_x,
                                     column->tex_y, column->shade, column->flags);
+#endif
 }
 
 // describe_wall_column(column).top without the descriptor: no

@@ -4,23 +4,23 @@
     .section .wallpack0,"a"
     .align  2
     .globl  megaldoom_vis_program_e1m1
-megaldoom_vis_program_e1m1: /* 237 leaves, 36254 words, longest 373 */
+megaldoom_vis_program_e1m1: /* 237 leaves, 31346 words, longest 351 */
     .incbin "src/bsp/generated_bsp_vis_e1m1.dat"
 
     .section .wallpack1,"a"
     .align  2
     .globl  megaldoom_vis_program_e1m2
-megaldoom_vis_program_e1m2: /* 448 leaves, 66144 words, longest 996 */
+megaldoom_vis_program_e1m2: /* 448 leaves, 56002 words, longest 988 */
     .incbin "src/bsp/generated_bsp_vis_e1m2.dat"
 
     .section .wallpack2,"a"
     .align  2
     .globl  megaldoom_vis_program_e1m3
-megaldoom_vis_program_e1m3: /* 461 leaves, 63039 words, longest 403 */
+megaldoom_vis_program_e1m3: /* 461 leaves, 52813 words, longest 373 */
     .incbin "src/bsp/generated_bsp_vis_e1m3.dat"
 
     .section .wallpack3,"a"
     .align  2
     .globl  megaldoom_vis_program_e1m4
-megaldoom_vis_program_e1m4: /* 355 leaves, 44641 words, longest 313 */
+megaldoom_vis_program_e1m4: /* 355 leaves, 37355 words, longest 297 */
     .incbin "src/bsp/generated_bsp_vis_e1m4.dat"

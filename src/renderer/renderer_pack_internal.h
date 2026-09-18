@@ -49,9 +49,9 @@ typedef struct {
     u8 shade_level;
     u8 flags;
     // 0, or the sample height whose generated scaler draws this column. Set
-    // only for a centred, unclipped, non-wrapping column: see
-    // describe_textured_column, which owns every condition the routine
-    // assumes, and renderer_hotpath.s, which jumps into it.
+    // only for a centred, unclipped column: see describe_textured_column,
+    // which owns every condition the routine assumes, and renderer_hotpath.s,
+    // which jumps into it (and handles a tex_y wrap itself).
     u16 scaler_height;
 } WallColumnDescriptor;
 
@@ -226,6 +226,8 @@ void draw_door_overlays(const RayColumn *columns,
                         const RaySceneColors *scene_colors,
                         u32 target[][8]);
 bool door_overlay_blocks_pixel(const RayColumn *column, u16 object_depth, u16 y);
+u16 door_overlay_blocked_rows(const RayColumn *column, u16 object_depth,
+                              u16 rows[4]);
 
 // Billboard rasterization into g_view_tiles (renderer_billboard_draw.c).
 void draw_projected_billboards(const RayColumn *columns,

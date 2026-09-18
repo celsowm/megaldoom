@@ -148,9 +148,16 @@ renderer_write_mixed_stride2_span_asm:
     suba.w  d5,a4                  /* ...so entering here draws wall_h rows */
     moveq   #0,d5
     move.b  WALL_DESC_OFF_TEX_Y(a1),d5
-    adda.w  d5,a5                  /* fold tex_y in; it cannot wrap here */
+    adda.w  d5,a5                  /* fold tex_y in */
     add.w   d2,d0                  /* y after the post */
+    /* The entry instruction is row wall_h-1's `move.b ty(a5),...`; its source
+     * displacement (2 bytes in) is the column's LARGEST sample, because
+     * samples are monotonic (tools/gen_wall_scalers.py enforces it). */
+    add.w   2(a4),d5
+    cmpi.w  #WALL_TEX_HEIGHT,d5
+    bcc.w   .Lwall_scaler_wrapped  /* out of line, after the rts */
     jsr     (a4)
+.Lwall_scaler_done:
     move.w  d2,d5
     lsl.w   #2,d5
     adda.w  d5,a6                  /* PACK_TILE_ROW_BYTES per row written */
@@ -199,6 +206,61 @@ renderer_write_mixed_stride2_span_asm:
 
     movem.l (sp)+,d2-d7/a2-a6
     rts
+
+    /* tex_y + sample reaches the texture height from some row k on, and
+     * exactly once (monotonic samples). Find it in the routine's own words:
+     * instruction j from the entry draws row wall_h-1-j and its sample is the
+     * word at 2+6j(a4), non-increasing in j. J = the first j whose sample is
+     * below t = 128 - tex_y is the number of wrapping rows (j = 0 wraps, so
+     * J >= 1; J = wall_h means every row wraps), and k = wall_h - J.
+     * Pass 1 draws every row from the column's -128 alias, right for rows
+     * k..wall_h-1 (rows below k read the 128 bytes before the column --
+     * harmless ROM -- and are overwritten). Pass 2 enters k rows from the end
+     * with the real column and redraws rows k-1..0. Only wrapping columns get
+     * here. d3/d4 (top/bottom) are dead; the routine preserves every register. */
+.Lwall_scaler_wrapped:
+    movem.l d7/a3,-(sp)
+    moveq   #0,d7
+    move.b  WALL_DESC_OFF_TEX_Y(a1),d7
+    neg.w   d7
+    add.w   #WALL_TEX_HEIGHT,d7    /* t */
+    moveq   #1,d3                  /* lo */
+    move.w  d2,d4                  /* hi = wall_h */
+    bra.s   .Lwrap_search_test
+.Lwrap_search:
+    move.w  d3,d5
+    add.w   d4,d5
+    lsr.w   #1,d5                  /* mid, lo <= mid < hi <= wall_h */
+    movea.w d5,a3
+    adda.w  a3,a3
+    adda.w  d5,a3
+    adda.w  a3,a3                  /* 6 * mid */
+    cmp.w   2(a4,a3.w),d7
+    bhi.s   .Lwrap_search_below    /* sample < t: J <= mid */
+    move.w  d5,d3
+    addq.w  #1,d3
+    bra.s   .Lwrap_search_test
+.Lwrap_search_below:
+    move.w  d5,d4
+.Lwrap_search_test:
+    cmp.w   d4,d3
+    bcs.s   .Lwrap_search
+    movem.l (sp)+,d7/a3            /* d3 = J */
+    lea     -WALL_TEX_HEIGHT(a5),a5
+    jsr     (a4)
+    lea     WALL_TEX_HEIGHT(a5),a5
+#if WALL_SCALER_WRAP_NEGATIVE_CONTROL
+    bra.w   .Lwall_scaler_done     /* NEGATIVE CONTROL: skip pass 2; asm-diff must fail */
+#endif
+    cmp.w   d2,d3                  /* J == wall_h: k = 0, nothing below */
+    beq.w   .Lwall_scaler_done
+    move.w  d3,d5
+    add.w   d5,d5
+    add.w   d3,d5
+    add.w   d5,d5                  /* 6 * J: skip the J wrapping rows */
+    adda.w  d5,a4
+    jsr     (a4)
+    bra.w   .Lwall_scaler_done
 
 
 /*

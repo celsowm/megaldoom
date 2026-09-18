@@ -22,7 +22,7 @@ def main() -> int:
     blob = bytes.fromhex(report["perfMailbox"])
     # u16 magic/last/max/missed, u32 iterations/vblank_sum, u16 hist[8],
     # u32 cast/pack/projection/billboard subtick sums, u32 rebuild_frames
-    fields = struct.unpack(">4H2I8H36I", blob[: 8 + 8 + 16 + 144])
+    fields = struct.unpack(">4H2I8H49I", blob[: 8 + 8 + 16 + 196])
     magic, last, vmax, missed = fields[:4]
     iterations, vblank_sum = fields[4:6]
     hist = fields[6:14]
@@ -38,6 +38,10 @@ def main() -> int:
     pack_columns, pack_flat, pack_mixed = fields[43:46]
     bb_max_bytes, bb_max_subticks = fields[46:48]
     pack_desc_sum, pack_tiles_sum = fields[48:50]
+    wall_rows = fields[56:63]
+    bb_classes = (("door-tested", fields[50], fields[51]),
+                  ("pickup posts", fields[52], fields[53]),
+                  ("magnified", fields[54], fields[55]))
     if magic != 0xCADE:
         print(f"bad magic 0x{magic:04X} (expected 0xCADE) - wrong build type? "
               "DEBUG_PERF builds publish RendererPerfSnapshot instead.")
@@ -141,12 +145,29 @@ def main() -> int:
             print(f"  pack unaccounted = {(pack_sum - accounted) / rebuilds:7.0f} subticks/rebuild"
                   f"  ({100.0 * (pack_sum - accounted) / pack_sum:.0f}%; flat rows, "
                   f"door overlays, probe overhead)")
+        if any(wall_rows):
+            # CADENCE_WALL_REASONS: every describe_wall_column call, by the
+            # first eligibility clause it fails.
+            total_rows = sum(wall_rows)
+            for name, value in zip(("scaler", "empty", "floor-aligned", "rows>120",
+                                    "clip delta", "scaler wrapped", "other"),
+                                   wall_rows):
+                print(f"  wall rows {name:<14}= {value / rebuilds:7.0f} /rebuild"
+                      f"  ({100.0 * value / total_rows:4.1f}%)")
         if bb_setup_sum or bb_rows_sum:
             print(f"  bb setup/object  = {bb_setup_sum / div:7.0f} subticks/scene-frame"
                   f"  ({bb_setup_sum / bb_objects if bb_objects else 0:.0f}/object)")
             print(f"  bb row loop      = {bb_rows_sum / div:7.0f} subticks/scene-frame"
                   f"  ({bb_rows_sum / (bb_bytes * 2) if bb_bytes else 0:.2f}/px,"
                   f" {bb_rows_sum / bb_rows if bb_rows else 0:.0f}/row)")
+        if bb_rows_sum:
+            # Overlapping classes: shares do not sum to 100%.
+            for name, sub, slots in bb_classes:
+                if sub or slots:
+                    print(f"  bb rows {name:<12} = {sub / div:7.0f} subticks/scene-frame"
+                          f"  ({100.0 * sub / bb_rows_sum:.0f}% of row loop,"
+                          f" {sub / slots if slots else 0:.2f}/byte)")
+            print(f"  bb rows all        = {bb_rows_sum / bb_bytes if bb_bytes else 0:.2f}/byte")
         print(f"  bb WORST frame   = {bb_max_subticks} subticks "
               f"({bb_max_subticks / 1280.0:.2f} vblanks), {bb_max_bytes} bytes "
               f"({bb_max_bytes * 2} px)")

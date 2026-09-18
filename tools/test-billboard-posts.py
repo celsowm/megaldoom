@@ -87,6 +87,32 @@ def main() -> None:
         expected_sparse = opaque * 100 < crop_area * 80
         assert bool(flags[visual]) == expected_sparse
 
+    # draw_sprite_columns (the default billboard rasterizer) rests on two facts
+    # and indexes 16-entry nibble tables with the raw texel, so pin all three:
+    #   * every sprite texel is a 4-bit palette index;
+    #   * every remap row sends 0 to 0 and every other index to non-zero, so a
+    #     nibble is opaque iff its remapped value is non-zero (the keep-mask is a
+    #     pure function of the packed byte);
+    #   * the posts above equal "texel != 0" (asserted per pixel), so skipping
+    #     the per-pixel post walk cannot change a pixel.
+    for name in ("FREEDOOM_BILLBOARD_WORLD_TEXTURES[", "FREEDOOM_BILLBOARD_ENEMY_FRAMES[",
+                 "FREEDOOM_BILLBOARD_IMP_FRAMES[", "FREEDOOM_BILLBOARD_BARREL_EXPLOSION_FRAMES[",
+                 "FREEDOOM_BILLBOARD_PUFF_FRAMES[", "FREEDOOM_BILLBOARD_BLOOD_FRAMES["):
+        pixels = initializer(header, name)
+        dims = re.search(re.escape(name) + r"[^=]*=", header).group(0)
+        assert max(pixels) <= 15, f"{name[:-1]} has a texel above 15"
+        assert pixels, dims
+    renderer_assets = (ROOT / "src" / "renderer" /
+                       "generated_renderer_assets.h").read_text(encoding="utf-8")
+    remap = initializer(renderer_assets, "MEGALDOOM_BILLBOARD_REMAP[")
+    assert len(remap) % 16 == 0
+    for row in range(len(remap) // 16):
+        entries = remap[row * 16:(row + 1) * 16]
+        assert entries[0] == 0, f"remap row {row} does not keep 0 transparent"
+        assert all(1 <= value <= 15 for value in entries[1:]), (
+            f"remap row {row} sends an opaque index to 0 or above 15")
+    assert "draw_sprite_columns" in scene
+
     assert "pickup_post_contains" in scene
     assert "FREEDOOM_BILLBOARD_PICKUP_USE_POSTS[object->visual_id]" in scene
     print(f"ok pickup posts: {pickup_count} textures, {post_count} spans, exact masks")
