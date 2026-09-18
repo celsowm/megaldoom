@@ -172,8 +172,12 @@ static WallColumnDescriptor describe_textured_column(u16 wall_h,
     // wall_h-1..0 of MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[sample_height] at a fixed
     // tex_y. Every assumption it makes is decided here, once per column:
     //   * centred, so its DDA starts at row 0 (top == full_top);
-    //   * clip_delta == 0, because the routines bake the 128-row clip; this is
-    //     every column at the 128-row preset, and the unclipped ones elsewhere;
+    //   * the column's clip delta is the one the routines were baked with
+    //     (the 120-row viewport's, tools/gen_wall_scalers.py): true for every
+    //     column at a 120-row preset, and for the unclipped ones at 128 rows,
+    //     where both deltas are 0. A 128-row preset's CLIPPED columns start
+    //     4 rows earlier in the table than the routines assume, so they keep
+    //     the generic post;
     //   * within the table's own rows (see tools/gen_wall_scalers.py);
     //   * tex_y cannot wrap, so the offset folds into the column pointer.
     // Anything else keeps the generic post.
@@ -182,7 +186,8 @@ static WallColumnDescriptor describe_textured_column(u16 wall_h,
     // at the same pose. Measurement only; never define it in a shipping build.
     u16 scaler_height = 0;
 #if !MEGALDOOM_NO_WALL_SCALERS
-    if (!(flags & RAY_COLUMN_FLAG_FLOOR_ALIGNED) && clip_delta == 0) {
+    if (!(flags & RAY_COLUMN_FLAG_FLOOR_ALIGNED) &&
+        clip_delta == MEGALDOOM_WALL_CLIP_DELTA[0][sample_height]) {
         const u16 rows = (u16)(bottom - top);
         if (rows != 0 && rows <= sample_height &&
             rows <= MEGALDOOM_WALL_SCALER_ROWS &&

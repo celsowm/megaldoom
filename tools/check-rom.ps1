@@ -30,11 +30,12 @@ $RamTotal = 65536
 $LevelWindowBase = 0x280000
 $LevelWindowBytes = 0x180000
 # Re-baselined 2026-09-17 from 0x240000, which the 128-row DDA table and its
-# wider wall scalers (+31 KB, a correctness fix for the 22x16 viewport) pushed
-# past. 0x250000 leaves ~196 KB of real early warning before the hard failure at
-# the level window -- about half a generated_wall_scalers.s, i.e. one asset of
-# the size this project actually adds. A permanently-yellow check is one that
-# stops being read, so move the line deliberately rather than living above it.
+# clip-delta table (+6.6 KB, a correctness fix for the 22x16 viewport) pushed
+# past by ~4.6 KB. 0x250000 leaves ~196 KB of real early warning before the hard
+# failure at the level window -- about half a generated_wall_scalers.s, i.e. one
+# asset of the size this project actually adds. A permanently-yellow check is one
+# that stops being read, so move the line deliberately rather than living above
+# it. The binding limit remains the hard 0x280000 below.
 $ResidentWarnEnd = 0x250000
 $RomMaxBytes = 16 * 1024 * 1024 - 256 * 1024
 

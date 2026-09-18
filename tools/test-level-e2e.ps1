@@ -5,7 +5,13 @@ param(
     # here spans hundreds of thousands of host frames, so decimate first
     # (-TraceEvery 30) and re-run at full rate on the window that matters.
     [string]$Trace = "",
-    [int]$TraceEvery = 0
+    [int]$TraceEvery = 0,
+    # Extra -D flags for the deterministic build. The follower is vblank-paced,
+    # so a flag that only changes COST (e.g. -DMEGALDOOM_NO_WALL_SCALERS=1,
+    # which is output-identical by asm-diff) is the way to tell a real
+    # regression from a route that is merely timing-fragile: if the outcome
+    # moves under an output-identical flag, the route moved, not the game.
+    [string]$ExtraFlags = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -42,7 +48,8 @@ if ([int]$case.requiredKeys -ne 0) {
 }
 
 Invoke-MegalDoomDebugBuild `
-    "-DDEBUG_BLASTEM_CHECKPOINT=1 -DDEBUG_E2E_START_LEVEL=$($case.index) -DDEBUG_E2E_GOD=1"
+    ("-DDEBUG_BLASTEM_CHECKPOINT=1 -DDEBUG_E2E_START_LEVEL=$($case.index) -DDEBUG_E2E_GOD=1" +
+     $(if ($ExtraFlags) { " $ExtraFlags" }))
 $mailbox = Resolve-MegalDoomMailbox -Symbol "g_debug_e2e_state" -Bytes 20
 $report = Join-Path $root ("out\{0}-e2e-report.json" -f $case.name.ToLowerInvariant())
 $routeParams = @{
