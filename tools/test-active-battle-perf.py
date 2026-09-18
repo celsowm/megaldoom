@@ -141,8 +141,8 @@ def main():
     # a slow motion frame (~11 vblanks) must still display the flash for one
     # full frame, which is what makes muzzle feedback survive at any framerate.
     weapons_c = (ROOT / "src/weapons.c").read_text()
-    # Field order: ammo_type, ammo_per_shot, pellets, spread_cols, melee_range,
-    # cooldown_vblanks, flash_vblanks, automatic, sfx, sfx_len.
+    # Field order: ammo_type, ammo_per_shot, pellets, accurate_shots,
+    # melee_range, cooldown_vblanks, flash_vblanks, sfx, sfx_len.
     weapon_flashes = {
         name: int(row.split(",")[6])
         for name, row in re.findall(

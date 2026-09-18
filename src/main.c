@@ -44,6 +44,9 @@ typedef struct {
 #define PLAYER_MAX_HEALTH 100
 #define PLAYER_MAX_ARMOR 200
 #define PLAYER_HIT_DAMAGE 20
+// At most this many refire cycles complete in one main-loop iteration. Two
+// covers the chaingun and chainsaw (7 vb) against a ~10 vb motion frame.
+#define MAX_SHOTS_PER_ITERATION 2
 // Doom raises a new weapon before it can fire. One cooldown's worth of vblanks
 // is enough to stop a switch from being a free instant shot.
 #define WEAPON_RAISE_VBLANKS 10
@@ -274,45 +277,80 @@ static void level_progress_visit(LevelProgress *progress, s32 x, s32 y) {
     progress->secrets_found++;
 }
 
-// One trigger pull: `pellets` independent hitscans fanned across `spread_cols`
-// view columns, each blocked by the wall depth at ITS OWN column so an outer
-// shotgun pellet cannot punch through a corner the centre pellet clears. Their
-// results merge into one outcome for the HUD and the reaction sound: the most
-// significant status wins (kill over damage over none), explosion counts and
-// splash damage sum, since one blast can set off several barrels.
-static BillboardFireResult fire_weapon(const WeaponDef *weapon, const RayColumn *columns) {
-    BillboardFireResult merged = {BILLBOARD_SHOT_NONE, 0, 0, 0, 0};
+// Fold one trace's outcome into a trigger pull's (or a frame's) result: the
+// most significant status wins (kill over damage over none), explosion counts
+// and splash damage sum, since one blast can set off several barrels.
+static void merge_fire_result(BillboardFireResult *merged, const BillboardFireResult *hit) {
+    if (hit->status > merged->status) {
+        merged->status = hit->status;
+    }
+    merged->player_damage = (u16)(merged->player_damage + hit->player_damage);
+    merged->explosion_count = (u8)(merged->explosion_count + hit->explosion_count);
+    merged->push_x = (s16)(merged->push_x + hit->push_x);
+    merged->push_y = (s16)(merged->push_y + hit->push_y);
+    merged->pain = (bool)(merged->pain || hit->pain);
+    if (hit->hit_target && !merged->hit_target) {
+        merged->hit_target = TRUE;
+        merged->target_x = hit->target_x;
+        merged->target_y = hit->target_y;
+    }
+}
+
+// One trigger pull, Doom's weapon action functions: each of `pellets` traces
+// rolls its damage and then its aim offset from the P_Random table
+// (P_GunShot's order), and is blocked by the wall depth at the view column its
+// offset points down, so an outer shotgun pellet cannot punch through a corner
+// the centre one clears. `accurate` is Doom's refire == 0 for the pistol and
+// chaingun; the shotgun and the melee weapons always roll a spread.
+static BillboardFireResult fire_weapon(const WeaponDef *weapon, const RayColumn *columns,
+                                       bool accurate) {
+    BillboardFireResult merged = {BILLBOARD_SHOT_NONE, 0, 0, 0, 0, FALSE, 0, 0, FALSE};
     const u8 pellets = (weapon->pellets > 0) ? weapon->pellets : 1;
 
     for (u8 i = 0; i < pellets; i++) {
-        s16 aim_col = RAY_VIEW_CENTER_X;
-        if ((pellets > 1) && (weapon->spread_cols > 0)) {
-            // Fan the pellets evenly across [-spread, +spread].
-            aim_col = (s16)(RAY_VIEW_CENTER_X +
-                (((s16)(2 * i) - (s16)(pellets - 1)) * (s16)weapon->spread_cols) /
-                (s16)(pellets - 1));
-        }
+        const u16 damage = weapon_roll_damage(weapon);
+        const s16 spread_q12 = weapon_roll_spread_q12(accurate);
+        s16 aim_col = (s16)(RAY_VIEW_CENTER_X + (((s32)spread_q12 * RAY_PROJ_X) / 4096));
         if (aim_col < 0) aim_col = 0;
         if (aim_col >= RAY_VIEW_COLS) aim_col = (s16)(RAY_VIEW_COLS - 1);
 
-        u16 depth = columns[RAY_SAMPLE_OF(aim_col)].depth;
-        // Melee weapons reach only a fixed distance, never all the way to the
-        // wall; billboard_fire_center treats this as the pellet's stop depth.
-        if ((weapon->melee_range > 0) && (depth > weapon->melee_range)) {
-            depth = weapon->melee_range;
-        }
-
-        const BillboardFireResult hit = billboard_fire_center(
-            &g_player, depth, aim_col, weapon_roll_damage());
-        if (hit.status > merged.status) {
-            merged.status = hit.status;
-        }
-        merged.player_damage = (u16)(merged.player_damage + hit.player_damage);
-        merged.explosion_count = (u8)(merged.explosion_count + hit.explosion_count);
-        merged.push_x = (s16)(merged.push_x + hit.push_x);
-        merged.push_y = (s16)(merged.push_y + hit.push_y);
+        const u16 depth = columns[RAY_SAMPLE_OF(aim_col)].depth;
+        const BillboardFireResult hit = billboard_fire_hitscan(
+            &g_player, spread_q12, depth, weapon->melee_range, damage);
+        merge_fire_result(&merged, &hit);
     }
     return merged;
+}
+
+// A_Punch turns the player to face what it hit. A_Saw pulls toward it instead:
+// a target more than ANG90/20 away snaps to ANG90/21 short of it, a nearer one
+// is overshot by ANG90/20 -- the chainsaw's familiar shake. Both are 3 of this
+// engine's 256 angle steps (64/20 and 64/21 round to 3).
+#define SAW_TURN_STEP 3
+static bool turn_to_melee_target(u8 weapon_id, const BillboardFireResult *hit) {
+    if (!hit->hit_target) {
+        return FALSE;
+    }
+    const u16 target = billboard_angle_to(&g_player, hit->target_x, hit->target_y);
+    u16 angle = target;
+    if (weapon_id == WEAPON_CHAINSAW) {
+        const s16 diff = (s16)(s8)(u8)(target - g_player.angle);
+        if (diff < -SAW_TURN_STEP) {
+            angle = (u16)(target + SAW_TURN_STEP);
+        } else if (diff < 0) {
+            angle = (u16)(g_player.angle - SAW_TURN_STEP);
+        } else if (diff > SAW_TURN_STEP) {
+            angle = (u16)(target - SAW_TURN_STEP);
+        } else {
+            angle = (u16)(g_player.angle + SAW_TURN_STEP);
+        }
+    }
+    angle &= ANGLE_MASK;
+    if (angle == g_player.angle) {
+        return FALSE;
+    }
+    g_player.angle = angle;
+    return TRUE;
 }
 
 /* The two damage producers (enemy AI and barrel splash) intentionally share
@@ -409,7 +447,7 @@ static void enter_level(u16 phase_index, DoomSkill skill, bool pistol_start,
         arsenal->owned = WEAPON_START_OWNED;
         arsenal->current = WEAPON_PISTOL;
     }
-    weapon_reset_damage_roll();
+    weapon_rng_reset();
     *player_keys = BSP_KEY_NONE;
 #if DEBUG_START_KEYS
     *player_keys = (u8)DEBUG_START_KEYS;
@@ -467,6 +505,12 @@ int main(bool hard) {
         PlayerArsenal arsenal;
         u8 player_keys = BSP_KEY_NONE;
         u16 shot_cooldown = 0;
+        // Vblanks a frame ran past the end of the refire cycle: the next shot
+        // of a held burst is due that much early, so a weapon whose cycle is
+        // shorter than a frame (chaingun, chainsaw) still fires at Doom's rate.
+        u16 shot_overrun = 0;
+        // Shots fired since the trigger went down: Doom's player->refire.
+        u8 burst_shots = 0;
         u16 previous_system_joy;
         u32 prev_vtimer;
         DoomSkill skill;
@@ -508,7 +552,7 @@ int main(bool hard) {
         u16 system_pressed;
         DoorActionResult action_status = g_hud.action_status;
         BillboardShotResult shot_status = g_hud.shot_status;
-        BillboardFireResult fire_result = {BILLBOARD_SHOT_NONE, 0, 0, 0, 0};
+        BillboardFireResult fire_result = {BILLBOARD_SHOT_NONE, 0, 0, 0, 0, FALSE, 0, 0, FALSE};
         // Real vblanks elapsed since last iteration. Keep it clamped for future diagnostics,
         // but now it IS fed to the turn controller so rotation stays time-correct.
         u32 cur_vtimer;
@@ -612,8 +656,12 @@ int main(bool hard) {
         }
 
         if (shot_cooldown > 0) {
-            shot_cooldown = (shot_cooldown > elapsed_vblanks)
-                ? (u16)(shot_cooldown - elapsed_vblanks) : 0;
+            if (shot_cooldown > elapsed_vblanks) {
+                shot_cooldown = (u16)(shot_cooldown - elapsed_vblanks);
+            } else {
+                shot_overrun = (u16)(elapsed_vblanks - shot_cooldown);
+                shot_cooldown = 0;
+            }
         }
         if (g_weapon_flash > 0) {
             g_weapon_flash = (g_weapon_flash > elapsed_vblanks)
@@ -710,6 +758,8 @@ int main(bool hard) {
                 if (shot_cooldown < WEAPON_RAISE_VBLANKS) {
                     shot_cooldown = WEAPON_RAISE_VBLANKS;
                 }
+                shot_overrun = 0;
+                burst_shots = 0;
                 g_weapon_flash = 0;
                 renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_WEAPON);
             }
@@ -748,6 +798,8 @@ int main(bool hard) {
                         if (shot_cooldown < WEAPON_RAISE_VBLANKS) {
                             shot_cooldown = WEAPON_RAISE_VBLANKS;
                         }
+                        shot_overrun = 0;
+                        burst_shots = 0;
                         g_weapon_flash = 0;
                         renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_WEAPON);
                     }
@@ -834,18 +886,47 @@ int main(bool hard) {
             break;
         }
 
-        // Semi-automatic weapons fire on the button's rising edge; the chaingun
-        // and chainsaw keep firing while it is held. The cooldown gate below is
-        // what paces the automatic ones.
+        // Every Doom weapon refires while the trigger is held (A_ReFire); the
+        // cooldown paces the burst. A fresh press, or a tap the ISR latched
+        // between iterations, starts a new burst whose first shot is accurate.
         const WeaponDef *weapon = &WEAPON_DEFS[arsenal.current];
-        if ((control & (weapon->automatic ? (PLAYER_CONTROL_FIRE | PLAYER_CONTROL_FIRE_HELD)
-                                          : PLAYER_CONTROL_FIRE)) != 0) {
-            BillboardShotResult shot = BILLBOARD_SHOT_NONE;
+        if ((control & PLAYER_CONTROL_FIRE) != 0) {
+            burst_shots = 0;
+        }
+        if ((control & (PLAYER_CONTROL_FIRE | PLAYER_CONTROL_FIRE_HELD)) != 0) {
+            u8 shots = 0;
 
-            if ((shot_cooldown == 0) && weapon_has_ammo(arsenal.current, arsenal.ammo)) {
+            while ((shot_cooldown == 0) && (shots < MAX_SHOTS_PER_ITERATION) &&
+                   weapon_has_ammo(arsenal.current, arsenal.ammo)) {
                 debug_checkpoint_mark(DEBUG_CHECKPOINT_COMBAT);
-                fire_result = fire_weapon(weapon, g_ray_columns);
-                shot = fire_result.status;
+                const BillboardFireResult hit = fire_weapon(
+                    weapon, g_ray_columns, (bool)(burst_shots < weapon->accurate_shots));
+                merge_fire_result(&fire_result, &hit);
+                if ((weapon->melee_range > 0) && turn_to_melee_target(arsenal.current, &hit)) {
+                    renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE);
+                }
+                if (burst_shots < 0xFF) {
+                    burst_shots++;
+                }
+                shots++;
+                if (weapon->ammo_type != AMMO_NONE) {
+                    arsenal.ammo[weapon->ammo_type] =
+                        (u16)(arsenal.ammo[weapon->ammo_type] - weapon->ammo_per_shot);
+                }
+                if (shot_overrun >= weapon->cooldown_vblanks) {
+                    shot_overrun = (u16)(shot_overrun - weapon->cooldown_vblanks);
+                } else {
+                    shot_cooldown = (u16)(weapon->cooldown_vblanks - shot_overrun);
+                    shot_overrun = 0;
+                }
+            }
+            // Never bank past the cap: a long stall must not queue a volley.
+            if (shot_cooldown == 0) {
+                shot_overrun = 0;
+            }
+
+            const BillboardShotResult shot = fire_result.status;
+            if (shots > 0) {
                 if ((shot == BILLBOARD_SHOT_DAMAGE) ||
                     (shot == BILLBOARD_SHOT_KILL) ||
                     (shot == BILLBOARD_SHOT_EXPLOSION)) {
@@ -858,11 +939,6 @@ int main(bool hard) {
                     // before the follower arrives, which is what stalled E1M2.
                     debug_e2e_mark(DEBUG_E2E_EVENT_COMBAT_HIT);
                 }
-                shot_cooldown = weapon->cooldown_vblanks;
-                if (weapon->ammo_type != AMMO_NONE) {
-                    arsenal.ammo[weapon->ammo_type] =
-                        (u16)(arsenal.ammo[weapon->ammo_type] - weapon->ammo_per_shot);
-                }
                 g_weapon_flash = weapon->flash_vblanks;
                 renderer_draw_weapon_flash();
                 renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_WEAPON);
@@ -871,12 +947,12 @@ int main(bool hard) {
                 // for music PCM). Connected-hit SFX go on channel 3 so the shot
                 // and the enemy reaction never cancel each other out.
                 game_audio_play_sfx(weapon->sfx, weapon->sfx_len, SOUND_PCM_CH2);
-                if (shot == BILLBOARD_SHOT_DAMAGE) {
-                    game_audio_play_sfx(sfx_enemy_pain, sizeof(sfx_enemy_pain), SOUND_PCM_CH3);
-                } else if (shot == BILLBOARD_SHOT_KILL) {
+                if (shot == BILLBOARD_SHOT_KILL) {
                     game_audio_play_sfx(sfx_enemy_death, sizeof(sfx_enemy_death), SOUND_PCM_CH3);
                 } else if (fire_result.explosion_count > 0) {
                     game_audio_play_sfx(sfx_barexp, sizeof(sfx_barexp), SOUND_PCM_CH3);
+                } else if (fire_result.pain) {
+                    game_audio_play_sfx(sfx_enemy_pain, sizeof(sfx_enemy_pain), SOUND_PCM_CH3);
                 }
 
                 if ((shot == BILLBOARD_SHOT_DAMAGE) || (shot == BILLBOARD_SHOT_KILL) ||
@@ -888,6 +964,11 @@ int main(bool hard) {
             }
 
             shot_status = shot;
+        } else {
+            shot_overrun = 0;
+        }
+        if ((control & PLAYER_CONTROL_FIRE_HELD) == 0) {
+            burst_shots = 0;
         }
 
         if (!level_cleared && !player_dead) {

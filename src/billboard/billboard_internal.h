@@ -17,15 +17,6 @@
 // largest authored billboard extent is barrel explosion BEXPE (31 world units
 // right of its origin) at visual_scale 2 = 62; 96 covers every source patch.
 #define BILLBOARD_SUBSECTOR_CULL_RADIUS 96
-// Point-blank barrel detonation fallback. billboard_measure_object rejects
-// anything within BILLBOARD_MIN_DEPTH of the camera forward axis, but a barrel
-// you are pressed against must still be shootable in Doom fashion: the Euclidean
-// fallback in billboard_fire_center detonates the nearest live barrel inside
-// this radius when the aim scan picks nothing. Player+barrel collision radii
-// sum to 36u; ~2.5x that (90u) keeps the trigger tolerant without detonating
-// barrels across the room when the player shoots blank walls.
-#define BILLBOARD_POINT_BLANK_RADIUS 90
-#define BILLBOARD_POINT_BLANK_RADIUS_SQ (BILLBOARD_POINT_BLANK_RADIUS * BILLBOARD_POINT_BLANK_RADIUS)
 #define BILLBOARD_TYPE_BONUS 0
 #define BILLBOARD_TYPE_KEY 1
 #define BILLBOARD_TYPE_STIMPACK 2

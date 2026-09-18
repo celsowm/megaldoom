@@ -8,6 +8,58 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## Vis GROUP words chosen per leaf by a cost model: cast -3.5% (2026-09-18)
+
+The per-leaf draw programs wrapped every run of >= 8 segs in a GROUP box test
+(K = 8). The Phase 1 sweep CSVs had already shown K is heading- and
+place-dependent: at E1M1 a233 no groups at all beat K=8 (7143 vs 7865), while
+at E1M3 a128 K=8 beat no groups by 19%. Before building anything, the ceiling:
+picking the best K per pose in hindsight was only -4.3% of cast over the three
+fully swept poses. A per-leaf choice cannot see heading, so it cannot beat
+that.
+
+**Model (`group_pays_off` in `tools/bsp_vis.py`).** Keep a GROUP iff
+`P_off * segs * GROUP_SEG_COST > GROUP_BOX_COST`.
+
+- `GROUP_BOX_COST` is 26 subticks, one box projection (LOG 2026-07-30).
+- `P_off` is the share of (viewpoints over the leaf region: vertices, centroid
+  and midpoints) x (16 headings) for which the child's box lies wholly outside
+  the 90-degree frustum or behind the near plane.
+- Occlusion skips are invisible offline, so `P_off` is a lower bound.
+- `GROUP_SEG_COST` is calibrated. The prototype re-used `bsp_vis.py` unmodified
+  (so the PVS cache still hit) and swapped in a leaf_program.
+
+| bake (6 poses) | cast total | vs K=8 |
+|---|---|---|
+| K=8 (shipping) | 37021 | -- |
+| cost model, SEG_COST 8 (keeps ~as many groups as K=8) | 36534 | -1.3% |
+| cost model, **SEG_COST 5** (keeps ~half) | **35751** | **-3.4%** |
+| cost model, SEG_COST 3 | 36854 | -0.5% |
+| no groups | 37049 | +0.1% |
+
+**All 17 poses, same session, K=8 vs SEG_COST 5 vs no groups:** cast 93771 vs
+**90483** vs 94515, so -3.5% against K=8 and -4.3% against no groups. Per pose
+it ranges from -13.7% (E1M4 a64) to +2.7% (E1M1 a73) and +3.0% (E1M3 a192).
+Both of those are within max(K=8, no groups) + 2%, which was the gate. The
+programs also shrank (E1M2 132 KB -> 112 KB of banked window). `segs tested`
+moves as expected when group placement changes. `segs drawn` is the
+correctness check, and the oracle covers it.
+
+**Correctness.** `tools/test-bsp-vis-oracle.ps1` was run on all four levels,
+casting both ways every 4th frame. Every frame compared was identical: E1M1
+181, E1M2 936, E1M3 845, E1M4 263. Every route completed. The negative control
+(`--negative-control-drop-every 7`, `-ExpectMismatch`) reported 86 of 164
+frames differing on E1M1.
+
+**Tooling.**
+- The integrated tool reproduces the prototype's output byte for byte, from a
+  fresh PVS (the edit changes the cache key; a full recompute is ~2.4 min).
+- `--group-min 8` still reproduces the previous shipping bake byte for byte.
+- `--no-groups` is new, for the A/B.
+
+As predicted, this is a small win: ~0.1-0.4 vb at the poses where cast
+dominates.
+
 ## Wrapping wall columns take the generated scalers too: pack -10% (2026-09-18)
 
 **Measured first.** A new opt-in counter, `-DCADENCE_WALL_REASONS=1`, classifies

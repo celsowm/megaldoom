@@ -42,15 +42,18 @@ def main():
         billboard_c,
     )
     assert "typedef struct {\n    BillboardShotResult status;" in billboard_h
-    assert "BillboardFireResult billboard_fire_center" in billboard_h
+    assert "BillboardFireResult billboard_fire_hitscan" in billboard_h
     assert "billboard_get_last_explosion_result" not in explosion_h
-    # main.c fires through fire_weapon(), which fans the weapon's pellets and
-    # merges their results; billboard_fire_center is the per-pellet primitive.
-    assert "fire_result = fire_weapon(weapon, g_ray_columns);" in main_c
-    assert "billboard_fire_center(\n            &g_player, depth, aim_col, weapon_roll_damage());" in main_c
+    # main.c fires through fire_weapon(), which rolls each pellet's damage and
+    # spread and merges their results; billboard_fire_hitscan is the
+    # per-pellet primitive (Doom's P_LineAttack, see tools/test-hitscan.py).
+    assert "const BillboardFireResult hit = fire_weapon(" in main_c
+    assert "merge_fire_result(&fire_result, &hit);" in main_c
+    assert ("billboard_fire_hitscan(\n            &g_player, spread_q12, depth, "
+            "weapon->melee_range, damage);") in main_c
     # A blast reached by any pellet must still surface through the merged result.
-    assert "merged.explosion_count + hit.explosion_count" in main_c
-    assert "merged.player_damage + hit.player_damage" in main_c
+    assert "merged->explosion_count + hit->explosion_count" in main_c
+    assert "merged->player_damage + hit->player_damage" in main_c
     assert "fire_result.player_damage" in main_c
     assert "fire_result.status == BILLBOARD_SHOT_EXPLOSION" in main_c
 
@@ -119,19 +122,19 @@ def main():
     assert "FREEDOOM_BILLBOARD_BLOOD_W 12" in assets
     assert "FREEDOOM_BILLBOARD_BLOOD_H 11" in assets
     assert "billboard_effects_spawn_blood(best_object->x, best_object->y)" in combat_c
-    assert "spawn_wall_puff(player, wall_depth)" in combat_c
+    assert "spawn_wall_puff(player, dir_x, dir_y, dir_depth, wall_depth)" in combat_c
     assert "billboard_effects_spawn_puff(best_object->x, best_object->y)" in combat_c
     assert "billboard_project_effects(" in projection_c
     assert "BILLBOARD_MAX_PROJECTED_TOTAL" in renderer_c
     assert "BILLBOARD_VISUAL_PUFF" in renderer_c
     assert "BILLBOARD_VISUAL_BLOOD" in renderer_c
     assert "billboard_update_effects()" in main_c
-    # Refire delay moved from a single main.c define into the per-weapon table.
-    # The pistol keeps the shipped 12-vblank feel, so gun pacing is unchanged.
+    # Refire delay lives in the per-weapon table: Doom's pistol cycle, 14 tics
+    # = 24 vblanks (2026-09-18; it was a faster 12 before).
     weapons_c = (ROOT / "src/weapons.c").read_text()
     pistol = weapons_c[weapons_c.index("[WEAPON_PISTOL] = {"):]
     pistol = pistol[:pistol.index("}")]
-    assert "AMMO_BULLETS, 1, 1, 0, 0, 12," in pistol
+    assert "AMMO_BULLETS, 1, 1, 1, 0, 24," in pistol
 
     # Explosion PCM is built into ROM and triggered once per returned event.
     assert 'WAV sfx_barexp       "sound/dsbarexp.wav"  XGM2' in resources

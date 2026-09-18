@@ -395,6 +395,20 @@ mitigations tried before the cause was found -- a "no other usable surface
 within reach" guard and a distance margin -- treated the symptom and are not
 needed.
 
+**Player combat is Doom's own rule, checked against Doom's source.** The
+hitscan (`billboard_fire_hitscan`) is P_LineAttack: a trace crossing the
+facing diagonal of the thing's 2r box, with Doom's radii (monsters 20, barrel
+10), never the drawn sprite's width. The sprites are drawn 2.25x, so a
+sprite-width test turns animation frames and visual scale into hit boxes.
+Damage, spread and refire use Doom's formulas on Doom's `rndtable`, whose index
+`enter_level` resets, so routes stay reproducible. Cooldowns are Doom's
+held-trigger cycles in tics x 12/7. When changing any of it, compare against
+linuxdoom-1.10 (`p_pspr.c`, `p_maputl.c`, `info.c`) and keep
+`tools/test-hitscan.py` green, including its negative controls. One deliberate
+deviation: the diagonal choice tests sign equality, not `(dx ^ dy) > 0`,
+because with 256 headings a spread trace can have `dx == dy`, and Doom's test
+then hits nothing (LOG, 2026-09-18).
+
 ## Dead ends — do not redo without new evidence
 
 Each is measured and written up in [LOG.md](LOG.md); the date locates the entry.

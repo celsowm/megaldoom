@@ -163,6 +163,11 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
+& python (Join-Path $PSScriptRoot "test-hitscan.py")
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
 if (-not $NoBuild) {
     & (Join-Path $PSScriptRoot "test-campaign-e2e.ps1")
     if ($LASTEXITCODE -ne 0) {

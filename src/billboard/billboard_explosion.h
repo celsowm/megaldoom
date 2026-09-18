@@ -20,7 +20,7 @@ typedef struct {
 //   - DUMMY/BARREL with life_state == ENEMY_ALIVE -> Doom-style 128-distance
 //     splash damage after subtracting the target collision radius;
 //   - player in radius AND with line-of-sight to the blast origin (raycast
-//     occlusion test, mirroring billboard_fire_center's wall-depth check) ->
+//     occlusion test, mirroring billboard_fire_hitscan's wall-depth check) ->
 //     accumulate damage and retain the strongest knockback direction.
 //
 // Pickups and decor are not damaged. Chain reactions are bounded by

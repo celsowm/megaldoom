@@ -50,17 +50,17 @@ assert [name for name, _ in rows] == WEAPON_ORDER, [n for n, _ in rows]
 
 for name, body in rows:
     fields = [field.strip() for field in body.replace("\n", " ").split(",")]
-    ammo_type, _per_shot, pellets, spread, _melee, cooldown, flash, automatic = fields[:8]
-    sfx = fields[8]
+    ammo_type, _per_shot, pellets, accurate, _melee, cooldown, flash = fields[:7]
+    sfx = fields[7]
     assert ammo_type in ("AMMO_NONE", "AMMO_BULLETS", "AMMO_SHELLS"), (name, ammo_type)
-    assert automatic in ("TRUE", "FALSE"), (name, automatic)
     assert int(cooldown) >= 1 and int(flash) >= 1, name
     # Every weapon must name a sound that actually exists in the ROM.
     assert f"WAV {sfx} " in RESOURCES or re.search(rf"WAV {sfx}\s", RESOURCES), (name, sfx)
-    # A multi-pellet weapon needs a spread, or every pellet would hit the same
-    # target and the shotgun would just be a slow pistol.
+    # A multi-pellet weapon must roll a spread on every pellet (no accurate
+    # shots), or every pellet would hit the same target and the shotgun would
+    # just be a slow pistol. The Doom values themselves: tools/test-hitscan.py.
     if int(pellets) > 1:
-        assert int(spread) > 0, name
+        assert int(accurate) == 0, name
 
 # Melee weapons cost no ammo; ammo weapons cost some.
 melee = {name for name, body in rows if "AMMO_NONE" in body}
@@ -208,12 +208,11 @@ assert "arsenal->owned = WEAPON_START_OWNED;" in MAIN_C
 assert "arsenal->current = WEAPON_PISTOL;" in MAIN_C
 assert "renderer_set_weapon(arsenal->current);" in MAIN_C
 # Damage is deterministic: the BlastEm route harness replays fixed input and
-# compares outcomes, so a PRNG here would make combat unreproducible.
+# compares outcomes, so combat rolls come from Doom's fixed rndtable (reset
+# every level), never a seeded PRNG. tools/test-hitscan.py pins the table.
 assert "random(" not in WEAPONS_C and "rand(" not in WEAPONS_C
-roll = [int(value) for value in re.search(
-    r"DAMAGE_ROLL\[3\] = \{([^}]*)\}", WEAPONS_C).group(1).split(",")]
-assert sorted(roll) == [5, 10, 15], roll
-assert sum(roll) // len(roll) == 10, roll
+assert "static const u8 RNDTABLE[256]" in WEAPONS_C
+assert "weapon_rng_reset();" in MAIN_C
 
 # --- Pickups -----------------------------------------------------------------
 for thing, name in ((2001, "SHOTGUN"), (2002, "CHAINGUN"), (2005, "CHAINSAW"),
@@ -225,6 +224,7 @@ assert "result.amount = 50; result.ammo_type = AMMO_BULLETS;" in BILLBOARD_C
 assert "result.amount = 4;  result.ammo_type = AMMO_SHELLS;" in BILLBOARD_C
 assert "result.amount = 20; result.ammo_type = AMMO_SHELLS;" in BILLBOARD_C
 assert re.search(r"\{BILLBOARD_VISUAL_DUMMY,\s+BILLBOARD_EFFECT_NONE,\s+20,", BILLBOARD_C)
+assert "#define DOOM_IMP_HEALTH 60" in BILLBOARD_C
 assert "const u16 AMMO_MAX[AMMO_TYPE_COUNT] = { 0, 200, 50 };" in WEAPONS_C
 
 print(f"ok    weapons: {len(WEAPON_ORDER)} weapons stream through "

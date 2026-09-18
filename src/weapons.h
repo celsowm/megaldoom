@@ -5,8 +5,8 @@
 
 // The DOOM1.WAD shareware arsenal minus the rocket launcher (a rocket is a
 // moving projectile, which this engine has no object kind for). All five are
-// hitscan, so they share one fire path: N pellets, each an independent
-// centre-column aim test through billboard_fire_center().
+// hitscan, so they share one fire path: N pellets, each a world-space trace
+// through billboard_fire_hitscan() (Doom's P_LineAttack against thing radii).
 //
 // The order is Doom's weapon-cycle order and is the order the overlay sprites
 // are baked in (FREEDOOM_WEAPON_IDLE/FIRE, tools/convert-freedoom-assets.ps1).
@@ -33,11 +33,11 @@ typedef struct {
     u8 ammo_type;         // AmmoType; AMMO_NONE for the melee weapons
     u8 ammo_per_shot;
     u8 pellets;           // 1, or Doom's 7 for the shotgun
-    u8 spread_cols;       // pellet fan half-width, in view columns (0 = no spread)
-    u16 melee_range;       // 0 = hitscan out to the wall; otherwise the reach in world units
-    u8 cooldown_vblanks;  // real vblanks between shots
+    u8 accurate_shots;    // shots of a held burst fired dead straight (Doom's
+                          // refire == 0): pistol 1, chaingun 2, others 0
+    u16 melee_range;      // 0 = hitscan out to the wall; otherwise Doom's reach in world units
+    u8 cooldown_vblanks;  // real vblanks between shots of a held burst
     u8 flash_vblanks;     // how long the fire pose is held
-    bool automatic;       // fires while the button is held, not only on the press
     const u8 *sfx;
     u32 sfx_len;
 } WeaponDef;
@@ -54,12 +54,20 @@ extern const u8 WEAPON_PICKUP_AMMO[WEAPON_COUNT];
 #define WEAPON_START_OWNED ((u8)(WEAPON_OWNED_BIT(WEAPON_FIST) | WEAPON_OWNED_BIT(WEAPON_PISTOL)))
 #define WEAPON_START_BULLETS 50
 
-// Per-bullet damage. Doom rolls 5 * (1 + P_Random() % 3), i.e. 5/10/15 with a
-// mean of 10. This walks that same set on a module-static counter instead of a
-// PRNG: the BlastEm route harness replays fixed input and compares outcomes, so
-// combat has to be reproducible run to run. Same distribution, same mean.
-u16 weapon_roll_damage(void);
-void weapon_reset_damage_roll(void);
+// Doom's P_Random: the fixed 256-entry rndtable walked by an index. Damage and
+// spread use Doom's own formulas on it (5 * (1 + P_Random() % 3) per bullet,
+// 2 * (1 + P_Random() % 10) per punch or saw tooth, (P_Random() - P_Random())
+// << 18 of angle for an inaccurate shot). It is a table, not a PRNG, so combat
+// stays reproducible: enter_level resets the index, exactly as Doom's
+// M_ClearRandom does, and the BlastEm route harness replays fixed input.
+u8 weapon_rng_next(void);
+void weapon_rng_reset(void);
+// One shot's damage, rolled the way the weapon's Doom action function does.
+u16 weapon_roll_damage(const WeaponDef *weapon);
+// One shot's aim offset, as tan(angle) in Q12 (the pellet's view-space slope).
+// Zero for an accurate shot; otherwise Doom's (P_Random() - P_Random()) << 18,
+// a triangular spread of at most +-5.6 degrees.
+s16 weapon_roll_spread_q12(bool accurate);
 
 // Next/previous owned weapon that can actually fire, skipping ones the player
 // does not own and ones whose ammo pool is empty (Doom's cycle behaviour).

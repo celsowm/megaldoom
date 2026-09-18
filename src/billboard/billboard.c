@@ -9,6 +9,11 @@
 // type: visual, effect, HP, radius, visual scale, max depth,
 // collectible, targetable, blocking.
 // Item/prop render geometry comes from the Doom patch metadata, not this table.
+// Doom's spawnhealth for the monsters that share BILLBOARD_TYPE_DUMMY with
+// the zombieman (whose 20 is the type's own hit_points).
+#define DOOM_IMP_HEALTH 60
+#define DOOM_SHOTGUN_GUY_HEALTH 30
+
 static const BillboardType BILLBOARD_TYPES[BILLBOARD_TYPE_COUNT] = {
     {BILLBOARD_VISUAL_BONUS,       BILLBOARD_EFFECT_HEALTH, 1, 20, BILLBOARD_PICKUP_VISUAL_SCALE, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
     {BILLBOARD_VISUAL_BLUE_KEY,    BILLBOARD_EFFECT_KEY,    1, 20, BILLBOARD_PICKUP_VISUAL_SCALE, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
@@ -23,12 +28,11 @@ static const BillboardType BILLBOARD_TYPES[BILLBOARD_TYPE_COUNT] = {
     {BILLBOARD_VISUAL_CANDELABRA,  BILLBOARD_EFFECT_NONE,   1, BILLBOARD_PROP_RADIUS, 1, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
     {BILLBOARD_VISUAL_COLUMN,      BILLBOARD_EFFECT_NONE,   1, 16, 1, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
     {BILLBOARD_VISUAL_ELEC,        BILLBOARD_EFFECT_NONE,   1, 16, 1, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
-    {BILLBOARD_VISUAL_BARREL,      BILLBOARD_EFFECT_NONE,   1, 20, BILLBOARD_BARREL_VISUAL_SCALE, BILLBOARD_MAX_DEPTH, FALSE, TRUE,  TRUE},
+    {BILLBOARD_VISUAL_BARREL,      BILLBOARD_EFFECT_NONE,   20, 20, BILLBOARD_BARREL_VISUAL_SCALE, BILLBOARD_MAX_DEPTH, FALSE, TRUE,  TRUE},
     {BILLBOARD_VISUAL_TREE,        BILLBOARD_EFFECT_NONE,   1, 48, 1, BILLBOARD_MAX_DEPTH, FALSE, FALSE, TRUE},
-    // Doom hit points, not "shots to kill": billboard_fire_center now takes a
-    // per-weapon damage amount (weapon_roll_damage, 5/10/15 per bullet), so a
-    // zombieman-class enemy at Doom's 20 HP still dies in about two pistol hits
-    // while a shotgun blast drops it outright. The barrel matches Doom's 20 too.
+    // Doom hit points (info.c spawnhealth): the zombieman's 20 here; the imp
+    // (60) and the shotgun guy (30) share this type and get theirs from
+    // DOOM_SPAWN_HEALTH at spawn. The barrel above is Doom's 20 as well.
     {BILLBOARD_VISUAL_DUMMY,       BILLBOARD_EFFECT_NONE,   20, 24, 1, BILLBOARD_MAX_DEPTH, FALSE, TRUE,  FALSE},
     {BILLBOARD_VISUAL_SHELLS,      BILLBOARD_EFFECT_AMMO,   1, 16, BILLBOARD_PICKUP_VISUAL_SCALE, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
     {BILLBOARD_VISUAL_SHELL_BOX,   BILLBOARD_EFFECT_AMMO,   1, 24, BILLBOARD_PICKUP_VISUAL_SCALE, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
@@ -370,6 +374,11 @@ void billboard_init(u16 phase_index, DoomSkill skill) {
         object->home_y = object->y;
         object->hp = (type == BILLBOARD_TYPE_KEY) ? visual :
                      billboard_get_type(type)->hit_points;
+        if (bsp_things[i].type == 3001) {
+            object->hp = DOOM_IMP_HEALTH;
+        } else if (bsp_things[i].type == 9) {
+            object->hp = DOOM_SHOTGUN_GUY_HEALTH;
+        }
         billboard_registry_add(object_index);
         if (type == BILLBOARD_TYPE_DUMMY) g_level_kill_total++;
         if ((type == BILLBOARD_TYPE_BONUS) ||
