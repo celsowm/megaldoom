@@ -141,10 +141,11 @@ def main():
     # a slow motion frame (~11 vblanks) must still display the flash for one
     # full frame, which is what makes muzzle feedback survive at any framerate.
     weapons_c = (ROOT / "src/weapons.c").read_text()
-    # Field order: ammo_type, ammo_per_shot, pellets, accurate_shots,
-    # melee_range, cooldown_vblanks, flash_vblanks, sfx, sfx_len.
+    # Field order: ammo_type, ammo_per_shot, pellets, accurate_first,
+    # melee_range, windup_tics, shots, shot_gap_tics, tail_tics, release_tics,
+    # flash_vblanks, sfx, sfx_len.
     weapon_flashes = {
-        name: int(row.split(",")[6])
+        name: int(row.split(",")[10])
         for name, row in re.findall(
             r"^    \[WEAPON_(\w+)\] = \{\s*([^}]*?),\s*$",
             weapons_c, re.S | re.M)
@@ -173,14 +174,15 @@ def main():
 
     # The blood/puff impact is a static-position pooled effect that never
     # tracks its target after spawning, so it must be spawned AFTER
-    # push_dummy_on_hit's knockback (up to 64u/axis), not before -- spawning
+    # knock_back_dummy's knockback (Doom's slide, ~4/3 unit per point of
+    # damage), not before -- spawning
     # first left the decal visibly stranded behind the shoved body. Assert the
     # source order directly rather than just the presence of both calls.
     hit_block = combat_c[combat_c.index("if (best_object == NULL)"):
                          combat_c.index("if (best_object->hp > damage)")]
-    assert hit_block.index("push_dummy_on_hit(") < hit_block.index(
+    assert hit_block.index("knock_back_dummy(") < hit_block.index(
         "billboard_effects_spawn_blood("), (
-        "blood/puff must spawn after push_dummy_on_hit's knockback, or the "
+        "blood/puff must spawn after knock_back_dummy's knockback, or the "
         "decal is left behind the enemy's post-hit position")
 
     # Phase 1 (docs/ENEMY_AI_IMPROVEMENT_PLAN.md): every enemy AI timer counts
@@ -298,7 +300,7 @@ def main():
     assert "const u16 enemy_tics = player_dead ? 0 : player_controller_tics_last_update();" in main_c
     assert "billboard_update_enemies(\n                &g_player, renderer_redraw_is_pending(&redraw), enemy_tics)" in main_c
     loop = enemy_c[enemy_c.index("BillboardEnemyUpdate billboard_update_enemies"):]
-    assert loop.index("if (object->life_state == ENEMY_DEAD)") < loop.index("hits_before")
+    assert loop.index("if (object->life_state == ENEMY_DEAD)") < loop.index("const bool was_visible")
     assert "const EnemyVisualChange change =\n            update_dummy" in loop
     assert "const bool was_visible = redraw_pending ? FALSE" in loop
     assert "const bool now_visible = (!redraw_pending && changed)" in loop
@@ -309,9 +311,11 @@ def main():
         "static bool enemy_affects_view")]
     assert alive.index("if (object->move_cooldown != 0)") < alive.index(
         "const s32 home_dx")
-    hit_block = loop[loop.index("if (update.hits > hits_before)"):loop.index(
-        "// Pair separation")]
-    assert "const s32 dist_sq" in hit_block
+    # The attack's geometry (aim, spread, box test) runs only once the AI has
+    # decided to attack, never per enemy per update.
+    attack = alive[alive.index("(object->attack_cooldown == 0)) {"):]
+    assert attack.index("enemy_attack(object, player, update);") < attack.index("return FALSE;")
+    assert "dist_sq" not in loop[:loop.index("// Pair separation")]
 
     # Every profiling family requested by the plan is visible in DEBUG_PERF.
     for symbol in (

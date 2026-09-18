@@ -8,6 +8,150 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## Damage and weapon timing re-derived from P_DamageMobj and info.c (2026-09-18)
+
+A follow-up to the combat entry below. It covers every damage path and
+weapon timing, compared against linuxdoom-1.10 (`p_inter.c`, `p_enemy.c`,
+`p_map.c`, `info.c`).
+
+**Monsters hitting the player.** Every attack used to hit for a flat 20.
+Several attackers in one frame counted as one hit, followed by 24 frames of
+invulnerability. Now `enemy_attack` rolls Doom's attacks on the shared
+P_Random table:
+- zombieman (A_PosAttack): one bullet of 3-15, spread (P - P) << 20, at most
+  +-22.4 degrees, triangular;
+- shotgun guy (A_SPosAttack): three such pellets;
+- imp (A_TroopAttack): 3-24.
+
+A bullet connects only if its trace crosses the player's 32-unit box, the
+same helper the player's hitscan uses. Over all 65,536 roll pairs the hit
+share matches Doom's float geometry within 1%: >75% at 48 units, 25-50% at
+192 (this engine's attack range), <25% at 400. Damage from all attackers
+sums, and Doom has no invulnerability window, so none remains.
+
+**P_DamageMobj on the player:**
+- "I'm too young to die" halves damage.
+- Knockback is Doom's thrust, damage x 100 / mass. It is added to the
+  player's momentum, so it slides under the walking collision and friction
+  instead of a fixed 64-unit jump per axis.
+- Armour has a class: green absorbs a third, blue half, until it runs out
+  (it was always a third).
+- Armour pickups follow P_GiveArmor, and the bonus gives green class.
+
+**P_DamageMobj on monsters.** The fixed 64-unit shove and the 10-tic stun on
+every hit are gone:
+- Knockback is Doom's thrust over the monster's ground friction, ~4/3 unit
+  per point of damage. It is applied at once in <= 16-unit steps that stop at
+  walls, since monsters have no momentum here.
+- The chainsaw pushes nothing.
+- A survivor rolls painchance (200, the shotgun guy 170). A pain holds it
+  6 tics (the imp 4) and makes it fire back (MF_JUSTHIT).
+
+**Barrels: P_RadiusAttack exactly.** Damage is 128 minus (Chebyshev distance
+minus the Doom radius): player 16, barrel 10, monsters 20. It was a tuned
+192-unit reach with 2/3 falloff, on collision radii.
+
+**Weapon timing is the psprite state sequence.** WeaponDef now carries each
+weapon's windup, shots per attack, gap, tail to A_ReFire, and A_ReFire's own
+state. main.c runs that timeline on the player's 35 Hz tics, the clock the
+monsters and movement use, so the player/monster fire ratio is Doom's. That
+gives:
+- the pistol's 4-tic delay before a fresh shot (the fist 4, the shotgun 3);
+- a chaingun or saw tap fires two shots;
+- the pistol is accurate only on refire == 0, the chaingun on its first two
+  shots;
+- a released trigger waits out A_ReFire's state before the next press fires.
+
+**Verification.** `tools/test-hitscan.py` runs Doom's own `info.c` state
+lists through a P_MovePsprites-style simulator and requires the C timeline's
+mirror to fire on the same tics, with the same accuracy, for all five weapons
+under four trigger patterns. It found one real bug: the tic that saw the
+press was being counted toward the windup. A variant that skips A_ReFire's
+release state is caught.
+
+The spread's tan series matches exact tan within 2 LSB + 0.2% for both
+shifts. Monster aim is checked as above; with the first aim scaling
+(128-255), 45 degrees at 192 units was 1.4% off, so the scale was raised to
+8192-16383.
+
+**Still not Doom:**
+- The imp's fireball lands at once; there is no projectile object, so it
+  cannot be dodged.
+- The monsters' attack decision (range 192, 30-tic cooldown) is this engine's
+  AI, not A_Chase and P_CheckMissileRange.
+- Barrels are not pushed by shots.
+- Health pickups and items the player cannot use are still always consumed.
+- The weapon raise stays at 6 tics.
+
+## Player combat re-derived from Doom's source (2026-09-18)
+
+Not a renderer change, logged here because it changes how combat must be
+worked on. The shooting code was reviewed against linuxdoom-1.10
+(`p_pspr.c`, `p_maputl.c`, `info.c`, `m_random.c`) and brought into line.
+
+**Hit test.** It was a screen-column test against the projected sprite width.
+The sprites are drawn 2.25x, and the barrel 2x, so:
+
+- the hit box followed animation: the zombieman narrowed from 54 to 36 units
+  in the frame where it fires;
+- barrels were about twice Doom's width.
+
+`billboard_fire_hitscan` is now P_LineAttack: the trace crosses the facing
+diagonal of a 2r box, with Doom's radii (monsters 20, barrel 10). That gives a
+width of 2r to 2.83r by heading. It is cheaper too: no projection, and a
+division only for candidates that pass.
+
+**Bugs removed:**
+- The "point-blank" rescue detonated any barrel within 90 units after a miss,
+  including one behind the player.
+- A melee swing into open air left a puff.
+- Melee reach was measured to the target's centre; Doom measures to the box
+  crossing.
+
+**Now matching Doom:**
+- Damage (5/10/15 per bullet, 2-20 for fist and saw) and spread
+  (`(P_Random() - P_Random()) << 18`, at most +-5.6 degrees, triangular) run
+  on Doom's own `rndtable`. `enter_level` resets its index, so routes stay
+  reproducible.
+- The pistol's first shot and the chaingun's first two are accurate; later
+  held shots are not. The shotgun, fist and saw always spread.
+- Every weapon refires while the trigger is held.
+- Refire cycles: fist 29, saw 7, pistol 24 (was 12), shotgun 63 (was 26),
+  chaingun 7 (was 5) vblanks.
+- A cooldown's overshoot carries into the next shot, up to 2 shots per
+  iteration. Without it, the 7-vb weapons were capped by a ~10 vb motion frame
+  and ran slower than Doom, not faster.
+- The fist turns the player to face its target. The saw pulls 3 angle steps
+  toward it: Doom's ANG90/20, including the shake.
+- HP: imp 60 (was 20), shotgun guy 30 (was 20), barrel 20 (was 1). A barrel
+  that survives a bullet gives no pain sound.
+
+**One deliberate deviation.** Doom picks the diagonal with
+`(dx ^ dy) > 0`, which is false for `dx == dy`. The trace then takes the
+diagonal parallel to itself and hits nothing. With Doom's fine angles that
+never happens in play. Here it does: 90 of the 256 x 801 heading/spread pairs
+a trace can take land on it. The C tests sign equality instead.
+
+**Verification.** `tools/test-hitscan.py` mirrors the C integer math and
+checks it against a float segment-intersection reference: 0 mismatches over
+59,232 traces. Hit or miss agree exactly away from half-unit corner grazes,
+and depth is within 1 + 0.4%. Its three negative controls all fail as they
+should:
+- swapped diagonal;
+- one-axis width;
+- Doom's literal strict XOR.
+
+The test also pins the rndtable (byte-identical to `m_random.c`), the radii,
+HP, cycles and damage/spread formulas. The full suite passes, with all four
+E2E routes. E1M4's god hits rose 130 -> 176: enemies now survive long enough
+to shoot back.
+
+**Not changed:** the draw and hit range (BILLBOARD_MAX_DEPTH, 1536 view units,
+~1300 world) stays below Doom's MISSILERANGE 2048. Raising it would draw
+sprites further out, a frame cost this change does not take on. Also
+unchanged: the pistol's 4-tic delay before its first shot, and the barrel
+blast using collision radii.
+
 ## Vis GROUP words chosen per leaf by a cost model: cast -3.5% (2026-09-18)
 
 The per-leaf draw programs wrapped every run of >= 8 segs in a GROUP box test

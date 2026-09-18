@@ -2,6 +2,7 @@
 #include "billboard_effects.h"
 #include "billboard_explosion.h"
 #include "bsp_map.h"
+#include "doom_random.h"
 
 #define ENEMY_RADIUS 24
 #define WALL_PUFF_DEPTH_BIAS 24
@@ -14,36 +15,65 @@ static bool is_position_blocked(s32 x, s32 y) {
            billboard_position_blocked(x, y, ENEMY_RADIUS);
 }
 
-static void push_dummy_on_hit(u16 index, BillboardObject *object, const PlayerState *player) {
-    s16 step_x = 0;
-    s16 step_y = 0;
-
+// Doom's P_DamageMobj on a monster, for the parts that are not hit points.
+//
+// Knockback: thrust = damage * 100 / mass (mass 100 for the zombieman, the
+// shotgun guy and the imp) along the shot, which the monster's ground
+// friction (29/32 a tic) bleeds off over its slide: damage * 8192 * 32/3 in
+// Q16, i.e. about damage * 4/3 world units in all. This engine has no monster
+// momentum, so the slide is applied at once, in steps of at most 16 units per
+// axis so it stops at the first wall instead of tunnelling. The chainsaw
+// pushes nothing, as in Doom.
+#define DOOM_MONSTER_SLIDE_NUM 4
+#define DOOM_MONSTER_SLIDE_DEN 3
+#define MONSTER_SLIDE_STEP 16
+static void knock_back_dummy(u16 index, BillboardObject *object, const PlayerState *player,
+                             u16 damage) {
     if (object->type_id != BILLBOARD_TYPE_DUMMY) {
         return;
     }
-
-    if (object->x > player->x) {
-        step_x = DUMMY_HIT_PUSH_STEP;
-    } else if (object->x < player->x) {
-        step_x = -DUMMY_HIT_PUSH_STEP;
+    const u16 angle = billboard_vector_angle(object->x - player->x, object->y - player->y);
+    const s32 slide = ((s32)damage * DOOM_MONSTER_SLIDE_NUM) / DOOM_MONSTER_SLIDE_DEN;
+    // fx_cos/fx_sin carry the 303/256 basis gain; divide it back out.
+    s32 remaining_x = (slide * fx_cos(angle)) / 303;
+    s32 remaining_y = (slide * fx_sin(angle)) / 303;
+    bool moved = FALSE;
+    while ((remaining_x != 0) || (remaining_y != 0)) {
+        s32 step_x = remaining_x;
+        s32 step_y = remaining_y;
+        if (step_x > MONSTER_SLIDE_STEP) step_x = MONSTER_SLIDE_STEP;
+        if (step_x < -MONSTER_SLIDE_STEP) step_x = -MONSTER_SLIDE_STEP;
+        if (step_y > MONSTER_SLIDE_STEP) step_y = MONSTER_SLIDE_STEP;
+        if (step_y < -MONSTER_SLIDE_STEP) step_y = -MONSTER_SLIDE_STEP;
+        if (is_position_blocked(object->x + step_x, object->y + step_y)) {
+            break;
+        }
+        object->x = (s16)(object->x + step_x);
+        object->y = (s16)(object->y + step_y);
+        remaining_x -= step_x;
+        remaining_y -= step_y;
+        moved = TRUE;
     }
-
-    if (object->y > player->y) {
-        step_y = DUMMY_HIT_PUSH_STEP;
-    } else if (object->y < player->y) {
-        step_y = -DUMMY_HIT_PUSH_STEP;
+    if (moved) {
+        billboard_invalidate_object_visibility(index);
     }
+}
 
-    if ((step_x != 0) && !is_position_blocked(object->x + step_x, object->y)) {
-        object->x += step_x;
+// Pain: a monster that survives rolls P_Random() < painchance (zombieman and
+// imp 200, shotgun guy 170). On a pain it holds its pain state -- POSS/SPOS
+// 3 + 3 tics, TROO 2 + 2 -- and MF_JUSTHIT makes its next attack check fire
+// at once. Otherwise it keeps doing what it was doing.
+static void roll_dummy_pain(BillboardObject *object) {
+    const bool is_imp = (bool)(object->visual_id == BILLBOARD_VISUAL_IMP);
+    const u8 painchance = object->shotgun_guy ? 170 : 200;
+    if (doom_random() >= painchance) {
+        return;
     }
-    if ((step_y != 0) && !is_position_blocked(object->x, object->y + step_y)) {
-        object->y += step_y;
+    const u8 pain_tics = is_imp ? 4 : 6;
+    if (object->move_cooldown < pain_tics) {
+        object->move_cooldown = pain_tics;
     }
-
-    billboard_invalidate_object_visibility(index);
-
-    object->move_cooldown = DUMMY_HIT_STUN_FRAMES;
+    object->attack_cooldown = 0;
 }
 
 u16 billboard_get_target_count(void) {
@@ -68,22 +98,19 @@ u16 billboard_get_target_health(void) {
 
 static BillboardFireResult explosion_fire_result(BarrelExplosionResult explosion,
                                                  const BillboardObject *barrel) {
-    BillboardFireResult result = {BILLBOARD_SHOT_NONE, 0, 0, 0, 0, TRUE,
-                                  barrel->x, barrel->y, FALSE};
-    result.status = BILLBOARD_SHOT_EXPLOSION;
-    result.player_damage = explosion.player_damage;
-    result.push_x = explosion.push_x;
-    result.push_y = explosion.push_y;
-    result.explosion_count = explosion.explosion_count;
+    const BillboardFireResult result = {
+        .status = BILLBOARD_SHOT_EXPLOSION,
+        .player_damage = explosion.player_damage,
+        .thrust_x = explosion.thrust_x,
+        .thrust_y = explosion.thrust_y,
+        .explosion_count = explosion.explosion_count,
+        .hit_target = TRUE,
+        .target_x = barrel->x,
+        .target_y = barrel->y,
+    };
     return result;
 }
 
-// Doom's thing radii for the hitscan cross-section (info.c): 20 for the
-// zombieman, the shotgun guy and the imp, 10 for a barrel. These are NOT the
-// BillboardType radii, which are this engine's movement-collision tuning; a
-// trace is tested against Doom's own box, never against the drawn sprite.
-#define DOOM_SHOOT_RADIUS_MONSTER 20
-#define DOOM_SHOOT_RADIUS_BARREL 10
 // The view basis carries a 1.1839 gain (fixed_math.h), so view depths are
 // world lengths times 303/256. A melee reach in world units is converted once.
 #define WORLD_TO_VIEW_DEPTH(units) ((u16)(((u32)(units) * 303u) >> 8))
@@ -105,10 +132,12 @@ static void spawn_wall_puff(const PlayerState *player, s16 dir_x, s16 dir_y,
 }
 
 u16 billboard_angle_to(const PlayerState *player, s32 x, s32 y) {
+    return billboard_vector_angle(x - player->x, y - player->y);
+}
+
+u16 billboard_vector_angle(s32 dx, s32 dy) {
     // Maximise the dot product with the heading: 16 coarse headings, then
-    // halve the step down to one angle unit. 24 evaluations, melee hits only.
-    const s32 dx = x - player->x;
-    const s32 dy = y - player->y;
+    // halve the step down to one angle unit. 24 evaluations, hits only.
     u16 best = 0;
     s32 best_dot = -0x7FFFFFFF;
     for (u16 a = 0; a < ANGLE_STEPS; a += ANGLE_STEPS / 16) {
@@ -135,6 +164,34 @@ u16 billboard_angle_to(const PlayerState *player, s32 x, s32 y) {
     return best;
 }
 
+void billboard_damage_thrust(s32 from_x, s32 from_y, s32 to_x, s32 to_y, u16 damage,
+                             s32 *thrust_x, s32 *thrust_y) {
+    // Doom: thrust = damage * (FRACUNIT >> 3) * 100 / mass, applied along
+    // R_PointToAngle2(inflictor, target). The basis carries the 303/256 gain,
+    // so each component divides it back out.
+    const u16 angle = billboard_vector_angle(to_x - from_x, to_y - from_y);
+    const s32 thrust = (s32)damage * 8192;
+    *thrust_x = (thrust / 303) * fx_cos(angle);
+    *thrust_y = (thrust / 303) * fx_sin(angle);
+}
+
+bool billboard_trace_crosses_box(s16 dir_x, s16 dir_y, s16 dx, s16 dy, s16 radius) {
+    // See billboard_fire_hitscan for the geometry and the sign-equality note.
+    const bool positive = (bool)((dir_x ^ dir_y) >= 0);
+    const s32 den = positive ? ((s32)dir_x + dir_y) : ((s32)dir_x - dir_y);
+    const s32 extent = (s32)((dir_x < 0) ? -dir_x : dir_x) +
+                       (s32)((dir_y < 0) ? -dir_y : dir_y);
+    s32 lateral = ((s32)dir_x * dy) - ((s32)dir_y * dx);
+    if (lateral < 0) {
+        lateral = -lateral;
+    }
+    if (lateral >= (s32)radius * extent) {
+        return FALSE;
+    }
+    const s32 num = positive ? ((s32)dx + dy) : ((s32)dx - dy);
+    return (bool)((num != 0) && ((num < 0) == (den < 0)));
+}
+
 // Doom's P_LineAttack against things (p_maputl.c PIT_AddThingIntercepts): a
 // thing is hit when the trace crosses the diagonal of its 2r x 2r box that
 // faces the trace -- (x-r,y+r)..(x+r,y-r) when the trace's dx and dy share a
@@ -149,8 +206,9 @@ u16 billboard_angle_to(const PlayerState *player, s32 x, s32 y) {
 //   its view depth is t * (f . dir) / 256,
 // the same unit as a ray column's depth and BillboardMeasure.forward.
 BillboardFireResult billboard_fire_hitscan(const PlayerState *player, s16 spread_q12,
-                                           u16 wall_depth, u16 range, u16 damage) {
-    BillboardFireResult result = {BILLBOARD_SHOT_NONE, 0, 0, 0, 0, FALSE, 0, 0, FALSE};
+                                           u16 wall_depth, u16 range, u16 damage,
+                                           bool thrust) {
+    BillboardFireResult result = {.status = BILLBOARD_SHOT_NONE};
     BillboardObject *best_object = NULL;
     u16 best_index = 0;
     s32 best_depth = 0x7FFFFFFF;
@@ -205,7 +263,7 @@ BillboardFireResult billboard_fire_hitscan(const PlayerState *player, s16 spread
             continue;
         }
         const s32 radius = (object->type_id == BILLBOARD_TYPE_BARREL) ?
-            DOOM_SHOOT_RADIUS_BARREL : DOOM_SHOOT_RADIUS_MONSTER;
+            DOOM_RADIUS_BARREL : DOOM_RADIUS_MONSTER;
         s32 lateral = ((s32)dir_x * (s16)dy) - ((s32)dir_y * (s16)dx);
         if (lateral < 0) {
             lateral = -lateral;
@@ -243,14 +301,15 @@ BillboardFireResult billboard_fire_hitscan(const PlayerState *player, s16 spread
     result.target_x = best_object->x;
     result.target_y = best_object->y;
 
-    // Knock back BEFORE spawning the decal: push_dummy_on_hit can move a DUMMY
-    // up to DUMMY_HIT_PUSH_STEP (64u) on each axis, and the blood/puff impact
-    // is a static-position pooled effect that never tracks its target after
-    // spawning (see spawn_impact in billboard_effects.c). Spawning first at
-    // the pre-knockback position left the decal visibly stranded behind the
-    // (now-shoved) body. push_dummy_on_hit no-ops for non-DUMMY types, so this
-    // ordering is a no-op change for the barrel/puff path.
-    push_dummy_on_hit(best_index, best_object, player);
+    // Knock back BEFORE spawning the decal: the blood/puff impact is a
+    // static-position pooled effect that never tracks its target after
+    // spawning (see spawn_impact in billboard_effects.c), so spawning first
+    // left it stranded behind the shoved body. knock_back_dummy no-ops for
+    // non-DUMMY types. Doom thrusts before it subtracts health, so a killing
+    // shot still shoves the body.
+    if (thrust) {
+        knock_back_dummy(best_index, best_object, player, damage);
+    }
     if (best_object->type_id == BILLBOARD_TYPE_DUMMY) {
         billboard_effects_spawn_blood(best_object->x, best_object->y);
     } else {
@@ -260,7 +319,10 @@ BillboardFireResult billboard_fire_hitscan(const PlayerState *player, s16 spread
     if (best_object->hp > damage) {
         best_object->hp = (u8)(best_object->hp - damage);
         result.status = BILLBOARD_SHOT_DAMAGE;
-        result.pain = (bool)(best_object->type_id == BILLBOARD_TYPE_DUMMY);
+        if (best_object->type_id == BILLBOARD_TYPE_DUMMY) {
+            roll_dummy_pain(best_object);
+            result.pain = TRUE;
+        }
         return result;
     }
 

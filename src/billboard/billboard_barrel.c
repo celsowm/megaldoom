@@ -20,7 +20,7 @@ static void advance_barrel_death(u16 index, BillboardObject *object) {
 }
 
 BillboardEnemyUpdate billboard_update_barrels(const PlayerState *player) {
-    BillboardEnemyUpdate update = {FALSE, FALSE, FALSE, 0, 0, 0};
+    BillboardEnemyUpdate update = {.moved = FALSE};
     (void)player;
 
     // Deactivation mutates the target registry, so iterate a stable snapshot.

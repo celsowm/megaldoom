@@ -23,8 +23,10 @@ def main():
     assert "if (gameplay && strafing)" in SOURCE
     assert "if (gameplay && six_button_pad)" in SOURCE
     assert "result |= PLAYER_CONTROL_FIRE_HELD;" in SOURCE
-    # Every weapon refires while held, as Doom's A_ReFire does.
-    assert "if ((control & (PLAYER_CONTROL_FIRE | PLAYER_CONTROL_FIRE_HELD)) != 0) {" in MAIN
+    # Every weapon refires while held, as Doom's A_ReFire does; a latched tap
+    # (FIRE without FIRE_HELD) still starts one attack.
+    assert "const bool held = (bool)((control & PLAYER_CONTROL_FIRE_HELD) != 0);" in MAIN
+    assert "bool trigger = (bool)((control & (PLAYER_CONTROL_FIRE |" in MAIN
 
     assert "BUTTON_C | BUTTON_START" in AUTOMAP
     assert "BUTTON_A | BUTTON_START" in AUTOMAP

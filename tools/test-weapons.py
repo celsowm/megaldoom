@@ -50,17 +50,19 @@ assert [name for name, _ in rows] == WEAPON_ORDER, [n for n, _ in rows]
 
 for name, body in rows:
     fields = [field.strip() for field in body.replace("\n", " ").split(",")]
-    ammo_type, _per_shot, pellets, accurate, _melee, cooldown, flash = fields[:7]
-    sfx = fields[7]
+    (ammo_type, _per_shot, pellets, accurate_first, _melee,
+     _windup, shots, _gap, tail, _release, flash) = fields[:11]
+    sfx = fields[11]
     assert ammo_type in ("AMMO_NONE", "AMMO_BULLETS", "AMMO_SHELLS"), (name, ammo_type)
-    assert int(cooldown) >= 1 and int(flash) >= 1, name
+    assert accurate_first in ("TRUE", "FALSE"), (name, accurate_first)
+    assert int(shots) >= 1 and int(tail) >= 1 and int(flash) >= 1, name
     # Every weapon must name a sound that actually exists in the ROM.
     assert f"WAV {sfx} " in RESOURCES or re.search(rf"WAV {sfx}\s", RESOURCES), (name, sfx)
     # A multi-pellet weapon must roll a spread on every pellet (no accurate
     # shots), or every pellet would hit the same target and the shotgun would
     # just be a slow pistol. The Doom values themselves: tools/test-hitscan.py.
     if int(pellets) > 1:
-        assert int(accurate) == 0, name
+        assert accurate_first == "FALSE", name
 
 # Melee weapons cost no ammo; ammo weapons cost some.
 melee = {name for name, body in rows if "AMMO_NONE" in body}
@@ -198,7 +200,7 @@ for lump in ("SHTG", "CHGG", "PUNG", "SAWG", "SHOTA0", "MGUNA0", "CSAWA0"):
 # --- Gameplay wiring ---------------------------------------------------------
 for token in (
     "PlayerArsenal", "arsenal.ammo", "weapon_cycle(", "weapon_has_ammo(",
-    "renderer_set_weapon(", "fire_weapon(", "WEAPON_RAISE_VBLANKS",
+    "renderer_set_weapon(", "fire_weapon(", "weapon_state_raise();",
     "BILLBOARD_EFFECT_WEAPON", "add_ammo(&arsenal",
 ):
     assert token in MAIN_C, token
@@ -210,9 +212,11 @@ assert "renderer_set_weapon(arsenal->current);" in MAIN_C
 # Damage is deterministic: the BlastEm route harness replays fixed input and
 # compares outcomes, so combat rolls come from Doom's fixed rndtable (reset
 # every level), never a seeded PRNG. tools/test-hitscan.py pins the table.
-assert "random(" not in WEAPONS_C and "rand(" not in WEAPONS_C
-assert "static const u8 RNDTABLE[256]" in WEAPONS_C
-assert "weapon_rng_reset();" in MAIN_C
+DOOM_RANDOM_C = (ROOT / "src/doom_random.c").read_text()
+for source in (WEAPONS_C, DOOM_RANDOM_C):
+    assert not re.search(r"(?<![\w])(rand|random|srand)\(", source)
+assert "static const u8 RNDTABLE[256]" in DOOM_RANDOM_C
+assert "doom_random_reset();" in MAIN_C
 
 # --- Pickups -----------------------------------------------------------------
 for thing, name in ((2001, "SHOTGUN"), (2002, "CHAINGUN"), (2005, "CHAINSAW"),

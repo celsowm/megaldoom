@@ -1,5 +1,6 @@
 #include "billboard_internal.h"
 #include "bsp_map.h"
+#include "doom_random.h"
 
 #define ENEMY_RADIUS 24
 
@@ -137,8 +138,69 @@ static u8 separate_dummies(u16 left_index, BillboardObject *left,
     return moved;
 }
 
+// A monster's attack as Doom resolves it (p_enemy.c), on the shared P_Random
+// table. The monster has already faced the player exactly (A_FaceTarget):
+//   zombieman    A_PosAttack:  one bullet, (P - P) << 20 of spread (at most
+//                +-22.4 degrees, triangular), ((P % 5) + 1) * 3 = 3..15;
+//   shotgun guy  A_SPosAttack: three such pellets;
+//   imp          A_TroopAttack: ((P % 8) + 1) * 3 = 3..24, by claw inside
+//                melee range and by fireball beyond it.
+// A bullet connects only if its trace crosses the player's 32-unit box, so
+// accuracy falls off with distance as in Doom. This engine has no projectile
+// object, so the imp's fireball lands at once instead of flying at 10 units a
+// tic; it cannot be dodged.
+static void enemy_attack(const BillboardObject *object, const PlayerState *player,
+                         BillboardEnemyUpdate *update) {
+    const s32 dx = player->x - object->x;
+    const s32 dy = player->y - object->y;
+    u16 damage = 0;
+
+    if (object->visual_id == BILLBOARD_VISUAL_IMP) {
+        damage = (u16)(((doom_random() % 8) + 1) * 3);
+    } else if ((dx > -0x8000) && (dx < 0x8000) && (dy > -0x8000) && (dy < 0x8000)) {
+        // The aim vector toward the player, scaled to 8192..16383 on its
+        // larger axis: fine enough that the tilt resolves Doom's spread to
+        // ~0.01 degrees, and small enough that the tilted vector stays s16
+        // and the box test's products stay s32.
+        s32 ax = dx;
+        s32 ay = dy;
+        while ((ax > 16383) || (ax < -16383) || (ay > 16383) || (ay < -16383)) {
+            ax >>= 1;
+            ay >>= 1;
+        }
+        while ((ax != 0 || ay != 0) && (ax < 8192) && (ax > -8192) &&
+               (ay < 8192) && (ay > -8192)) {
+            ax <<= 1;
+            ay <<= 1;
+        }
+        const u8 pellets = object->shotgun_guy ? 3 : 1;
+        for (u8 i = 0; i < pellets; i++) {
+            const s16 k = doom_random_spread_q12(20);
+            const u16 pellet = (u16)(((doom_random() % 5) + 1) * 3);
+            const s16 dir_x = (s16)(ax - (((s32)k * ay) >> 12));
+            const s16 dir_y = (s16)(ay + (((s32)k * ax) >> 12));
+            if (billboard_trace_crosses_box(dir_x, dir_y, (s16)dx, (s16)dy,
+                                            DOOM_RADIUS_PLAYER)) {
+                damage = (u16)(damage + pellet);
+            }
+        }
+    }
+
+    if (damage == 0) {
+        return;  // every bullet missed
+    }
+    s32 thrust_x;
+    s32 thrust_y;
+    billboard_damage_thrust(object->x, object->y, player->x, player->y, damage,
+                            &thrust_x, &thrust_y);
+    update->hits++;
+    update->player_damage = (u16)(update->player_damage + damage);
+    update->thrust_x += thrust_x;
+    update->thrust_y += thrust_y;
+}
+
 static bool update_dummy_alive(u16 index, BillboardObject *object, const PlayerState *player,
-                               u16 *hits, u16 tics) {
+                               BillboardEnemyUpdate *update, u16 tics) {
     const s32 player_dx = player->x - object->x;
     const s32 player_dy = player->y - object->y;
     const s32 abs_player_dx = (player_dx < 0) ? -player_dx : player_dx;
@@ -223,7 +285,7 @@ static bool update_dummy_alive(u16 index, BillboardObject *object, const PlayerS
         object->attack_cooldown = DUMMY_ATTACK_COOLDOWN;
         object->move_cooldown = DUMMY_ATTACK_RECOVERY_FRAMES;
         object->attack_anim = ENEMY_ATTACK_ANIM_FRAMES;
-        (*hits)++;
+        enemy_attack(object, player, update);
         return FALSE;
     }
 
@@ -339,15 +401,15 @@ static void advance_death(BillboardObject *object, u16 tics) {
 // Wrapper over the live AI / death animation. Keep position and pose changes
 // distinct so the caller can attribute redraws without re-running simulation.
 static EnemyVisualChange update_dummy(u16 index, BillboardObject *object,
-                                      const PlayerState *player, u16 *hits,
-                                      u16 tics) {
+                                      const PlayerState *player,
+                                      BillboardEnemyUpdate *update, u16 tics) {
     const u8 prev_frame = billboard_get_object_frame(object);
     EnemyVisualChange change = {FALSE, FALSE};
 
     if (object->life_state != ENEMY_ALIVE) {
         advance_death(object, tics);
     } else {
-        change.position_changed = update_dummy_alive(index, object, player, hits, tics);
+        change.position_changed = update_dummy_alive(index, object, player, update, tics);
     }
 
     if (billboard_get_object_frame(object) != prev_frame) {
@@ -360,8 +422,7 @@ static EnemyVisualChange update_dummy(u16 index, BillboardObject *object,
 BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player,
                                               bool redraw_pending,
                                               u16 tics) {
-    BillboardEnemyUpdate update = {FALSE, FALSE, FALSE, 0, 0, 0};
-    s32 best_hit_dist = 0x7FFFFFFF;
+    BillboardEnemyUpdate update = {.moved = FALSE};
     s16 cos_a = 0;
     s16 sin_a = 0;
 
@@ -395,11 +456,10 @@ BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player,
             continue;
         }
 
-        const u16 hits_before = update.hits;
         const bool was_visible = redraw_pending ? FALSE :
             enemy_affects_view(i, object, player, cos_a, sin_a);
         const EnemyVisualChange change =
-            update_dummy(i, object, player, &update.hits, tics);
+            update_dummy(i, object, player, &update, tics);
         const bool changed = change.position_changed || change.pose_changed;
         const bool now_visible = (!redraw_pending && changed) ?
             enemy_affects_view(i, object, player, cos_a, sin_a) : was_visible;
@@ -417,17 +477,6 @@ BillboardEnemyUpdate billboard_update_enemies(const PlayerState *player,
             s_simulated_enemy_count++;
         }
 
-        if (update.hits > hits_before) {
-            const s32 dx = player->x - object->x;
-            const s32 dy = player->y - object->y;
-            const s32 dist_sq = (dx * dx) + (dy * dy);
-            if (dist_sq >= best_hit_dist) {
-                continue;
-            }
-            best_hit_dist = dist_sq;
-            update.push_x = (dx > 0) ? 1 : ((dx < 0) ? -1 : 0);
-            update.push_y = (dy > 0) ? 1 : ((dy < 0) ? -1 : 0);
-        }
     }
 
     // Pair separation is local to the simulation working set, never all map enemies.

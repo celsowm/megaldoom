@@ -378,6 +378,7 @@ void billboard_init(u16 phase_index, DoomSkill skill) {
             object->hp = DOOM_IMP_HEALTH;
         } else if (bsp_things[i].type == 9) {
             object->hp = DOOM_SHOTGUN_GUY_HEALTH;
+            object->shotgun_guy = 1;
         }
         billboard_registry_add(object_index);
         if (type == BILLBOARD_TYPE_DUMMY) g_level_kill_total++;

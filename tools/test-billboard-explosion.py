@@ -8,9 +8,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def doom_radius_damage(dx: int, dy: int, target_radius: int) -> int:
+    """p_map.c P_RadiusAttack(128) / PIT_RadiusAttack."""
     distance = max(abs(dx), abs(dy)) - target_radius
     distance = max(distance, 0)
-    return 0 if distance >= 192 else 128 - (distance * 2) // 3
+    return 0 if distance >= 128 else 128 - distance
 
 
 def main():
@@ -50,7 +51,7 @@ def main():
     assert "const BillboardFireResult hit = fire_weapon(" in main_c
     assert "merge_fire_result(&fire_result, &hit);" in main_c
     assert ("billboard_fire_hitscan(\n            &g_player, spread_q12, depth, "
-            "weapon->melee_range, damage);") in main_c
+            "weapon->melee_range, damage,") in main_c
     # A blast reached by any pellet must still surface through the merged result.
     assert "merged->explosion_count + hit->explosion_count" in main_c
     assert "merged->player_damage + hit->player_damage" in main_c
@@ -60,17 +61,23 @@ def main():
     # Doom radius formula: Chebyshev distance, target-radius allowance, falloff.
     assert "u16 billboard_explosion_damage(" in explosion_h
     assert "((dx > dy) ? dx : dy) - target_radius" in explosion_c
-    assert "((u32)distance * 2u) / 3u" in explosion_c
-    assert "#define BARREL_EXPLOSION_RADIUS 192" in internal_h
+    assert "return (u16)(BARREL_EXPLOSION_DAMAGE - distance);" in explosion_c
+    assert "#define BARREL_EXPLOSION_RADIUS 128" in internal_h
+    # Doom's radii, not the movement-collision ones: player 16, barrel 10,
+    # monsters 20.
+    assert "bx, by, player->x, player->y, DOOM_RADIUS_PLAYER);" in explosion_c
+    assert "(object->type_id == BILLBOARD_TYPE_BARREL) ? DOOM_RADIUS_BARREL" in explosion_c
     assert doom_radius_damage(0, 0, 16) == 128
-    assert doom_radius_damage(36, 0, 16) == 115
-    assert doom_radius_damage(64, 0, 16) == 96
-    assert doom_radius_damage(64, 64, 16) == 96
-    assert doom_radius_damage(207, 0, 16) == 1
-    assert doom_radius_damage(208, 0, 16) == 0
+    assert doom_radius_damage(36, 0, 16) == 108
+    assert doom_radius_damage(64, 0, 16) == 80
+    assert doom_radius_damage(64, 64, 16) == 80
+    assert doom_radius_damage(143, 0, 16) == 1
+    assert doom_radius_damage(144, 0, 16) == 0
     assert "result.player_damage + player_damage" in explosion_c
     assert explosion_c.count("bsp_segment_crosses_wall(") >= 2
-    assert "player_damage > strongest_damage" in explosion_c
+    # Every blast that reaches the player adds its own P_DamageMobj thrust.
+    assert "billboard_damage_thrust(bx, by, player->x, player->y, player_damage," in explosion_c
+    assert "result.thrust_x += thrust_x;" in explosion_c
 
     # Chain reactions retain live-state guards and the source barrel population.
     assert "object->life_state != ENEMY_ALIVE" in explosion_c
@@ -129,12 +136,13 @@ def main():
     assert "BILLBOARD_VISUAL_PUFF" in renderer_c
     assert "BILLBOARD_VISUAL_BLOOD" in renderer_c
     assert "billboard_update_effects()" in main_c
-    # Refire delay lives in the per-weapon table: Doom's pistol cycle, 14 tics
-    # = 24 vblanks (2026-09-18; it was a faster 12 before).
+    # Refire timing lives in the per-weapon table as Doom's pistol states:
+    # 4 tics of windup, then 10 to A_ReFire (14 a shot held), 5 more if
+    # released (tools/test-hitscan.py simulates the timeline).
     weapons_c = (ROOT / "src/weapons.c").read_text()
     pistol = weapons_c[weapons_c.index("[WEAPON_PISTOL] = {"):]
     pistol = pistol[:pistol.index("}")]
-    assert "AMMO_BULLETS, 1, 1, 1, 0, 24," in pistol
+    assert "AMMO_BULLETS, 1, 1, TRUE, 0, 4, 1, 0, 10, 5," in pistol
 
     # Explosion PCM is built into ROM and triggered once per returned event.
     assert 'WAV sfx_barexp       "sound/dsbarexp.wav"  XGM2' in resources

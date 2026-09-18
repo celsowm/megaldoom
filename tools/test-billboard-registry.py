@@ -47,11 +47,12 @@ def main():
         "void billboard_registry_enemy_died"
     ):registry.index("const u16 *billboard_registry_active_indices")]
 
-    # The expensive player-distance products must occur only after the active
-    # enemy guard in the update loop.
-    guard = enemy.index("if (!object->active || (object->type_id != BILLBOARD_TYPE_DUMMY))")
-    distance = enemy.index("const s32 dist_sq", guard)
-    assert guard < distance
+    # No expensive player-distance products may run before the active enemy
+    # guard in the update loop (since 2026-09-18 the loop computes none; the
+    # attack's own geometry lives in enemy_attack, behind the AI's gates).
+    loop = enemy.index("for (u16 slot = 0; slot < enemy_count; slot++) {")
+    guard = enemy.index("if (!object->active || (object->type_id != BILLBOARD_TYPE_DUMMY))", loop)
+    assert "dist_sq" not in enemy[loop:guard]
 
     print("ok    billboard registry: compact active/enemy/blocking iteration and stable removal")
 

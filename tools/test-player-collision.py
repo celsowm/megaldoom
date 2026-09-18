@@ -4,9 +4,12 @@
 Doom walls are zero-thickness lines and the player is a 16-unit circle, so a
 single collision test at the END of a move lets any displacement of 32+ units
 perpendicular to a wall land "free" on the far side. player_apply_world_push
-used to do exactly that for the enemy-hit / barrel knockback, which is +-64
-units per axis in one jump: a tester walked out of E1M3 while being shot by a
-zombieman and could not get back in (2026-09-11).
+used to do exactly that for the enemy-hit / barrel knockback, then +-64 units
+per axis in one jump: a tester walked out of E1M3 while being shot by a
+zombieman and could not get back in (2026-09-11). Since 2026-09-18 knockback is
+Doom's P_DamageMobj thrust added to the player's momentum, so it moves only as
+movement tics do, at most DOOM_MAX_MOVE per axis per tic; the +-64 jump stays
+here as a harder case than anything the game now produces.
 
 This mirrors src/raycast.c's player_apply_world_push and src/bsp/bsp_map.c's
 bsp_circle_blocked -- integer rounding included, because seg_point_dist2's
@@ -27,7 +30,7 @@ from wad_reader import WadFile  # noqa: E402
 
 MAPS = ("E1M1", "E1M2", "E1M3", "E1M4")
 PLAYER_COLLISION_RADIUS = 16          # src/raycast.h
-PLAYER_HIT_PUSH_STEP = 64             # src/main.c: FX_ONE / 4
+PLAYER_HIT_PUSH_STEP = 64             # the pre-2026-09-18 knockback jump
 DOOM_MAX_MOVE = 30                    # src/player_controller.c, per axis per tic
 PLAYER_PUSH_MAX_AXIS_STEP = 20        # src/raycast.c
 CELL = 64

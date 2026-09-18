@@ -206,14 +206,181 @@ assert 39 <= hit_width(0, 20) <= 41, hit_width(0, 20)
 assert 55 <= hit_width(32, 20) <= 58, hit_width(32, 20)
 assert 19 <= hit_width(64, 10) <= 21, hit_width(64, 10)
 
-# --- source pins -----------------------------------------------------------------
-assert "#define DOOM_SHOOT_RADIUS_MONSTER 20" in COMBAT_C
-assert "#define DOOM_SHOOT_RADIUS_BARREL 10" in COMBAT_C
+
+# --- P_Random and the spread ------------------------------------------------------
+DOOM_RANDOM_C = (ROOT / "src/doom_random.c").read_text()
+ENEMY_C = (ROOT / "src/billboard/billboard_enemy.c").read_text()
+EXPLOSION_C = (ROOT / "src/billboard/billboard_explosion.c").read_text()
+
+table = [int(v) for v in re.search(
+    r"RNDTABLE\[256\] = \{(.*?)\};", DOOM_RANDOM_C, re.S).group(1).split(",")]
+assert len(table) == 256
+assert table[:8] == [0, 8, 109, 220, 222, 241, 149, 107] and table[-4:] == [120, 163, 236, 249]
+assert sum(table) == 32986, sum(table)  # m_random.c's rndtable, byte for byte
+assert "doom_random_reset();" in MAIN_C  # M_ClearRandom at every level start
+
+
+def spread_q12(d, shift):
+    """doom_random.c doom_random_spread_q12 for a given P_Random() - P_Random()."""
+    x = (d * 804) >> (7 + (20 - shift))
+    x2 = (x * x) >> 12
+    x3 = (x2 * x) >> 12
+    x5 = (x3 * x2) >> 12
+    return x + c_div(x3, 3) + c_div(2 * x5, 15)
+
+
+for token in (
+    "const s32 x = (d * 804) >> (7 + (20 - shift));",
+    "return (s16)(x + (x3 / 3) + ((2 * x5) / 15));",
+):
+    assert token in DOOM_RANDOM_C, token
+# (P - P) << shift of a 2^32 turn, as tan in Q12, for both of Doom's spreads.
+for shift in (18, 20):
+    for d in range(-255, 256):
+        want = math.tan(d * 2 * math.pi / (1 << (32 - shift))) * 4096
+        got = spread_q12(d, shift)
+        assert abs(got - want) <= 2 + 0.002 * abs(want), (shift, d, got, want)
+assert "return accurate ? 0 : doom_random_spread_q12(18);" in WEAPONS_C
+
+# --- damage rolls ------------------------------------------------------------------
+assert "return (u16)(2 * ((doom_random() % 10) + 1));" in WEAPONS_C      # A_Punch, A_Saw
+assert "return (u16)(5 * ((doom_random() % 3) + 1));" in WEAPONS_C       # P_GunShot
+assert "damage = (u16)(((doom_random() % 8) + 1) * 3);" in ENEMY_C       # A_TroopAttack
+assert "const u16 pellet = (u16)(((doom_random() % 5) + 1) * 3);" in ENEMY_C  # A_PosAttack
+assert "const u8 pellets = object->shotgun_guy ? 3 : 1;" in ENEMY_C      # A_SPosAttack
+assert "const s16 k = doom_random_spread_q12(20);" in ENEMY_C
+# The monsters' flat 20-point auto-hit is gone.
+assert "PLAYER_HIT_DAMAGE" not in MAIN_C
+
+
+# --- monster aim: Doom's hit chance, not a certainty -------------------------------
+def c_trace_crosses_box(dir_x, dir_y, dx, dy, radius):
+    """billboard_combat.c billboard_trace_crosses_box."""
+    positive = (dir_x ^ dir_y) >= 0
+    den = (dir_x + dir_y) if positive else (dir_x - dir_y)
+    extent = abs(dir_x) + abs(dir_y)
+    if abs(dir_x * dy - dir_y * dx) >= radius * extent:
+        return False
+    num = (dx + dy) if positive else (dx - dy)
+    return num != 0 and ((num < 0) == (den < 0))
+
+
+def c_enemy_bullet_hits(dx, dy, k):
+    """billboard_enemy.c enemy_attack's aim for one bullet with tilt k (Q12)."""
+    ax, ay = dx, dy
+    while ax > 16383 or ax < -16383 or ay > 16383 or ay < -16383:
+        ax >>= 1
+        ay >>= 1
+    while (ax or ay) and -8192 < ax < 8192 and -8192 < ay < 8192:
+        ax <<= 1
+        ay <<= 1
+    dir_x = ax - ((k * ay) >> 12)
+    dir_y = ay + ((k * ax) >> 12)
+    return c_trace_crosses_box(dir_x, dir_y, dx, dy, 16)
+
+
+def ref_bullet_hits(dx, dy, d):
+    """Doom, in floats: face the player exactly, turn by d << 20, and cross the
+    player's box diagonal (the one facing the trace) ahead of the shooter."""
+    a = math.atan2(dy, dx) + d * 2 * math.pi / (1 << 12)
+    ux, uy = math.cos(a), math.sin(a)
+    r = 16
+    if (ux >= 0) == (uy >= 0):
+        x1, y1, x2, y2 = dx - r, dy + r, dx + r, dy - r
+    else:
+        x1, y1, x2, y2 = dx - r, dy - r, dx + r, dy + r
+    s1 = ux * y1 - uy * x1
+    s2 = ux * y2 - uy * x2
+    if (s1 > 0) == (s2 > 0):
+        return False
+    ex, ey = x2 - x1, y2 - y1
+    det = ux * (-ey) - uy * (-ex)
+    t = (x1 * (-ey) - y1 * (-ex)) / det
+    return t > 0
+
+
+# Over every (P_Random, P_Random) pair Doom can roll, the hit share at each
+# range and bearing must match Doom's geometry.
+pairs = [(a - b) for a in range(256) for b in range(256)]
+d_counts = {}
+for d in pairs:
+    d_counts[d] = d_counts.get(d, 0) + 1
+for dist in (48, 96, 192, 400):
+    for bearing in (0.0, 0.4, 0.785398, 2.2, 3.9):
+        dx = int(round(dist * math.cos(bearing)))
+        dy = int(round(dist * math.sin(bearing)))
+        c_hits = sum(n for d, n in d_counts.items() if c_enemy_bullet_hits(dx, dy, spread_q12(d, 20)))
+        r_hits = sum(n for d, n in d_counts.items() if ref_bullet_hits(dx, dy, d))
+        assert abs(c_hits - r_hits) <= 0.01 * len(pairs), (dist, bearing, c_hits, r_hits)
+# The share itself, pinned: nearly every shot at 48 units, well under half at
+# 192 (this engine's attack range), a small minority at 400.
+share = lambda dist: sum(n for d, n in d_counts.items()
+                         if c_enemy_bullet_hits(dist, 0, spread_q12(d, 20))) / len(pairs)
+assert share(48) > 0.75, share(48)
+assert 0.25 < share(192) < 0.5, share(192)
+assert share(400) < 0.25, share(400)
+# Negative control: the old rule, every attack connects, is far from Doom.
+assert abs(1.0 - share(192)) > 0.4
+
+# --- the player's side of P_DamageMobj ----------------------------------------------
+for token in (
+    # "I'm too young to die" halves damage.
+    "if (skill == DOOM_SKILL_IM_TOO_YOUNG_TO_DIE) {",
+    "damage >>= 1;",
+    # Armour class: green absorbs a third, blue half, until it runs out.
+    "u16 saved = (g_player_armor_type == 1) ? (u16)(damage / 3) : (u16)(damage / 2);",
+    "if (*player_armor <= saved) {",
+    "g_player_armor_type = 0;",
+    # P_GiveArmor / the armour bonus.
+    "} else if (player_armor < pickup.amount) {",
+    "g_player_armor_type = (u8)(pickup.amount / 100);",
+    "if (g_player_armor_type == 0) g_player_armor_type = 1;",
+    # Knockback rides the player's momentum, through the walking collision.
+    "player_controller_add_thrust(thrust_x, thrust_y);",
+):
+    assert token in MAIN_C, token
+# Doom has no invulnerability window after a hit.
+assert "g_player_invuln" not in MAIN_C and "PLAYER_INVULN" not in MAIN_C
+# Thrust is damage * (FRACUNIT >> 3) * 100 / mass (100) along inflictor -> target.
+assert "const s32 thrust = (s32)damage * 8192;" in COMBAT_C
+assert "*thrust_x = (thrust / 303) * fx_cos(angle);" in COMBAT_C
+assert "billboard_damage_thrust(object->x, object->y, player->x, player->y, damage," in ENEMY_C
+
+# --- the monsters' side ------------------------------------------------------------------
+for token in (
+    "const u8 painchance = object->shotgun_guy ? 170 : 200;",  # info.c
+    "if (doom_random() >= painchance) {",
+    "const u8 pain_tics = is_imp ? 4 : 6;",                    # POSS/SPOS 3+3, TROO 2+2
+    "object->attack_cooldown = 0;",                            # MF_JUSTHIT
+    "#define DOOM_MONSTER_SLIDE_NUM 4",                        # damage * 4/3 units
+    "#define DOOM_MONSTER_SLIDE_DEN 3",
+    "#define MONSTER_SLIDE_STEP 16",
+):
+    assert token in COMBAT_C, token
+# 8192 * 32/3 / 65536 = 4/3: Doom's thrust over ground friction's geometric sum.
+assert abs(8192 * (32 / 3) / 65536 - 4 / 3) < 1e-9
+# Pain only after surviving; the chainsaw pushes nothing.
+damage_path = COMBAT_C[COMBAT_C.index("    if (best_object->hp > damage) {"):]
+assert damage_path.index("roll_dummy_pain(best_object);") < damage_path.index("return result;")
+assert "(bool)(weapon != &WEAPON_DEFS[WEAPON_CHAINSAW]));" in MAIN_C
+assert "DUMMY_HIT_PUSH_STEP" not in INTERNAL_H and "DUMMY_HIT_STUN_FRAMES" not in INTERNAL_H
+
+# --- radii and HP ------------------------------------------------------------------------
+for token in ("#define DOOM_RADIUS_MONSTER 20", "#define DOOM_RADIUS_BARREL 10",
+              "#define DOOM_RADIUS_PLAYER 16", "#define BARREL_EXPLOSION_RADIUS 128"):
+    assert token in INTERNAL_H, token
+assert "DOOM_RADIUS_BARREL : DOOM_RADIUS_MONSTER;" in COMBAT_C
+assert "return (u16)(BARREL_EXPLOSION_DAMAGE - distance);" in EXPLOSION_C
+assert "#define DOOM_IMP_HEALTH 60" in BILLBOARD_C
+assert "#define DOOM_SHOTGUN_GUY_HEALTH 30" in BILLBOARD_C
+assert "object->shotgun_guy = 1;" in BILLBOARD_C
+assert re.search(r"\{BILLBOARD_VISUAL_BARREL,\s+BILLBOARD_EFFECT_NONE,\s+20,", BILLBOARD_C)
+assert re.search(r"\{BILLBOARD_VISUAL_DUMMY,\s+BILLBOARD_EFFECT_NONE,\s+20,", BILLBOARD_C)
+
+# --- the player's hitscan source pins -----------------------------------------------------
 assert "BillboardFireResult billboard_fire_hitscan(" in COMBAT_C
-# The old sprite-width test and the direction-blind barrel rescue are gone.
 assert "aim_col < (measure.center_col - measure.half_w)" not in COMBAT_C
 assert "POINT_BLANK" not in COMBAT_C and "POINT_BLANK" not in INTERNAL_H
-# Mirrored expressions: the Python above must be what the C computes.
 for token in (
     "const s16 dir_x = (s16)(cos_a - (s16)(((s32)spread_q12 * sin_a) >> 12));",
     "const s16 dir_y = (s16)(sin_a + (s16)(((s32)spread_q12 * cos_a) >> 12));",
@@ -223,68 +390,184 @@ for token in (
     "const s32 num = trace_positive ? (dx + dy) : (dx - dy);",
     "if ((num == 0) || ((num < 0) != (den < 0))) {",
     "const s32 depth = ((s32)(s16)num * (s16)dir_depth) / den;",
-    # A melee swing into open air leaves no puff.
-    "if (wall_depth <= range_depth) {",
+    "if (wall_depth <= range_depth) {",  # no puff from a swing into open air
     "#define WORLD_TO_VIEW_DEPTH(units) ((u16)(((u32)(units) * 303u) >> 8))",
+    # the shared helper the monsters use is the same test
+    "const bool positive = (bool)((dir_x ^ dir_y) >= 0);",
+    "if (lateral >= (s32)radius * extent) {",
 ):
     assert token in COMBAT_C, token
 
-# Doom spawnhealth (info.c): zombieman 20, shotgun guy 30, imp 60, barrel 20.
-assert "#define DOOM_IMP_HEALTH 60" in BILLBOARD_C
-assert "#define DOOM_SHOTGUN_GUY_HEALTH 30" in BILLBOARD_C
-assert "if (bsp_things[i].type == 3001) {" in BILLBOARD_C
-assert "} else if (bsp_things[i].type == 9) {" in BILLBOARD_C
-assert re.search(r"\{BILLBOARD_VISUAL_BARREL,\s+BILLBOARD_EFFECT_NONE,\s+20,", BILLBOARD_C)
-assert re.search(r"\{BILLBOARD_VISUAL_DUMMY,\s+BILLBOARD_EFFECT_NONE,\s+20,", BILLBOARD_C)
-
-# Refire cycles: Doom's held-trigger loop in tics (info.c states, A_ReFire's
-# own state skipped), converted at 12/7 vblanks per tic.
-DOOM_CYCLE_TICS = {
-    "FIST": 4 + 4 + 5 + 4,
-    "CHAINSAW": 4,
-    "PISTOL": 4 + 6 + 4,
-    "SHOTGUN": 3 + 7 + 5 + 5 + 4 + 5 + 5 + 3,
-    "CHAINGUN": 4,
+# --- weapon timing: Doom's psprite states, simulated tic by tic ----------------------------
+# Reference: the state lists of linuxdoom-1.10 info.c, run the way P_MovePsprites
+# and A_WeaponReady / A_ReFire run them. Each state is (tics, action).
+DOOM_STATES = {
+    "FIST": [(4, None), (4, "fire"), (5, None), (4, None), (5, "refire")],
+    "CHAINSAW": [(4, "fire"), (4, "fire"), (0, "refire")],
+    "PISTOL": [(4, None), (6, "fire"), (4, None), (5, "refire")],
+    "SHOTGUN": [(3, None), (7, "fire"), (5, None), (5, None), (4, None),
+                (5, None), (5, None), (3, None), (7, "refire")],
+    "CHAINGUN": [(4, "fire"), (4, "fire"), (0, "refire")],
 }
+
+
+def doom_fire_tics(states, held_at, total):
+    """Tics at which Doom's weapon fires, and whether each shot is refire == 0."""
+    shots = []
+    state = None   # None = ready
+    tics = 0
+    refire = 0
+
+    def enter(i, t):
+        nonlocal state, tics, refire
+        while True:
+            state = i
+            n, action = states[i]
+            tics = n
+            if action == "fire":
+                shots.append((t, refire == 0))
+            elif action == "refire":
+                if held_at(t):
+                    refire += 1
+                    i = 0
+                    continue
+                refire = 0
+            if tics == 0:
+                i += 1
+                if i >= len(states):
+                    state = None
+                    return
+                continue
+            return
+
+    for t in range(total):
+        if state is None:
+            if held_at(t):
+                enter(0, t)
+            continue
+        tics -= 1
+        if tics <= 0:
+            nxt = state + 1
+            if nxt >= len(states):
+                state = None
+                if held_at(t):
+                    enter(0, t)
+            else:
+                enter(nxt, t)
+    return shots
+
+
 rows = dict(re.findall(r"^    \[WEAPON_(\w+)\] = \{\n(.*?)\n    \},$", WEAPONS_C, re.S | re.M))
-for name, tics in DOOM_CYCLE_TICS.items():
-    fields = [f.strip() for f in rows[name].replace("\n", " ").split(",")]
-    _ammo, _per, pellets, accurate, melee, cooldown, _flash = fields[:7]
-    assert int(cooldown) == round(tics * 12 / 7), (name, cooldown, tics)
-    # Doom's refire == 0 shots: the pistol's first, the chaingun's first two.
-    assert int(accurate) == {"PISTOL": 1, "CHAINGUN": 2}.get(name, 0), (name, accurate)
-    assert int(melee) == {"FIST": 64, "CHAINSAW": 65}.get(name, 0), (name, melee)
-    assert int(pellets) == (7 if name == "SHOTGUN" else 1), (name, pellets)
-assert "automatic" not in WEAPONS_H and "spread_cols" not in WEAPONS_H
 
-# Damage and spread come from Doom's rndtable with Doom's formulas.
-table = [int(v) for v in re.search(
-    r"RNDTABLE\[256\] = \{(.*?)\};", WEAPONS_C, re.S).group(1).split(",")]
-assert len(table) == 256
-assert table[:8] == [0, 8, 109, 220, 222, 241, 149, 107] and table[-4:] == [120, 163, 236, 249]
-assert sum(table) == 32986, sum(table)  # m_random.c's rndtable checksum
-assert "return (u16)(2 * ((weapon_rng_next() % 10) + 1));" in WEAPONS_C
-assert "return (u16)(5 * ((weapon_rng_next() % 3) + 1));" in WEAPONS_C
-assert "return (s16)(((s32)d * 201) / 128);" in WEAPONS_C
-# (P - P) << 18 in BAM is d * 2*pi / 2^14 rad; 201/128 in Q12 must match it.
-for d in (1, 100, 255):
-    want = math.tan(d * 2 * math.pi / (1 << 14)) * 4096
-    got = (d * 201) / 128
-    assert abs(got - want) / want < 0.006, (d, got, want)
-# Deterministic: the index restarts every level, like M_ClearRandom.
-assert "weapon_rng_reset();" in MAIN_C
-assert "rand(" not in WEAPONS_C
 
-# Main-loop wiring: held-trigger refire, overrun carry, melee turn-to-face.
+def weapon_row(name):
+    f = [x.strip() for x in rows[name].replace("\n", " ").split(",")]
+    return {"pellets": int(f[2]), "accurate_first": f[3] == "TRUE", "melee": int(f[4]),
+            "windup": int(f[5]), "shots": int(f[6]), "gap": int(f[7]),
+            "tail": int(f[8]), "release": int(f[9])}
+
+
+def c_fire_tics(w, held_at, total, batch=1, variant=None):
+    """main.c weapon_state_step, driven one main-loop iteration per `batch`
+    tics with the button sampled once per iteration."""
+    READY, WINDUP, GAP, TAIL, RELEASE = range(5)
+    phase, timer, fired, refire = READY, 0, 0, 0
+    shots = []
+    t = 0
+    while t < total:
+        held = held_at(t)
+        trigger = held
+        tics = batch
+        guard = 0
+        while guard < 16:
+            guard += 1
+            if phase == READY:
+                if not trigger:
+                    break
+                trigger = held
+                tics = 0
+                phase, timer, fired = WINDUP, w["windup"], 0
+                continue
+            if timer > tics:
+                timer -= tics
+                tics = 0
+                break
+            tics -= timer
+            timer = 0
+            if phase in (WINDUP, GAP):
+                shots.append((t + batch - 1 - tics, w["accurate_first"] and refire == 0))
+                fired += 1
+                if fired < w["shots"]:
+                    phase, timer = GAP, w["gap"]
+                else:
+                    phase, timer = TAIL, w["tail"]
+                continue
+            if phase == TAIL:
+                if held:
+                    refire += 1
+                    phase, timer, fired = WINDUP, w["windup"], 0
+                elif variant == "no-release":
+                    refire, phase = 0, READY
+                else:
+                    refire, phase, timer = 0, RELEASE, w["release"]
+                continue
+            phase = READY
+        t += batch
+    return shots
+
+
+PATTERNS = {
+    "held": lambda t: True,
+    "tap": lambda t: t == 0,
+    "burst-then-repress": lambda t: t < 6 or 20 <= t < 70,
+    "quick-repress": lambda t: t < 2 or 16 <= t < 18,
+}
+for name in DOOM_STATES:
+    w = weapon_row(name)
+    for pattern, held_at in PATTERNS.items():
+        doom = doom_fire_tics(DOOM_STATES[name], held_at, 200)
+        doom_acc = [(t, acc and w["accurate_first"]) for t, acc in doom]
+        got = c_fire_tics(w, held_at, 200)
+        assert got == doom_acc, (name, pattern, got[:6], doom_acc[:6])
+# The headline numbers, straight from the simulation:
+pistol = weapon_row("PISTOL")
+held_shots = [t for t, _ in c_fire_tics(pistol, PATTERNS["held"], 200)]
+assert held_shots[0] == 4                                   # the first-shot delay
+assert {b - a for a, b in zip(held_shots, held_shots[1:])} == {14}
+assert [t for t, _ in c_fire_tics(weapon_row("CHAINGUN"), PATTERNS["tap"], 50)] == [0, 4]
+shotgun_held = [t for t, _ in c_fire_tics(weapon_row("SHOTGUN"), PATTERNS["held"], 200)]
+assert shotgun_held[0] == 3 and {b - a for a, b in zip(shotgun_held, shotgun_held[1:])} == {37}
+# Accuracy: the pistol's first held shot only; the chaingun's first two.
+assert [acc for _, acc in c_fire_tics(pistol, PATTERNS["held"], 60)] == [True, False, False, False]
+assert [acc for _, acc in c_fire_tics(weapon_row("CHAINGUN"), PATTERNS["held"], 20)][:4] == \
+    [True, True, False, False]
+# Negative control: skipping A_ReFire's release state lets a quick re-press
+# fire sooner than Doom does.
+assert c_fire_tics(pistol, PATTERNS["quick-repress"], 200, variant="no-release") != \
+    [(t, a) for t, a in doom_fire_tics(DOOM_STATES["PISTOL"], PATTERNS["quick-repress"], 200)]
+# Batched iterations (up to 3 tics each, as player_controller credits them)
+# must not change how many shots a hold fires, only when they resolve.
+for name in DOOM_STATES:
+    w = weapon_row(name)
+    exact = len(c_fire_tics(w, PATTERNS["held"], 210))
+    for batch in (2, 3):
+        batched = len(c_fire_tics(w, PATTERNS["held"], 210, batch=batch))
+        assert abs(batched - exact) <= 1, (name, batch, exact, batched)
 for token in (
-    "(bool)(burst_shots < weapon->accurate_shots)",
-    "shot_overrun = (u16)(elapsed_vblanks - shot_cooldown);",
-    "#define MAX_SHOTS_PER_ITERATION 2",
+    "static bool weapon_state_step(const WeaponDef *weapon, u16 *tics, bool *trigger,",
+    "*trigger = held;  // a tap starts one attack, not one per step",
+    "*accurate = (bool)(weapon->accurate_first && (st->refire == 0));",
+    "if (held && has_ammo) {",
+    "st->timer = weapon->release_tics;",
+    "u16 weapon_tics = player_dead ? 0 : player_controller_tics_last_update();",
     "turn_to_melee_target(arsenal.current, &hit)",
     "#define SAW_TURN_STEP 3",
     "} else if (fire_result.pain) {",
 ):
     assert token in MAIN_C, token
+assert "automatic" not in WEAPONS_H and "spread_cols" not in WEAPONS_H
+assert "cooldown_vblanks" not in WEAPONS_H
 
 print(f"ok    hitscan: Doom box crossing matches a float reference on {compared} traces; "
-      "3 negative controls caught; radii, HP, refire and P_Random pinned")
+      "monster aim matches Doom's hit share; weapon timelines match info.c tic for tic; "
+      "5 negative controls caught; P_DamageMobj, radii, HP and P_Random pinned")

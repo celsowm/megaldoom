@@ -92,8 +92,6 @@
 #define DUMMY_WAKE_RANGE_SQ (DUMMY_WAKE_RANGE * DUMMY_WAKE_RANGE)
 #define DUMMY_CHASE_RANGE (6 * FX_ONE)
 #define DUMMY_CHASE_RANGE_SQ (DUMMY_CHASE_RANGE * DUMMY_CHASE_RANGE)
-#define DUMMY_HIT_PUSH_STEP (FX_ONE / 4)
-#define DUMMY_HIT_STUN_FRAMES 10
 #define DUMMY_HOME_RANGE (FX_ONE / 8)
 #define DUMMY_HOME_RANGE_SQ (DUMMY_HOME_RANGE * DUMMY_HOME_RANGE)
 #define DUMMY_LEASH_RANGE (2 * FX_ONE)
@@ -112,12 +110,17 @@
 #define BARREL_DEATH_FRAME_COUNT 5
 static const u8 BARREL_DEATH_FRAME_HOLDS[BARREL_DEATH_FRAME_COUNT] = {1, 1, 1, 1, 1};
 
-// Barrel explosion AoE. World sprites are visually enlarged, but using their
-// full 3x scale here made barrels kill the player from across a room. A 192-unit
-// reach keeps point-blank splash reliable without the excessive 384-unit range.
-#define BARREL_EXPLOSION_BASE_RADIUS 128
-#define BARREL_EXPLOSION_RADIUS 192
+// Barrel explosion AoE: Doom's P_RadiusAttack(thing, source, 128). Damage is
+// 128 minus the Chebyshev distance past the target's Doom radius, so it
+// reaches 128 units beyond that radius. (It was a tuned 192-unit reach with
+// a 2/3 falloff until 2026-09-18.)
+#define BARREL_EXPLOSION_RADIUS 128
 #define BARREL_EXPLOSION_DAMAGE 128
+// Doom's thing radii (info.c), which its hitscan and splash use. The
+// BillboardType radii are this engine's movement-collision tuning instead.
+#define DOOM_RADIUS_MONSTER 20
+#define DOOM_RADIUS_BARREL 10
+#define DOOM_RADIUS_PLAYER 16
 // Per-explosion worklist cap. E1M1's largest barrel cluster is 3; this still
 // bounds worst-case chains without unbounded recursion.
 #define BARREL_EXPLOSION_MAX_CHAIN 8
@@ -236,7 +239,10 @@ typedef struct {
     u8 active : 1;
     u8 saw_player : 1;
     u8 has_last_seen : 1;
-    u8 reserved_flags : 5;
+    // Doom's shotgun guy (thing 9): shares the zombieman's POSS sprites here
+    // but fires three pellets (A_SPosAttack) and has 30 HP.
+    u8 shotgun_guy : 1;
+    u8 reserved_flags : 4;
     u8 move_cooldown;
     u8 attack_cooldown;
     u8 spot_cooldown;
@@ -275,6 +281,18 @@ u8 billboard_get_object_visual_id(const BillboardObject *object, const Billboard
 u8 billboard_get_object_frame(const BillboardObject *object);
 bool billboard_measure_object(const PlayerState *player, s16 cos_a, s16 sin_a,
                               const BillboardObject *object, BillboardMeasure *measure);
+// Doom's hitscan geometry, shared by the player's traces and the monsters'
+// (billboard_combat.c). A trace along (dir_x, dir_y) from the origin hits a
+// thing at (dx, dy) when it crosses the facing diagonal of its 2r box ahead of
+// the origin (PIT_AddThingIntercepts).
+bool billboard_trace_crosses_box(s16 dir_x, s16 dir_y, s16 dx, s16 dy, s16 radius);
+// The heading (ANGLE_STEPS units) of a world vector: R_PointToAngle2.
+u16 billboard_vector_angle(s32 dx, s32 dy);
+// P_DamageMobj's knockback: damage * 100 / mass (the player's mass is 100) in
+// 1/8-unit steps, i.e. damage * 8192 as Q16.16 momentum, pushed from the
+// inflictor toward the target.
+void billboard_damage_thrust(s32 from_x, s32 from_y, s32 to_x, s32 to_y, u16 damage,
+                             s32 *thrust_x, s32 *thrust_y);
 void billboard_visibility_begin(const PlayerState *player);
 bool billboard_has_line_of_sight(u16 index, const PlayerState *player);
 void billboard_invalidate_object_visibility(u16 index);

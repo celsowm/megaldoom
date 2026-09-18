@@ -38,6 +38,10 @@ typedef enum {
 } PlayerControlMode;
 
 void player_controller_reset(void);
+// Knockback: add Q16.16 momentum (world units per tic), as P_DamageMobj adds
+// its thrust to mo->momx/momy. It is spent by the movement tics under the same
+// collision, friction and MAXMOVE clamp as walking.
+void player_controller_add_thrust(s32 thrust_x, s32 thrust_y);
 u16 player_controller_update(PlayerState *player, u16 elapsed_frames,
                              u16 latched_pressed, PlayerControlMode mode);
 

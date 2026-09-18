@@ -209,6 +209,11 @@ static bool simulate_doom_movement_tic(PlayerState *player, s16 forward_command,
     return moved;
 }
 
+void player_controller_add_thrust(s32 thrust_x, s32 thrust_y) {
+    s_momentum_x = clamp_momentum(s_momentum_x + thrust_x);
+    s_momentum_y = clamp_momentum(s_momentum_y + thrust_y);
+}
+
 void player_controller_reset(void) {
     s_previous_joy = 0;
     s_weapon_chord_dir = 0;

@@ -26,9 +26,8 @@ u16 billboard_explosion_damage(s32 blast_x, s32 blast_y,
 
     if (distance < 0) distance = 0;
     if (distance >= BARREL_EXPLOSION_RADIUS) return 0;
-    // 192 units map linearly onto Doom's 128 damage steps: distance 0 is 128,
-    // distance 191 is 1, and the radius boundary is zero.
-    return (u16)(BARREL_EXPLOSION_DAMAGE - (((u32)distance * 2u) / 3u));
+    // P_RadiusAttack: 128 at distance 0, 1 at distance 127.
+    return (u16)(BARREL_EXPLOSION_DAMAGE - distance);
 }
 
 static void process_blast(s32 bx, s32 by,
@@ -44,15 +43,15 @@ static void process_blast(s32 bx, s32 by,
     for (u16 slot = 0; slot < target_count; slot++) {
         const u16 i = indices[slot];
         BillboardObject *object = &g_billboards[i];
-        const BillboardType *type;
         u16 damage;
 
         if (!object->active || object->life_state != ENEMY_ALIVE) continue;
         if (object->type_id != BILLBOARD_TYPE_BARREL &&
             object->type_id != BILLBOARD_TYPE_DUMMY) continue;
 
-        type = billboard_get_type(object->type_id);
-        damage = billboard_explosion_damage(bx, by, object->x, object->y, type->radius);
+        damage = billboard_explosion_damage(bx, by, object->x, object->y,
+            (object->type_id == BILLBOARD_TYPE_BARREL) ? DOOM_RADIUS_BARREL
+                                                       : DOOM_RADIUS_MONSTER);
         if (damage == 0) continue;
         if (bsp_segment_crosses_wall(bx, by, object->x, object->y)) continue;
 
@@ -92,7 +91,6 @@ BarrelExplosionResult billboard_apply_explosion(const PlayerState *player,
     BarrelExplosionResult result = {0, 0, 0, 0};
     BlastSite worklist[BARREL_EXPLOSION_MAX_CHAIN];
     u16 worklist_count = 1;
-    u16 strongest_damage = 0;
 
     worklist[0].x = origin_x;
     worklist[0].y = origin_y;
@@ -107,7 +105,7 @@ BarrelExplosionResult billboard_apply_explosion(const PlayerState *player,
         process_blast(bx, by, worklist, &worklist_count);
 
         player_damage = billboard_explosion_damage(
-            bx, by, player->x, player->y, PLAYER_COLLISION_RADIUS);
+            bx, by, player->x, player->y, DOOM_RADIUS_PLAYER);
         if (player_damage == 0 ||
             bsp_segment_crosses_wall(bx, by, player->x, player->y)) {
             continue;
@@ -118,12 +116,13 @@ BarrelExplosionResult billboard_apply_explosion(const PlayerState *player,
         } else {
             result.player_damage = (u16)(result.player_damage + player_damage);
         }
-        if (player_damage > strongest_damage) {
-            const s32 pdx = player->x - bx;
-            const s32 pdy = player->y - by;
-            strongest_damage = player_damage;
-            result.push_x = (pdx > 0) ? 1 : ((pdx < 0) ? -1 : 0);
-            result.push_y = (pdy > 0) ? 1 : ((pdy < 0) ? -1 : 0);
+        {
+            s32 thrust_x;
+            s32 thrust_y;
+            billboard_damage_thrust(bx, by, player->x, player->y, player_damage,
+                                    &thrust_x, &thrust_y);
+            result.thrust_x += thrust_x;
+            result.thrust_y += thrust_y;
         }
     }
 

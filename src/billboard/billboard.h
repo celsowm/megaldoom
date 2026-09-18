@@ -112,8 +112,10 @@ typedef enum {
 typedef struct {
     BillboardShotResult status;
     u16 player_damage;
-    s16 push_x;
-    s16 push_y;
+    // Knockback on the player, Doom's P_DamageMobj thrust as Q16.16 momentum
+    // (world units per tic), summed over every blast that reached them.
+    s32 thrust_x;
+    s32 thrust_y;
     u8 explosion_count;
     // The object the trace hit, if any (a barrel counts), so a melee weapon
     // can turn the player to face it the way A_Punch and A_Saw do.
@@ -129,9 +131,12 @@ typedef struct {
     bool moved;
     bool position_changed;
     bool pose_changed;
+    // Attacks that connected this update, and the Doom hit points and
+    // knockback thrust (Q16.16 momentum) they deal to the player in total.
     u16 hits;
-    s16 push_x;
-    s16 push_y;
+    u16 player_damage;
+    s32 thrust_x;
+    s32 thrust_y;
 } BillboardEnemyUpdate;
 
 void billboard_init(u16 phase_index, DoomSkill skill);
@@ -153,9 +158,11 @@ u16 billboard_get_target_health(void);
 // crosses. `wall_depth` is the view depth of the wall that trace meets, and
 // `range` (world units, 0 = unlimited) is a melee weapon's reach. A trace that
 // reaches a wall within range leaves a puff on it; one that reaches nothing
-// leaves nothing. Multi-pellet weapons call this once per pellet.
+// leaves nothing. Multi-pellet weapons call this once per pellet. `thrust`
+// is FALSE for the chainsaw, which Doom exempts from knockback.
 BillboardFireResult billboard_fire_hitscan(const PlayerState *player, s16 spread_q12,
-                                           u16 wall_depth, u16 range, u16 damage);
+                                           u16 wall_depth, u16 range, u16 damage,
+                                           bool thrust);
 // The heading (ANGLE_STEPS units) from the player to a world point, Doom's
 // R_PointToAngle2 at this engine's angle resolution.
 u16 billboard_angle_to(const PlayerState *player, s32 x, s32 y);

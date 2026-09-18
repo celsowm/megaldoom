@@ -32,24 +32,19 @@ typedef struct {
     u8 visited_secret_bits[LEVEL_SECRET_BYTES];
 } LevelProgress;
 
-// Shot timers count real vblanks (not loop iterations) so the gun feel does not
-// stretch when a motion frame takes ~11 vblanks: the pistol's 12 vblanks is
-// ~0.2 s between shots at any framerate. The per-weapon cooldown and flash
-// durations live in WEAPON_DEFS (src/weapons.c); the flash is set after its
+// The weapon flash counts real vblanks (display only). It is set after its
 // decrement runs, so the firing iteration always renders it and it survives
-// >= 1 displayed frame.
+// >= 1 displayed frame. When shots happen is WEAPON_DEFS' Doom timeline, run
+// on 35 Hz player tics (see WeaponState below).
 #define PLAYER_DAMAGE_FLASH_FRAMES 6
-#define PLAYER_INVULN_FRAMES 24
-#define PLAYER_HIT_PUSH_STEP (FX_ONE / 4)
 #define PLAYER_MAX_HEALTH 100
 #define PLAYER_MAX_ARMOR 200
-#define PLAYER_HIT_DAMAGE 20
-// At most this many refire cycles complete in one main-loop iteration. Two
-// covers the chaingun and chainsaw (7 vb) against a ~10 vb motion frame.
-#define MAX_SHOTS_PER_ITERATION 2
-// Doom raises a new weapon before it can fire. One cooldown's worth of vblanks
-// is enough to stop a switch from being a free instant shot.
-#define WEAPON_RAISE_VBLANKS 10
+// Doom raises a new weapon before it can fire. Kept at the shipped ~10
+// vblanks (6 tics), shorter than Doom's lower-and-raise.
+#define WEAPON_RAISE_TICS 6
+// Safety cap on fire actions resolved in one main-loop iteration. A 4-tic
+// weapon over the 3 tics an iteration can credit never reaches it.
+#define MAX_SHOTS_PER_ITERATION 4
 // Doom locks respawn input for roughly a second after death (PST_REBORN) so a
 // still-held fire button from the killing blow cannot instantly restart the
 // level. Counted in real vblanks, same unit as elapsed_vblanks.
@@ -119,7 +114,99 @@ static RayColumn g_ray_columns[RAY_SAMPLE_COLS_MAX];
 static RaySceneColors g_scene_colors;
 static u16 g_weapon_flash = 0;
 static u16 g_player_damage_flash = 0;
-static u16 g_player_invuln = 0;
+// Doom's player->armortype: 1 (green, absorbs a third) or 2 (blue, half);
+// 0 once the armour is used up.
+static u8 g_player_armor_type = 0;
+
+// Where the held weapon is in its Doom state sequence (WeaponDef). `timer`
+// counts 35 Hz tics left in `phase`; `refire` is Doom's player->refire.
+typedef enum {
+    WEAPON_PHASE_READY = 0,
+    WEAPON_PHASE_RAISE,
+    WEAPON_PHASE_WINDUP,
+    WEAPON_PHASE_GAP,
+    WEAPON_PHASE_TAIL,
+    WEAPON_PHASE_RELEASE
+} WeaponPhase;
+typedef struct {
+    u8 phase;
+    u8 timer;
+    u8 shots_fired;
+    u8 refire;
+} WeaponState;
+static WeaponState g_weapon_state;
+
+static void weapon_state_raise(void) {
+    g_weapon_state.phase = WEAPON_PHASE_RAISE;
+    g_weapon_state.timer = WEAPON_RAISE_TICS;
+    g_weapon_state.shots_fired = 0;
+    g_weapon_state.refire = 0;
+}
+
+// Spend `*tics` on the weapon's timeline until it reaches a fire action
+// (returns TRUE, with `*accurate` set) or runs out of time (FALSE). `trigger`
+// is whether an attack may start from ready (a press, or the button held);
+// `held` is the button state A_ReFire sees. An attack only starts, or
+// refires, with ammo for it (P_CheckAmmo).
+static bool weapon_state_step(const WeaponDef *weapon, u16 *tics, bool *trigger,
+                              bool held, bool has_ammo, bool *accurate) {
+    WeaponState *st = &g_weapon_state;
+    for (;;) {
+        if (st->phase == WEAPON_PHASE_READY) {
+            if (!*trigger || !has_ammo) {
+                return FALSE;
+            }
+            *trigger = held;  // a tap starts one attack, not one per step
+            // The button is sampled after this iteration's tics ran, so the
+            // attack starts on the last of them; as in Doom, the tic that
+            // sees the press does not count toward the windup.
+            *tics = 0;
+            st->phase = WEAPON_PHASE_WINDUP;
+            st->timer = weapon->windup_tics;
+            st->shots_fired = 0;
+            continue;
+        }
+        if (st->timer > *tics) {
+            st->timer = (u8)(st->timer - *tics);
+            *tics = 0;
+            return FALSE;
+        }
+        *tics = (u16)(*tics - st->timer);
+        st->timer = 0;
+        switch (st->phase) {
+        case WEAPON_PHASE_WINDUP:
+        case WEAPON_PHASE_GAP:
+            *accurate = (bool)(weapon->accurate_first && (st->refire == 0));
+            st->shots_fired++;
+            if (st->shots_fired < weapon->shots) {
+                st->phase = WEAPON_PHASE_GAP;
+                st->timer = weapon->shot_gap_tics;
+            } else {
+                st->phase = WEAPON_PHASE_TAIL;
+                st->timer = weapon->tail_tics;
+            }
+            return TRUE;
+        case WEAPON_PHASE_TAIL:
+            // A_ReFire.
+            if (held && has_ammo) {
+                if (st->refire < 0xFF) {
+                    st->refire++;
+                }
+                st->phase = WEAPON_PHASE_WINDUP;
+                st->timer = weapon->windup_tics;
+                st->shots_fired = 0;
+            } else {
+                st->refire = 0;
+                st->phase = WEAPON_PHASE_RELEASE;
+                st->timer = weapon->release_tics;
+            }
+            break;
+        default:  // RAISE, RELEASE
+            st->phase = WEAPON_PHASE_READY;
+            break;
+        }
+    }
+}
 static RendererHudState g_hud;
 static AutomapState g_automap;
 #if DEBUG_BLASTEM_CHECKPOINT
@@ -286,8 +373,8 @@ static void merge_fire_result(BillboardFireResult *merged, const BillboardFireRe
     }
     merged->player_damage = (u16)(merged->player_damage + hit->player_damage);
     merged->explosion_count = (u8)(merged->explosion_count + hit->explosion_count);
-    merged->push_x = (s16)(merged->push_x + hit->push_x);
-    merged->push_y = (s16)(merged->push_y + hit->push_y);
+    merged->thrust_x += hit->thrust_x;
+    merged->thrust_y += hit->thrust_y;
     merged->pain = (bool)(merged->pain || hit->pain);
     if (hit->hit_target && !merged->hit_target) {
         merged->hit_target = TRUE;
@@ -304,7 +391,7 @@ static void merge_fire_result(BillboardFireResult *merged, const BillboardFireRe
 // chaingun; the shotgun and the melee weapons always roll a spread.
 static BillboardFireResult fire_weapon(const WeaponDef *weapon, const RayColumn *columns,
                                        bool accurate) {
-    BillboardFireResult merged = {BILLBOARD_SHOT_NONE, 0, 0, 0, 0, FALSE, 0, 0, FALSE};
+    BillboardFireResult merged = {.status = BILLBOARD_SHOT_NONE};
     const u8 pellets = (weapon->pellets > 0) ? weapon->pellets : 1;
 
     for (u8 i = 0; i < pellets; i++) {
@@ -316,7 +403,8 @@ static BillboardFireResult fire_weapon(const WeaponDef *weapon, const RayColumn 
 
         const u16 depth = columns[RAY_SAMPLE_OF(aim_col)].depth;
         const BillboardFireResult hit = billboard_fire_hitscan(
-            &g_player, spread_q12, depth, weapon->melee_range, damage);
+            &g_player, spread_q12, depth, weapon->melee_range, damage,
+            (bool)(weapon != &WEAPON_DEFS[WEAPON_CHAINSAW]));
         merge_fire_result(&merged, &hit);
     }
     return merged;
@@ -354,16 +442,23 @@ static bool turn_to_melee_target(u8 weapon_id, const BillboardFireResult *hit) {
 }
 
 /* The two damage producers (enemy AI and barrel splash) intentionally share
- * this path.  DEBUG_E2E_GOD only changes the player consequence; the attack,
- * explosion, enemy update and collision that produced it have already run. */
-static void apply_player_damage(u16 total_damage, s16 push_x, s16 push_y,
+ * this path, which is Doom's P_DamageMobj for the player: skill "I'm too young
+ * to die" halves the damage, the knockback thrust (computed by the producer
+ * from the full damage) goes onto the player's momentum and so through the
+ * same collision as walking, then armour absorbs a third (green) or half
+ * (blue) until it runs out. Doom has no invulnerability window after a hit.
+ * DEBUG_E2E_GOD only changes the player consequence; the attack, explosion,
+ * enemy update and collision that produced it have already run. */
+static void apply_player_damage(u16 total_damage, s32 thrust_x, s32 thrust_y,
+                                DoomSkill skill,
                                 u16 *player_health, u16 *player_armor,
                                 bool *player_dead, u16 *death_lockout,
                                 RendererRedrawState *redraw) {
 #if DEBUG_E2E_GOD
     (void)total_damage;
-    (void)push_x;
-    (void)push_y;
+    (void)thrust_x;
+    (void)thrust_y;
+    (void)skill;
     (void)player_health;
     (void)player_armor;
     (void)player_dead;
@@ -371,10 +466,24 @@ static void apply_player_damage(u16 total_damage, s16 push_x, s16 push_y,
     (void)redraw;
     debug_e2e_god_hit();
 #else
-    const u16 armor_absorb = (u16)(((total_damage / 3) < *player_armor) ?
-        (total_damage / 3) : *player_armor);
-    const u16 damage = (u16)(total_damage - armor_absorb);
-    *player_armor = (u16)(*player_armor - armor_absorb);
+    u16 damage = total_damage;
+    if (skill == DOOM_SKILL_IM_TOO_YOUNG_TO_DIE) {
+        damage >>= 1;
+        thrust_x /= 2;
+        thrust_y /= 2;
+    }
+    if (damage == 0) {
+        return;
+    }
+    if (g_player_armor_type != 0) {
+        u16 saved = (g_player_armor_type == 1) ? (u16)(damage / 3) : (u16)(damage / 2);
+        if (*player_armor <= saved) {
+            saved = *player_armor;
+            g_player_armor_type = 0;
+        }
+        *player_armor = (u16)(*player_armor - saved);
+        damage = (u16)(damage - saved);
+    }
     if (*player_health <= damage) {
         game_audio_play_sfx(sfx_player_death, sizeof(sfx_player_death), SOUND_PCM_CH2);
         *player_health = 0;
@@ -386,14 +495,10 @@ static void apply_player_damage(u16 total_damage, s16 push_x, s16 push_y,
         frontend_load_death_prompt(renderer_get_menu_tile_base());
         renderer_redraw_request_overlay(redraw, RENDERER_REDRAW_DAMAGE);
     } else {
-        debug_light_note_knockback((s32)push_x * PLAYER_HIT_PUSH_STEP,
-                                   (s32)push_y * PLAYER_HIT_PUSH_STEP);
-        player_apply_world_push(&g_player,
-                                (s32)push_x * PLAYER_HIT_PUSH_STEP,
-                                (s32)push_y * PLAYER_HIT_PUSH_STEP);
+        debug_light_note_knockback(thrust_x >> 16, thrust_y >> 16);
+        player_controller_add_thrust(thrust_x, thrust_y);
         *player_health = (u16)(*player_health - damage);
         g_player_damage_flash = PLAYER_DAMAGE_FLASH_FRAMES;
-        g_player_invuln = PLAYER_INVULN_FRAMES;
         renderer_redraw_request_overlay(redraw, RENDERER_REDRAW_DAMAGE);
         game_audio_play_sfx(sfx_player_pain, sizeof(sfx_player_pain), SOUND_PCM_CH2);
     }
@@ -432,12 +537,13 @@ static void enter_level(u16 phase_index, DoomSkill skill, bool pistol_start,
     debug_light_level_start(&g_player);
     g_weapon_flash = 0;
     g_player_damage_flash = 0;
-    g_player_invuln = 0;
     *level_cleared = FALSE;
     *shot_cooldown = 0;
+    g_weapon_state = (WeaponState){0};
     if (pistol_start) {
         *player_health = PLAYER_MAX_HEALTH;
         *player_armor = 0;
+        g_player_armor_type = 0;
         // New game and rebirth use Doom's pistol start. A normal map exit
         // deliberately skips this block and carries the inventory forward.
         for (u16 i = 0; i < AMMO_TYPE_COUNT; i++) {
@@ -447,7 +553,7 @@ static void enter_level(u16 phase_index, DoomSkill skill, bool pistol_start,
         arsenal->owned = WEAPON_START_OWNED;
         arsenal->current = WEAPON_PISTOL;
     }
-    weapon_rng_reset();
+    doom_random_reset();
     *player_keys = BSP_KEY_NONE;
 #if DEBUG_START_KEYS
     *player_keys = (u8)DEBUG_START_KEYS;
@@ -505,12 +611,6 @@ int main(bool hard) {
         PlayerArsenal arsenal;
         u8 player_keys = BSP_KEY_NONE;
         u16 shot_cooldown = 0;
-        // Vblanks a frame ran past the end of the refire cycle: the next shot
-        // of a held burst is due that much early, so a weapon whose cycle is
-        // shorter than a frame (chaingun, chainsaw) still fires at Doom's rate.
-        u16 shot_overrun = 0;
-        // Shots fired since the trigger went down: Doom's player->refire.
-        u8 burst_shots = 0;
         u16 previous_system_joy;
         u32 prev_vtimer;
         DoomSkill skill;
@@ -552,7 +652,7 @@ int main(bool hard) {
         u16 system_pressed;
         DoorActionResult action_status = g_hud.action_status;
         BillboardShotResult shot_status = g_hud.shot_status;
-        BillboardFireResult fire_result = {BILLBOARD_SHOT_NONE, 0, 0, 0, 0, FALSE, 0, 0, FALSE};
+        BillboardFireResult fire_result = {.status = BILLBOARD_SHOT_NONE};
         // Real vblanks elapsed since last iteration. Keep it clamped for future diagnostics,
         // but now it IS fed to the turn controller so rotation stays time-correct.
         u32 cur_vtimer;
@@ -655,14 +755,6 @@ int main(bool hard) {
             renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE);
         }
 
-        if (shot_cooldown > 0) {
-            if (shot_cooldown > elapsed_vblanks) {
-                shot_cooldown = (u16)(shot_cooldown - elapsed_vblanks);
-            } else {
-                shot_overrun = (u16)(elapsed_vblanks - shot_cooldown);
-                shot_cooldown = 0;
-            }
-        }
         if (g_weapon_flash > 0) {
             g_weapon_flash = (g_weapon_flash > elapsed_vblanks)
                 ? (u16)(g_weapon_flash - elapsed_vblanks) : 0;
@@ -675,9 +767,6 @@ int main(bool hard) {
             if (g_player_damage_flash == 0) {
                 renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_DAMAGE);
             }
-        }
-        if (g_player_invuln > 0) {
-            g_player_invuln--;
         }
         if (billboard_update_effects()) {
             renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_EFFECT);
@@ -755,11 +844,7 @@ int main(bool hard) {
                 renderer_set_weapon(next);
                 // The new weapon has to be raised before it fires, and its idle
                 // pose must replace whatever the old one left on BG_A.
-                if (shot_cooldown < WEAPON_RAISE_VBLANKS) {
-                    shot_cooldown = WEAPON_RAISE_VBLANKS;
-                }
-                shot_overrun = 0;
-                burst_shots = 0;
+                weapon_state_raise();
                 g_weapon_flash = 0;
                 renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_WEAPON);
             }
@@ -778,10 +863,15 @@ int main(bool hard) {
                 if (pickup.effect == BILLBOARD_EFFECT_HEALTH) {
                     player_health = (u16)((player_health + pickup.amount > PLAYER_MAX_HEALTH) ? PLAYER_MAX_HEALTH : player_health + pickup.amount);
                 } else if (pickup.effect == BILLBOARD_EFFECT_ARMOR) {
+                    // Doom: a bonus adds a point and gives green class if none;
+                    // green (100) and blue (200) set both, unless the player
+                    // already has at least that many points (P_GiveArmor).
                     if (pickup.amount == 1) {
                         player_armor++;
-                    } else {
-                        player_armor = (u16)((pickup.amount > player_armor) ? pickup.amount : player_armor);
+                        if (g_player_armor_type == 0) g_player_armor_type = 1;
+                    } else if (player_armor < pickup.amount) {
+                        player_armor = pickup.amount;
+                        g_player_armor_type = (u8)(pickup.amount / 100);
                     }
                     if (player_armor > PLAYER_MAX_ARMOR) player_armor = PLAYER_MAX_ARMOR;
                 } else if (pickup.effect == BILLBOARD_EFFECT_AMMO) {
@@ -795,11 +885,7 @@ int main(bool hard) {
                         weapon_has_ammo(pickup.weapon_id, arsenal.ammo)) {
                         arsenal.current = pickup.weapon_id;
                         renderer_set_weapon(arsenal.current);
-                        if (shot_cooldown < WEAPON_RAISE_VBLANKS) {
-                            shot_cooldown = WEAPON_RAISE_VBLANKS;
-                        }
-                        shot_overrun = 0;
-                        burst_shots = 0;
+                        weapon_state_raise();
                         g_weapon_flash = 0;
                         renderer_redraw_request_overlay(&redraw, RENDERER_REDRAW_WEAPON);
                     }
@@ -886,44 +972,42 @@ int main(bool hard) {
             break;
         }
 
-        // Every Doom weapon refires while the trigger is held (A_ReFire); the
-        // cooldown paces the burst. A fresh press, or a tap the ISR latched
-        // between iterations, starts a new burst whose first shot is accurate.
+        // The held weapon's Doom timeline advances on the player's own tics;
+        // each fire action it reaches is one trigger pull (fire_weapon). A
+        // press waits the weapon's windup (the pistol's 4 tics) before the
+        // shot leaves, holding the button refires through A_ReFire, and a tap
+        // the ISR latched between iterations starts one attack.
         const WeaponDef *weapon = &WEAPON_DEFS[arsenal.current];
-        if ((control & PLAYER_CONTROL_FIRE) != 0) {
-            burst_shots = 0;
-        }
-        if ((control & (PLAYER_CONTROL_FIRE | PLAYER_CONTROL_FIRE_HELD)) != 0) {
+        {
+            u16 weapon_tics = player_dead ? 0 : player_controller_tics_last_update();
+            bool trigger = (bool)((control & (PLAYER_CONTROL_FIRE |
+                                              PLAYER_CONTROL_FIRE_HELD)) != 0);
+            const bool held = (bool)((control & PLAYER_CONTROL_FIRE_HELD) != 0);
+            bool accurate = FALSE;
             u8 shots = 0;
 
-            while ((shot_cooldown == 0) && (shots < MAX_SHOTS_PER_ITERATION) &&
-                   weapon_has_ammo(arsenal.current, arsenal.ammo)) {
+            while ((shots < MAX_SHOTS_PER_ITERATION) &&
+                   weapon_state_step(weapon, &weapon_tics, &trigger, held,
+                                     weapon_has_ammo(arsenal.current, arsenal.ammo),
+                                     &accurate)) {
+                // A_FireCGun's own ammo check: the second shot of a pair
+                // needs a bullet too.
+                if (!weapon_has_ammo(arsenal.current, arsenal.ammo)) {
+                    continue;
+                }
                 debug_checkpoint_mark(DEBUG_CHECKPOINT_COMBAT);
-                const BillboardFireResult hit = fire_weapon(
-                    weapon, g_ray_columns, (bool)(burst_shots < weapon->accurate_shots));
+                const BillboardFireResult hit = fire_weapon(weapon, g_ray_columns, accurate);
                 merge_fire_result(&fire_result, &hit);
                 if ((weapon->melee_range > 0) && turn_to_melee_target(arsenal.current, &hit)) {
                     renderer_redraw_request_base(&redraw, RENDERER_REDRAW_BASE);
-                }
-                if (burst_shots < 0xFF) {
-                    burst_shots++;
                 }
                 shots++;
                 if (weapon->ammo_type != AMMO_NONE) {
                     arsenal.ammo[weapon->ammo_type] =
                         (u16)(arsenal.ammo[weapon->ammo_type] - weapon->ammo_per_shot);
                 }
-                if (shot_overrun >= weapon->cooldown_vblanks) {
-                    shot_overrun = (u16)(shot_overrun - weapon->cooldown_vblanks);
-                } else {
-                    shot_cooldown = (u16)(weapon->cooldown_vblanks - shot_overrun);
-                    shot_overrun = 0;
-                }
             }
-            // Never bank past the cap: a long stall must not queue a volley.
-            if (shot_cooldown == 0) {
-                shot_overrun = 0;
-            }
+            shot_cooldown = g_weapon_state.timer;
 
             const BillboardShotResult shot = fire_result.status;
             if (shots > 0) {
@@ -962,13 +1046,9 @@ int main(bool hard) {
                             RENDERER_REDRAW_BARREL : RENDERER_REDRAW_ENEMY_POSE);
                 }
             }
-
-            shot_status = shot;
-        } else {
-            shot_overrun = 0;
-        }
-        if ((control & PLAYER_CONTROL_FIRE_HELD) == 0) {
-            burst_shots = 0;
+            if ((control & (PLAYER_CONTROL_FIRE | PLAYER_CONTROL_FIRE_HELD)) != 0) {
+                shot_status = shot;
+            }
         }
 
         if (!level_cleared && !player_dead) {
@@ -976,10 +1056,10 @@ int main(bool hard) {
             // damage on the fire result prevents stale HUD shot state or a later
             // explosion from overwriting the player-facing blast outcome.
             if ((fire_result.status == BILLBOARD_SHOT_EXPLOSION) &&
-                (fire_result.player_damage > 0) && (g_player_invuln == 0)) {
-                apply_player_damage(fire_result.player_damage, fire_result.push_x,
-                                    fire_result.push_y, &player_health, &player_armor,
-                                    &player_dead, &death_lockout, &redraw);
+                (fire_result.player_damage > 0)) {
+                apply_player_damage(fire_result.player_damage, fire_result.thrust_x,
+                                    fire_result.thrust_y, skill, &player_health,
+                                    &player_armor, &player_dead, &death_lockout, &redraw);
             }
         }
 
@@ -1003,10 +1083,10 @@ int main(bool hard) {
                 }
             }
 
-            if ((enemy_update.hits > 0) && (g_player_invuln == 0) && !player_dead) {
-                apply_player_damage(PLAYER_HIT_DAMAGE, enemy_update.push_x,
-                                    enemy_update.push_y, &player_health, &player_armor,
-                                    &player_dead, &death_lockout, &redraw);
+            if ((enemy_update.player_damage > 0) && !player_dead) {
+                apply_player_damage(enemy_update.player_damage, enemy_update.thrust_x,
+                                    enemy_update.thrust_y, skill, &player_health,
+                                    &player_armor, &player_dead, &death_lockout, &redraw);
             }
         }
 

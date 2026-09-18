@@ -409,6 +409,14 @@ deviation: the diagonal choice tests sign equality, not `(dx ^ dy) > 0`,
 because with 256 headings a spread trace can have `dx == dy`, and Doom's test
 then hits nothing (LOG, 2026-09-18).
 
+The same goes for damage in both directions and for weapon timing. Monster
+attacks, P_DamageMobj (armour class, baby halving, thrust as momentum, pain
+chance, no invulnerability window) and P_RadiusAttack follow Doom's source.
+The player and the monsters share one `doom_random` index. Weapon timing is
+each weapon's `info.c` state sequence, run on the player's 35 Hz tics, not on
+vblanks. The test simulates the real state lists tic by tic, so change a
+timeline by editing WEAPON_DEFS from `info.c`, never by tuning a cooldown.
+
 ## Dead ends — do not redo without new evidence
 
 Each is measured and written up in [LOG.md](LOG.md); the date locates the entry.
