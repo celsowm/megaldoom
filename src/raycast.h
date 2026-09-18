@@ -101,10 +101,10 @@ extern u16 g_view_center_y;
 // user judged the 4px-replicated walls too pixelated in motion. There is no
 // horizontal interpolation between samples, so this constant IS the wall's
 // horizontal resolution; raising it is a visual decision, not a free win.
-// Guarded so a comparison build can override it (EXTRA_FLAGS="-DRAY_COL_STRIDE=4").
-#ifndef RAY_COL_STRIDE
+// FIXED at 2: the stride-4 packer and every RAY_COL_STRIDE == 4 branch were
+// deleted on 2026-09-18, so this is no longer an overridable knob. Changing it
+// means writing a packer again, not flipping a define.
 #define RAY_COL_STRIDE 2
-#endif
 #define RAY_SAMPLE_COLS (RAY_VIEW_COLS / RAY_COL_STRIDE)
 #define RAY_SAMPLE_COLS_MAX (RAY_VIEW_COLS_MAX / RAY_COL_STRIDE)
 // Samples per 8px tile column: 4 at stride 2, 2 at stride 4. The packers walk

@@ -15,15 +15,13 @@
 #define RENDERER_OVERLAY_C_REFERENCE 0
 #endif
 
-#if RAY_COL_STRIDE == 2
-// Defined in renderer_hotpath.s, which assembles to nothing at any other
-// stride; the argument offsets are OVL_ARG_*/SKY_ARG_* in renderer_pack_abi.h.
+// Defined in renderer_hotpath.s; the argument offsets are OVL_ARG_*/SKY_ARG_*
+// in renderer_pack_abi.h.
 void renderer_write_overlay_frame_post_asm(u8 *dst, u16 row_count,
                                            const u8 *dda, const u8 *packed,
                                            u16 tex_y);
 void renderer_write_overlay_sky_post_asm(u8 *dst, u16 row_count,
                                          const u8 *sky_bytes, u16 index);
-#endif
 
 // The door's interactive silhouette -- a dark metal frame plus a yellow/black
 // moving safety edge around the real WAD texture -- used to be re-derived here
@@ -85,19 +83,12 @@ static void window_band_rows(u16 slab_top, u16 slab_bottom,
 // which is what every ordinary wall has always done. Reachable on four moving
 // doors -- the only overlay segs with a nonzero tex_v_offset: E1M1 seg 261
 // (BROWN96, offset 72) and E1M2 segs 48/52/933 (offsets 112/56/8).
-#if RENDERER_ASM_DIFF_ENABLED || RENDERER_OVERLAY_C_REFERENCE || RAY_COL_STRIDE != 2
+#if RENDERER_ASM_DIFF_ENABLED || RENDERER_OVERLAY_C_REFERENCE
 static __attribute__((noinline)) void write_overlay_frame_post_reference(
     u8 *dst, u16 row_count, const u8 *dda, const u8 *packed, u16 tex_y) {
     for (u16 i = 0; i < row_count; i++) {
         const u8 pair = packed[(u16)((dda[i] + tex_y) & WALL_TEX_HEIGHT_MASK)];
-#if RAY_COL_STRIDE == 4
-        // One sampled column owns two adjacent byte lanes at this stride; the
-        // packed byte is already 2px, so storing it to both spreads it over 4.
         dst[0] = pair;
-        dst[1] = pair;
-#else
-        dst[0] = pair;
-#endif
         dst += PACK_TILE_ROW_BYTES;
     }
 }
@@ -112,19 +103,14 @@ static __attribute__((noinline)) void write_overlay_sky_post_reference(
     u8 *dst, u16 row_count, const u8 *sky_bytes, u16 index) {
     for (u16 i = 0; i < row_count; i++) {
         const u8 pair = sky_bytes[index];
-#if RAY_COL_STRIDE == 4
         dst[0] = pair;
-        dst[1] = pair;
-#else
-        dst[0] = pair;
-#endif
         dst += PACK_TILE_ROW_BYTES;
         index = (u16)((index + PACK_TILE_ROW_BYTES) & PACK_CEILING_INDEX_MASK);
     }
 }
 #endif
 
-#if RAY_COL_STRIDE == 2 && !RENDERER_OVERLAY_C_REFERENCE
+#if !RENDERER_OVERLAY_C_REFERENCE
 #define write_overlay_frame_post renderer_write_overlay_frame_post_asm
 #define write_overlay_sky_post renderer_write_overlay_sky_post_asm
 #else
@@ -359,11 +345,7 @@ void draw_door_overlays(const RayColumn *columns,
         }
 
         const u16 tile_x = (u16)(x >> 3);
-#if RAY_COL_STRIDE == 4
-        const u16 lane = (u16)((x & 4) ? 2 : 0);
-#else
         const u16 lane = (u16)((x & 7) >> 1);
-#endif
         // Byte address of screen row 0 in this sampled column's lane. Both posts
         // step it by PACK_TILE_ROW_BYTES per row; see the note above them for
         // why the tile boundary is invisible to that walk.

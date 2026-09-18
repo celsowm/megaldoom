@@ -186,12 +186,17 @@ static WallColumnDescriptor describe_textured_column(u16 wall_h,
     // at the same pose. Measurement only; never define it in a shipping build.
     u16 scaler_height = 0;
 #if !MEGALDOOM_NO_WALL_SCALERS
-    if (!(flags & RAY_COLUMN_FLAG_FLOOR_ALIGNED) &&
-        clip_delta == MEGALDOOM_WALL_CLIP_DELTA[0][sample_height]) {
+    // Ordered cheapest-first: `rows` is already in registers, the two table
+    // loads are not. Three clauses that used to be here are gone because they
+    // cannot fail -- `rows <= sample_height` (height is min(projected,
+    // RAY_VIEW_ROWS) and projected_height is min(projected, 640), and
+    // RAY_VIEW_ROWS <= 128 < 640) and `sample_height < SCALER_HEIGHTS`
+    // (column_sample_height clamps to 640, and HEIGHTS is 641). A predicate
+    // that can never be false is not a safety net, it is per-column cost.
+    if (!(flags & RAY_COLUMN_FLAG_FLOOR_ALIGNED)) {
         const u16 rows = (u16)(bottom - top);
-        if (rows != 0 && rows <= sample_height &&
-            rows <= MEGALDOOM_WALL_SCALER_ROWS &&
-            sample_height < MEGALDOOM_WALL_SCALER_HEIGHTS &&
+        if (rows != 0 && rows <= MEGALDOOM_WALL_SCALER_ROWS &&
+            clip_delta == MEGALDOOM_WALL_CLIP_DELTA[0][sample_height] &&
             (u16)(tex_y_value + MEGALDOOM_WALL_SCALER_MAX_TY[sample_height]) <
                 WALL_TEX_HEIGHT) {
             scaler_height = sample_height;
@@ -280,139 +285,11 @@ static inline bool column_door_active(const RayColumn *columns, u16 base_sample)
     return FALSE;
 }
 
-#if (RAY_COL_STRIDE != 4) && (RAY_COL_STRIDE != 2)
-#error "build_bsp_tilemap only implements the RAY_COL_STRIDE == 4 and == 2 packers"
-#endif
+// Only the stride-2 packer exists. RAY_COL_STRIDE is fixed at 2
+// (src/raycast.h); the stride-4 comparison packer was deleted 2026-09-18,
+// having been dead since the stride-4 revert (LOG, 2026-07-27).
+_Static_assert(RAY_COL_STRIDE == 2, "build_bsp_tilemap only implements the stride-2 packer");
 
-#if RAY_COL_STRIDE == 4
-// Stride-4 mixed tile: two sampled columns per tile, each covering two
-// adjacent byte lanes. Reuses the stride-2 level wall packs —
-// each u8 holds one shaded texel replicated across 2px, so storing it to both
-// bytes of the lane pair replicates it across this stride's 4px. Same
-// run-splitting structure as the stride-2 C reference below; there is no asm
-// hotpath for this stride.
-static __attribute__((noinline)) void write_mixed_stride4_tile(
-    u32 *tile,
-    u16 pixel_y,
-    const WallColumnDescriptor descriptors[2],
-    const u8 *const packed_columns[2],
-    const PackedFlatRows *flat_rows) {
-    u8 *const tile_bytes = (u8 *)tile;
-    const u8 *const ceiling_bytes = (const u8 *)flat_rows->ceiling;
-    const u8 *const floor_bytes = (const u8 *)flat_rows->floor;
-    const u16 end_y = (u16)(pixel_y + 8);
-
-    for (u16 lane = 0; lane < 2; lane++) {
-        const WallColumnDescriptor *const descriptor = &descriptors[lane];
-        const u8 *const packed_column = packed_columns[lane];
-        u8 *dst = &tile_bytes[lane * 2];
-        u16 y = pixel_y;
-        u16 run_end = descriptor->top;
-        if (run_end > end_y) run_end = end_y;
-
-        while (y < run_end) {
-            const u8 flat = ceiling_bytes[
-                ((y & (PACK_CEILING_ROW_COUNT - 1)) << 2) + (lane * 2)];
-            dst[0] = flat;
-            dst[1] = flat;
-            dst += 4;
-            y++;
-        }
-
-        if (y < descriptor->top) y = descriptor->top;
-        run_end = descriptor->bottom;
-        if (run_end > end_y) run_end = end_y;
-        while (y < run_end) {
-            const u8 pair = packed_column[
-                wall_packed_y(descriptor, (u16)(y - descriptor->top))];
-            dst[0] = pair;
-            dst[1] = pair;
-            dst += 4;
-            y++;
-        }
-
-        while (y < end_y) {
-            const u8 flat = floor_bytes[((y & 3) << 2) + (lane * 2)];
-            dst[0] = flat;
-            dst[1] = flat;
-            dst += 4;
-            y++;
-        }
-    }
-}
-
-// Same coherence contract as the stride-2 packer below, with two descriptors
-// per tile column (px 0 and 4). No DEBUG_PERF oracles or asm-compare harness
-// at this stride — the release cadence probe is the ground truth here.
-void build_bsp_tilemap(const RayColumn *columns,
-                       const RaySceneColors *scene_colors,
-                       u32 target[][8]) {
-    PackedFlatRows *const flat_rows = build_flat_rows(scene_colors);
-    const bool flat_changed = (bool)(!s_coherence_valid ||
-                                     !scene_flats_equal(scene_colors, &s_prev_scene_flats));
-    const u32 overlay_columns = renderer_overlay_prev_columns();
-    for (u16 tile_x = 0; tile_x < VIEW_TILE_W; tile_x++) {
-        const u16 base_sample = (u16)(tile_x * RAY_TILE_SAMPLES);
-        const WallColumnDescriptor descriptors[2] = {
-            describe_wall_column(&columns[base_sample]),
-            describe_wall_column(&columns[base_sample + 1])
-        };
-        if (!flat_changed && !s_prev_door_active[tile_x] &&
-            !(overlay_columns & ((u32)1u << tile_x)) &&
-            wall_desc_equal(&descriptors[0], &s_prev_desc[tile_x][0]) &&
-            wall_desc_equal(&descriptors[1], &s_prev_desc[tile_x][1]) &&
-            !column_door_active(columns, base_sample)) {
-            continue;
-        }
-        s_prev_desc[tile_x][0] = descriptors[0];
-        s_prev_desc[tile_x][1] = descriptors[1];
-        s_prev_door_active[tile_x] = (u8)column_door_active(columns, base_sample);
-
-        // See the stride-2 packer below: under a sky, each tile column reads its
-        // own column of the 2D sky table. At this stride a mixed tile only
-        // samples lanes 0 and 2 and doubles them, so the sky is half as detailed
-        // horizontally inside wall tiles as in whole-ceiling ones; stride 2 is
-        // what ships, and this keeps the two paths behaviourally the same.
-        if (scene_colors->sky) {
-            flat_rows->ceiling = sky_column_rows(tile_x, scene_colors->sky_offset);
-        }
-
-        u16 min_top = descriptors[0].top;
-        if (descriptors[1].top < min_top) min_top = descriptors[1].top;
-        u16 max_bottom = descriptors[0].bottom;
-        if (descriptors[1].bottom > max_bottom) max_bottom = descriptors[1].bottom;
-
-        const u8 *const packed_columns[2] = {
-            packed_wall_column(&descriptors[0]),
-            packed_wall_column(&descriptors[1])
-        };
-        for (u16 tile_y = 0; tile_y < VIEW_TILE_H; tile_y++) {
-            const u16 tile_index = view_tile_index(tile_x, tile_y);
-            const u16 pixel_y = (u16)(tile_y * 8);
-
-            if ((pixel_y + 7) < min_top) {
-                write_ceiling_tile(target[tile_index], flat_rows->ceiling, pixel_y);
-#if CADENCE_STAGE_PROBE
-                g_cadence_pack_flat_tiles++;
-#endif
-            } else if (pixel_y >= max_bottom) {
-                write_repeated_flat_tile(target[tile_index], flat_rows->floor);
-#if CADENCE_STAGE_PROBE
-                g_cadence_pack_flat_tiles++;
-#endif
-            } else {
-                write_mixed_stride4_tile(target[tile_index], pixel_y,
-                                         descriptors, packed_columns, flat_rows);
-#if CADENCE_STAGE_PROBE
-                g_cadence_pack_mixed_tiles++;
-#endif
-            }
-        }
-    }
-    s_prev_scene_flats = *scene_colors;
-    s_coherence_valid = TRUE;
-}
-#else /* RAY_COL_STRIDE == 2 */
 // 0 = ship the hand-written renderer_hotpath.s mixed-tile packer (measured
 // -39.6% pack_subticks on checkpoints.txt, 2026-07-21); 1 = use the C
 // reference implementation below. The DEBUG_PERF probe byte-verified the asm
@@ -827,4 +704,3 @@ void build_bsp_tilemap(const RayColumn *columns,
         (u16)(oracle_changed_columns * VIEW_TILE_H));
 #endif
 }
-#endif

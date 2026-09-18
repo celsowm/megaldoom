@@ -179,15 +179,9 @@ PackedFlatRows *build_flat_rows(const RaySceneColors *scene_colors);
 const u32 *sky_column_rows(u16 tile_x, u8 sky_offset);
 void flat_rows_invalidate(void);
 
-// Pixel-replication table for the active stride (guarded so the unused one
-// isn't compiled): REP4[c] == c*0x1111 spreads a colour across 4px (stride 4);
-// REP2[c] == c*0x11 spreads it across 2px (stride 2, four cast columns per
-// 8px tile). Defined in renderer_flats.c.
-#if RAY_COL_STRIDE == 4
-extern const u32 REP4[16];
-#else
+// Pixel-replication table: REP2[c] == c*0x11 spreads a colour across the 2px a
+// cast column owns (four columns per 8px tile). Defined in renderer_flats.c.
 extern const u32 REP2[16];
-#endif
 
 // Tile bands always begin at y%4 == 0, so the four prepacked Bayer rows repeat
 // exactly twice. Three MOVEM.L instructions replace two eight-iteration C

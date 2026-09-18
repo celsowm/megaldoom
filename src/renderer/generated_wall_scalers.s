@@ -2,8 +2,6 @@
  * One routine per sample height S; see the generator for the contract. */
 #include "renderer_pack_abi.h"
 
-#if RAY_COL_STRIDE == 2
-
 /* The row displacements below were baked with this stride. */
     .if PACK_TILE_ROW_BYTES != 4
     .error "PACK_TILE_ROW_BYTES changed; rerun tools/gen_wall_scalers.py"
@@ -72239,4 +72237,3 @@ megaldoom_wall_scaler_ends:
     .long   megaldoom_wall_scaler_end_639
     .long   megaldoom_wall_scaler_end_640
 
-#endif

@@ -8,11 +8,9 @@
  */
 #include "renderer_pack_abi.h"
 
-/* This is the stride-2 packer. renderer_pack.c declares and calls it only under
- * the same condition, and supplies a pure-C packer for stride 4, so a
- * comparison build (EXTRA_FLAGS="-DRAY_COL_STRIDE=4") assembles this file to
- * nothing rather than emitting a function whose lane count no longer matches. */
-#if RAY_COL_STRIDE == 2
+/* The stride-2 packer, and the only one: RAY_COL_STRIDE is fixed at 2 in
+ * src/raycast.h and renderer_pack.c static-asserts it. The stride-4 comparison
+ * packer this file used to be guarded against was deleted 2026-09-18. */
 
     .text
     .align  2
@@ -279,5 +277,3 @@ renderer_write_overlay_sky_post_asm:
     andi.w  #PACK_CEILING_INDEX_MASK,d1
     dbra    d0,.Lovl_sky_loop
     rts
-
-#endif /* RAY_COL_STRIDE == 2 */

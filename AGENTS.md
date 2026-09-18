@@ -202,6 +202,32 @@ calling a precompute unaffordable. **That headroom is now nearly spent**: the
 below check-rom's 0x240000 warning line, from ~686 KB free right after banking.
 The next precompute needs its own banked home, not the resident image.
 
+**A generated table's shape must be DERIVED from the viewport, never a
+literal.** `MEGALDOOM_WALL_TEX_Y_BY_HEIGHT` was `[641][120]` while the 22x16
+preset needs 128 rows, so that preset drew a corrupt 8-row band on every close
+wall for as long as the preset has existed (LOG, 2026-09-17). The table is now
+as wide as `RAY_VIEW_TILE_H_MAX * 8` and bakes THAT viewport's centring clip;
+shorter viewports advance by `MEGALDOOM_WALL_CLIP_DELTA[VIEW_PIXEL_H >> 7][S]`.
+Two rules fall out:
+
+* **The generated wall scalers bake the DEFAULT viewport's clip delta**, and
+  `renderer_pack.c` may only use a routine when the column's delta equals the
+  baked one. Gating on `clip_delta == 0` instead silently drops every close wall
+  at the default preset back to the generic post -- a large perf regression
+  inside what looks like a correctness fix.
+* **A failing E2E route is a regression until proven otherwise.** That
+  eligibility bug surfaced only as an E1M3 waypoint-79 stall, and "the routes are
+  timing-fragile" was the wrong first answer: pack really was slower. If a route
+  fails, find the cost change before blaming the harness. To tell the two apart,
+  re-run with an output-identical cost flag (`-DMEGALDOOM_NO_WALL_SCALERS=1`,
+  passed via `test-level-e2e.ps1 -ExtraFlags`).
+
+**The asm/C differential cannot validate a shared input table.** Both sides read
+the same table through the same index arithmetic, so a wrong table or a wrong
+index is wrong identically and still reports 0 mismatches. Pixels test that;
+the differential tests asm-vs-C only. Know which claim each instrument supports
+before citing it.
+
 **An A/B needs the same world state, not just the same pose.** `PERF_FIXED_POSE`
 locks the player, but enemies keep moving, so a sweep recorded earlier in the
 session is not a baseline: comparing the wall-scaler build against a few hours

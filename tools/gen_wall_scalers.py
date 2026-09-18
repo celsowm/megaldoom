@@ -110,8 +110,6 @@ def main():
         " * One routine per sample height S; see the generator for the contract. */",
         '#include "renderer_pack_abi.h"',
         "",
-        "#if RAY_COL_STRIDE == 2",
-        "",
         "/* The row displacements below were baked with this stride. */",
         "    .if PACK_TILE_ROW_BYTES != %d" % row_bytes,
         "    .error \"PACK_TILE_ROW_BYTES changed; rerun tools/gen_wall_scalers.py\"",
@@ -149,7 +147,7 @@ def main():
     ])
     for s in range(1, heights):
         asm.append("    .long   megaldoom_wall_scaler_end_%d" % s)
-    asm.extend(["", "#endif", ""])
+    asm.extend(["", ""])
     Path(args.asm_out).write_text("\n".join(asm), newline="\n")
 
     header = [

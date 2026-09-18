@@ -8,6 +8,152 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## Deleted the stride-4 paths (2026-09-18)
+
+`RAY_COL_STRIDE` has been 2 since the stride-4 revert (LOG, 2026-07-27) and
+`test-wall-quality.py` already asserted it, but every stride-4 branch was still
+carried: ~200 lines across seven files, including a whole second
+`build_bsp_tilemap` and `write_mixed_stride4_tile` in `renderer_pack.c`. Gone,
+along with `REP4`/`pack_flat_quad`, four sites in `renderer_doors.c`, and the
+file-wide guard on `renderer_hotpath.s`. `RAY_COL_STRIDE` is now an
+unconditional `#define 2` -- changing it means writing a packer again, not
+flipping a knob -- and the `#error` that policed the two packers became a
+`_Static_assert`, so the invariant is still enforced rather than merely deleted.
+
+`renderer_pack.c` went 835 -> 706 lines. **Resident ROM did not move**
+(`0x2411F6` before and after), which is the expected result: the branches were
+`#if`-ed out and never reached the compiler. This buys clarity in the files
+Phase 3 touches, not bytes. A size change would have meant something live had
+been deleted.
+
+Two things the pre-work exploration got wrong, worth recording because both
+would have shaped the diff:
+
+* It warned of a "~415-line reindent" of the live stride-2 body inside the
+  `#else`. There is none -- preprocessor conditionals do not indent their
+  contents, so the body is already at column 0 and this is a clean excision. A
+  415-line reformat is exactly where a silent error hides, so the difference
+  matters.
+* `tools/raycast_constants.py` parses `RAY_COL_STRIDE` textually out of
+  `raycast.h`; removing the `#ifndef` wrapper could have broken it silently.
+  Checked: it still reads 2.
+
+Gate: asm-diff 624/0, captures **byte-identical** below row 2 (the only
+surviving semantic change in this and the previous entry is the deletion of
+three provably-dead clauses, so a single changed pixel would have meant one of
+them was reachable), full suite green.
+
+## The scaler eligibility test costs register pressure, not arithmetic (2026-09-18)
+
+Two E1M4 poses pay ~5% more pack with the scalers enabled than without, at poses
+where NO column qualifies, so the cost is the test that says no.
+`CADENCE_PACK_SPLIT` at (2032, -1120) heading 64, measured after the 128-row
+table landed (the earlier 685/1049 numbers are stale -- both builds now also
+load a clip delta):
+
+| | scalers off | scalers on |
+|---|---|---|
+| pack prologue | 842 | 1216 |
+| pack tile loop | 6030 | 6054 |
+
++374 subticks, 18.7 per column, with the tile loop flat. That is ~470 cycles per
+`describe_wall_column` call for an expression whose arithmetic is worth ~15.
+
+**The plan's fix was wrong, and two experiments proved it.** The plan said hoist
+the per-seg `tex_y` out of the wrap test.
+
+1. **Deleting three provably-dead clauses** (`rows <= sample_height` and
+   `sample_height < SCALER_HEIGHTS` cannot be false given how
+   `column_sample_height` and `draw_seg` clamp; `top == full_top` is set by
+   `column_slab_bounds` on that very branch) recovered **41 of 374** -- and made
+   `describe_wall_column` GROW from 420 to 534 bytes. Removing code emitted more
+   of it. So the cost is not the expression.
+2. **Moving the test to a `noinline` helper** -- the direct test of the
+   register-pressure theory -- made it **worse**, 1175 -> 1319. The call and its
+   argument setup (~180 cycles) exceed the spilling it avoids.
+
+The theory is right (`describe_textured_column` already saves ten registers and
+the extra live values spill) and both remedies lose. What is left is Phase 3's
+A1: split a centred fast path and inline it at the four call sites. That is a
+much larger change, and the plan's own gate warns it can slow the tile loop --
+77% of pack -- through the same spilling, for at most ~1-2% of frame.
+
+**Kept:** the dead-clause deletion (1216 -> 1175) and the cheapest-first
+reorder, because a predicate that can never be false is not a safety net, it is
+per-column cost that also misleads the next reader.
+
+**Not fixed:** +333 subticks at the two poses where nothing qualifies, ~+1.9% of
+frame, against -15.8% pack from the scalers overall. Recorded rather than chased:
+the next step costs more risk than the defect costs frame.
+
+## The 22x16 viewport drew a corrupt band on every close wall (2026-09-17)
+
+`MEGALDOOM_WALL_TEX_Y_BY_HEIGHT` was declared `[641][120]`, and the `120` was a
+hardcoded literal in `tools/generate-renderer-assets.ps1`, not derived from the
+viewport. `RAY_VIEW_SIZE_2` is 22x16, i.e. `VIEW_PIXEL_H = 128`, and it is
+selectable from the OPTIONS menu, so it ships. Two defects followed, not one:
+
+* rows 120..127 ran off the end of a row into the NEXT sample height's row;
+* `New-WallSamplingRows` also baked the centring CLIP for a 120-row viewport, so
+  at 128 rows every clipped row sampled a few texture rows off as well
+  (clip 40 vs the needed 36 at S=200).
+
+The first is the visible one. At S=140 rows 120..127 should sample texture rows
+115..121 and instead read rows 9..11 -- the top of the texture -- so every close
+wall ended in a flat 8-row band that broke hard from the texture above it.
+Measured in the capture: the last colour change per column concentrated at
+exactly `rel_y` 120, and the band's colour INVERTED relative to the rows above
+it per column, which is what rules out "that is just the floor".
+
+**One table, not two.** The table is now as wide as the tallest viewport and
+bakes that viewport's clip; `MEGALDOOM_WALL_CLIP_DELTA[VIEW_PIXEL_H >> 7][S]`
+tells a shorter viewport how far to advance into the same row (0 up to S=120,
+ramping to 4, then flat). +6.6 KB, against the +66-82 KB a second table would
+have cost. `VIEW_PIXEL_H >> 7` is only a valid selector for 120 and 128, so a
+`_Static_assert` pins all three presets and the table width.
+
+### The eligibility test that looked equivalent and was not
+
+Exploration showed the scaler test's `top == full_top` clause is always true
+inside its own `if` (`column_slab_bounds` sets `full_top = top` on that branch),
+so it was replaced with `clip_delta == 0`. **That is not the same predicate.**
+At the default 120-row preset a wall with S > 120 has delta 4, so every close
+wall silently lost its scaler and fell back to the 56-cycles-per-byte generic
+loop -- acceleration removed from the preset everyone actually plays, inside a
+change advertised as a pure correctness fix.
+
+It surfaced as an E1M3 E2E failure: the follower stalled 35 units short of a
+door at waypoint 79, pressed use five times and burned all 499,999 frames. The
+first instinct -- "the routes are timing-fragile, this is the waypoint that
+broke under the oracle build too" -- was wrong. Pack really had got slower, the
+vblank-paced follower really did arrive somewhere else, and the route was
+reporting a real regression.
+
+Fix: bake the routines with the DEFAULT viewport's delta and compare against
+that same value instead of zero. 120-row presets match and keep their coverage;
+a 128-row preset's unclipped columns match too (both deltas 0); its clipped
+columns differ and keep the generic post, which is correct because they start 4
+rows earlier than the routines assume. Scalers went back to 419,240 bytes, so
+the whole fix costs +6.6 KB and resident ends at `0x2411F6`.
+
+**What verified what** -- worth writing down, because one of these proves less
+than it looks:
+
+| claim | evidence |
+|---|---|
+| band fixed at 22x16 | pixels: the `rel_y` 120 break is gone |
+| presets 0/1 untouched | 0 differing pixels below row 2 |
+| asm still agrees with C | differentials, 624/0 and 640/0 |
+| scaler coverage restored | negative control: 64 mismatches, the pre-change count |
+
+The differential does **not** validate the table fix: the asm post and the C
+reference read the same table through the same delta, so a wrong delta is wrong
+identically on both sides and still reports 0. Only the pixels test that.
+
+`tools/test-door-animation.py` had pinned `[641][120]` -- a test holding the bug
+in place. It now asserts the derived width, `RAY_VIEW_TILE_H_MAX`, and the
+clip-delta table together, so the literal cannot drift back on its own.
+
 ## Banked ROM, baked visibility, generated scalers (2026-09-17)
 
 `docs/DREAD_RENDERER_COMPARISON.md` listed three things Dread does that we did
