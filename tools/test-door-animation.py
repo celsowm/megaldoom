@@ -95,7 +95,17 @@ def main():
     assert "projected_height" in BSP_RENDER
     assert "projected_wall_h" in SCENE
     assert "vertical_samples == b->vertical_samples" in SCENE
-    assert "MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[641][120]" in RENDERER_ASSETS
+    # The row width must be the TALLEST viewport (RAY_VIEW_TILE_H_MAX * 8), not
+    # the default one. It was 120 until 2026-09-17, so the 22x16 preset indexed
+    # rows 120..127 into the NEXT sample height's row and drew a visible 8-row
+    # band of wrong texture at the bottom of every close wall. Keep these two
+    # assertions together: the literal is only correct because it is the derived
+    # value, and MEGALDOOM_WALL_CLIP_DELTA is what lets a shorter viewport share
+    # the row.
+    assert "#define RAY_VIEW_TILE_H_MAX 16" in RAYCAST
+    assert "MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[641][128]" in RENDERER_ASSETS
+    assert "#define MEGALDOOM_WALL_SAMPLE_ROWS 128" in RENDERER_ASSETS
+    assert "MEGALDOOM_WALL_CLIP_DELTA[2][641]" in RENDERER_ASSETS
     overlay_branch = BSP_RENDER.split("if (overlay) {", 1)[1].split("} else {", 1)[0]
     assert "RayDoorOverlay" in overlay_branch
     assert "mark_sample_solid" not in overlay_branch

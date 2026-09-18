@@ -36,7 +36,8 @@ The packs are per-level subsets — only the pair columns that level actually
 draws — so the four together are smaller than the two monolithic tables they
 replace, and the resident image fell from 3.93 MB to 1.93 MB. Image 8.5 MB.
 ~686 KB resident headroom, which is the number to look at before calling a
-precompute unaffordable; the image size is not a budget.
+precompute unaffordable; the image size is not a budget. (Phase 2 below then
+spent 419 KB of that 686 KB — see "Known, not fixed".)
 
 One regression worth recording: the first cut looked up a per-column slot byte
 to find the pack block, and pack got 0.7% *slower*. Replacing it with a resident
@@ -125,12 +126,50 @@ self-modifying code (ROM cannot be patched). ~20 cycles per wall byte against
 the generic DDA post's ~56. 640 routines, 69,660 rows, 419,240 bytes resident —
 affordable only because of Phase 0.
 
-| Pose | Pack before → after | Frame |
+| Map | Heading | Pack | Frame (vblanks) |
+|---|---|---|---|
+| E1M1 | 73 | 7,018 → 3,925 (−44.1%) | 10.80 → 8.36 (−22.6%) |
+| E1M3 | 0 | 6,030 → 3,917 (−35.0%) | 23.37 → 22.21 |
+| E1M3 | 64 | 5,905 → 3,866 (−34.5%) | 15.40 → 13.77 (−10.6%) |
+| E1M2 | 128 | 6,195 → 4,726 (−23.7%) | 12.98 → 11.82 (−8.9%) |
+| E1M1 | 9 | 5,437 → 4,304 (−20.8%) | 14.36 → 13.42 |
+| E1M2 | 0 | 6,479 → 5,289 (−18.4%) | 28.33 → 27.37 |
+| E1M4 | 128 | 5,684 → 4,825 (−15.1%) | 13.00 → 12.36 |
+| E1M4 | 192 | 6,154 → 6,500 (**+5.6%**) | 13.10 → 13.32 |
+| E1M4 | 64 | 7,021 → 7,383 (**+5.2%**) | 13.92 → 14.18 |
+
+Pack −15.8% over the 17 poses, mean −15.2% per pose, whole frame −4.2%.
+
+**Measure this with `MEGALDOOM_NO_WALL_SCALERS=1`, not against yesterday's
+sweep.** The first version of this table compared the scaler build against
+sweeps recorded earlier in the session and was wrong: enemies had moved, so the
+`bb` column ran from 11 to 9,931 between "before" and "after" and several poses
+appeared to regress for reasons that had nothing to do with walls. The toggle
+forces every column onto the generic post, so the two builds differ only in the
+thing being measured. The pose being equal is not enough — the world state has
+to be equal too.
+
+### The gate costs more than the scalers save at two poses
+
+E1M4 headings 64 and 192 reproducibly get ~5% *worse*, far outside the ~0.1%
+noise of repeated identical builds. `CADENCE_PACK_SPLIT` at heading 64 says
+exactly where:
+
+| | scalers on | generic |
 |---|---|---|
-| E1M1 hall, 9 | 5,571 → 4,304 (−22.7%) | 14.43 → 13.42 |
-| E1M2, 192 | 6,746 → 5,610 (−16.8%) | 15.20 → 14.26 |
-| E1M1 hall, 233 | 4,812 → 4,373 (−9.1%) | 13.93 → 13.67 |
-| E1M3, 128 | 4,895 → 4,480 (−8.5%) | 27.91 → 27.45 |
+| pack prologue | 1,049 (52/column) | 685 (34/column) |
+| pack tile loop | 6,044 (20.1/tile) | 6,065 (20.2/tile) |
+
+The tile loop does not move, so **no column at that pose takes the scaler path**
+and the whole +364 is the eligibility test, +18 subticks per column paid 20
+times per rebuild for nothing. The scalers are not slow here; the gate is.
+
+The fix is a hoist, not a tuning: the test's most expensive clause is the
+vertical-wrap check against `MEGALDOOM_WALL_SCALER_MAX_TY[sample_height]`, but
+`tex_y` comes from the seg's `tex_v_offset` and is **constant for every column of
+a seg**. A seg with a nonzero offset therefore rejects all of its columns one at
+a time, re-deriving the same answer each time. Precomputing a per-seg maximum
+eligible sample height would make the common rejection nearly free. Not done.
 
 Columns keep the generic post when the texture offset could wrap vertically,
 when the wall is floor-aligned (sky), and when the height exceeds the DDA
@@ -142,6 +181,25 @@ directly — 624 tiles, 0 mismatches. The negative control
 (`--negative-control-corrupt-height 0`) produces 64 mismatches, which is the
 only reason to believe the 0 means anything: it proves 64 of those 624 tiles
 really do go through the new path rather than silently falling back.
+
+### Confirmed in motion
+
+The user played E1M1 after all three phases and reported it feels more fluid.
+That is the gate the measurements only predict, and it lands on the vantage with
+the largest measured gain (E1M1, -23.7% over its five headings, worst pose
+18.61 -> 13.67 vblanks). E1M2-E1M4 have not been play-tested since the change;
+E1M3 heading 128 remains the slowest pose measured anywhere (31.1 vblanks) and
+is the obvious place to look next.
+
+### The headroom is spent
+
+Phase 0 freed ~686 KB resident and Phase 2 immediately spent 419 KB of it. The
+resident image now ends at `0x23F7F6` — **2,058 bytes** below check-rom's
+`0x240000` warning line. Phase 0 did exactly the job it was started for and
+there is essentially nothing left over: Phase 3 (baked column layouts, overlay
+band skip) cannot assume resident space and needs either its own banked window
+or a smaller scaler set. Do not read "8.5 MB image, 16 MB cartridge" as slack;
+the binding limit is the 2.5 MB below the window, and it is full.
 
 ### Known, not fixed
 

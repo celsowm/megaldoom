@@ -357,7 +357,7 @@ def main():
     assert "RAY_COLUMN_FLAG_FLOOR_ALIGNED" in PACKER
     assert "ty_table += top - full_top;" in PACKER
     # The window compositor used to read describe_wall_column(column).top --
-    # building a 20-byte descriptor, a [641][120] table index and a fog level to
+    # building a 20-byte descriptor, a [641][128] table index and a fog level to
     # get one u16. It now asks for that u16 directly. The contract being pinned
     # is unchanged (the compositor must honour a floor-aligned far wall's
     # non-centred top), so pin every link in the new chain instead of the old

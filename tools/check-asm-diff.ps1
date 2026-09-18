@@ -21,7 +21,16 @@
 param(
     [string]$Route = "tools/routes/fixed-pose.txt",
     [int]$Frames = 3200,
-    [int]$MinChecked = 500
+    [int]$MinChecked = 500,
+    # The default pose above is the best single pose for the overlay harness.
+    # Override to cover a path it cannot reach -- e.g. the 22x16 viewport
+    # (-ExtraFlags '-DMEGALDOOM_VIEW_SIZE_BOOT=2 -DDEBUG_E2E_START_LEVEL=3'
+    # with a close-wall pose), where a clipped wall takes a generated scaler and
+    # the default 120-row preset never does.
+    [int]$PoseX = 1300,
+    [int]$PoseY = 3300,
+    [int]$PoseAngle = 0,
+    [string]$ExtraFlags = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -29,7 +38,8 @@ $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Push-Location $Root
 try {
     $env:EXTRA_FLAGS = "-DDEBUG_BLASTEM_CHECKPOINT=1 -DRENDERER_ASM_DIFF=1 " +
-        "-DPERF_FIXED_POSE=1 -DPERF_POSE_X=1300 -DPERF_POSE_Y=3300 -DPERF_POSE_ANGLE=0"
+        "-DPERF_FIXED_POSE=1 -DPERF_POSE_X=$PoseX -DPERF_POSE_Y=$PoseY " +
+        "-DPERF_POSE_ANGLE=$PoseAngle" + $(if ($ExtraFlags) { " $ExtraFlags" })
     & (Join-Path $PSScriptRoot "build-windows.ps1") -Clean -DebugPerf | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "build failed" }
 

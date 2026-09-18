@@ -196,8 +196,23 @@ flat ROM read did. Invariants: nothing but `.wallpackN` may occupy the window
 (check-rom fails otherwise); `level_bank.c` is the only writer of the mapper
 registers; SGDK's `ENABLE_BANK_SWITCH` / `FAR()` stay unused — do not put a
 table behind SGDK's transient `FAR()` windows, which remap per access. Resident
-headroom is what `check-rom` prints (~700 KB after banking the pair tables);
-look there, not at the image size, before calling a precompute unaffordable.
+headroom is what `check-rom` prints; look there, not at the image size, before
+calling a precompute unaffordable. **That headroom is now nearly spent**: the
+419 KB of generated wall scalers took the resident end to 0x23F7F6, about 2 KB
+below check-rom's 0x240000 warning line, from ~686 KB free right after banking.
+The next precompute needs its own banked home, not the resident image.
+
+**An A/B needs the same world state, not just the same pose.** `PERF_FIXED_POSE`
+locks the player, but enemies keep moving, so a sweep recorded earlier in the
+session is not a baseline: comparing the wall-scaler build against a few hours
+old sweep showed the `bb` column swinging from 11 to 9,931 and invented frame
+deltas that had nothing to do with walls. Build the baseline in the same session
+from the same tree with the feature toggled off (`MEGALDOOM_NO_WALL_SCALERS=1`
+is there for exactly this) and check that `bb`, `segs` and `rebuilds` match
+before reading the column you care about. `perf-sweep.ps1` takes the level via
+`-ExtraFlags '-DDEBUG_E2E_START_LEVEL=N'`; omit it and every vantage is measured
+on E1M1, which puts the player in void and reports gorgeous, meaningless numbers
+(0 segs, 1 node). Extends [[route-ab-measurement-hazard]] (LOG, 2026-09-17).
 
 **Fidelity tradeoffs need the user judging motion.** A static screenshot
 approval does not survive real gameplay; the stride-4 revert (LOG, 2026-07-27)

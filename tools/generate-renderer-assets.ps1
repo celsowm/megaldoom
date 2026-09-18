@@ -94,19 +94,53 @@ function New-PairTileRows {
     return $lines
 }
 
+# The table's row width is the TALLEST viewport (RAY_VIEW_TILE_H_MAX * 8 = 128).
+# It used to be a hardcoded 120, which was wrong twice over at the 22x16 preset:
+# rows 120..127 ran off the end of the row into the next sample height's row
+# (a visible 8-row band of wrong texture at the bottom of every close wall), and
+# the centring clip baked below assumed a 120-row viewport, so every clipped row
+# sampled a few texture rows off as well.
+#
+# The clip is baked for a 128-row viewport; a 120-row viewport reads the same row
+# advanced by MEGALDOOM_WALL_CLIP_DELTA, so one table serves both.
+$WallSampleRows = 128
+
 function New-WallSamplingRows {
     $lines = New-Object System.Collections.Generic.List[string]
-    [void]$lines.Add(((Format-ByteRow (1..120 | ForEach-Object { 0 })) + ","))
+    [void]$lines.Add(((Format-ByteRow (1..$WallSampleRows | ForEach-Object { 0 })) + ","))
     for ($height = 1; $height -le $MaxProjectedWallHeight; $height++) {
         $row = New-Object System.Collections.Generic.List[int]
-        $visibleHeight = [Math]::Min($height, 120)
+        $visibleHeight = [Math]::Min($height, $WallSampleRows)
         $clipOffset = [int][Math]::Floor(($height - $visibleHeight) / 2)
-        for ($relY = 0; $relY -lt 120; $relY++) {
+        for ($relY = 0; $relY -lt $WallSampleRows; $relY++) {
             $sample = [int][Math]::Floor((($relY + $clipOffset) * $WallTexRowsPerWall) / $height)
             if ($height -lt ($WallTexRowsPerWall / 2)) { $sample = $sample -band 0xFE }
             [void]$row.Add($sample -band 0xFF)
         }
         [void]$lines.Add(((Format-ByteRow @($row)) + ","))
+    }
+    return $lines
+}
+
+# How far a viewport of height VH must advance into a row whose clip was baked
+# for 128 rows: max(0, (S - VH) / 2) - max(0, (S - 128) / 2). Zero for the
+# 128-row preset, 0..4 for the 120-row presets. Indexed [VIEW_PIXEL_H >> 7][S],
+# which is 0 for 120 and 1 for 128.
+function New-WallClipDeltaRows {
+    $lines = New-Object System.Collections.Generic.List[string]
+    foreach ($viewHeight in @(120, $WallSampleRows)) {
+        [void]$lines.Add("    {")
+        $row = New-Object System.Collections.Generic.List[int]
+        for ($height = 0; $height -le $MaxProjectedWallHeight; $height++) {
+            $near = [Math]::Max(0, [int][Math]::Floor(($height - $viewHeight) / 2))
+            $far = [Math]::Max(0, [int][Math]::Floor(($height - $WallSampleRows) / 2))
+            [void]$row.Add($near - $far)
+        }
+        for ($i = 0; $i -lt $row.Count; $i += 20) {
+            $slice = $row.GetRange($i, [Math]::Min(20, $row.Count - $i))
+            [void]$lines.Add("        " + (($slice | ForEach-Object { $_ }) -join ", ") + ",")
+        }
+        [void]$lines.Add("    },")
     }
     return $lines
 }
@@ -409,8 +443,15 @@ $lines = New-Object System.Collections.Generic.List[string]
 foreach ($line in (New-PairTileRows)) { [void]$lines.Add($line) }
 [void]$lines.Add("};")
 [void]$lines.Add("")
-[void]$lines.Add("static const u8 MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[$($MaxProjectedWallHeight + 1)][120] = {")
+[void]$lines.Add("static const u8 MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[$($MaxProjectedWallHeight + 1)][$WallSampleRows] = {")
 foreach ($line in (New-WallSamplingRows)) { [void]$lines.Add($line) }
+[void]$lines.Add("};")
+[void]$lines.Add("")
+[void]$lines.Add("#define MEGALDOOM_WALL_SAMPLE_ROWS $WallSampleRows")
+[void]$lines.Add("// Rows to skip so a shorter viewport reads the 128-row clip correctly;")
+[void]$lines.Add("// see New-WallClipDeltaRows. Index [VIEW_PIXEL_H >> 7][sample_height].")
+[void]$lines.Add("static const u8 MEGALDOOM_WALL_CLIP_DELTA[2][$($MaxProjectedWallHeight + 1)] = {")
+foreach ($line in (New-WallClipDeltaRows)) { [void]$lines.Add($line) }
 [void]$lines.Add("};")
 [void]$lines.Add("")
 [void]$lines.Add("#define MEGALDOOM_WEAPON_TILE_X $($weaponTiles.TileX)")

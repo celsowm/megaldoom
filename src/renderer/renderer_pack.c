@@ -43,6 +43,16 @@ _Static_assert(WALL_TEX_HEIGHT == 1 << 7 && WALL_TEX_WIDTH == 1 << 6 &&
                MEGALDOOM_LEVEL_PACK_BLOCK_BYTES == 1L << 15,
                "packed_wall_column's shifts encode the pack block layout");
 
+// describe_textured_column selects a clip-delta row with VIEW_PIXEL_H >> 7,
+// which is 0 for a 120-row viewport and 1 for a 128-row one. A preset of any
+// other pixel height would silently pick the wrong row and mis-sample every
+// clipped wall, so pin the presets here rather than trusting the shift.
+_Static_assert((RAY_VIEW_SIZE_0_H * 8) == 120 && (RAY_VIEW_SIZE_1_H * 8) == 120 &&
+               (RAY_VIEW_SIZE_2_H * 8) == 128 && RAY_VIEW_SIZE_COUNT == 3 &&
+               MEGALDOOM_WALL_SAMPLE_ROWS == (RAY_VIEW_TILE_H_MAX * 8),
+               "MEGALDOOM_WALL_CLIP_DELTA is indexed by VIEW_PIXEL_H >> 7; only "
+               "120- and 128-row viewports are representable");
+
 // Reads the banked pack of the loaded level (src/bsp/level_bank.c). A block is
 // [shade][tex_x][tex_y] with 64 columns of 128 rows, so a column starts at
 // (shade * 64 + tex_x) * 128 -- the offset the old monolithic
@@ -145,7 +155,12 @@ static WallColumnDescriptor describe_textured_column(u16 wall_h,
     // must use the unclipped projected span, otherwise a near wall/closed door
     // remaps its entire 128-row texture into the 120 visible rows.
     const u16 sample_height = column_sample_height(projected_wall_h);
-    const u8 *ty_table = MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[sample_height];
+    // The table's centring clip is baked for the TALLEST viewport (128 rows);
+    // a 120-row viewport clips 4 rows less off a tall wall, so it starts that
+    // much further into the same row. Zero for every unclipped column, and zero
+    // for every column at the 128-row preset.
+    const u8 clip_delta = MEGALDOOM_WALL_CLIP_DELTA[VIEW_PIXEL_H >> 7][sample_height];
+    const u8 *ty_table = MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[sample_height] + clip_delta;
     u16 full_top;
     column_slab_bounds(wall_h, sample_height, flags, &top, &bottom, &full_top);
     // Advance the DDA past the rows a floor-aligned wall omits above its top.
@@ -157,12 +172,17 @@ static WallColumnDescriptor describe_textured_column(u16 wall_h,
     // wall_h-1..0 of MEGALDOOM_WALL_TEX_Y_BY_HEIGHT[sample_height] at a fixed
     // tex_y. Every assumption it makes is decided here, once per column:
     //   * centred, so its DDA starts at row 0 (top == full_top);
-    //   * within the table's own rows, which the 128-row viewport preset can
-    //     otherwise index past (see tools/gen_wall_scalers.py);
+    //   * clip_delta == 0, because the routines bake the 128-row clip; this is
+    //     every column at the 128-row preset, and the unclipped ones elsewhere;
+    //   * within the table's own rows (see tools/gen_wall_scalers.py);
     //   * tex_y cannot wrap, so the offset folds into the column pointer.
     // Anything else keeps the generic post.
+    // MEGALDOOM_NO_WALL_SCALERS=1 forces every column onto the generic post, so
+    // a sweep can measure the scalers against an otherwise byte-identical build
+    // at the same pose. Measurement only; never define it in a shipping build.
     u16 scaler_height = 0;
-    if (!(flags & RAY_COLUMN_FLAG_FLOOR_ALIGNED) && top == full_top) {
+#if !MEGALDOOM_NO_WALL_SCALERS
+    if (!(flags & RAY_COLUMN_FLAG_FLOOR_ALIGNED) && clip_delta == 0) {
         const u16 rows = (u16)(bottom - top);
         if (rows != 0 && rows <= sample_height &&
             rows <= MEGALDOOM_WALL_SCALER_ROWS &&
@@ -172,6 +192,7 @@ static WallColumnDescriptor describe_textured_column(u16 wall_h,
             scaler_height = sample_height;
         }
     }
+#endif
 
     return (WallColumnDescriptor){top, bottom, ty_table,
                                   tex_x, tex_y_value, tid, (u8)fog_level, flags,
