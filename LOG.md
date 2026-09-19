@@ -8,6 +8,95 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## E1M5 ships as the fifth level, with the demon (2026-09-18)
+
+E1M5 (Phobos Lab) is the fifth campaign level. The demon (3002) is now a
+monster; for now the spectre (58) is the same demon, without its fuzz.
+
+**Cost.**
+- **Work RAM:** no cost for the map. E1M5 is under every existing MAX_*
+  ceiling: 857 segs, 778 vertices, 384 subsectors, 383 nodes, 143 sectors,
+  657 automap lines. The demons cost 356 bytes: MAX_ACTIVE_THINGS goes
+  317 -> 326, because E1M3 on hard now spawns its 9 demons. Free work RAM is
+  21852 -> 21496.
+- **Cartridge:** +1.5 MB banked. Pack 4 is at banks 17-19, holding 25 walls
+  + 7 door faces = 1.0 MB of its 1.5 MB window, plus its vis programs.
+  rom.bin goes 8.5 -> 10 MB.
+- **Resident ROM:** +78 KB (map, vis rows, music, and 12.8 KB of demon
+  frames). 175 KB is left below the level window.
+- **Atlas:** one new wall texture, SW1STONE, which passes every wall-quality
+  contract without an exemption. There is one new door face: SW1COMP, a door
+  drawn with the switch plate.
+
+**Campaign rows.**
+- CAMPAIGN gets `d_e1m5` and par 165. The par and the WIMAP0 node (116,89)
+  come from Doom's `g_game.c` / `wi_stuff.c`, and the node maps to (12,11)
+  with its arrow from (6,11).
+- Intermission cards: "E1M4 finished" and "entering E1M5" (WILV04).
+- The shared intermission palette is now fitted to the E1M1-E1M4 screens only.
+  Re-fitting it over the new cards moved 100-1600 visible pixels on each of
+  the 12 screens that already shipped. Quantizing E1M5's cards into the
+  existing palette leaves those screens byte-identical, which was checked
+  against HEAD's generator output.
+
+**Route: the lock scenario picked the wrong blue door.** `generate-e2e-routes`
+failed with "no reachable, stable press for door group 9". The failure was
+the same on the pre-session generator.
+- Cause: the lock scenario pressed "the first SEG carrying the key". E1M5 has
+  three blue doors. Its route crosses group 8 after taking the key, but the
+  first blue SEG belongs to group 9, 880 units off the path.
+- Fix: `lock_scenario_door` now picks the first door of that key that the
+  route steps across after the pickup, falling back to the old choice. Both
+  the lock detour and the LOCKED/UNLOCKED injection use it. The E1M1-E1M4
+  routes regenerate byte-identical.
+- Group 8 then needed one more change. The blue key sits mid-room between
+  the route's two corridors, and the only way around it passes 156 units
+  from the key. That is clear of the runtime's 128-unit collect radius, but
+  not of the detour's 128 + 32 margin. The detour now retries with a 16-unit
+  margin only when the full margin finds nothing. The LOCKED press itself
+  proves the follower left the key alone.
+- Run: E1M5 E2E events 0xFF, keys 0x03.
+
+**The demon.** Its values come from linuxdoom-1.10 `info.c` and `p_enemy.c`:
+- 150 HP, painchance 180, pain 2 + 2 tics;
+- Doom radius 30 for hitscan and splash (`billboard_doom_radius`);
+- mass 400, so a quarter of the zombieman's knockback slide;
+- A_SargAttack: `((P % 10) + 1) * 4` = 4..40.
+
+The bite obeys P_CheckMeleeRange: P_AproxDistance < 64 - 20 + 16 = 60, and in
+sight. It lands at ATK3, 16 tics into its 24-tic attack, and re-checks range
+and sight then, so backing off in time makes it miss. A pain cancels a
+pending bite. P_AproxDistance halves in 16.16, so the C compares in half
+units: a floor-halved integer misses a bite at exactly 59.5, and the test's
+negative control catches that. The demon has no stop range. Each axis steps
+at most DUMMY_MOVE_STEP, clamped against the player's box (16 + the 24-unit
+monster collision radius), so it ends square on one axis within bite range.
+
+Sprites: SARGA1-D1 walk, F1 attack, I0/J0/K0/M0/N0 death, with N0 the
+corpse, flat on the floor. The pose boxes use the same header rule as the
+imp. On PAL3 the demon comes out red and tan: the palette has no pink, and
+PAL3 is not changed for it.
+
+`tools/test-hitscan.py` covers the demon:
+- the SARG state timings drive DEMON_ATTACK_TICS and DEMON_BITE_AT;
+- the melee test matches Doom's 16.16 P_CheckMeleeRange on 40401 offsets;
+- an approach model, from 4453 starts, always ends in bite range without
+  entering the player's box.
+
+Four new negative controls (floor-halving, a range missing the -20, full
+steps, no box clamp) are all caught. `test-billboard-projection` re-derives
+DEMON_FRAME_GEOMETRY from the picture headers, and a perturbed corpse row is
+caught.
+
+**Still not Doom:**
+- The spectre has no fuzz; it is the plain demon.
+- Movement speed is the engine's shared step, not Doom's speed 10.
+- Door group 9 in E1M5 has one keyed face (special 26) and one plain face
+  (special 1). This engine keys the whole group, so its east face needs the
+  blue key, which Doom's does not. It is the only mixed door in E1M1-E1M5.
+- Computer map, light amp, soulsphere, radsuit, backpack and the rocket
+  launcher are not modelled, as on the other levels.
+
 ## Damage and weapon timing re-derived from P_DamageMobj and info.c (2026-09-18)
 
 A follow-up to the combat entry below. It covers every damage path and

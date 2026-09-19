@@ -417,6 +417,40 @@ each weapon's `info.c` state sequence, run on the player's 35 Hz tics, not on
 vblanks. The test simulates the real state lists tic by tic, so change a
 timeline by editing WEAPON_DEFS from `info.c`, never by tuning a cooldown.
 
+**The demon (3002) and the spectre (58) are the same monster for now.**
+MT_SHADOWS is MT_SERGEANT plus `MF_SHADOW`; the fuzz effect is not drawn, so
+58 maps to the plain demon visual (`BILLBOARD_VISUAL_DEMON`) until someone
+implements it. Its values are `info.c`/`p_enemy.c`: 150 HP, radius 30 (not
+the shared 20), mass 400 (a quarter of the usual knockback via
+`DOOM_DEMON_MASS_RATIO`), painchance 180, pain 2+2 tics. It has no ranged
+attack: `A_SargAttack` only fires inside `P_CheckMeleeRange`
+(`P_AproxDistance < 64 - 20 + player radius`, compared in doubled/half units
+to stay bit-exact with Doom's 16.16 fixed point -- a plain `>>1` floor-halve
+misses at exact half-unit distances, per `test-hitscan.py`'s negative
+control), for `((P_Random()%10)+1)*4` = 4..40 damage. It has no stop range:
+unlike the other monsters it closes to melee and stays there. Doom radius for
+hitscan and splash goes through `billboard_doom_radius(object)`, not the flat
+`DOOM_RADIUS_MONSTER`, and that helper is where any future per-type radius
+belongs.
+
+**Adding a campaign level follows the E1M5 recipe (LOG, 2026-09-18).** Extend
+`--maps` on `wad-map-extract.py` and `bsp_vis.py` together (atomic, never
+regenerate one map alone), add a `.wallpackN` section to `tools/md_banked.ld`
+plus the count assert in `level_bank.c`, add the CAMPAIGN/INTERMISSION_NODES
+rows and intermission cards, and add the level to every test that enumerates
+maps. Fit the shared intermission palette to the already-shipped screens
+only -- refitting it over new cards reflows 1-2 palette levels per channel,
+which is enough to flip a thousand-odd pixels on screens that didn't change.
+The E2E generator's lock scenario presses the door the certified route
+actually crosses after picking up the key
+(`lock_scenario_door` in `generate-e2e-routes.py`), not just any door carrying
+that key -- a level can have more than one locked door on the same key, and
+picking the wrong one produces an unreachable detour. This engine keys an
+entire door group by its keyed face, so a level with a mixed keyed/plain door
+group (E1M5's group 9: special 26 and special 1 sharing a sector) will demand
+the key on both faces where Doom only demanded it on one; that's a known,
+accepted deviation, not a bug to chase.
+
 ## Dead ends — do not redo without new evidence
 
 Each is measured and written up in [LOG.md](LOG.md); the date locates the entry.
