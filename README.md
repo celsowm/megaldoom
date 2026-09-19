@@ -1,5 +1,7 @@
 # MegalDoom
 
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/L4L11VB7JN)
+
 MegalDoom is a Doom-inspired first-person shooter built for the Sega Mega Drive / Genesis.
 It is a technical experiment in bringing textured 3D-style environments, doors, enemies,
 items, music and sound effects to the console's hardware limits.
