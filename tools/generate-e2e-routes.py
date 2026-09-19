@@ -68,12 +68,9 @@ COMBAT_THINGS = {3001, 3002, 3003, 3004, 3005, 3006, 3007, 3008, 58}
 # stalling waypoint 390 for 85% of the run's frame budget. src/main.c marks
 # combat_hit on a direct barrel detonation, so a barrel satisfies the waypoint.
 BARREL_THING = 2035
-# The runtime's own billboard spawn cap (src/bsp/generated_map_limits.h). It
-# must NOT be read from doom_map.runtime_things: that helper carries a stale
-# hardcoded 112, which silently drops every one of E1M2's 24 barrels (they sit
-# past the 112th qualifying thing in table order) and is why the barrel-target
-# search below found nothing on the first attempt. The campaign maps all have
-# fewer things than this, so in practice no target is ever capped away.
+# The runtime's own billboard spawn cap (src/bsp/generated_map_limits.h). The
+# campaign maps all have fewer things than this, so in practice no target is
+# ever capped away.
 MAX_ACTIVE_THINGS = int(re.search(
     r"MEGALDOOM_MAP_MAX_ACTIVE_THINGS\s+(\d+)",
     (ROOT / "src" / "bsp" / "generated_map_limits.h").read_text()).group(1))

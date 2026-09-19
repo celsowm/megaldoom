@@ -82,7 +82,6 @@ USE_SIGHT_STANDOFF = 4
 # wall end, and every pose a step aside hit door 15 or nothing. Inside 128 the
 # search walks up to the surface, which is the press the E2E route can repeat.
 USE_WITNESS_RADIUS = 128
-BILLBOARD_OBJECT_COUNT = 112
 # The one constant slab height every wall projects from. A sky sector taller
 # than this already renders its walls SHORTER than they really are, so the sky
 # above them survives on its own; only a sector below it needs the sky-wall
@@ -212,8 +211,6 @@ def runtime_things(things):
             continue
         if thing_type not in RUNTIME_THING_TYPES:
             continue
-        if len(result) >= BILLBOARD_OBJECT_COUNT:
-            break
         result.append(thing)
     return result
 
