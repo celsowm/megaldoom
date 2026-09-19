@@ -451,6 +451,28 @@ group (E1M5's group 9: special 26 and special 1 sharing a sector) will demand
 the key on both faces where Doom only demanded it on one; that's a known,
 accepted deviation, not a bug to chase.
 
+**Size a per-object array by what it holds, not by MAX_ACTIVE_THINGS (LOG,
+2026-09-19).** Most objects are pickups. Monster-only state lives in
+`g_enemy_states[BILLBOARD_ENEMY_COUNT]` through `enemy_slot`. The enemy lists
+are sized by ENEMIES, and the target/blocking registries by TARGETS
+(monsters + barrels). All three ceilings are generated, and
+`test-billboard-population.py` checks them against `billboard.c`'s type table.
+A new monster type goes in `doom_map.ENEMY_THING_TYPES`. A new spawned
+blocking or targetable prop goes in `TARGET_THING_TYPES`, or its registry
+overflows.
+
+**E2E certificates see every spawned thing.** `doom_map.runtime_things` has
+no cap. Its old stale cap of 112 hid barrels from four routes, which then
+walked through them and passed only while combat happened to destroy them
+first. When a route stalls after a change that only moves timing, rerun it
+with an output-identical cost flag (`-ExtraFlags
+'-DMEGALDOOM_NO_WALL_SCALERS=1'`). If the outcome moves, the route is
+fragile: find what it depends on, and do not revert the change.
+
+**Resident ROM is nearly full.** 78.8 KB is left below the 0x280000 level
+window after E1M6. E1M7 is about E1M6's size and needs its map descriptor in
+its banked pack before it can ship.
+
 ## Dead ends — do not redo without new evidence
 
 Each is measured and written up in [LOG.md](LOG.md); the date locates the entry.

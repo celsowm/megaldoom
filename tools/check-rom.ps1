@@ -162,6 +162,30 @@ if (-not $script:failed) {
     Pass ("$($packs.Count) level packs at 0x{0:X6}, banks 5..{1}." -f
           $LevelWindowBase, (4 + 3 * $packs.Count))
 }
+# Map arrays (tools/bsp_emit.py, BSP_LEVEL_PACK) live in their own level's
+# pack: E1M<n> in .wallpack<n-1>. Every pack links at the same address, so only
+# the section name tells a misplaced array apart. The resident vis-program
+# index tables (generated_bsp_vis.c) and the g_e1m<n>_map descriptors are not
+# map arrays.
+$mapArrays = 0
+foreach ($line in (& $ObjdumpExe -t $RomOutPath)) {
+    if ($line -match '\s(\S+)\s+[0-9a-f]{8}\s+(?:\.hidden\s+)?e1m(\d)_bsp_(\w+?)(?:\.lto_priv\.\d+)?$' -and
+        $Matches[3] -notlike 'vis_program_*') {
+        $mapArrays++
+        $want = ".wallpack{0}" -f ([int]$Matches[2] - 1)
+        if ($Matches[1] -ne $want) {
+            $why = if ($Matches[1] -like ".wallpack*") { "another level's banks" } else { "resident ROM" }
+            Fail ("e1m{0}_bsp_{1} is in {2} ({3}), not {4}." -f
+                  $Matches[2], $Matches[3], $Matches[1], $why, $want)
+        }
+    }
+}
+if ($mapArrays -eq 0) {
+    Fail "no e1mN_bsp_* map arrays found in the symbol table."
+}
+elseif (-not $script:failed) {
+    Pass ("$mapArrays map arrays, each in its own level's pack.")
+}
 foreach ($other in $sections.Keys) {
     $sec = $sections[$other]
     if ($other -notlike ".wallpack*" -and $sec.Size -gt 0 -and

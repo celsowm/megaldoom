@@ -30,3 +30,9 @@ megaldoom_vis_program_e1m4: /* 355 leaves, 37355 words, longest 297 */
     .globl  megaldoom_vis_program_e1m5
 megaldoom_vis_program_e1m5: /* 384 leaves, 52565 words, longest 469 */
     .incbin "src/bsp/generated_bsp_vis_e1m5.dat"
+
+    .section .wallpack5,"a"
+    .align  2
+    .globl  megaldoom_vis_program_e1m6
+megaldoom_vis_program_e1m6: /* 606 leaves, 83698 words, longest 986 */
+    .incbin "src/bsp/generated_bsp_vis_e1m6.dat"

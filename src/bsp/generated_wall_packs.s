@@ -33,6 +33,11 @@ megaldoom_wallpack3: /* E1M4 */
 megaldoom_wallpack4: /* E1M5 */
     .incbin "src/bsp/generated_wallpack_e1m5.dat"
 
+    .section .wallpack5,"a"
+    .globl megaldoom_wallpack5
+megaldoom_wallpack5: /* E1M6 */
+    .incbin "src/bsp/generated_wallpack_e1m6.dat"
+
     .section .rodata.megaldoom_level_wall_bases,"a"
     .align 2
     .globl megaldoom_level_wall_bases
@@ -43,11 +48,14 @@ megaldoom_level_wall_bases:
     .long megaldoom_wallpack0+32768 /* BIGDOOR2 */
     .long megaldoom_wallpack0+65536 /* BIGDOOR4 */
     .long megaldoom_wallpack0+0 /* BRNPOIS */
+    .long megaldoom_wallpack0+0 /* BRNSMAL1 */
+    .long megaldoom_wallpack0+0 /* BRNSMAL2 */
     .long megaldoom_wallpack0+98304 /* BROWN1 */
     .long megaldoom_wallpack0+131072 /* BROWN144 */
     .long megaldoom_wallpack0+163840 /* BROWN96 */
     .long megaldoom_wallpack0+196608 /* BROWNGRN */
     .long megaldoom_wallpack0+0 /* BROWNHUG */
+    .long megaldoom_wallpack0+0 /* BROWNPIP */
     .long megaldoom_wallpack0+0 /* COMPSPAN */
     .long megaldoom_wallpack0+229376 /* COMPTALL */
     .long megaldoom_wallpack0+262144 /* DOOR1 */
@@ -59,6 +67,7 @@ megaldoom_level_wall_bases:
     .long megaldoom_wallpack0+360448 /* EXITDOOR */
     .long megaldoom_wallpack0+0 /* LITE2 */
     .long megaldoom_wallpack0+393216 /* LITE3 */
+    .long megaldoom_wallpack0+0 /* LITEBLU1 */
     .long megaldoom_wallpack0+0 /* LITEBLU3 */
     .long megaldoom_wallpack0+0 /* METAL1 */
     .long megaldoom_wallpack0+0 /* NUKE24 */
@@ -71,9 +80,12 @@ megaldoom_level_wall_bases:
     .long megaldoom_wallpack0+0 /* STARTAN2 */
     .long megaldoom_wallpack0+524288 /* STARTAN3 */
     .long megaldoom_wallpack0+0 /* STEP2 */
+    .long megaldoom_wallpack0+0 /* STEP4 */
     .long megaldoom_wallpack0+0 /* STONE */
     .long megaldoom_wallpack0+0 /* STONE2 */
     .long megaldoom_wallpack0+557056 /* SUPPORT2 */
+    .long megaldoom_wallpack0+0 /* SW1BRN1 */
+    .long megaldoom_wallpack0+0 /* SW1BRN2 */
     .long megaldoom_wallpack0+0 /* SW1COMP */
     .long megaldoom_wallpack0+0 /* SW1METAL */
     .long megaldoom_wallpack0+0 /* SW1STONE */
@@ -88,11 +100,14 @@ megaldoom_level_wall_bases:
     .long megaldoom_wallpack1+32768 /* BIGDOOR2 */
     .long megaldoom_wallpack1+0 /* BIGDOOR4 */
     .long megaldoom_wallpack1+0 /* BRNPOIS */
+    .long megaldoom_wallpack1+0 /* BRNSMAL1 */
+    .long megaldoom_wallpack1+0 /* BRNSMAL2 */
     .long megaldoom_wallpack1+65536 /* BROWN1 */
     .long megaldoom_wallpack1+98304 /* BROWN144 */
     .long megaldoom_wallpack1+0 /* BROWN96 */
     .long megaldoom_wallpack1+131072 /* BROWNGRN */
     .long megaldoom_wallpack1+163840 /* BROWNHUG */
+    .long megaldoom_wallpack1+0 /* BROWNPIP */
     .long megaldoom_wallpack1+0 /* COMPSPAN */
     .long megaldoom_wallpack1+196608 /* COMPTALL */
     .long megaldoom_wallpack1+229376 /* DOOR1 */
@@ -104,6 +119,7 @@ megaldoom_level_wall_bases:
     .long megaldoom_wallpack1+360448 /* EXITDOOR */
     .long megaldoom_wallpack1+0 /* LITE2 */
     .long megaldoom_wallpack1+393216 /* LITE3 */
+    .long megaldoom_wallpack1+0 /* LITEBLU1 */
     .long megaldoom_wallpack1+425984 /* LITEBLU3 */
     .long megaldoom_wallpack1+458752 /* METAL1 */
     .long megaldoom_wallpack1+0 /* NUKE24 */
@@ -116,9 +132,12 @@ megaldoom_level_wall_bases:
     .long megaldoom_wallpack1+589824 /* STARTAN2 */
     .long megaldoom_wallpack1+622592 /* STARTAN3 */
     .long megaldoom_wallpack1+0 /* STEP2 */
+    .long megaldoom_wallpack1+0 /* STEP4 */
     .long megaldoom_wallpack1+0 /* STONE */
     .long megaldoom_wallpack1+655360 /* STONE2 */
     .long megaldoom_wallpack1+688128 /* SUPPORT2 */
+    .long megaldoom_wallpack1+0 /* SW1BRN1 */
+    .long megaldoom_wallpack1+0 /* SW1BRN2 */
     .long megaldoom_wallpack1+720896 /* SW1COMP */
     .long megaldoom_wallpack1+0 /* SW1METAL */
     .long megaldoom_wallpack1+0 /* SW1STONE */
@@ -133,11 +152,14 @@ megaldoom_level_wall_bases:
     .long megaldoom_wallpack2+32768 /* BIGDOOR2 */
     .long megaldoom_wallpack2+65536 /* BIGDOOR4 */
     .long megaldoom_wallpack2+0 /* BRNPOIS */
+    .long megaldoom_wallpack2+0 /* BRNSMAL1 */
+    .long megaldoom_wallpack2+0 /* BRNSMAL2 */
     .long megaldoom_wallpack2+98304 /* BROWN1 */
     .long megaldoom_wallpack2+131072 /* BROWN144 */
     .long megaldoom_wallpack2+163840 /* BROWN96 */
     .long megaldoom_wallpack2+196608 /* BROWNGRN */
     .long megaldoom_wallpack2+229376 /* BROWNHUG */
+    .long megaldoom_wallpack2+0 /* BROWNPIP */
     .long megaldoom_wallpack2+0 /* COMPSPAN */
     .long megaldoom_wallpack2+262144 /* COMPTALL */
     .long megaldoom_wallpack2+294912 /* DOOR1 */
@@ -149,6 +171,7 @@ megaldoom_level_wall_bases:
     .long megaldoom_wallpack2+458752 /* EXITDOOR */
     .long megaldoom_wallpack2+0 /* LITE2 */
     .long megaldoom_wallpack2+491520 /* LITE3 */
+    .long megaldoom_wallpack2+0 /* LITEBLU1 */
     .long megaldoom_wallpack2+524288 /* LITEBLU3 */
     .long megaldoom_wallpack2+557056 /* METAL1 */
     .long megaldoom_wallpack2+0 /* NUKE24 */
@@ -161,9 +184,12 @@ megaldoom_level_wall_bases:
     .long megaldoom_wallpack2+720896 /* STARTAN2 */
     .long megaldoom_wallpack2+753664 /* STARTAN3 */
     .long megaldoom_wallpack2+0 /* STEP2 */
+    .long megaldoom_wallpack2+0 /* STEP4 */
     .long megaldoom_wallpack2+786432 /* STONE */
     .long megaldoom_wallpack2+819200 /* STONE2 */
     .long megaldoom_wallpack2+851968 /* SUPPORT2 */
+    .long megaldoom_wallpack2+0 /* SW1BRN1 */
+    .long megaldoom_wallpack2+0 /* SW1BRN2 */
     .long megaldoom_wallpack2+884736 /* SW1COMP */
     .long megaldoom_wallpack2+0 /* SW1METAL */
     .long megaldoom_wallpack2+0 /* SW1STONE */
@@ -178,11 +204,14 @@ megaldoom_level_wall_bases:
     .long megaldoom_wallpack3+65536 /* BIGDOOR2 */
     .long megaldoom_wallpack3+98304 /* BIGDOOR4 */
     .long megaldoom_wallpack3+131072 /* BRNPOIS */
+    .long megaldoom_wallpack3+0 /* BRNSMAL1 */
+    .long megaldoom_wallpack3+0 /* BRNSMAL2 */
     .long megaldoom_wallpack3+163840 /* BROWN1 */
     .long megaldoom_wallpack3+196608 /* BROWN144 */
     .long megaldoom_wallpack3+229376 /* BROWN96 */
     .long megaldoom_wallpack3+262144 /* BROWNGRN */
     .long megaldoom_wallpack3+0 /* BROWNHUG */
+    .long megaldoom_wallpack3+0 /* BROWNPIP */
     .long megaldoom_wallpack3+294912 /* COMPSPAN */
     .long megaldoom_wallpack3+327680 /* COMPTALL */
     .long megaldoom_wallpack3+360448 /* DOOR1 */
@@ -194,6 +223,7 @@ megaldoom_level_wall_bases:
     .long megaldoom_wallpack3+524288 /* EXITDOOR */
     .long megaldoom_wallpack3+557056 /* LITE2 */
     .long megaldoom_wallpack3+589824 /* LITE3 */
+    .long megaldoom_wallpack3+0 /* LITEBLU1 */
     .long megaldoom_wallpack3+0 /* LITEBLU3 */
     .long megaldoom_wallpack3+622592 /* METAL1 */
     .long megaldoom_wallpack3+655360 /* NUKE24 */
@@ -206,9 +236,12 @@ megaldoom_level_wall_bases:
     .long megaldoom_wallpack3+0 /* STARTAN2 */
     .long megaldoom_wallpack3+819200 /* STARTAN3 */
     .long megaldoom_wallpack3+851968 /* STEP2 */
+    .long megaldoom_wallpack3+0 /* STEP4 */
     .long megaldoom_wallpack3+884736 /* STONE */
     .long megaldoom_wallpack3+917504 /* STONE2 */
     .long megaldoom_wallpack3+950272 /* SUPPORT2 */
+    .long megaldoom_wallpack3+0 /* SW1BRN1 */
+    .long megaldoom_wallpack3+0 /* SW1BRN2 */
     .long megaldoom_wallpack3+983040 /* SW1COMP */
     .long megaldoom_wallpack3+1015808 /* SW1METAL */
     .long megaldoom_wallpack3+0 /* SW1STONE */
@@ -223,11 +256,14 @@ megaldoom_level_wall_bases:
     .long megaldoom_wallpack4+65536 /* BIGDOOR2 */
     .long megaldoom_wallpack4+0 /* BIGDOOR4 */
     .long megaldoom_wallpack4+0 /* BRNPOIS */
+    .long megaldoom_wallpack4+0 /* BRNSMAL1 */
+    .long megaldoom_wallpack4+0 /* BRNSMAL2 */
     .long megaldoom_wallpack4+98304 /* BROWN1 */
     .long megaldoom_wallpack4+131072 /* BROWN144 */
     .long megaldoom_wallpack4+163840 /* BROWN96 */
     .long megaldoom_wallpack4+196608 /* BROWNGRN */
     .long megaldoom_wallpack4+0 /* BROWNHUG */
+    .long megaldoom_wallpack4+0 /* BROWNPIP */
     .long megaldoom_wallpack4+0 /* COMPSPAN */
     .long megaldoom_wallpack4+229376 /* COMPTALL */
     .long megaldoom_wallpack4+262144 /* DOOR1 */
@@ -239,6 +275,7 @@ megaldoom_level_wall_bases:
     .long megaldoom_wallpack4+425984 /* EXITDOOR */
     .long megaldoom_wallpack4+0 /* LITE2 */
     .long megaldoom_wallpack4+458752 /* LITE3 */
+    .long megaldoom_wallpack4+0 /* LITEBLU1 */
     .long megaldoom_wallpack4+0 /* LITEBLU3 */
     .long megaldoom_wallpack4+491520 /* METAL1 */
     .long megaldoom_wallpack4+0 /* NUKE24 */
@@ -251,9 +288,12 @@ megaldoom_level_wall_bases:
     .long megaldoom_wallpack4+0 /* STARTAN2 */
     .long megaldoom_wallpack4+655360 /* STARTAN3 */
     .long megaldoom_wallpack4+0 /* STEP2 */
+    .long megaldoom_wallpack4+0 /* STEP4 */
     .long megaldoom_wallpack4+688128 /* STONE */
     .long megaldoom_wallpack4+720896 /* STONE2 */
     .long megaldoom_wallpack4+753664 /* SUPPORT2 */
+    .long megaldoom_wallpack4+0 /* SW1BRN1 */
+    .long megaldoom_wallpack4+0 /* SW1BRN2 */
     .long megaldoom_wallpack4+786432 /* SW1COMP */
     .long megaldoom_wallpack4+0 /* SW1METAL */
     .long megaldoom_wallpack4+819200 /* SW1STONE */
@@ -262,6 +302,58 @@ megaldoom_level_wall_bases:
     .long megaldoom_wallpack4+0 /* TEKWALL1 */
     .long megaldoom_wallpack4+0 /* TEKWALL4 */
     .long megaldoom_wallpack4+0 /* TEKWALL5 */
+    /* E1M6 */
+    .long megaldoom_wallpack5+0 /* __FALLBACK__ */
+    .long megaldoom_wallpack5+0 /* BIGDOOR1 */
+    .long megaldoom_wallpack5+32768 /* BIGDOOR2 */
+    .long megaldoom_wallpack5+65536 /* BIGDOOR4 */
+    .long megaldoom_wallpack5+0 /* BRNPOIS */
+    .long megaldoom_wallpack5+98304 /* BRNSMAL1 */
+    .long megaldoom_wallpack5+131072 /* BRNSMAL2 */
+    .long megaldoom_wallpack5+163840 /* BROWN1 */
+    .long megaldoom_wallpack5+0 /* BROWN144 */
+    .long megaldoom_wallpack5+196608 /* BROWN96 */
+    .long megaldoom_wallpack5+229376 /* BROWNGRN */
+    .long megaldoom_wallpack5+262144 /* BROWNHUG */
+    .long megaldoom_wallpack5+294912 /* BROWNPIP */
+    .long megaldoom_wallpack5+0 /* COMPSPAN */
+    .long megaldoom_wallpack5+327680 /* COMPTALL */
+    .long megaldoom_wallpack5+360448 /* DOOR1 */
+    .long megaldoom_wallpack5+393216 /* DOORBLU */
+    .long megaldoom_wallpack5+425984 /* DOORRED */
+    .long megaldoom_wallpack5+458752 /* DOORSTOP */
+    .long megaldoom_wallpack5+491520 /* DOORTRAK */
+    .long megaldoom_wallpack5+524288 /* DOORYEL */
+    .long megaldoom_wallpack5+557056 /* EXITDOOR */
+    .long megaldoom_wallpack5+589824 /* LITE2 */
+    .long megaldoom_wallpack5+622592 /* LITE3 */
+    .long megaldoom_wallpack5+655360 /* LITEBLU1 */
+    .long megaldoom_wallpack5+688128 /* LITEBLU3 */
+    .long megaldoom_wallpack5+0 /* METAL1 */
+    .long megaldoom_wallpack5+0 /* NUKE24 */
+    .long megaldoom_wallpack5+0 /* PIPE2 */
+    .long megaldoom_wallpack5+0 /* PLAT1 */
+    .long megaldoom_wallpack5+0 /* SLADWALL */
+    .long megaldoom_wallpack5+720896 /* STARG3 */
+    .long megaldoom_wallpack5+0 /* STARGR1 */
+    .long megaldoom_wallpack5+0 /* STARTAN1 */
+    .long megaldoom_wallpack5+0 /* STARTAN2 */
+    .long megaldoom_wallpack5+0 /* STARTAN3 */
+    .long megaldoom_wallpack5+0 /* STEP2 */
+    .long megaldoom_wallpack5+753664 /* STEP4 */
+    .long megaldoom_wallpack5+0 /* STONE */
+    .long megaldoom_wallpack5+0 /* STONE2 */
+    .long megaldoom_wallpack5+786432 /* SUPPORT2 */
+    .long megaldoom_wallpack5+819200 /* SW1BRN1 */
+    .long megaldoom_wallpack5+851968 /* SW1BRN2 */
+    .long megaldoom_wallpack5+884736 /* SW1COMP */
+    .long megaldoom_wallpack5+0 /* SW1METAL */
+    .long megaldoom_wallpack5+0 /* SW1STONE */
+    .long megaldoom_wallpack5+0 /* SW1STRTN */
+    .long megaldoom_wallpack5+917504 /* SW2BROWN */
+    .long megaldoom_wallpack5+950272 /* TEKWALL1 */
+    .long megaldoom_wallpack5+983040 /* TEKWALL4 */
+    .long megaldoom_wallpack5+1015808 /* TEKWALL5 */
 
     .section .rodata.megaldoom_level_door_bases,"a"
     .align 2
@@ -273,11 +365,14 @@ megaldoom_level_door_bases:
     .long megaldoom_wallpack0+622592 /* BIGDOOR2 */
     .long megaldoom_wallpack0+655360 /* BIGDOOR4 */
     .long 0 /* BRNPOIS */
+    .long 0 /* BRNSMAL1 */
+    .long 0 /* BRNSMAL2 */
     .long 0 /* BROWN1 */
     .long 0 /* BROWN144 */
     .long 0 /* BROWN96 */
     .long 0 /* BROWNGRN */
     .long 0 /* BROWNHUG */
+    .long 0 /* BROWNPIP */
     .long 0 /* COMPSPAN */
     .long 0 /* COMPTALL */
     .long 0 /* DOOR1 */
@@ -289,6 +384,7 @@ megaldoom_level_door_bases:
     .long megaldoom_wallpack0+688128 /* EXITDOOR */
     .long 0 /* LITE2 */
     .long 0 /* LITE3 */
+    .long 0 /* LITEBLU1 */
     .long 0 /* LITEBLU3 */
     .long 0 /* METAL1 */
     .long 0 /* NUKE24 */
@@ -301,9 +397,12 @@ megaldoom_level_door_bases:
     .long 0 /* STARTAN2 */
     .long 0 /* STARTAN3 */
     .long 0 /* STEP2 */
+    .long 0 /* STEP4 */
     .long 0 /* STONE */
     .long 0 /* STONE2 */
     .long 0 /* SUPPORT2 */
+    .long 0 /* SW1BRN1 */
+    .long 0 /* SW1BRN2 */
     .long 0 /* SW1COMP */
     .long 0 /* SW1METAL */
     .long 0 /* SW1STONE */
@@ -318,11 +417,14 @@ megaldoom_level_door_bases:
     .long megaldoom_wallpack1+851968 /* BIGDOOR2 */
     .long 0 /* BIGDOOR4 */
     .long 0 /* BRNPOIS */
+    .long 0 /* BRNSMAL1 */
+    .long 0 /* BRNSMAL2 */
     .long megaldoom_wallpack1+884736 /* BROWN1 */
     .long 0 /* BROWN144 */
     .long 0 /* BROWN96 */
     .long megaldoom_wallpack1+917504 /* BROWNGRN */
     .long 0 /* BROWNHUG */
+    .long 0 /* BROWNPIP */
     .long 0 /* COMPSPAN */
     .long 0 /* COMPTALL */
     .long 0 /* DOOR1 */
@@ -334,6 +436,7 @@ megaldoom_level_door_bases:
     .long megaldoom_wallpack1+950272 /* EXITDOOR */
     .long 0 /* LITE2 */
     .long 0 /* LITE3 */
+    .long 0 /* LITEBLU1 */
     .long 0 /* LITEBLU3 */
     .long 0 /* METAL1 */
     .long 0 /* NUKE24 */
@@ -346,9 +449,12 @@ megaldoom_level_door_bases:
     .long 0 /* STARTAN2 */
     .long 0 /* STARTAN3 */
     .long 0 /* STEP2 */
+    .long 0 /* STEP4 */
     .long 0 /* STONE */
     .long 0 /* STONE2 */
     .long 0 /* SUPPORT2 */
+    .long 0 /* SW1BRN1 */
+    .long 0 /* SW1BRN2 */
     .long 0 /* SW1COMP */
     .long 0 /* SW1METAL */
     .long 0 /* SW1STONE */
@@ -363,11 +469,14 @@ megaldoom_level_door_bases:
     .long megaldoom_wallpack2+1015808 /* BIGDOOR2 */
     .long megaldoom_wallpack2+1048576 /* BIGDOOR4 */
     .long 0 /* BRNPOIS */
+    .long 0 /* BRNSMAL1 */
+    .long 0 /* BRNSMAL2 */
     .long 0 /* BROWN1 */
     .long 0 /* BROWN144 */
     .long 0 /* BROWN96 */
     .long 0 /* BROWNGRN */
     .long 0 /* BROWNHUG */
+    .long 0 /* BROWNPIP */
     .long 0 /* COMPSPAN */
     .long 0 /* COMPTALL */
     .long 0 /* DOOR1 */
@@ -379,6 +488,7 @@ megaldoom_level_door_bases:
     .long megaldoom_wallpack2+1081344 /* EXITDOOR */
     .long 0 /* LITE2 */
     .long 0 /* LITE3 */
+    .long 0 /* LITEBLU1 */
     .long 0 /* LITEBLU3 */
     .long megaldoom_wallpack2+1114112 /* METAL1 */
     .long 0 /* NUKE24 */
@@ -391,9 +501,12 @@ megaldoom_level_door_bases:
     .long megaldoom_wallpack2+1146880 /* STARTAN2 */
     .long megaldoom_wallpack2+1179648 /* STARTAN3 */
     .long 0 /* STEP2 */
+    .long 0 /* STEP4 */
     .long 0 /* STONE */
     .long megaldoom_wallpack2+1212416 /* STONE2 */
     .long 0 /* SUPPORT2 */
+    .long 0 /* SW1BRN1 */
+    .long 0 /* SW1BRN2 */
     .long 0 /* SW1COMP */
     .long 0 /* SW1METAL */
     .long 0 /* SW1STONE */
@@ -408,11 +521,14 @@ megaldoom_level_door_bases:
     .long megaldoom_wallpack3+1146880 /* BIGDOOR2 */
     .long megaldoom_wallpack3+1179648 /* BIGDOOR4 */
     .long 0 /* BRNPOIS */
+    .long 0 /* BRNSMAL1 */
+    .long 0 /* BRNSMAL2 */
     .long 0 /* BROWN1 */
     .long 0 /* BROWN144 */
     .long 0 /* BROWN96 */
     .long 0 /* BROWNGRN */
     .long 0 /* BROWNHUG */
+    .long 0 /* BROWNPIP */
     .long 0 /* COMPSPAN */
     .long 0 /* COMPTALL */
     .long megaldoom_wallpack3+1212416 /* DOOR1 */
@@ -424,6 +540,7 @@ megaldoom_level_door_bases:
     .long megaldoom_wallpack3+1245184 /* EXITDOOR */
     .long 0 /* LITE2 */
     .long 0 /* LITE3 */
+    .long 0 /* LITEBLU1 */
     .long 0 /* LITEBLU3 */
     .long 0 /* METAL1 */
     .long 0 /* NUKE24 */
@@ -436,9 +553,12 @@ megaldoom_level_door_bases:
     .long 0 /* STARTAN2 */
     .long 0 /* STARTAN3 */
     .long megaldoom_wallpack3+1277952 /* STEP2 */
+    .long 0 /* STEP4 */
     .long megaldoom_wallpack3+1310720 /* STONE */
     .long 0 /* STONE2 */
     .long 0 /* SUPPORT2 */
+    .long 0 /* SW1BRN1 */
+    .long 0 /* SW1BRN2 */
     .long 0 /* SW1COMP */
     .long 0 /* SW1METAL */
     .long 0 /* SW1STONE */
@@ -453,11 +573,14 @@ megaldoom_level_door_bases:
     .long megaldoom_wallpack4+884736 /* BIGDOOR2 */
     .long 0 /* BIGDOOR4 */
     .long 0 /* BRNPOIS */
+    .long 0 /* BRNSMAL1 */
+    .long 0 /* BRNSMAL2 */
     .long megaldoom_wallpack4+917504 /* BROWN1 */
     .long 0 /* BROWN144 */
     .long 0 /* BROWN96 */
     .long 0 /* BROWNGRN */
     .long 0 /* BROWNHUG */
+    .long 0 /* BROWNPIP */
     .long 0 /* COMPSPAN */
     .long 0 /* COMPTALL */
     .long megaldoom_wallpack4+950272 /* DOOR1 */
@@ -469,6 +592,7 @@ megaldoom_level_door_bases:
     .long megaldoom_wallpack4+983040 /* EXITDOOR */
     .long 0 /* LITE2 */
     .long 0 /* LITE3 */
+    .long 0 /* LITEBLU1 */
     .long 0 /* LITEBLU3 */
     .long 0 /* METAL1 */
     .long 0 /* NUKE24 */
@@ -481,14 +605,69 @@ megaldoom_level_door_bases:
     .long 0 /* STARTAN2 */
     .long 0 /* STARTAN3 */
     .long 0 /* STEP2 */
+    .long 0 /* STEP4 */
     .long megaldoom_wallpack4+1015808 /* STONE */
     .long 0 /* STONE2 */
     .long 0 /* SUPPORT2 */
+    .long 0 /* SW1BRN1 */
+    .long 0 /* SW1BRN2 */
     .long megaldoom_wallpack4+1048576 /* SW1COMP */
     .long 0 /* SW1METAL */
     .long 0 /* SW1STONE */
     .long 0 /* SW1STRTN */
     .long 0 /* SW2BROWN */
     .long 0 /* TEKWALL1 */
+    .long 0 /* TEKWALL4 */
+    .long 0 /* TEKWALL5 */
+    /* E1M6 */
+    .long 0 /* __FALLBACK__ */
+    .long 0 /* BIGDOOR1 */
+    .long megaldoom_wallpack5+1048576 /* BIGDOOR2 */
+    .long megaldoom_wallpack5+1081344 /* BIGDOOR4 */
+    .long 0 /* BRNPOIS */
+    .long 0 /* BRNSMAL1 */
+    .long 0 /* BRNSMAL2 */
+    .long 0 /* BROWN1 */
+    .long 0 /* BROWN144 */
+    .long 0 /* BROWN96 */
+    .long megaldoom_wallpack5+1114112 /* BROWNGRN */
+    .long 0 /* BROWNHUG */
+    .long 0 /* BROWNPIP */
+    .long 0 /* COMPSPAN */
+    .long megaldoom_wallpack5+1146880 /* COMPTALL */
+    .long 0 /* DOOR1 */
+    .long 0 /* DOORBLU */
+    .long 0 /* DOORRED */
+    .long 0 /* DOORSTOP */
+    .long 0 /* DOORTRAK */
+    .long 0 /* DOORYEL */
+    .long megaldoom_wallpack5+1179648 /* EXITDOOR */
+    .long 0 /* LITE2 */
+    .long 0 /* LITE3 */
+    .long 0 /* LITEBLU1 */
+    .long 0 /* LITEBLU3 */
+    .long 0 /* METAL1 */
+    .long 0 /* NUKE24 */
+    .long 0 /* PIPE2 */
+    .long 0 /* PLAT1 */
+    .long 0 /* SLADWALL */
+    .long 0 /* STARG3 */
+    .long 0 /* STARGR1 */
+    .long 0 /* STARTAN1 */
+    .long 0 /* STARTAN2 */
+    .long 0 /* STARTAN3 */
+    .long 0 /* STEP2 */
+    .long 0 /* STEP4 */
+    .long 0 /* STONE */
+    .long 0 /* STONE2 */
+    .long 0 /* SUPPORT2 */
+    .long 0 /* SW1BRN1 */
+    .long 0 /* SW1BRN2 */
+    .long 0 /* SW1COMP */
+    .long 0 /* SW1METAL */
+    .long 0 /* SW1STONE */
+    .long 0 /* SW1STRTN */
+    .long 0 /* SW2BROWN */
+    .long megaldoom_wallpack5+1212416 /* TEKWALL1 */
     .long 0 /* TEKWALL4 */
     .long 0 /* TEKWALL5 */

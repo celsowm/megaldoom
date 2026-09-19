@@ -35,6 +35,7 @@ def main():
     e1m3 = generated("e1m3")
     e1m4 = generated("e1m4")
     e1m5 = generated("e1m5")
+    e1m6 = generated("e1m6")
     limits = (ROOT / "src" / "bsp" / "generated_map_limits.h").read_text()
     header = (ROOT / "src" / "bsp" / "bsp_map.h").read_text()
     runtime = (ROOT / "src" / "bsp" / "bsp_map.c").read_text()
@@ -47,14 +48,16 @@ def main():
     bsp_render_internal = (ROOT / "src" / "bsp" / "bsp_render_internal.h").read_text()
 
     for token in (
-        # MAX_SEGS/MAX_VERTICES were 968/946 until 2026-09-12: capping window
-        # openings at 64 units split E1M2's 38 window lines into collinear wall
-        # pieces (1089 segs, 1006 lattice-extended vertices). That is 121 bytes
-        # of seg query bits and 300 of vertex cache in work RAM.
-        "MEGALDOOM_MAP_COUNT 5", "MEGALDOOM_MAP_MAX_SEGS 1089",
-        "MEGALDOOM_MAP_MAX_VERTICES 1006", "MEGALDOOM_MAP_MAX_SUBSECTORS 461",
-        "MEGALDOOM_MAP_MAX_NODES 460", "MEGALDOOM_MAP_MAX_SECTORS 200",
-        "MEGALDOOM_MAP_MAX_ACTIVE_THINGS 326",
+        # E1M6 is the largest level in every dimension, so it sets every
+        # ceiling (2026-09-19). The object pool is sized per kind: 405 objects
+        # on hard, of which 177 monsters and 201 targets (monsters + barrels).
+        "MEGALDOOM_MAP_COUNT 6", "MEGALDOOM_MAP_MAX_SEGS 1293",
+        "MEGALDOOM_MAP_MAX_VERTICES 1217", "MEGALDOOM_MAP_MAX_SUBSECTORS 606",
+        "MEGALDOOM_MAP_MAX_NODES 605", "MEGALDOOM_MAP_MAX_SECTORS 250",
+        "MEGALDOOM_MAP_MAX_AUTOMAP_LINES 1069",
+        "MEGALDOOM_MAP_MAX_ACTIVE_THINGS 405",
+        "MEGALDOOM_MAP_MAX_ACTIVE_ENEMIES 177",
+        "MEGALDOOM_MAP_MAX_ACTIVE_TARGETS 201",
     ):
         assert token in limits
     assert "const BspMapData g_e1m1_map" in e1m1
@@ -71,12 +74,15 @@ def main():
     # that moved.
     assert "const BspMapData g_e1m5_map" in e1m5
     assert "857u, 778u, 384u, 383u, 20u, 293u, 143u, 9u" in e1m5
+    assert "const BspMapData g_e1m6_map" in e1m6
+    assert "1293u, 1217u, 606u, 605u, 24u, 463u, 250u, 4u, 1069u" in e1m6
     assert "1089u, 1006u, 448u, 447u, 12u, 262u, 200u, 6u" in e1m2
     assert E1M1_HEADER_ROW in e1m1
     assert "typedef struct {" in header and "BspMapData" in header
     assert "bsp_select_map(u16 level_index)" in runtime
     assert "static const BspMapData *const maps[MEGALDOOM_MAP_COUNT]" in runtime
     assert "&g_e1m1_map, &g_e1m2_map, &g_e1m3_map, &g_e1m4_map, &g_e1m5_map," in runtime
+    assert "        &g_e1m6_map,\n    };" in runtime
     assert "level_index >= MEGALDOOM_MAP_COUNT) return FALSE" in runtime
 
     bits1 = secret_bits(e1m1, "e1m1")
@@ -123,6 +129,8 @@ def main():
         "frontend_intermission_stats_e1m4",
         "frontend_intermission_entering_e1m5",
         "frontend_intermission_stats_e1m5",
+        "frontend_intermission_entering_e1m6",
+        "frontend_intermission_stats_e1m6",
         "INTERMISSION_NODES[MEGALDOOM_MAP_COUNT]",
     ):
         assert token in frontend
@@ -141,7 +149,7 @@ def main():
     assert "DEBUG_CHECKPOINT_KEY" in main_source
     assert "DEBUG_CHECKPOINT_EXIT" in main_source
 
-    print("ok    campaign: E1M1..E1M5 descriptors, carry/rebirth, stats and secrets")
+    print("ok    campaign: E1M1..E1M6 descriptors, carry/rebirth, stats and secrets")
 
 
 if __name__ == "__main__":

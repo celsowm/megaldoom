@@ -100,6 +100,7 @@ SECTIONS
     .wallpack2 { KEEP(*(.wallpack2)) . = 0x180000; }
     .wallpack3 { KEEP(*(.wallpack3)) . = 0x180000; }
     .wallpack4 { KEEP(*(.wallpack4)) . = 0x180000; }
+    .wallpack5 { KEEP(*(.wallpack5)) . = 0x180000; }
   }
 
   .stab 0 (NOLOAD) :

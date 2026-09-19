@@ -252,9 +252,10 @@ def main():
             asset_temp, combined_usage, sector_owner.sectors, None,
             door_texture_names, level_packs, pack_asm + ".tmp")
         reports = []
-        for campaign_map, _, temp in map_outputs:
+        for pack_index, (campaign_map, _, temp) in enumerate(map_outputs):
             reports.append(bsp_emit.emit_map_c(
-                temp, args.wad, campaign_map, texture_ids, texture_meta))
+                temp, args.wad, campaign_map, texture_ids, texture_meta,
+                pack_index))
         emit_limits(limits_temp, campaign_maps)
 
         os.replace(asset_temp, args.assets_out)
@@ -286,7 +287,7 @@ def main():
     # Wall pixels live in per-level banked packs built from the whole
     # campaign; one map on its own cannot emit a consistent set.
     raise SystemExit("single-map extraction was removed with the banked wall "
-                     "packs; use --maps E1M1 E1M2 E1M3 E1M4 E1M5")
+                     "packs; use --maps E1M1 E1M2 E1M3 E1M4 E1M5 E1M6")
 
 if __name__ == "__main__":
     main()

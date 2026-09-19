@@ -143,7 +143,8 @@ def main():
     assert "sizeof(BspAutomapLine) == 8" in header
     assert "sizeof(BspSeg) == 16" in header
     assert "sizeof(RayDoorOverlay) == 10" in (ROOT / "src/raycast.h").read_text()
-    assert "MEGALDOOM_MAP_MAX_AUTOMAP_LINES 810" in limits
+    # E1M6 (1069 lines) has set the ceiling since 2026-09-19; E1M2 (810) before.
+    assert "MEGALDOOM_MAP_MAX_AUTOMAP_LINES 1069" in limits
     assert "bsp_automap_mark_seg(seg_index);" in render
     # Discovery is render-only now: no line kind is revealed by visiting a
     # sector, so neither the sector bits nor the sector branch may come back.

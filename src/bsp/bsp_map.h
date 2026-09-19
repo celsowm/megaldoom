@@ -219,11 +219,17 @@ typedef struct {
 #define BSP_MAX_SUBSECTORS MEGALDOOM_MAP_MAX_SUBSECTORS
 #define BSP_MAX_NODES MEGALDOOM_MAP_MAX_NODES
 
+// A generated map's arrays live in its level's banked pack (tools/md_banked.ld),
+// mapped by bsp_select_map before any of them is read. Only the BspMapData
+// descriptors stay resident, so the vis lookups can compare their addresses.
+#define BSP_LEVEL_PACK(n) __attribute__((section(".wallpack" #n)))
+
 extern const BspMapData g_e1m1_map;
 extern const BspMapData g_e1m2_map;
 extern const BspMapData g_e1m3_map;
 extern const BspMapData g_e1m4_map;
 extern const BspMapData g_e1m5_map;
+extern const BspMapData g_e1m6_map;
 extern const BspMapData *g_bsp_map;
 
 bool bsp_select_map(u16 level_index);

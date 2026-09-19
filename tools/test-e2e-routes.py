@@ -67,7 +67,7 @@ def lines(path):
 def main():
     with tempfile.TemporaryDirectory() as temp:
         temp = Path(temp)
-        for name in ("E1M1", "E1M2", "E1M3", "E1M4", "E1M5"):
+        for name in ("E1M1", "E1M2", "E1M3", "E1M4", "E1M5", "E1M6"):
             output = temp / (name.lower() + ".waypoints")
             subprocess.check_call([sys.executable, str(GENERATOR), "--map", name,
                                    "--out", str(output)])
@@ -127,6 +127,21 @@ def main():
             assert len(locked) == len(unlocked) == 1, name
             assert locked[0][7] == "2" and unlocked[0][7] == "3", name
             assert locked[0][8] == unlocked[0][8], name
+        # E1M6 needs all three keys, and each gets its own pair: the LOCKED
+        # press before that key, the UNLOCKED one on the same group after it.
+        # Both blue doors sit behind plain doors until long after the blue
+        # key, so its detour walks through them (add_lock_detours' last
+        # resort).
+        rows = lines(temp / "e1m6.waypoints")
+        locked = [(index, row[8]) for index, row in enumerate(rows)
+                  if row[5] == "USE" and row[6] == "20"]
+        unlocked = [(index, row[8]) for index, row in enumerate(rows)
+                    if row[5] == "USE" and row[6] == "40"]
+        assert len(locked) == len(unlocked) == 3, (locked, unlocked)
+        assert {group for _, group in locked} == {group for _, group in unlocked}
+        assert len({group for _, group in locked}) == 3
+        for index, group in locked:
+            assert index < next(i for i, g in unlocked if g == group), group
         for name in ("E1M1", "E1M4"):
             assert not [row for row in lines(temp / (name.lower() + ".waypoints"))
                         if row[5] == "USE" and row[6] in {"20", "40"}]

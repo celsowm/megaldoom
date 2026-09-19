@@ -635,6 +635,14 @@ LOCK_DETOUR_KEY_MARGIN = 32
 # own LOCKED press is the check that the follower really left the key alone:
 # had it picked the key up, the door would answer UNLOCKED and the run fails.
 LOCK_DETOUR_KEY_MARGIN_TIGHT = 16
+# Last resort, after both margins: let the detour walk through plain doors
+# (no key, pressable in front of their face). E1M6's two blue doors are both
+# behind shut plain doors until well after the blue key, so a detour that opens
+# nothing reaches neither. The door-control pass that runs after this presses
+# each such door at the detour's first touch, and doors here toggle and stay
+# open, so the route meets them open later; verify_use_replay checks every
+# press against the exact door state, so a press that would shut one again
+# fails generation instead of the run.
 LOCK_DETOUR_MAX_CELLS = 200000
 LOCK_DETOUR_POSE_TRIES = 24
 
@@ -658,7 +666,7 @@ def _compact_grid_path(cells):
 
 
 def _press_detour(map_data, nodes, key_index, faces, expected_action=2,
-                  key_margin=LOCK_DETOUR_KEY_MARGIN):
+                  key_margin=LOCK_DETOUR_KEY_MARGIN, open_groups=frozenset()):
     """Insert a walk from the pre-key path to a cell that presses `faces` and back.
 
     Movement is a breadth-first search over the certificate's 16-unit grid with
@@ -675,6 +683,8 @@ def _press_detour(map_data, nodes, key_index, faces, expected_action=2,
     grid = {}
     for seg in map_data.out_segs:
         if seg["type"] == SEG_TRIGGER:
+            continue
+        if seg["type"] == SEG_DOOR and seg["door_group"] in open_groups:
             continue
         ax, ay = vertices[seg["v1"]]
         bx, by = vertices[seg["v2"]]
@@ -802,6 +812,11 @@ def add_lock_detours(map_data, nodes):
     for seg in map_data.out_segs:
         if seg["type"] == SEG_DOOR and seg["required_key"] != KEY_NONE:
             faces_by_key.setdefault(seg["required_key"], []).append(seg)
+    keyed_groups = {seg["door_group"] for segs in faces_by_key.values() for seg in segs}
+    plain_groups = frozenset(
+        seg["door_group"] for seg in map_data.out_segs
+        if seg["type"] == SEG_DOOR and seg["flags"] & SEG_FLAG_DIRECT_USE and
+        seg["door_group"] not in keyed_groups)
     for required_key in sorted(faces_by_key):
         key_index = next((index for index, node in enumerate(nodes)
                           if node["action"] == "key" and node["detail"] & required_key),
@@ -815,11 +830,17 @@ def add_lock_detours(map_data, nodes):
             continue
         faces = [seg for seg in faces_by_key[required_key]
                  if seg["door_group"] == door["door_group"]]
-        try:
-            nodes = _press_detour(map_data, nodes, key_index, faces)
-        except AssertionError:
-            nodes = _press_detour(map_data, nodes, key_index, faces,
-                                  key_margin=LOCK_DETOUR_KEY_MARGIN_TIGHT)
+        attempts = [{}, {"key_margin": LOCK_DETOUR_KEY_MARGIN_TIGHT},
+                    {"open_groups": plain_groups},
+                    {"open_groups": plain_groups,
+                     "key_margin": LOCK_DETOUR_KEY_MARGIN_TIGHT}]
+        for attempt, options in enumerate(attempts):
+            try:
+                nodes = _press_detour(map_data, nodes, key_index, faces, **options)
+                break
+            except AssertionError:
+                if attempt == len(attempts) - 1:
+                    raise
     return nodes
 
 def key_pickup_legs(map_data, node):
@@ -1017,12 +1038,17 @@ def route_lines(map_data):
         # still shut in front of it.  Walk the path forward from the key
         # pickup instead and press at the certified node standing right
         # before the segment that actually steps across the door's face.
+        # Every face of the group, not just `door`: a door is a sector with a
+        # face on each side, and `door` may be the far one. E1M6's group 18 is
+        # 16 units deep (y=-688 and y=-704); testing only the far face put
+        # the unlock press on the near face, inside the shut door.
         after = None
-        v1 = map_data.vertices[door["v1"]]
-        v2 = map_data.vertices[door["v2"]]
+        faces = [(map_data.vertices[seg["v1"]], map_data.vertices[seg["v2"]])
+                 for seg in key_segs if seg["door_group"] == door["door_group"]]
         for index in range(key_index + 1, len(nodes)):
-            if segments_intersect((nodes[index - 1]["x"], nodes[index - 1]["y"]),
-                                  (nodes[index]["x"], nodes[index]["y"]), v1, v2):
+            step = ((nodes[index - 1]["x"], nodes[index - 1]["y"]),
+                    (nodes[index]["x"], nodes[index]["y"]))
+            if any(segments_intersect(*step, v1, v2) for v1, v2 in faces):
                 after = index - 1
                 break
         if after is None:
@@ -1189,6 +1215,15 @@ def route_lines(map_data):
             if pose[4] == group:
                 break
             pose = None
+        if (pose is None and certified["type"] != SEG_EXIT and
+                group not in first_touch):
+            # The search opened a door the route never walks through, and no
+            # control can press it from the path. E1M6's group 10 is certified
+            # from (-320,1376), facing linedef 167 (special 0); its DR face,
+            # linedef 121, is on the far side. Doom's use stops at the shut
+            # special-0 face, and so does the runtime's. The route does not
+            # need that door, so it is skipped rather than pressed.
+            continue
         assert pose is not None, (
             "%s: no control opens door group %d from before node %s" %
             (map_data.mapn, group, before))

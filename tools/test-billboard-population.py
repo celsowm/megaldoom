@@ -71,6 +71,15 @@ EXPECTED = {
         "normal": (201, 91, 82, 28),
         "hard": (242, 131, 83, 28),
     },
+    # The largest level: hard sets every pool ceiling (405 objects, 177
+    # monsters, 201 targets). Normal: 43 imps, 35 shotgun guys, 22 zombiemen,
+    # 9 demons, 9 spectres.
+    "e1m6": {
+        "curated": 414,
+        "easy": (254, 50, 182, 22),
+        "normal": (335, 118, 195, 22),
+        "hard": (405, 177, 204, 24),
+    },
 }
 
 

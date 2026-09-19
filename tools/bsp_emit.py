@@ -31,8 +31,11 @@ class EmitReport:
     spatial_checks: int
 
 
-def emit_map_c(path, wad_path, map_data, texture_ids, texture_meta):
+def emit_map_c(path, wad_path, map_data, texture_ids, texture_meta, pack_index):
     out_segs = map_data.out_segs
+    # Every array lives in the level's banked pack; only the descriptor stays
+    # resident (BSP_LEVEL_PACK in bsp_map.h).
+    pack = "BSP_LEVEL_PACK(%d) " % pack_index
     vertices = map_data.vertices
     nodes = map_data.nodes
     prefix = map_data.mapn.lower()
@@ -77,14 +80,14 @@ def emit_map_c(path, wad_path, map_data, texture_ids, texture_meta):
     lines.append("#if !BSP_USE_HAND_MAP")
     lines.append("")
 
-    lines.append("static const BspAutomapLine %s[%d] = {" %
+    lines.append(pack + "static const BspAutomapLine %s[%d] = {" %
                  (sym("bsp_automap_lines"), len(map_data.automap_lines)))
     for line in map_data.automap_lines:
         lines.append("    {%d, %d, %d, %d, %d, %d}," % (
             line["v1"], line["v2"], line["front_sector"],
             line["back_sector"], line["kind"], line["flags"]))
     lines.append("};")
-    lines.append("static const u16 %s[%d] = {" %
+    lines.append(pack + "static const u16 %s[%d] = {" %
                  (sym("bsp_seg_automap_lines"), len(out_segs)))
     seg_automap = [map_data.linedef_automap_indices[s["source_linedef"]]
                    for s in out_segs]
@@ -95,13 +98,13 @@ def emit_map_c(path, wad_path, map_data, texture_ids, texture_meta):
     lines.append("")
 
     # Vertices (full original array; segs/nodes reference these indices).
-    lines.append("static const BspVertex %s[%d] = {" % (sym("bsp_vertices"), len(vertices)))
+    lines.append(pack + "static const BspVertex %s[%d] = {" % (sym("bsp_vertices"), len(vertices)))
     for (x, y) in vertices:
         lines.append("    {%d, %d}," % (x, y))
     lines.append("};")
     lines.append("")
 
-    lines.append("static const BspSeg %s[%d] = {" % (sym("bsp_segs"), len(out_segs)))
+    lines.append(pack + "static const BspSeg %s[%d] = {" % (sym("bsp_segs"), len(out_segs)))
     for s in out_segs:
         lines.append("    {%d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d}," % (
             s["v1"], s["v2"], s["nx"], s["ny"], s["tex_u_offset"],
@@ -113,7 +116,7 @@ def emit_map_c(path, wad_path, map_data, texture_ids, texture_meta):
     # Compact parallel ROM table: precomputed wall length per seg (|bx-ax| +
     # |by-ay|). Camera-independent, stored in ROM to avoid two vertex lookups
     # and two abs calls per seg visit in the renderer hot path.
-    lines.append("static const u16 %s[%d] = {" % (sym("bsp_seg_wall_len"), len(out_segs)))
+    lines.append(pack + "static const u16 %s[%d] = {" % (sym("bsp_seg_wall_len"), len(out_segs)))
     for i, s in enumerate(out_segs):
         ax, ay = vertices[s["v1"]]
         bx, by = vertices[s["v2"]]
@@ -165,22 +168,22 @@ def emit_map_c(path, wad_path, map_data, texture_ids, texture_meta):
         vertices, out_segs, grid_min_x, grid_min_y, grid_w, grid_h,
         grid_cell, grid_cells, map_data.start_x, map_data.start_y)
 
-    lines.append("static const u16 %s[%d] = {" % (sym("bsp_grid_cell_offsets"), len(grid_offsets)))
+    lines.append(pack + "static const u16 %s[%d] = {" % (sym("bsp_grid_cell_offsets"), len(grid_offsets)))
     for i in range(0, len(grid_offsets), 12):
         lines.append("    %s," % ",".join(str(v) for v in grid_offsets[i:i + 12]))
     lines.append("};")
-    lines.append("static const u16 %s[%d] = {" % (sym("bsp_grid_seg_indices"), len(grid_indices)))
+    lines.append(pack + "static const u16 %s[%d] = {" % (sym("bsp_grid_seg_indices"), len(grid_indices)))
     for i in range(0, len(grid_indices), 12):
         lines.append("    %s," % ",".join(str(v) for v in grid_indices[i:i + 12]))
     lines.append("};")
     lines.append("")
 
-    lines.append("static const BspSubsector %s[%d] = {" %
+    lines.append(pack + "static const BspSubsector %s[%d] = {" %
                  (sym("bsp_subsectors"), len(map_data.out_ssectors)))
     for first, count in map_data.out_ssectors:
         lines.append("    {%d, %d}," % (first, count))
     lines.append("};")
-    lines.append("static const u16 %s[%d] = {" %
+    lines.append(pack + "static const u16 %s[%d] = {" %
                  (sym("bsp_subsector_sector"), len(map_data.out_ssector_sectors)))
     for i in range(0, len(map_data.out_ssector_sectors), 16):
         lines.append("    %s," % ",".join(
@@ -188,7 +191,7 @@ def emit_map_c(path, wad_path, map_data, texture_ids, texture_meta):
     lines.append("};")
     lines.append("")
 
-    lines.append("static const BspNode %s[%d] = {" % (sym("bsp_nodes"), len(nodes)))
+    lines.append(pack + "static const BspNode %s[%d] = {" % (sym("bsp_nodes"), len(nodes)))
     for nd in nodes:
         lines.append("    {%d, %d, %d, %d, {%d, %d, %d, %d}, {%d, %d, %d, %d}, %du, %du}," % (
             nd["x"], nd["y"], nd["dx"], nd["dy"],
@@ -196,7 +199,7 @@ def emit_map_c(path, wad_path, map_data, texture_ids, texture_meta):
     lines.append("};")
     lines.append("")
 
-    lines.append("static const BspThing %s[%d] = {" % (sym("bsp_things"), len(map_data.out_things)))
+    lines.append(pack + "static const BspThing %s[%d] = {" % (sym("bsp_things"), len(map_data.out_things)))
     for x, y, thing_type, angle, flags in map_data.out_things:
         lines.append("    {%d, %d, %du, %du, %du}," %
                      (x, y, thing_type, angle, flags))
@@ -206,7 +209,7 @@ def emit_map_c(path, wad_path, map_data, texture_ids, texture_meta):
     secret_bits = [0] * ((len(map_data.sectors) + 7) // 8)
     for sector_id in secret_sector_ids:
         secret_bits[sector_id >> 3] |= 1 << (sector_id & 7)
-    lines.append("static const u8 %s[%d] = {" %
+    lines.append(pack + "static const u8 %s[%d] = {" %
                  (sym("bsp_secret_sector_bits"), len(secret_bits)))
     for i in range(0, len(secret_bits), 16):
         lines.append("    %s," % ",".join(str(value) for value in secret_bits[i:i + 16]))
@@ -221,7 +224,7 @@ def emit_map_c(path, wad_path, map_data, texture_ids, texture_meta):
     sky_bits = [0] * ((len(map_data.sectors) + 7) // 8)
     for sector_id in sky_sector_ids:
         sky_bits[sector_id >> 3] |= 1 << (sector_id & 7)
-    lines.append("static const u8 %s[%d] = {" %
+    lines.append(pack + "static const u8 %s[%d] = {" %
                  (sym("bsp_sky_sector_bits"), len(sky_bits)))
     for i in range(0, len(sky_bits), 16):
         lines.append("    %s," % ",".join(str(value) for value in sky_bits[i:i + 16]))

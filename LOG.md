@@ -8,6 +8,133 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## E1M6 ships as the sixth level; the object pool is sized per kind (2026-09-19)
+
+E1M6 (Central Processing) is the sixth campaign level. It is the first level
+larger than every map ceiling, so the billboard object pool was reworked
+before the map went in.
+
+**The object pool.** Every object cost about 40 bytes of work RAM: the
+26-byte `BillboardObject` plus 14 bytes of per-object arrays. All of them
+were sized by `MAX_ACTIVE_THINGS`. Most objects are pickups, which use
+neither the AI fields nor the enemy/target/blocking lists. Adding E1M6 as it
+was would have left about 16.9 KB free, 0.5 KB above the boot-panic floor.
+Now:
+- `wad-map-extract` emits two more ceilings. `MAX_ACTIVE_ENEMIES` counts
+  monsters (3004, 9, 3001, 3002, 58). `MAX_ACTIVE_TARGETS` counts monsters
+  plus barrels.
+- The enemy registry and the simulated-enemy lists are sized by ENEMIES. The
+  target and blocking registries, and the explosion/barrel stack arrays, are
+  sized by TARGETS. The barrel is the only blocking type that spawns.
+- The AI fields (home, last seen, three cooldowns, attack_anim) moved out of
+  `BillboardObject` into `g_enemy_states[MAX_ACTIVE_ENEMIES]`, reached through
+  a u8 `enemy_slot`. The object is 14 bytes; the AI state is 12.
+- On the five shipped levels this raised free work RAM from 21496 to 25476
+  bytes, with no behaviour change: the field move is textual (git show
+  662be1c), and asm-diff is clean.
+- `test-billboard-population` checks that each ceiling equals the campaign's
+  largest population of its kind. It also reads `billboard.c`'s
+  `map_thing_type` and type table, and checks that monsters, targets and
+  blockers match the generator's sets. Two negative controls are caught: a
+  spawned candle, and a spectre that is not a DUMMY.
+
+**A latent route bug the RAM change exposed.** After the pool change, the
+E1M2 E2E run stalled against a barrel at (-1216,-400). With the same code
+and route, a cost-only build flag (`-DMEGALDOOM_NO_WALL_SCALERS=1`) made it
+pass, so the route was timing-fragile; the game had not changed.
+- Cause: the flat-progression certificate took its barrels from
+  `doom_map.runtime_things`, which still capped at a stale hardcoded 112
+  objects. It saw 0 of E1M2's 24 barrels, 0 of E1M4's 32, 18 of E1M3's 28 and
+  20 of E1M5's 28.
+- Effect: four routes walked through a barrel (0-16 units from its centre,
+  against a 36-unit collision distance). They passed only because combat
+  usually destroyed the barrel first.
+- Fix: the cap is gone; the generated ceilings are exact. The E1M2-E1M5
+  routes now keep every barrel clear. Only the certificate comments in the
+  map files change (the explored state count).
+
+**Cost of E1M6.**
+- **Work RAM:** 25476 -> 21568 bytes free, above the 20480 warn line.
+  Geometry ceilings: segs 1089 -> 1293, vertices 1006 -> 1217, subsectors
+  461 -> 606, nodes 460 -> 605, sectors 200 -> 250, automap lines
+  810 -> 1069. The pool on hard: 405 objects, 177 monsters, 201 targets.
+- **Cartridge:** pack 5 is at banks 20-22, holding 31 walls + 6 door faces
+  (1.25 MB) plus 167 KB of vis programs, in its 1.5 MB window. rom.bin goes
+  10 -> 11.5 MB.
+- **Resident ROM:** +95 KB (map, vis rows, music, cards). **78.8 KB is left
+  below the level window.** E1M7 is about E1M6's size and will not fit
+  resident: its map descriptor has to move into the banked pack first.
+- **Atlas:** seven new wall textures (BRNSMAL1/2, BROWNPIP, LITEBLU1, STEP4,
+  SW1BRN1/2) and one door face (COMPTALL). All pass the wall-quality
+  contracts without an exemption. 51 walls + 19 door faces.
+
+**Campaign rows.** CAMPAIGN gets `d_e1m6` and par 180 (`g_game.c`). The WIMAP0
+node (166,55) maps to (18,7), with its arrow from (12,7). The WILV05 cards
+are quantized into the palette fitted to the shipped screens, so the old
+screens are unchanged. `test-frontend`'s VRAM budget used to add two entering
+cards and a stats card to the map screen, which the runtime never loads
+together, so E1M6 pushed it to 1455/1440. It now mirrors
+`load_intermission_stats_tiles`/`load_intermission_map_tiles` with the
+largest card of each kind: stats screen 1338/1440, map screen 1182/1440.
+
+**E1M6 route: three generator fixes.** Each was reproduced first and none
+changes E1M1-E1M5, which regenerate byte-identical.
+- Both blue doors (groups 17 and 20) are behind shut plain doors until well
+  after the blue key, so no lock detour that opens nothing can reach them.
+  After both key margins fail, the detour may now walk through plain doors.
+  Doors here toggle and stay open, the door-control pass presses each one at
+  the detour's first touch, and `verify_use_replay` checks every press.
+- The certificate opened door group 10 from (-320,1376), facing linedef 167
+  (special 0). Its DR face, linedef 121, is on the far side, so neither Doom
+  nor the runtime can press it from there. The route never walks through
+  that door, so this one certificate press is skipped. Every other press
+  still asserts.
+- The unlock press for group 18 landed on the door's near face (y=-688),
+  inside the shut door: crossings were tested only against the group's
+  representative face, which was the far one (y=-704). Every face of the
+  group is tested now.
+
+Group 20 is another mixed door, like E1M5's group 9: linedef 1139 is
+special 26 (blue) and linedef 1122 is special 1. This engine keys the whole
+group.
+
+**Verification.**
+- `test-level-e2e -Level E1M6`: events 0xFF, keys 0x07, three LOCKED/UNLOCKED
+  pairs.
+- Visibility oracle on E1M6: 1380 frames identical over the whole route. Its
+  negative control (every 7th seg dropped) is caught: 719 of 1379 frames
+  differ.
+- Full suite with 6 E2E routes and asm-diff pass.
+
+**Performance (measured only).** `perf-sweep` with
+`-DDEBUG_E2E_START_LEVEL=5 -DDEBUG_E2E_GOD=1`, 4 headings per pose, 3200
+frames. Captures confirm live E1M6 gameplay at 100% health. Without god mode,
+the horde pose kills the player and the sweep measures the death screen.
+Pass the angle list through `pwsh -Command`: under `pwsh -File`, `9,73,137,201`
+arrives as one angle.
+
+| pose | heading | vblanks | cast | pack | projection | billboards |
+|---|---|---|---|---|---|---|
+| start (32,1376) | 73 best | 13.6 | 4054 | 4027 | 4283 | 10 |
+| start (32,1376) | 201 worst | 18.7 | 5812 | 4438 | 6529 | 1511 |
+| full-PVS leaf (1952,224) | 9 best | 14.2 | 3900 | 3604 | 4099 | 1057 |
+| full-PVS leaf (1952,224) | 73 worst | 21.2 | 4013 | 3606 | 6505 | 6763 |
+| monster cluster (-1984,-1392) | 201 best | 18.0 | 3848 | 3631 | 4148 | 3978 |
+| monster cluster (-1984,-1392) | 9 worst | 24.7 | 6522 | 3519 | 4770 | 9321 |
+
+The worst E1M6 frame is 24.7 vblanks (2.4 fps), and billboards are its
+largest stage: 9321 subticks, about 7.3 vblanks, with monsters crowding the
+player. At the full-PVS leaf, which sees all 606 subsectors, cast stays near
+4000. Its worst heading is also a billboard frame, with a monster filling the
+view. So on this level the next target is billboard raster/projection with
+many near monsters, not traversal.
+
+**Still not Doom (unchanged from E1M5, plus):**
+- Floor lamps (2028 x10), tall tech columns (48 x3) and candelabras (35 x2)
+  are dropped: not drawn and not solid.
+- Nukage (special 7), the computer map, light amp, soulsphere, invisibility,
+  radsuit, backpack and the rocket launcher are not modelled.
+
 ## E1M5 ships as the fifth level, with the demon (2026-09-18)
 
 E1M5 (Phobos Lab) is the fifth campaign level. The demon (3002) is now a

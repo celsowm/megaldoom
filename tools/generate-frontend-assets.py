@@ -146,8 +146,10 @@ def expected_outputs() -> tuple[str, ...]:
         "ending_mars.png", "ending_thanks.png", "intermission_stats.png",
         "intermission_stats_e1m2.png", "intermission_stats_e1m3.png",
         "intermission_stats_e1m4.png", "intermission_stats_e1m5.png",
+        "intermission_stats_e1m6.png",
         "intermission_entering_e1m2.png", "intermission_entering_e1m3.png",
         "intermission_entering_e1m4.png", "intermission_entering_e1m5.png",
+        "intermission_entering_e1m6.png",
         "intermission_digits.png",
         "intermission_time_digits.png", "intermission_splat.png",
         "intermission_pointer0.png",
@@ -947,10 +949,12 @@ def generate(source: Path, output: Path) -> None:
     intermission_stats_e1m3 = make_intermission_stats(source, "WILV02")
     intermission_stats_e1m4 = make_intermission_stats(source, "WILV03")
     intermission_stats_e1m5 = make_intermission_stats(source, "WILV04")
+    intermission_stats_e1m6 = make_intermission_stats(source, "WILV05")
     intermission_entering = make_intermission_entering(source)
     intermission_entering_e1m3 = make_intermission_entering(source, "WILV02")
     intermission_entering_e1m4 = make_intermission_entering(source, "WILV03")
     intermission_entering_e1m5 = make_intermission_entering(source, "WILV04")
+    intermission_entering_e1m6 = make_intermission_entering(source, "WILV05")
     intermission_digits = make_intermission_digits(source)
     intermission_time_digits = make_intermission_time_digits(source)
     intermission_splat = padded_intermission_patch("WISPLAT", 32, 24, source)
@@ -1091,10 +1095,12 @@ def generate(source: Path, output: Path) -> None:
         ("intermission_stats_e1m3.png", intermission_stats_e1m3),
         ("intermission_stats_e1m4.png", intermission_stats_e1m4),
         ("intermission_stats_e1m5.png", intermission_stats_e1m5),
+        ("intermission_stats_e1m6.png", intermission_stats_e1m6),
         ("intermission_entering_e1m2.png", intermission_entering),
         ("intermission_entering_e1m3.png", intermission_entering_e1m3),
         ("intermission_entering_e1m4.png", intermission_entering_e1m4),
         ("intermission_entering_e1m5.png", intermission_entering_e1m5),
+        ("intermission_entering_e1m6.png", intermission_entering_e1m6),
         ("intermission_digits.png", intermission_digits),
         ("intermission_time_digits.png", intermission_time_digits),
         ("intermission_splat.png", intermission_splat),
