@@ -1,9 +1,10 @@
 #include "billboard_internal.h"
 
 static u16 s_active_indices[BILLBOARD_OBJECT_COUNT];
-static u16 s_enemy_indices[BILLBOARD_OBJECT_COUNT];
-static u16 s_target_indices[BILLBOARD_OBJECT_COUNT];
-static u16 s_blocking_indices[BILLBOARD_OBJECT_COUNT];
+static u16 s_enemy_indices[BILLBOARD_ENEMY_COUNT];
+static u16 s_target_indices[BILLBOARD_TARGET_COUNT];
+// The barrel is the only blocking type that spawns (decor props never do).
+static u16 s_blocking_indices[BILLBOARD_TARGET_COUNT];
 static u16 s_active_count;
 static u16 s_enemy_count;
 static u16 s_target_count;

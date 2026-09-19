@@ -207,21 +207,21 @@ def main():
 
     # No AI counter is decremented by a bare `--` (the iteration-counted bug);
     # every one is a saturating subtract against the tic count instead.
-    for bad in ("object->move_cooldown--", "object->attack_cooldown--",
-                "object->spot_cooldown--", "object->attack_anim--"):
+    for bad in ("state->move_cooldown--", "state->attack_cooldown--",
+                "state->spot_cooldown--", "state->attack_anim--"):
         assert bad not in enemy_c, bad
     for good in (
-        "object->move_cooldown = (object->move_cooldown > tics)",
-        "object->attack_cooldown = (object->attack_cooldown > tics)",
-        "object->spot_cooldown = (object->spot_cooldown > tics)",
-        "object->attack_anim = (object->attack_anim > tics)",
+        "state->move_cooldown = (state->move_cooldown > tics)",
+        "state->attack_cooldown = (state->attack_cooldown > tics)",
+        "state->spot_cooldown = (state->spot_cooldown > tics)",
+        "state->attack_anim = (state->attack_anim > tics)",
     ):
         assert good in enemy_c, good
     # A player tic does not fire every iteration (unlike elapsed_vblanks, which
     # main.c floor-clamps to >=1) -- the walk cadence must not advance a pose
     # on a call where zero tics elapsed, or the iteration-counted bug comes
     # back in miniature for exactly that case.
-    assert "if (object->attack_anim == 0 && tics > 0)" in enemy_c
+    assert "if (state->attack_anim == 0 && tics > 0)" in enemy_c
 
     # Movement advances at most one DUMMY_MOVE_STEP per iteration (see
     # try_move_dummy's call sites), so this must stay >= 3: the max tics a
@@ -309,11 +309,11 @@ def main():
     # Expensive distances are deferred to the decisions that consume them.
     alive = enemy_c[enemy_c.index("static bool update_dummy_alive"):enemy_c.index(
         "static bool enemy_affects_view")]
-    assert alive.index("if (object->move_cooldown != 0)") < alive.index(
+    assert alive.index("if (state->move_cooldown != 0)") < alive.index(
         "const s32 home_dx")
     # The attack's geometry (aim, spread, box test) runs only once the AI has
     # decided to attack, never per enemy per update.
-    attack = alive[alive.index("(object->attack_cooldown == 0)) {"):]
+    attack = alive[alive.index("(state->attack_cooldown == 0)) {"):]
     assert attack.index("enemy_attack(object, player, update);") < attack.index("return FALSE;")
     assert "dist_sq" not in loop[:loop.index("// Pair separation")]
 

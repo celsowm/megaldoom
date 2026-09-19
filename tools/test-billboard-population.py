@@ -7,6 +7,9 @@ import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 RUNTIME_SOURCE = ROOT / "src" / "billboard" / "billboard.c"
+INTERNAL_SOURCE = ROOT / "src" / "billboard" / "billboard_internal.h"
+sys.path.insert(0, str(ROOT / "tools"))
+import doom_map  # noqa: E402
 
 # Keep in sync with map_thing_type() in src/billboard/billboard.c and with
 # RUNTIME_THING_TYPES in tools/wad-map-extract.py.
@@ -71,11 +74,73 @@ EXPECTED = {
 }
 
 
+def table_sets(runtime_text: str, internal_text: str):
+    """The Doom THING types billboard.c spawns as monsters, as targets and as
+    blockers, read from map_thing_type() and the BILLBOARD_TYPES flags."""
+    type_ids = {name: int(value) for name, value in re.findall(
+        r"#define BILLBOARD_TYPE_(\w+) (\d+)", internal_text)}
+    table = runtime_text[runtime_text.index("BILLBOARD_TYPES[BILLBOARD_TYPE_COUNT] = {"):]
+    table = table[:table.index("};")]
+    rows = [re.findall(r"\b(TRUE|FALSE)\b", row)
+            for row in re.findall(r"\{(BILLBOARD_VISUAL_[^}]*)\}", table)]
+    switch = runtime_text[runtime_text.index("static u8 map_thing_type"):]
+    switch = switch[:switch.index("default:")]
+    spawned = {}
+    for cases, type_name in re.findall(
+            r"((?:case\s+\d+:\s*)+)[^;]*;\s*return BILLBOARD_TYPE_(\w+);", switch):
+        for doom_type in re.findall(r"\d+", cases):
+            spawned[int(doom_type)] = type_ids[type_name]
+    monsters = {t for t, type_id in spawned.items() if type_id == type_ids["DUMMY"]}
+    targets = {t for t, type_id in spawned.items() if rows[type_id][1] == "TRUE"}
+    blockers = {t for t, type_id in spawned.items() if rows[type_id][2] == "TRUE"}
+    return monsters, targets, blockers
+
+
+def check_table(runtime_text: str, internal_text: str) -> None:
+    """The per-enemy arrays are sized by ENEMY_THING_TYPES and the target and
+    blocking registries by TARGET_THING_TYPES, so the runtime must spawn
+    exactly those as monsters and targets, and block only with targets."""
+    monsters, targets, blockers = table_sets(runtime_text, internal_text)
+    if monsters != doom_map.ENEMY_THING_TYPES:
+        raise ValueError(f"billboard.c monsters {sorted(monsters)} != ENEMY_THING_TYPES")
+    if targets != doom_map.TARGET_THING_TYPES:
+        raise ValueError(f"billboard.c targets {sorted(targets)} != TARGET_THING_TYPES")
+    if not blockers <= targets:
+        raise ValueError(f"blocking non-targets {sorted(blockers - targets)} would "
+                         "overflow s_blocking_indices[BILLBOARD_TARGET_COUNT]")
+
+
 def main() -> int:
     runtime_text = RUNTIME_SOURCE.read_text(encoding="utf-8")
-    max_runtime_objects = int(re.search(
-        r"#define MEGALDOOM_MAP_MAX_ACTIVE_THINGS (\d+)",
-        LIMITS.read_text(encoding="utf-8")).group(1))
+    internal_text = INTERNAL_SOURCE.read_text(encoding="utf-8")
+    limits_text = LIMITS.read_text(encoding="utf-8")
+    ceilings = {name: int(re.search(
+        rf"#define MEGALDOOM_MAP_MAX_ACTIVE_{name} (\d+)", limits_text).group(1))
+        for name in ("THINGS", "ENEMIES", "TARGETS")}
+    max_runtime_objects = ceilings["THINGS"]
+    if (ENEMY_TYPES != doom_map.ENEMY_THING_TYPES or
+            ENEMY_TYPES | BARREL_TYPES != doom_map.TARGET_THING_TYPES):
+        raise ValueError("doom_map ENEMY/TARGET_THING_TYPES drifted from this test's sets")
+    check_table(runtime_text, internal_text)
+    # Negative controls: a spawned decor prop (blocking, not targetable), and
+    # a monster that stops being a DUMMY, must both be caught.
+    for label, broken in (
+            ("spawned candle", runtime_text.replace(
+                "        case 2035:",
+                "        case 34: *visual = BILLBOARD_VISUAL_CANDLE; "
+                "return BILLBOARD_TYPE_CANDLE;\n        case 2035:")),
+            ("spectre not a monster", runtime_text.replace(
+                "case 3002: case 58: *visual = BILLBOARD_VISUAL_DEMON; return BILLBOARD_TYPE_DUMMY;",
+                "case 3002: *visual = BILLBOARD_VISUAL_DEMON; return BILLBOARD_TYPE_DUMMY;\n"
+                "        case 58: *visual = BILLBOARD_VISUAL_DEMON; return BILLBOARD_TYPE_BONUS;"))):
+        if broken == runtime_text:
+            raise ValueError(f"negative control {label!r} did not apply")
+        try:
+            check_table(broken, internal_text)
+        except ValueError:
+            continue
+        raise ValueError(f"negative control {label!r} was not caught")
+    peaks = {"THINGS": 0, "ENEMIES": 0, "TARGETS": 0}
     mapped_types = {
         int(value)
         for value in re.findall(r"case\s+(\d+)\s*:", runtime_text)
@@ -110,8 +175,19 @@ def main() -> int:
             raise ValueError(f"unexpected {map_name} populations: {actual}")
         if any(len(runtime) > max_runtime_objects for runtime in populations.values()):
             raise ValueError(f"{map_name} population exceeds object pool")
+        for objects, enemies, _, barrels in actual.values():
+            peaks["THINGS"] = max(peaks["THINGS"], objects)
+            peaks["ENEMIES"] = max(peaks["ENEMIES"], enemies)
+            peaks["TARGETS"] = max(peaks["TARGETS"], enemies + barrels)
 
-    print("ok    billboard populations: E1M1..E1M5, E1M3 hard 326 = the object pool")
+    # Each generated ceiling is exactly the campaign's largest population of
+    # its kind: no smaller (overflow), no larger (wasted work RAM).
+    if peaks != ceilings:
+        raise ValueError(f"generated ceilings {ceilings} != campaign peaks {peaks}")
+
+    print(f"ok    billboard populations: E1M1..E1M{len(EXPECTED)}; pool {ceilings['THINGS']} "
+          f"objects, {ceilings['ENEMIES']} monsters, {ceilings['TARGETS']} targets; "
+          "type table matches, 2 negative controls caught")
     return 0
 
 

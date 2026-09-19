@@ -24,7 +24,7 @@ BillboardEnemyUpdate billboard_update_barrels(const PlayerState *player) {
     (void)player;
 
     // Deactivation mutates the target registry, so iterate a stable snapshot.
-    u16 snapshot[BILLBOARD_OBJECT_COUNT];
+    u16 snapshot[BILLBOARD_TARGET_COUNT];
     const u16 *target_indices = billboard_registry_target_indices();
     const u16 target_count = billboard_registry_target_count();
     for (u16 i = 0; i < target_count; i++) snapshot[i] = target_indices[i];

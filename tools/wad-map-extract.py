@@ -81,10 +81,10 @@ def ensure_extracted_assets(wad_path, wad_sha256):
             shutil.rmtree(staged)
 
 
-def active_thing_count(map_data, skill_mask):
+def active_thing_count(map_data, skill_mask, types=doom_map.RUNTIME_THING_TYPES):
     return sum(
         1 for _, _, thing_type, _, flags in map_data.out_things
-        if thing_type in doom_map.RUNTIME_THING_TYPES and
+        if thing_type in types and
         (flags & skill_mask) != 0 and (flags & 0x0010) == 0
     )
 
@@ -101,8 +101,11 @@ def emit_limits(path, maps):
             raise SystemExit(
                 "%s object coordinates do not fit s16 with %d-unit movement margin" %
                 (map_data.mapn, movement_margin))
-    active_max = max(active_thing_count(map_data, skill_mask)
-                     for map_data in maps for skill_mask in (1, 2, 4))
+    def ceiling(types):
+        return max(active_thing_count(map_data, skill_mask, types)
+                   for map_data in maps for skill_mask in (1, 2, 4))
+
+    active_max = ceiling(doom_map.RUNTIME_THING_TYPES)
     values = {
         "MAP_COUNT": len(maps),
         "MAP_MAX_SEGS": max(len(map_data.out_segs) for map_data in maps),
@@ -112,9 +115,13 @@ def emit_limits(path, maps):
         "MAP_MAX_SECTORS": max(len(map_data.sectors) for map_data in maps),
         "MAP_MAX_AUTOMAP_LINES": max(len(map_data.automap_lines) for map_data in maps),
         "MAP_MAX_ACTIVE_THINGS": active_max,
+        "MAP_MAX_ACTIVE_ENEMIES": ceiling(doom_map.ENEMY_THING_TYPES),
+        "MAP_MAX_ACTIVE_TARGETS": ceiling(doom_map.TARGET_THING_TYPES),
     }
     if values["MAP_MAX_ACTIVE_THINGS"] > 65535:
         raise SystemExit("active THING count exceeds u16 registry index capacity")
+    if values["MAP_MAX_ACTIVE_ENEMIES"] > 255:
+        raise SystemExit("active monster count exceeds the u8 BillboardObject.enemy_slot")
     lines = [
         "#ifndef MEGALDOOM_GENERATED_MAP_LIMITS_H",
         "#define MEGALDOOM_GENERATED_MAP_LIMITS_H",

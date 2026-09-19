@@ -352,7 +352,7 @@ for token in (
     "if (doom_random() >= painchance) {",
     "const u8 pain_tics = short_pain ? 4 : 6;",   # POSS/SPOS 3+3, TROO/SARG 2+2
     "const bool short_pain = is_demon || (object->visual_id == BILLBOARD_VISUAL_IMP);",
-    "object->attack_cooldown = 0;",                            # MF_JUSTHIT
+    "state->attack_cooldown = 0;",                             # MF_JUSTHIT
     "#define DOOM_MONSTER_SLIDE_NUM 4",                        # damage * 4/3 units
     "#define DOOM_MONSTER_SLIDE_DEN 3",
     "#define MONSTER_SLIDE_STEP 16",
@@ -593,7 +593,7 @@ pain = COMBAT_C[COMBAT_C.index("static void roll_dummy_pain"):]
 assert pain.index("object->bite_pending = 0;") < pain.index("const u8 pain_tics")
 # The bite re-checks range and sight when it lands, not when the attack began.
 demon_block = ENEMY_C[ENEMY_C.index("    if (is_demon) {"):]
-assert (demon_block.index("if (object->bite_pending && (object->attack_anim <= DEMON_BITE_AT)) {") <
+assert (demon_block.index("if (object->bite_pending && (state->attack_anim <= DEMON_BITE_AT)) {") <
         demon_block.index("if (visible && demon_in_melee_range(player_dx, player_dy)) {") <
         demon_block.index("enemy_attack(object, player, update);"))
 

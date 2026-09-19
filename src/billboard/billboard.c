@@ -43,6 +43,7 @@ static const BillboardType BILLBOARD_TYPES[BILLBOARD_TYPE_COUNT] = {
 };
 
 BillboardObject g_billboards[BILLBOARD_OBJECT_COUNT];
+BillboardEnemyState g_enemy_states[BILLBOARD_ENEMY_COUNT];
 u16 g_collected_count;
 BillboardPickupCounts g_pickup_counts;
 BillboardPickupKind g_last_pickup_kind;
@@ -137,7 +138,7 @@ u8 billboard_get_object_frame(const BillboardObject *object) {
         if (index >= ENEMY_DEATH_FRAME_COUNT) index = (u8)(ENEMY_DEATH_FRAME_COUNT - 1);
         return (u8)(ENEMY_DEATH_FRAME_BASE + index);
     }
-    if (object->attack_anim > 0) return ENEMY_ATTACK_FRAME_INDEX;
+    if (billboard_enemy_state(object)->attack_anim > 0) return ENEMY_ATTACK_FRAME_INDEX;
     return (u8)(object->anim_frame & (ENEMY_WALK_FRAME_COUNT - 1));
 }
 
@@ -350,6 +351,7 @@ bool billboard_measure_object(const PlayerState *player, s16 cos_a, s16 sin_a,
 
 void billboard_init(u16 phase_index, DoomSkill skill) {
     u16 count = 0;
+    u16 enemies = 0;
     const u16 thing_skill_mask = doom_skill_thing_mask(skill);
     (void)phase_index;
     billboard_registry_reset();
@@ -378,8 +380,13 @@ void billboard_init(u16 phase_index, DoomSkill skill) {
         object->type_id = type;
         object->visual_id = visual;
         object->active = TRUE;
-        object->home_x = object->x;
-        object->home_y = object->y;
+        if (type == BILLBOARD_TYPE_DUMMY) {
+            BillboardEnemyState *state = &g_enemy_states[enemies];
+            object->enemy_slot = (u8)enemies++;
+            *state = (BillboardEnemyState){0};
+            state->home_x = object->x;
+            state->home_y = object->y;
+        }
         object->hp = (type == BILLBOARD_TYPE_KEY) ? visual :
                      billboard_get_type(type)->hit_points;
         if (bsp_things[i].type == 3001) {

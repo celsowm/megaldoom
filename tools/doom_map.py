@@ -118,6 +118,12 @@ AUTOMAP_LINE_SPECIAL = 3
 # THING is emitted to the map regardless. Keep in sync with that switch.
 RUNTIME_THING_TYPES = {5, 6, 9, 13, 58, 2001, 2002, 2005, 2007, 2008, 2011, 2012,
                        2014, 2015, 2018, 2019, 2035, 2048, 2049, 3001, 3002, 3004}
+# The runtime's monsters (BILLBOARD_TYPE_DUMMY) and its targets (the monsters
+# plus the barrel, billboard.c's targetable rows). They size the per-enemy and
+# per-target arrays; tools/test-billboard-population.py checks both sets
+# against billboard.c.
+ENEMY_THING_TYPES = {9, 58, 3001, 3002, 3004}
+TARGET_THING_TYPES = ENEMY_THING_TYPES | {2035}
 KEY_THING_MASK = {5: KEY_BLUE, 6: KEY_YELLOW, 13: KEY_RED}
 BLOCKING_THING_RADIUS = {2035: 20}
 

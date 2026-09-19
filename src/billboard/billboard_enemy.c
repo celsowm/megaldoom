@@ -4,8 +4,8 @@
 
 #define ENEMY_RADIUS 24
 
-static u16 s_simulated_enemy_indices[BILLBOARD_OBJECT_COUNT];
-static u8 s_simulated_enemy_visibility[BILLBOARD_OBJECT_COUNT];
+static u16 s_simulated_enemy_indices[BILLBOARD_ENEMY_COUNT];
+static u8 s_simulated_enemy_visibility[BILLBOARD_ENEMY_COUNT];
 static u16 s_simulated_enemy_count;
 #define SEPARATION_WAS_VISIBLE 0x01u
 #define SEPARATION_MOVED 0x02u
@@ -244,6 +244,7 @@ static void enemy_attack(const BillboardObject *object, const PlayerState *playe
 
 static bool update_dummy_alive(u16 index, BillboardObject *object, const PlayerState *player,
                                BillboardEnemyUpdate *update, u16 tics) {
+    BillboardEnemyState *state = billboard_enemy_state(object);
     const s32 player_dx = player->x - object->x;
     const s32 player_dy = player->y - object->y;
     const s32 abs_player_dx = (player_dx < 0) ? -player_dx : player_dx;
@@ -253,7 +254,7 @@ static bool update_dummy_alive(u16 index, BillboardObject *object, const PlayerS
     if (!object->has_last_seen &&
         (abs_player_dx > DUMMY_WAKE_RANGE || abs_player_dy > DUMMY_WAKE_RANGE)) {
         object->saw_player = FALSE;
-        object->spot_cooldown = 0;
+        state->spot_cooldown = 0;
         object->anim_frame = 0;
         object->anim_timer = 0;
         object->bite_pending = 0;
@@ -273,7 +274,7 @@ static bool update_dummy_alive(u16 index, BillboardObject *object, const PlayerS
     // the player. This is the normal idle state for map-spawned enemies.
     if (!engaged) {
         object->saw_player = FALSE;
-        object->spot_cooldown = 0;
+        state->spot_cooldown = 0;
         object->anim_frame = 0;
         object->anim_timer = 0;
         object->bite_pending = 0;
@@ -286,14 +287,14 @@ static bool update_dummy_alive(u16 index, BillboardObject *object, const PlayerS
     // DUMMY_MOVE_STEP in billboard_internal.h. That keeps AI cadence in
     // lockstep with the player's clock instead of degrading further on a slow
     // render frame.
-    object->move_cooldown = (object->move_cooldown > tics)
-        ? (u8)(object->move_cooldown - tics) : 0;
-    object->attack_cooldown = (object->attack_cooldown > tics)
-        ? (u8)(object->attack_cooldown - tics) : 0;
-    object->spot_cooldown = (object->spot_cooldown > tics)
-        ? (u8)(object->spot_cooldown - tics) : 0;
-    object->attack_anim = (object->attack_anim > tics)
-        ? (u8)(object->attack_anim - tics) : 0;
+    state->move_cooldown = (state->move_cooldown > tics)
+        ? (u8)(state->move_cooldown - tics) : 0;
+    state->attack_cooldown = (state->attack_cooldown > tics)
+        ? (u8)(state->attack_cooldown - tics) : 0;
+    state->spot_cooldown = (state->spot_cooldown > tics)
+        ? (u8)(state->spot_cooldown - tics) : 0;
+    state->attack_anim = (state->attack_anim > tics)
+        ? (u8)(state->attack_anim - tics) : 0;
 
     // Walk cadence: free-run the leg cycle while engaged (independent of the
     // discrete move_cooldown steps so it looks smooth, not once-per-hop). The
@@ -305,7 +306,7 @@ static bool update_dummy_alive(u16 index, BillboardObject *object, const PlayerS
     // clamped to >=1 in main.c), a player tic does not fire every iteration --
     // without this gate a call where no tic fired could still advance a pose
     // sitting at anim_timer == 0, which is the same bug this phase fixes.
-    if (object->attack_anim == 0 && tics > 0) {
+    if (state->attack_anim == 0 && tics > 0) {
         if (object->anim_timer > tics) {
             object->anim_timer = (u8)(object->anim_timer - tics);
         } else {
@@ -317,22 +318,22 @@ static bool update_dummy_alive(u16 index, BillboardObject *object, const PlayerS
     if (visible) {
         if (!object->saw_player) {
             object->saw_player = TRUE;
-            object->spot_cooldown = DUMMY_SPOT_DELAY_FRAMES;
+            state->spot_cooldown = DUMMY_SPOT_DELAY_FRAMES;
         }
-        object->last_seen_x = player->x;
-        object->last_seen_y = player->y;
+        state->last_seen_x = player->x;
+        state->last_seen_y = player->y;
         object->has_last_seen = TRUE;
     } else {
         object->saw_player = FALSE;
-        object->spot_cooldown = 0;
+        state->spot_cooldown = 0;
     }
 
-    if (!is_demon && visible && (object->spot_cooldown == 0) &&
+    if (!is_demon && visible && (state->spot_cooldown == 0) &&
         (player_dist_sq <= DUMMY_ATTACK_RANGE_SQ) &&
-        (object->attack_cooldown == 0)) {
-        object->attack_cooldown = DUMMY_ATTACK_COOLDOWN;
-        object->move_cooldown = DUMMY_ATTACK_RECOVERY_FRAMES;
-        object->attack_anim = ENEMY_ATTACK_ANIM_FRAMES;
+        (state->attack_cooldown == 0)) {
+        state->attack_cooldown = DUMMY_ATTACK_COOLDOWN;
+        state->move_cooldown = DUMMY_ATTACK_RECOVERY_FRAMES;
+        state->attack_anim = ENEMY_ATTACK_ANIM_FRAMES;
         enemy_attack(object, player, update);
         return FALSE;
     }
@@ -340,7 +341,7 @@ static bool update_dummy_alive(u16 index, BillboardObject *object, const PlayerS
     if (is_demon) {
         // The bite lands 16 tics into the attack, if the player is still
         // there to be bitten.
-        if (object->bite_pending && (object->attack_anim <= DEMON_BITE_AT)) {
+        if (object->bite_pending && (state->attack_anim <= DEMON_BITE_AT)) {
             object->bite_pending = 0;
             if (visible && demon_in_melee_range(player_dx, player_dy)) {
                 enemy_attack(object, player, update);
@@ -348,27 +349,27 @@ static bool update_dummy_alive(u16 index, BillboardObject *object, const PlayerS
         }
         // A_Chase: in melee range, go to the melee state. The demon stands
         // still for all 24 tics of it and chases again once it ends.
-        if (visible && !object->bite_pending && (object->spot_cooldown == 0) &&
-            (object->attack_cooldown == 0) &&
+        if (visible && !object->bite_pending && (state->spot_cooldown == 0) &&
+            (state->attack_cooldown == 0) &&
             demon_in_melee_range(player_dx, player_dy)) {
-            object->attack_cooldown = DEMON_ATTACK_TICS;
-            object->move_cooldown = DEMON_ATTACK_TICS;
-            object->attack_anim = DEMON_ATTACK_TICS;
+            state->attack_cooldown = DEMON_ATTACK_TICS;
+            state->move_cooldown = DEMON_ATTACK_TICS;
+            state->attack_anim = DEMON_ATTACK_TICS;
             object->bite_pending = 1;
             return FALSE;
         }
     }
 
-    if (object->move_cooldown != 0) {
+    if (state->move_cooldown != 0) {
         return FALSE;
     }
 
     {
-        const s32 home_dx = object->home_x - object->x;
-        const s32 home_dy = object->home_y - object->y;
+        const s32 home_dx = state->home_x - object->x;
+        const s32 home_dy = state->home_y - object->y;
         const s32 home_dist_sq = (home_dx * home_dx) + (home_dy * home_dy);
-        const s32 seen_dx = object->last_seen_x - object->x;
-        const s32 seen_dy = object->last_seen_y - object->y;
+        const s32 seen_dx = state->last_seen_x - object->x;
+        const s32 seen_dy = state->last_seen_y - object->y;
         const s32 seen_dist_sq = (seen_dx * seen_dx) + (seen_dy * seen_dy);
         s16 step_x;
         s16 step_y;
@@ -428,7 +429,7 @@ static bool update_dummy_alive(u16 index, BillboardObject *object, const PlayerS
     }
 
     if (moved) {
-        object->move_cooldown = DUMMY_MOVE_INTERVAL;
+        state->move_cooldown = DUMMY_MOVE_INTERVAL;
     }
 
     return moved;

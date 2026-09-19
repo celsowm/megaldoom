@@ -12,9 +12,20 @@ def main():
     enemy = (ROOT / "src/billboard/billboard_enemy.c").read_text()
     combat = (ROOT / "src/billboard/billboard_combat.c").read_text()
 
+    # Each list is sized by what it can hold: every object, only monsters, or
+    # only targets (monsters + barrels; the barrel is the only blocking type
+    # that spawns). test-billboard-population.py proves those ceilings.
     assert "s_active_indices[BILLBOARD_OBJECT_COUNT]" in registry
-    assert "s_enemy_indices[BILLBOARD_OBJECT_COUNT]" in registry
-    assert "s_blocking_indices[BILLBOARD_OBJECT_COUNT]" in registry
+    assert "s_enemy_indices[BILLBOARD_ENEMY_COUNT]" in registry
+    assert "s_target_indices[BILLBOARD_TARGET_COUNT]" in registry
+    assert "s_blocking_indices[BILLBOARD_TARGET_COUNT]" in registry
+    assert "s_simulated_enemy_indices[BILLBOARD_ENEMY_COUNT]" in enemy
+    assert "s_simulated_enemy_visibility[BILLBOARD_ENEMY_COUNT]" in enemy
+    assert "BillboardEnemyState g_enemy_states[BILLBOARD_ENEMY_COUNT];" in billboard
+    # Only monsters take an AI-state slot, and each takes the next one.
+    spawn = billboard[billboard.index("void billboard_init"):]
+    assert "if (type == BILLBOARD_TYPE_DUMMY) {" in spawn
+    assert "object->enemy_slot = (u8)enemies++;" in spawn
     assert "s_blocking_count = 0;" in registry
     assert "if (type->blocking)" in registry
     assert "s_blocking_indices[s_blocking_count++]" in registry

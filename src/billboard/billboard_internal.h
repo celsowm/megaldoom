@@ -11,6 +11,12 @@
 // View dimensions come from raycast.h (RAY_VIEW_COLS/ROWS) -- billboard.h
 // includes it -- instead of being redefined here.
 #define BILLBOARD_OBJECT_COUNT MEGALDOOM_MAP_MAX_ACTIVE_THINGS
+// Most objects are pickups. Arrays that only ever hold monsters (the enemy
+// registry, the AI state) or targets (monsters + barrels: the target and
+// blocking registries) are sized by those populations instead.
+#define BILLBOARD_ENEMY_COUNT MEGALDOOM_MAP_MAX_ACTIVE_ENEMIES
+#define BILLBOARD_TARGET_COUNT MEGALDOOM_MAP_MAX_ACTIVE_TARGETS
+_Static_assert(BILLBOARD_ENEMY_COUNT <= 255, "BillboardObject.enemy_slot is a u8");
 #define BILLBOARD_COLLECT_RADIUS (FX_ONE / 2)
 #define BILLBOARD_COLLECT_RADIUS_SQ (BILLBOARD_COLLECT_RADIUS * BILLBOARD_COLLECT_RADIUS)
 // Conservative horizontal radius for the visible-subsector prototype. The
@@ -245,10 +251,6 @@ typedef struct {
     // movement margin fit s16. Arithmetic users promote these fields to s32.
     s16 x;
     s16 y;
-    s16 home_x;
-    s16 home_y;
-    s16 last_seen_x;
-    s16 last_seen_y;
     u8 type_id;
     // Map THING visual identity. Enemy behaviour remains shared by DUMMY,
     // while this selects the source sprite family (POSS or TROO).
@@ -265,16 +267,32 @@ typedef struct {
     // still in melee range and in sight.
     u8 bite_pending : 1;
     u8 reserved_flags : 3;
-    u8 move_cooldown;
-    u8 attack_cooldown;
-    u8 spot_cooldown;
     u8 life_state;
     u8 anim_frame;
     u8 anim_timer;
     u8 death_index;
     u8 death_timer;
-    u8 attack_anim;
+    // A monster's index into g_enemy_states; meaningless for anything else.
+    u8 enemy_slot;
 } BillboardObject;
+
+// The AI state only monsters (BILLBOARD_TYPE_DUMMY) carry.
+typedef struct {
+    s16 home_x;
+    s16 home_y;
+    s16 last_seen_x;
+    s16 last_seen_y;
+    u8 move_cooldown;
+    u8 attack_cooldown;
+    u8 spot_cooldown;
+    u8 attack_anim;
+} BillboardEnemyState;
+
+extern BillboardEnemyState g_enemy_states[BILLBOARD_ENEMY_COUNT];
+
+static inline BillboardEnemyState *billboard_enemy_state(const BillboardObject *object) {
+    return &g_enemy_states[object->enemy_slot];
+}
 
 // A shootable thing's Doom radius (info.c): what hitscan and splash measure
 // against, as opposed to the BillboardType movement-collision radius.

@@ -37,7 +37,7 @@ static void process_blast(s32 bx, s32 by,
     // moving enemies remain present without requiring a static spatial grid.
     const u16 *indices = billboard_registry_target_indices();
     const u16 target_count = billboard_registry_target_count();
-    PendingHit pending[BILLBOARD_OBJECT_COUNT];
+    PendingHit pending[BILLBOARD_TARGET_COUNT];
     u16 pending_count = 0;
 
     for (u16 slot = 0; slot < target_count; slot++) {

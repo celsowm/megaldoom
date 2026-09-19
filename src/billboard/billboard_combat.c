@@ -70,6 +70,7 @@ static void knock_back_dummy(u16 index, BillboardObject *object, const PlayerSta
 // pain also cuts a demon's attack short, bite and all: P_SetMobjState leaves
 // S_SARG_ATK* before A_SargAttack runs.
 static void roll_dummy_pain(BillboardObject *object) {
+    BillboardEnemyState *state = billboard_enemy_state(object);
     const bool is_demon = (bool)(object->visual_id == BILLBOARD_VISUAL_DEMON);
     const bool short_pain = is_demon || (object->visual_id == BILLBOARD_VISUAL_IMP);
     const u8 painchance = object->shotgun_guy ? 170 : (is_demon ? 180 : 200);
@@ -78,13 +79,13 @@ static void roll_dummy_pain(BillboardObject *object) {
     }
     if (object->bite_pending) {
         object->bite_pending = 0;
-        object->attack_anim = 0;
+        state->attack_anim = 0;
     }
     const u8 pain_tics = short_pain ? 4 : 6;
-    if (object->move_cooldown < pain_tics) {
-        object->move_cooldown = pain_tics;
+    if (state->move_cooldown < pain_tics) {
+        state->move_cooldown = pain_tics;
     }
-    object->attack_cooldown = 0;
+    state->attack_cooldown = 0;
 }
 
 u16 billboard_get_target_count(void) {
