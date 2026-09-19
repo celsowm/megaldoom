@@ -96,7 +96,7 @@ typedef struct {
 // MEGALDOOM_MAP_COUNT, which tools/wad-map-extract.py emits from the map list
 // it was actually given, so the campaign has a single source of truth and
 // adding a level cannot leave a stale `phase_index == 0` branch behind.
-// Par times are Doom's own for E1M1..E1M6.
+// Par times are Doom's own for E1M1..E1M7.
 typedef struct {
     const u8 *music;
     u16 par_seconds;
@@ -109,6 +109,7 @@ static const CampaignLevel CAMPAIGN[MEGALDOOM_MAP_COUNT] = {
     { e1m4_music, 90 },
     { e1m5_music, 165 },
     { e1m6_music, 180 },
+    { e1m7_music, 180 },
 };
 
 static PlayerState g_player;

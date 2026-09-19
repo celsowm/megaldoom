@@ -143,24 +143,31 @@ $packs = @($sections.Keys | Where-Object { $_ -like ".wallpack*" } | Sort-Object
 if ($packs.Count -eq 0) {
     Fail "no .wallpackN sections: the level wall packs were not linked."
 }
-foreach ($name in $packs) {
+# Packs are padded to whole 512 KB mapper banks, not to the window, and load
+# back to back from 0x280000 (tools/md_banked.ld); level_bank.c reads each
+# one's first bank from the linker. So each must start where the previous one
+# ends, on a bank boundary, and be at most the 1.5 MB window.
+$BankBytes = 0x80000
+$nextLma = $LevelWindowBase
+$packBanks = @()
+foreach ($name in ($packs | Sort-Object { [int]($_.Substring(".wallpack".Length)) })) {
     $pack = $sections[$name]
-    $index = [int]($name.Substring(".wallpack".Length))
-    $expectedLma = $LevelWindowBase + $index * $LevelWindowBytes
     if ($pack.Vma -ne $LevelWindowBase) {
         Fail ("$name links at 0x{0:X6}, not the level window 0x{1:X6}." -f $pack.Vma, $LevelWindowBase)
     }
-    elseif ($pack.Lma -ne $expectedLma) {
-        Fail ("$name loads at 0x{0:X6}, expected 0x{1:X6} (banks {2}-{3})." -f
-              $pack.Lma, $expectedLma, (5 + 3 * $index), (7 + 3 * $index))
+    elseif ($pack.Lma -ne $nextLma) {
+        Fail ("$name loads at 0x{0:X6}, expected 0x{1:X6} right after the previous pack." -f
+              $pack.Lma, $nextLma)
     }
-    elseif ($pack.Size -ne $LevelWindowBytes) {
-        Fail ("$name is $($pack.Size) bytes; packs are padded to the $LevelWindowBytes-byte window.")
+    elseif ($pack.Size -le 0 -or $pack.Size % $BankBytes -ne 0 -or $pack.Size -gt $LevelWindowBytes) {
+        Fail ("$name is $($pack.Size) bytes; a pack is 1 to 3 whole 512 KB banks.")
     }
+    $packBanks += [int]($pack.Size / $BankBytes)
+    $nextLma = $pack.Lma + $pack.Size
 }
 if (-not $script:failed) {
-    Pass ("$($packs.Count) level packs at 0x{0:X6}, banks 5..{1}." -f
-          $LevelWindowBase, (4 + 3 * $packs.Count))
+    Pass ("$($packs.Count) level packs from 0x{0:X6}, banks 5..{1} ({2} banks each)." -f
+          $LevelWindowBase, (4 + ($packBanks | Measure-Object -Sum).Sum), ($packBanks -join "/"))
 }
 # Map arrays (tools/bsp_emit.py, BSP_LEVEL_PACK) live in their own level's
 # pack: E1M<n> in .wallpack<n-1>. Every pack links at the same address, so only

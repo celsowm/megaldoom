@@ -24,6 +24,7 @@ from typing import Iterable
 
 LEVEL_WINDOW_BASE = 0x280000
 LEVEL_WINDOW_BYTES = 0x180000
+MAPPER_BANK_BYTES = 0x80000
 
 
 def parse_args() -> argparse.Namespace:
@@ -191,7 +192,10 @@ def build_report(root: Path, rom_out: Path, rom_bin: Path, objdump: str) -> dict
     maps = level_map_sizes(objdump, rom_out)
     level_names = sorted(set(wallpacks) | set(visibility) | set(maps), key=lambda x: int(x[3:]))
     levels = []
-    for level in level_names:
+    for index, level in enumerate(level_names):
+        # Packs are padded to whole 512 KB banks (tools/md_banked.ld), so the
+        # cartridge space a level takes is its section size, not the window.
+        reserved = rom_sections.get(f".wallpack{index}", 0)
         wall_bytes = wallpacks.get(level, 0)
         visibility_bytes = visibility.get(level, 0)
         map_bytes = maps.get(level, 0)
@@ -203,12 +207,14 @@ def build_report(root: Path, rom_out: Path, rom_bin: Path, objdump: str) -> dict
                 "visibility": visibility_bytes,
                 "map_data": map_bytes,
                 "payload": payload,
+                "reserved": reserved,
+                "banks": reserved // MAPPER_BANK_BYTES,
                 "window_percent": percent(payload, LEVEL_WINDOW_BYTES),
             }
         )
 
     rom_size = rom_bin.stat().st_size
-    level_window_capacity = len(levels) * LEVEL_WINDOW_BYTES
+    level_window_capacity = sum(level["reserved"] for level in levels)
     actual_level_payload = sum(level["payload"] for level in levels)
     frontend_bytes = sum(
         size for name, size in resource_groups_by_name.items() if name.startswith("frontend:")
@@ -285,16 +291,18 @@ def render_markdown(report: dict) -> str:
         "",
         f"Actual level payload: **{format_size(totals['payload'])}**. "
         f"The levels reserve **{format_size(rom['level_window_capacity_bytes'])}** "
-        f"in fixed {format_size(LEVEL_WINDOW_BYTES)} bank windows.",
+        f"in whole {format_size(MAPPER_BANK_BYTES)} mapper banks "
+        f"(each at most the {format_size(LEVEL_WINDOW_BYTES)} window).",
         "",
-        "| Level | Wallpacks | Visibility/PVS | BSP/map data | Payload | Window used |",
-        "|---|---:|---:|---:|---:|---:|",
+        "| Level | Wallpacks | Visibility/PVS | BSP/map data | Payload | Banks | Window used |",
+        "|---|---:|---:|---:|---:|---:|---:|",
     ]
     for level in report["levels"]:
         lines.append(
             f"| {level['level']} | {format_size(level['wallpacks'])} | "
             f"{format_size(level['visibility'])} | {format_size(level['map_data'])} | "
-            f"{format_size(level['payload'])} | {level['window_percent']:.1f}% |"
+            f"{format_size(level['payload'])} | {level['banks']} | "
+            f"{level['window_percent']:.1f}% |"
         )
 
     lines += [

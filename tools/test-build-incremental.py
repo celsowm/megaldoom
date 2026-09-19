@@ -64,17 +64,18 @@ with tempfile.TemporaryDirectory(prefix="megaldoom-build-test-") as folder:
         frontend.generate = real_generate
     assert frontend.complete_outputs(output)
     assert (output / frontend.MANIFEST_NAME).is_file()
-    # 48 fixed cards plus the OPTIONS cross product (MUSIC x SFX x VIEW SIZE x
-    # DEBUG x cursor row). Derived rather than written out so adding a viewport
-    # preset updates it here instead of failing with a bare number mismatch.
+    # Fixed cards plus the OPTIONS and CONTROLS pieces below. Derived rather
+    # than written out so adding a viewport preset updates it here instead of
+    # failing with a bare number mismatch.
     # The fixed count carries one stats panel and one "ENTERING" card per
     # campaign level, so it grows by two whenever a level is added: 44 for the
-    # three-map campaign, 46 with E1M4, 48 with E1M5, 50 with E1M6; Sonic's two
-    # boot sprite sheets make 52.
+    # three-map campaign, 46 with E1M4, 48 with E1M5, 50 with E1M6, 52 with
+    # E1M7; Sonic's two boot sprite sheets make 54.
     # The CONTROLS submenu adds one label panel per cursor row plus the
-    # button-letter sheet.
-    assert len(frontend.EXPECTED_OUTPUTS) == 52 + (frontend.CONTROLS_ROWS + 1) + (
-        2 * 2 * frontend.VIEW_SIZE_COUNT * 2 * frontend.OPTIONS_ROWS)
+    # button-letter sheet. OPTIONS adds one panel per cursor row plus one image
+    # per setting value, no longer their cross product.
+    assert len(frontend.EXPECTED_OUTPUTS) == 54 + (frontend.CONTROLS_ROWS + 1) + (
+        frontend.OPTIONS_ROWS + sum(frontend.OPTIONS_VALUE_COUNTS))
     for name in frontend.CACODEMON_BOOT_FRAMES:
         assert frontend.SPRITE_SOURCE / f"{name}.png" in frontend.source_paths(source)
     for name in frontend.CACODEMON_PROJECTILE_FRAMES:

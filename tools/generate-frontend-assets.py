@@ -3,6 +3,7 @@
 
 import argparse
 import hashlib
+import itertools
 import json
 import os
 from pathlib import Path
@@ -47,6 +48,20 @@ import raycast_constants
 # display it.
 VIEW_SIZE_COUNT = raycast_constants.view_size_count()
 OPTIONS_ROWS = 6
+# OPTIONS is one panel per cursor row plus one small image per setting value,
+# which frontend.c stamps into that setting's row. It used to be the full cross
+# product of every setting and the cursor, 144 full screens and 793 KB of
+# resident ROM. The panel sits at (64, 20), so row k's text lands on tile rows
+# 7 + 3k and 8 + 3k, and every value text fits tile columns 15..24, clear of
+# the skull in columns 11..13. frontend.c mirrors these as OPTIONS_VALUE_X,
+# OPTIONS_FIRST_ROW_Y, OPTIONS_ROW_STEP, OPTIONS_VALUE_W and OPTIONS_VALUE_H.
+OPTIONS_VALUE_X = 15
+OPTIONS_FIRST_ROW_Y = 7
+OPTIONS_ROW_STEP = 3
+OPTIONS_VALUE_W = 10
+OPTIONS_VALUE_H = 2
+# Values per setting row, in row order: MUSIC, SFX, VIEW SIZE, DEBUG.
+OPTIONS_VALUE_COUNTS = (2, 2, VIEW_SIZE_COUNT, 2)
 
 # CONTROLS submenu. Unlike OPTIONS it is NOT a cross product: 36 layouts x 8
 # cursor rows would be 288 full-screen panels. Each panel carries only the labels
@@ -106,7 +121,8 @@ BOOT_INPUTS = (
     SEGA_FONT,
 )
 INTERMISSION_PATCHES = (
-    "WIMAP0", "WILV00", "WILV01", "WILV02", "WILV03", "WIOSTK", "WIOSTI",
+    "WIMAP0", "WILV00", "WILV01", "WILV02", "WILV03", "WILV04", "WILV05",
+    "WILV06", "WIOSTK", "WIOSTI",
     "WISCRT2",
     "WITIME", "WIPAR", "WISPLAT", "WIURH0", "WIPCNT",
     "WICOLON", "WIF", "WIENTER", *(f"WINUM{i}" for i in range(10)),
@@ -147,19 +163,20 @@ def expected_outputs() -> tuple[str, ...]:
         "intermission_stats_e1m2.png", "intermission_stats_e1m3.png",
         "intermission_stats_e1m4.png", "intermission_stats_e1m5.png",
         "intermission_stats_e1m6.png",
+        "intermission_stats_e1m7.png",
         "intermission_entering_e1m2.png", "intermission_entering_e1m3.png",
         "intermission_entering_e1m4.png", "intermission_entering_e1m5.png",
         "intermission_entering_e1m6.png",
+        "intermission_entering_e1m7.png",
         "intermission_digits.png",
         "intermission_time_digits.png", "intermission_splat.png",
         "intermission_pointer0.png",
     ]
     names.extend(f"main_{selected}_{frame}.png" for selected in range(3) for frame in range(2))
+    names.extend(f"options_panel_{selected}.png" for selected in range(OPTIONS_ROWS))
     names.extend(
-        f"options_{music}_{sfx}_{view}_{debug}_{selected}.png"
-        for music in range(2) for sfx in range(2)
-        for view in range(VIEW_SIZE_COUNT) for debug in range(2)
-        for selected in range(OPTIONS_ROWS)
+        f"options_value_{row}_{value}.png"
+        for row, count in enumerate(OPTIONS_VALUE_COUNTS) for value in range(count)
     )
     names.extend(f"skill_{selected}.png" for selected in range(5))
     names.extend(f"pause_{selected}.png" for selected in range(3))
@@ -950,11 +967,13 @@ def generate(source: Path, output: Path) -> None:
     intermission_stats_e1m4 = make_intermission_stats(source, "WILV03")
     intermission_stats_e1m5 = make_intermission_stats(source, "WILV04")
     intermission_stats_e1m6 = make_intermission_stats(source, "WILV05")
+    intermission_stats_e1m7 = make_intermission_stats(source, "WILV06")
     intermission_entering = make_intermission_entering(source)
     intermission_entering_e1m3 = make_intermission_entering(source, "WILV02")
     intermission_entering_e1m4 = make_intermission_entering(source, "WILV03")
     intermission_entering_e1m5 = make_intermission_entering(source, "WILV04")
     intermission_entering_e1m6 = make_intermission_entering(source, "WILV05")
+    intermission_entering_e1m7 = make_intermission_entering(source, "WILV06")
     intermission_digits = make_intermission_digits(source)
     intermission_time_digits = make_intermission_time_digits(source)
     intermission_splat = padded_intermission_patch("WISPLAT", 32, 24, source)
@@ -1026,27 +1045,51 @@ def generate(source: Path, output: Path) -> None:
                 panel.alpha_composite(patch, ((192 - patch.width) // 2 + 8, y))
             assets[f"main_{selected}_{frame}.png"] = (panel, False)
 
-    # OPTIONS is the full cross product of its settings (MUSIC, SFX, VIEW SIZE,
-    # DEBUG) and the cursor position: 2 x 2 x VIEW_SIZE_COUNT x 2 x 5 panels.
-    # They are cheap ROM (the budget that matters on this cart is work RAM, not
-    # ROM) and it keeps frontend.c a pure lookup with no runtime text
-    # composition.
-    for music in range(2):
-        for sfx in range(2):
-            for view in range(VIEW_SIZE_COUNT):
-                for debug in range(2):
-                    for selected in range(OPTIONS_ROWS):
-                        panel = submenu_panel(images, selected, rows=OPTIONS_ROWS)
-                        patch = images["M_OPTTTL"]
-                        panel.alpha_composite(patch, ((192 - patch.width) // 2, 0))
-                        centered_doom_text(panel, f"MUSIC {'ON' if music else 'OFF'}", 40, source)
-                        centered_doom_text(panel, f"SFX {'ON' if sfx else 'OFF'}", 64, source)
-                        centered_doom_text(panel, f"VIEW SIZE {view + 1}", 88, source)
-                        centered_doom_text(panel, f"DEBUG {'ON' if debug else 'OFF'}", 112, source)
-                        centered_doom_text(panel, "CONTROLS", 136, source)
-                        centered_doom_text(panel, "BACK", 160, source)
-                        assets[f"options_{music}_{sfx}_{view}_{debug}_{selected}.png"] = (
-                            screen_overlay(panel), True)
+    # OPTIONS: one panel per cursor row and one image per setting value (see
+    # OPTIONS_VALUE_X). Every combination is still composed here as the full
+    # screen it used to ship as, and must equal its panel with the four value
+    # images stamped in. indexed() picks each 8x8 tile's palette line from that
+    # tile alone, so equal RGBA on tile-aligned rectangles means equal indices:
+    # the runtime composition draws exactly the 144 screens it replaces.
+    def options_screen(settings, selected):
+        panel = submenu_panel(images, selected, rows=OPTIONS_ROWS)
+        patch = images["M_OPTTTL"]
+        panel.alpha_composite(patch, ((192 - patch.width) // 2, 0))
+        music, sfx, view, debug = settings
+        centered_doom_text(panel, f"MUSIC {'ON' if music else 'OFF'}", 40, source)
+        centered_doom_text(panel, f"SFX {'ON' if sfx else 'OFF'}", 64, source)
+        centered_doom_text(panel, f"VIEW SIZE {view + 1}", 88, source)
+        centered_doom_text(panel, f"DEBUG {'ON' if debug else 'OFF'}", 112, source)
+        centered_doom_text(panel, "CONTROLS", 136, source)
+        centered_doom_text(panel, "BACK", 160, source)
+        return screen_overlay(panel)
+
+    def value_box(row):
+        x = OPTIONS_VALUE_X * 8
+        y = (OPTIONS_FIRST_ROW_Y + row * OPTIONS_ROW_STEP) * 8
+        return (x, y, x + OPTIONS_VALUE_W * 8, y + OPTIONS_VALUE_H * 8)
+
+    base_settings = (0,) * len(OPTIONS_VALUE_COUNTS)
+    panels = [options_screen(base_settings, selected) for selected in range(OPTIONS_ROWS)]
+    values = {}
+    for row, count in enumerate(OPTIONS_VALUE_COUNTS):
+        for value in range(count):
+            settings = tuple(value if index == row else 0
+                             for index in range(len(OPTIONS_VALUE_COUNTS)))
+            values[row, value] = options_screen(settings, 0).crop(value_box(row))
+    for settings in itertools.product(*(range(count) for count in OPTIONS_VALUE_COUNTS)):
+        for selected in range(OPTIONS_ROWS):
+            composed = panels[selected].copy()
+            for row, value in enumerate(settings):
+                composed.paste(values[row, value], value_box(row)[:2])
+            if composed.tobytes() != options_screen(settings, selected).tobytes():
+                raise RuntimeError(
+                    f"OPTIONS {settings} cursor {selected} is not its panel plus "
+                    "value images; a value text left its tile rectangle")
+    for selected, panel in enumerate(panels):
+        assets[f"options_panel_{selected}.png"] = (panel, True)
+    for (row, value), image in values.items():
+        assets[f"options_value_{row}_{value}.png"] = (image, True)
 
     for selected in range(5):
         assets[f"skill_{selected}.png"] = (skill_panel(images, selected), False)
@@ -1096,11 +1139,13 @@ def generate(source: Path, output: Path) -> None:
         ("intermission_stats_e1m4.png", intermission_stats_e1m4),
         ("intermission_stats_e1m5.png", intermission_stats_e1m5),
         ("intermission_stats_e1m6.png", intermission_stats_e1m6),
+        ("intermission_stats_e1m7.png", intermission_stats_e1m7),
         ("intermission_entering_e1m2.png", intermission_entering),
         ("intermission_entering_e1m3.png", intermission_entering_e1m3),
         ("intermission_entering_e1m4.png", intermission_entering_e1m4),
         ("intermission_entering_e1m5.png", intermission_entering_e1m5),
         ("intermission_entering_e1m6.png", intermission_entering_e1m6),
+        ("intermission_entering_e1m7.png", intermission_entering_e1m7),
         ("intermission_digits.png", intermission_digits),
         ("intermission_time_digits.png", intermission_time_digits),
         ("intermission_splat.png", intermission_splat),

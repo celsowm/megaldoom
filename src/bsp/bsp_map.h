@@ -230,6 +230,7 @@ extern const BspMapData g_e1m3_map;
 extern const BspMapData g_e1m4_map;
 extern const BspMapData g_e1m5_map;
 extern const BspMapData g_e1m6_map;
+extern const BspMapData g_e1m7_map;
 extern const BspMapData *g_bsp_map;
 
 bool bsp_select_map(u16 level_index);

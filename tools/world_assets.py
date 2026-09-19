@@ -577,8 +577,8 @@ TECH_WALL_MATERIALS = (
     "COMPTALL", "COMPTILE", "COMPUTE2", "LITE3", "STARG3",
     "STARGR1", "STARTAN1", "STARTAN3", "SUPPORT2",
 )
-CURATED_WALL_MATERIALS = TECH_WALL_MATERIALS + ("TEKWALL1", "TEKWALL4",
-                                                "TEKWALL5")
+CURATED_WALL_MATERIALS = TECH_WALL_MATERIALS + ("TEKWALL1", "TEKWALL3",
+                                                "TEKWALL4", "TEKWALL5")
 # Per-material overrides. Everything absent here takes the plain edge-aware
 # low-pass, which is what the majority of curated materials want.
 _WALL_BAKE_OVERRIDES = {
@@ -671,6 +671,16 @@ _WALL_BAKE_OVERRIDES = {
     # narrowed; see tools/test-wall-quality.py.
     "TEKWALL5": dict(
         facade_window=(0, 0, 128, 128),
+        facade_compose=False,
+    ),
+    # TEKWALL3 (E1M7) is the same kind of dense machinery -- circuit boards and
+    # a valve panel over the full 128x112 source. Uncurated it bakes to vertical
+    # churn 0.381 against the 0.35 ceiling (horizontal 0.256); the plain curated
+    # low-pass only reaches 0.338 vertical. The TEKWALL5 magnification brings it
+    # to 0.232/0.231 and keeps Doom's own art, so it takes the same recipe
+    # rather than an exemption or an alias onto TEKWALL1, whose art differs.
+    "TEKWALL3": dict(
+        facade_window=(0, 0, 128, 112),
         facade_compose=False,
     ),
 }

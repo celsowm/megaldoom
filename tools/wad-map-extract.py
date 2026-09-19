@@ -287,7 +287,7 @@ def main():
     # Wall pixels live in per-level banked packs built from the whole
     # campaign; one map on its own cannot emit a consistent set.
     raise SystemExit("single-map extraction was removed with the banked wall "
-                     "packs; use --maps E1M1 E1M2 E1M3 E1M4 E1M5 E1M6")
+                     "packs; use --maps E1M1 E1M2 E1M3 E1M4 E1M5 E1M6 E1M7")
 
 if __name__ == "__main__":
     main()

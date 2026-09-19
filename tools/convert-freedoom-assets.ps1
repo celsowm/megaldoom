@@ -217,7 +217,7 @@ Add-Type -AssemblyName System.Drawing
 # hand afterwards. The campaign list belongs in one place, and this is it.
 & python (Join-Path $PSScriptRoot "wad-map-extract.py") `
     --wad (Join-Path $Root "DOOM1.WAD") `
-    --maps E1M1 E1M2 E1M3 E1M4 E1M5 E1M6 `
+    --maps E1M1 E1M2 E1M3 E1M4 E1M5 E1M6 E1M7 `
     --map-out-dir (Split-Path -Parent $MapOutPath) `
     --assets-out $OutPath
 if ($LASTEXITCODE -ne 0) {

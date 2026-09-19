@@ -80,6 +80,14 @@ EXPECTED = {
         "normal": (335, 118, 195, 22),
         "hard": (405, 177, 204, 24),
     },
+    # Under every E1M6 ceiling: hard is 299 objects, 150 monsters and 166
+    # targets, so E1M7 costs no work RAM.
+    "e1m7": {
+        "curated": 314,
+        "easy": (181, 32, 133, 16),
+        "normal": (236, 84, 136, 16),
+        "hard": (299, 150, 133, 16),
+    },
 }
 
 

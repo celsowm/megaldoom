@@ -67,7 +67,7 @@ def lines(path):
 def main():
     with tempfile.TemporaryDirectory() as temp:
         temp = Path(temp)
-        for name in ("E1M1", "E1M2", "E1M3", "E1M4", "E1M5", "E1M6"):
+        for name in ("E1M1", "E1M2", "E1M3", "E1M4", "E1M5", "E1M6", "E1M7"):
             output = temp / (name.lower() + ".waypoints")
             subprocess.check_call([sys.executable, str(GENERATOR), "--map", name,
                                    "--out", str(output)])
@@ -142,7 +142,9 @@ def main():
         assert len({group for _, group in locked}) == 3
         for index, group in locked:
             assert index < next(i for i, g in unlocked if g == group), group
-        for name in ("E1M1", "E1M4"):
+        # E1M7, like E1M4, has keyed doors but certifies its exit at key mask
+        # 0x00, so its route collects no key and has no lock scenario.
+        for name in ("E1M1", "E1M4", "E1M7"):
             assert not [row for row in lines(temp / (name.lower() + ".waypoints"))
                         if row[5] == "USE" and row[6] in {"20", "40"}]
     print("ok    E2E routes: certified movement, combat, locks, keys and exits")

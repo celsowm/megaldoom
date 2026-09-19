@@ -525,6 +525,7 @@ static const IntermissionNode INTERMISSION_NODES[MEGALDOOM_MAP_COUNT] = {
     { 24, 13, 18, 13 },   // E1M4
     { 12, 11,  6, 11 },   // E1M5
     { 18,  7, 12,  7 },   // E1M6
+    {  6,  7,  0,  7 },   // E1M7
 };
 
 static const Image *intermission_stats_image(u16 completed_level) {
@@ -535,6 +536,7 @@ static const Image *intermission_stats_image(u16 completed_level) {
         &frontend_intermission_stats_e1m4,
         &frontend_intermission_stats_e1m5,
         &frontend_intermission_stats_e1m6,
+        &frontend_intermission_stats_e1m7,
     };
     return stats[(completed_level < MEGALDOOM_MAP_COUNT) ? completed_level : 0];
 }
@@ -546,6 +548,7 @@ static const Image *intermission_entering_image(u16 completed_level) {
         &frontend_intermission_entering_e1m4,
         &frontend_intermission_entering_e1m5,
         &frontend_intermission_entering_e1m6,
+        &frontend_intermission_entering_e1m7,
         NULL,
     };
     return (completed_level < MEGALDOOM_MAP_COUNT) ? entering[completed_level] : NULL;
@@ -721,9 +724,9 @@ static void run_intermission_map(u16 completed_level,
     }
     // WIMAP0 node positions, one row per level, in the tile-aligned 224-line
     // frame. E1M1 and E1M2 are the values this screen already shipped with;
-    // E1M3..E1M6 follow the same WIMAP0 layout -- x = floor(node/8) - 2,
+    // E1M3..E1M7 follow the same WIMAP0 layout -- x = floor(node/8) - 2,
     // y = round(node/8), read off Doom's own lnodes table (E1M4 is 209,102,
-    // E1M5 116,89, E1M6 166,55).
+    // E1M5 116,89, E1M6 166,55, E1M7 71,56).
     // A splat marks every level already finished, so the map fills in as the
     // campaign advances.
     for (u16 level = 0; level <= completed_level &&
@@ -795,37 +798,73 @@ static void load_main_cursor_tiles(u16 tile_base) {
                     (u16)(tile_base + frontend_skull1.tileset->numTile), DMA);
 }
 
-// One pre-rendered panel per (music, sfx, view size, debug, cursor row)
-// combination. The table is indexed rather than branched so adding a setting
-// is a generator change plus a dimension here, not another nested if-ladder;
-// the macros only spell out the 144 generated resource names.
-#define OPTIONS_PANEL_ROWS(m, s, v, d) {                                   \
-    &frontend_options_##m##_##s##_##v##_##d##_0,                        \
-    &frontend_options_##m##_##s##_##v##_##d##_1,                        \
-    &frontend_options_##m##_##s##_##v##_##d##_2,                        \
-    &frontend_options_##m##_##s##_##v##_##d##_3,                        \
-    &frontend_options_##m##_##s##_##v##_##d##_4,                        \
-    &frontend_options_##m##_##s##_##v##_##d##_5 }
-_Static_assert(OPTIONS_ROW_COUNT == 6, "OPTIONS_PANEL_ROWS spells out six cursor rows");
-#define OPTIONS_PANEL_DEBUG(m, s, v) \
-    { OPTIONS_PANEL_ROWS(m, s, v, 0), OPTIONS_PANEL_ROWS(m, s, v, 1) }
-#define OPTIONS_PANEL_VIEWS(m, s) \
-    { OPTIONS_PANEL_DEBUG(m, s, 0), OPTIONS_PANEL_DEBUG(m, s, 1), OPTIONS_PANEL_DEBUG(m, s, 2) }
+// OPTIONS is one panel per cursor row plus one small image per setting value,
+// stamped into that setting's row. It used to ship every (music, sfx, view
+// size, debug, cursor) combination as a full screen: 144 panels, 793 KB of
+// resident ROM. tools/generate-frontend-assets.py proves each of those screens
+// equals its panel plus the four value images, and mirrors this geometry as
+// OPTIONS_VALUE_X, OPTIONS_FIRST_ROW_Y, OPTIONS_ROW_STEP and OPTIONS_VALUE_W/H.
+#define OPTIONS_VALUE_X 15
+#define OPTIONS_FIRST_ROW_Y 7
+#define OPTIONS_ROW_STEP 3
+#define OPTIONS_VALUE_W 10
+#define OPTIONS_VALUE_H 2
+#define OPTIONS_VALUE_ROWS 4 // MUSIC, SFX, VIEW SIZE, DEBUG
+static const Image *const OPTIONS_PANELS[OPTIONS_ROW_COUNT] = {
+    &frontend_options_panel_0, &frontend_options_panel_1, &frontend_options_panel_2,
+    &frontend_options_panel_3, &frontend_options_panel_4, &frontend_options_panel_5,
+};
+_Static_assert(OPTIONS_ROW_COUNT == 6, "OPTIONS_PANELS spells out six cursor rows");
+_Static_assert(OPTIONS_ROW_MUSIC == 0 && OPTIONS_ROW_SFX == 1 &&
+               OPTIONS_ROW_VIEW_SIZE == 2 && OPTIONS_ROW_DEBUG == 3,
+               "the value images are stamped into rows 0..3");
+static const Image *const OPTIONS_ON_OFF[2][2] = {
+    { &frontend_options_value_0_0, &frontend_options_value_0_1 }, // MUSIC
+    { &frontend_options_value_1_0, &frontend_options_value_1_1 }, // SFX
+};
+static const Image *const OPTIONS_VIEW_SIZES[RAY_VIEW_SIZE_COUNT] = {
+    &frontend_options_value_2_0, &frontend_options_value_2_1, &frontend_options_value_2_2,
+};
 _Static_assert(RAY_VIEW_SIZE_COUNT == 3,
-               "OPTIONS_PANEL_VIEWS spells out three viewport presets");
-static const Image *const OPTIONS_PANELS[2][2][RAY_VIEW_SIZE_COUNT][2][OPTIONS_ROW_COUNT] = {
-    { OPTIONS_PANEL_VIEWS(0, 0), OPTIONS_PANEL_VIEWS(0, 1) },
-    { OPTIONS_PANEL_VIEWS(1, 0), OPTIONS_PANEL_VIEWS(1, 1) },
+               "OPTIONS_VIEW_SIZES spells out three viewport presets");
+static const Image *const OPTIONS_DEBUG[2] = {
+    &frontend_options_value_3_0, &frontend_options_value_3_1,
 };
 
-static const Image *options_panel(u16 selected) {
-    const u16 music = game_audio_music_enabled() ? 1 : 0;
-    const u16 sfx = game_audio_sfx_enabled() ? 1 : 0;
-    const u16 debug = debug_light_enabled() ? 1 : 0;
-    u16 view = raycast_view_size();
-    if (view >= RAY_VIEW_SIZE_COUNT) view = 0;
+static const Image *options_value(u16 row) {
+    if (row == OPTIONS_ROW_MUSIC) return OPTIONS_ON_OFF[0][game_audio_music_enabled() ? 1 : 0];
+    if (row == OPTIONS_ROW_SFX) return OPTIONS_ON_OFF[1][game_audio_sfx_enabled() ? 1 : 0];
+    if (row == OPTIONS_ROW_VIEW_SIZE) {
+        const u16 view = raycast_view_size();
+        return OPTIONS_VIEW_SIZES[view < RAY_VIEW_SIZE_COUNT ? view : 0];
+    }
+    return OPTIONS_DEBUG[debug_light_enabled() ? 1 : 0];
+}
+
+// draw_panel() plus the four current values, loaded right after the panel's
+// own tiles, inside the same display-off / XGM2-suspended window so a value
+// never flashes in late.
+static void draw_options_panel(u16 selected, u16 tile_base) {
     if (selected >= OPTIONS_ROW_COUNT) selected = 0;
-    return OPTIONS_PANELS[music][sfx][view][debug][selected];
+    const Image *panel = OPTIONS_PANELS[selected];
+    u16 value_base = (u16)(tile_base + panel->tileset->numTile);
+    game_audio_suspend_for_video();
+    VDP_waitVSync();
+    VDP_setEnable(FALSE);
+    VDP_drawImageEx(BG_A, panel,
+                    TILE_ATTR_FULL(PAL0, TRUE, FALSE, FALSE, tile_base),
+                    0, 0, TRUE, TRUE);
+    for (u16 row = 0; row < OPTIONS_VALUE_ROWS; row++) {
+        const Image *value = options_value(row);
+        VDP_loadTileSet(value->tileset, value_base, CPU);
+        VDP_setTileMapEx(BG_A, value->tilemap,
+                         TILE_ATTR_FULL(PAL0, TRUE, FALSE, FALSE, value_base),
+                         OPTIONS_VALUE_X, (u16)(OPTIONS_FIRST_ROW_Y + row * OPTIONS_ROW_STEP),
+                         0, 0, OPTIONS_VALUE_W, OPTIONS_VALUE_H, CPU);
+        value_base = (u16)(value_base + value->tileset->numTile);
+    }
+    VDP_setEnable(TRUE);
+    game_audio_resume_after_video();
 }
 
 static const Image *skill_panel(u16 selected) {
@@ -962,7 +1001,7 @@ static void run_options(u16 tile_base) {
     u16 selected = 0;
     u16 previous;
 
-    draw_panel(options_panel(selected), tile_base);
+    draw_options_panel(selected, tile_base);
     wait_for_release(MENU_INPUT);
     previous = JOY_readJoypad(JOY_1);
     while (TRUE) {
@@ -1008,7 +1047,7 @@ static void run_options(u16 tile_base) {
             else break;
             redraw = TRUE;
         }
-        if (redraw) draw_panel(options_panel(selected), tile_base);
+        if (redraw) draw_options_panel(selected, tile_base);
         VDP_waitVSync();
     }
     wait_for_release(MENU_INPUT);

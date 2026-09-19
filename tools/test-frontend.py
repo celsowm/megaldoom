@@ -56,14 +56,15 @@ for selected in range(3):
     for frame in range(2):
         expected[f"main_{selected}_{frame}.png"] = (192, 176)
     expected[f"pause_{selected}.png"] = (320, 224)
-# OPTIONS is the cross product of MUSIC, SFX, the VIEW SIZE preset, DEBUG and
-# the cursor row (MUSIC / SFX / VIEW SIZE / DEBUG / CONTROLS / BACK).
-for music in range(2):
-    for sfx in range(2):
-        for view in range(raycast_constants.view_size_count()):
-            for debug in range(2):
-                for selected in range(6):
-                    expected[f"options_{music}_{sfx}_{view}_{debug}_{selected}.png"] = (320, 224)
+# OPTIONS is one panel per cursor row (MUSIC / SFX / VIEW SIZE / DEBUG /
+# CONTROLS / BACK) plus one 10x2-tile image per setting value, which frontend.c
+# stamps into that row. The generator proves every combination equals the full
+# screen the old cross product shipped.
+for selected in range(6):
+    expected[f"options_panel_{selected}.png"] = (320, 224)
+for row, count in enumerate((2, 2, raycast_constants.view_size_count(), 2)):
+    for value in range(count):
+        expected[f"options_value_{row}_{value}.png"] = (80, 16)
 # CONTROLS is one label panel per cursor row (six actions, DEFAULTS, BACK) plus
 # the A B C X Y Z sheet frontend.c stamps into the value column at runtime.
 for selected in range(8):
@@ -281,9 +282,15 @@ view_w_max, view_h_max = raycast_constants.view_tiles_max()
 pair_base = 16 + (view_w_max * view_h_max * 2)
 pause_tiles = max(
     unique_tiles(path)
-    for pattern in ("pause_*.png", "options_*_*_*.png", "skill_*.png", "confirm_*.png")
+    for pattern in ("pause_*.png", "skill_*.png", "confirm_*.png")
     for path in ASSETS.glob(pattern)
 )
+# OPTIONS loads its four current values right after the panel's own tiles.
+options_tiles = max(unique_tiles(path) for path in ASSETS.glob("options_panel_*.png")) + sum(
+    max(unique_tiles(path) for path in ASSETS.glob(f"options_value_{row}_*.png"))
+    for row in range(4)
+)
+pause_tiles = max(pause_tiles, options_tiles)
 pause_end = pair_base + pause_tiles
 assert pause_end < 1440, "pause overlay exceeds the reloadable VRAM region"
 # CONTROLS loads its A B C X Y Z sheet right after the panel's own tiles.
@@ -295,6 +302,10 @@ assert controls_end < 1440, "CONTROLS panel plus button glyphs exceed the reload
 title_controls_end = controls_end - pair_base + 16 + unique_tiles(ASSETS / "main_menu.png") + \
     unique_tiles(ASSETS / "skull1.png")
 assert title_controls_end < 1440, "CONTROLS from the title menu exceeds user VRAM"
+for token in ("#define OPTIONS_VALUE_X 15", "#define OPTIONS_FIRST_ROW_Y 7",
+              "#define OPTIONS_ROW_STEP 3", "#define OPTIONS_VALUE_W 10",
+              "#define OPTIONS_VALUE_H 2", "draw_options_panel"):
+    assert token in FRONTEND, token
 for token in ("#define CONTROLS_VALUE_X 28", "#define CONTROLS_FIRST_ROW_Y 7",
               "#define CONTROLS_ROW_STEP 2", "run_controls", "controls_cycle"):
     assert token in FRONTEND, token
@@ -401,6 +412,7 @@ assert "{ e1m3_music, 120 }," in MAIN
 assert "{ e1m4_music, 90 }," in MAIN
 assert "{ e1m5_music, 165 }," in MAIN
 assert "{ e1m6_music, 180 }," in MAIN
+assert "{ e1m7_music, 180 }," in MAIN
 assert "phase_index + 1 < MEGALDOOM_MAP_COUNT" in MAIN
 assert "game_audio_play_music(intermission_music);" in FRONTEND
 assert "PAL_fadeOut(0, 63, BOOT_FADE_FRAMES, FALSE);\n    frontend_video_init();" in FRONTEND
@@ -412,6 +424,7 @@ assert 'XGM2 e1m3_music  "music/d_e1m3.vgm"' in RESOURCES
 assert 'XGM2 e1m4_music  "music/d_e1m4.vgm"' in RESOURCES
 assert 'XGM2 e1m5_music  "music/d_e1m5.vgm"' in RESOURCES
 assert 'XGM2 e1m6_music  "music/d_e1m6.vgm"' in RESOURCES
+assert 'XGM2 e1m7_music  "music/d_e1m7.vgm"' in RESOURCES
 assert 'SPRITE frontend_sega_s        "frontend/sega_s.png" 4 6 FAST 0' in RESOURCES
 assert 'SPRITE frontend_sega_e        "frontend/sega_e.png" 4 6 FAST 0' in RESOURCES
 assert 'SPRITE frontend_sega_g        "frontend/sega_g.png" 4 6 FAST 0' in RESOURCES

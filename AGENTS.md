@@ -189,7 +189,8 @@ The cartridge is **Sega SSF-banked** (2026-09-17): `src/boot/rom_head.c` says
 "SEGA SSF", `tools/md_banked.ld` links everything resident below `0x280000`,
 and each level's wall pack (`src/bsp/generated_wallpack_<map>.dat`: only the
 pair columns that level draws) is linked at the `0x280000–0x3FFFFF` window and
-loaded at its own physical banks (pack N at banks 5+3N..7+3N).
+loaded at its own physical banks (packs back to back from bank 5, each
+padded to whole 512 KB banks; see below).
 `level_bank_select()` maps a level's banks **once per level load**; the window
 is never switched mid-frame, so the pixel-rate wall reads cost exactly what a
 flat ROM read did. Invariants: nothing but `.wallpackN` may occupy the window
@@ -197,10 +198,10 @@ flat ROM read did. Invariants: nothing but `.wallpackN` may occupy the window
 registers; SGDK's `ENABLE_BANK_SWITCH` / `FAR()` stay unused — do not put a
 table behind SGDK's transient `FAR()` windows, which remap per access. Resident
 headroom is what `check-rom` prints; look there, not at the image size, before
-calling a precompute unaffordable. **That headroom is now nearly spent**: the
-419 KB of generated wall scalers took the resident end to 0x23F7F6, about 2 KB
-below check-rom's 0x240000 warning line, from ~686 KB free right after banking.
-The next precompute needs its own banked home, not the resident image.
+calling a precompute unaffordable. The 419 KB of generated wall scalers once
+took the resident end to within 2 KB of the warning line; banking the map
+arrays and composing OPTIONS at runtime (2026-09-19) brought it back to about
+1.09 MB free (resident end 0x16ED88).
 
 **A generated table's shape must be DERIVED from the viewport, never a
 literal.** `MEGALDOOM_WALL_TEX_Y_BY_HEIGHT` was `[641][120]` while the 22x16
@@ -469,9 +470,22 @@ with an output-identical cost flag (`-ExtraFlags
 '-DMEGALDOOM_NO_WALL_SCALERS=1'`). If the outcome moves, the route is
 fragile: find what it depends on, and do not revert the change.
 
-**Resident ROM is nearly full.** 78.8 KB is left below the 0x280000 level
-window after E1M6. E1M7 is about E1M6's size and needs its map descriptor in
-its banked pack before it can ship.
+**Map arrays live in their level's pack; only the descriptor is resident
+(LOG, 2026-09-19).** `tools/bsp_emit.py` tags every per-level array
+`BSP_LEVEL_PACK(n)`; the `g_e1mN_map` descriptors stay resident because the
+vis lookups compare their addresses. `check-rom.ps1` fails if an `e1mN_bsp_*`
+array sits in resident ROM or in another level's pack. Anything that reads a
+level's map data must do it while that level's banks are mapped.
+
+**Packs are padded to 512 KB banks, not to the window.** They load back to
+back from 0x280000, and `level_bank.c` reads each pack's first bank from the
+linker's `megaldoom_pack_lmaN` symbols; `md_banked.ld` asserts each pack is at
+most the 1.5 MB window. Do not reintroduce a fixed `5 + 3N` bank formula.
+
+**Do not ship a menu as the cross product of its settings.** OPTIONS was 144
+full screens, 793 KB of resident ROM. It is now one panel per cursor row plus
+one image per value, stamped at runtime like CONTROLS; the generator proves
+each composition equals the full screen it replaces.
 
 ## Dead ends — do not redo without new evidence
 
