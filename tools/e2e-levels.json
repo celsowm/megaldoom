@@ -64,6 +64,22 @@
       ],
       "requiredKeys": 0,
       "requiresLockedDoor": false
+    },
+    {
+      "name": "E1M5",
+      "index": 4,
+      "map": "E1M5",
+      "waypoints": "out/e2e/e1m5.waypoints",
+      "frames": 500000,
+      "requiredEvents": [
+        "started",
+        "moved",
+        "combat_hit",
+        "interaction",
+        "exit"
+      ],
+      "requiredKeys": 1,
+      "requiresLockedDoor": true
     }
   ]
 }

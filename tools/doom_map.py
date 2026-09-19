@@ -116,8 +116,8 @@ AUTOMAP_LINE_SPECIAL = 3
 # The THING types map_thing_type() in src/billboard/billboard.c recognises. Used
 # only for reporting and for the progression certificate's object budget; every
 # THING is emitted to the map regardless. Keep in sync with that switch.
-RUNTIME_THING_TYPES = {5, 6, 9, 13, 2001, 2002, 2005, 2007, 2008, 2011, 2012,
-                       2014, 2015, 2018, 2019, 2035, 2048, 2049, 3001, 3004}
+RUNTIME_THING_TYPES = {5, 6, 9, 13, 58, 2001, 2002, 2005, 2007, 2008, 2011, 2012,
+                       2014, 2015, 2018, 2019, 2035, 2048, 2049, 3001, 3002, 3004}
 KEY_THING_MASK = {5: KEY_BLUE, 6: KEY_YELLOW, 13: KEY_RED}
 BLOCKING_THING_RADIUS = {2035: 20}
 

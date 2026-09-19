@@ -50,8 +50,7 @@ static void process_blast(s32 bx, s32 by,
             object->type_id != BILLBOARD_TYPE_DUMMY) continue;
 
         damage = billboard_explosion_damage(bx, by, object->x, object->y,
-            (object->type_id == BILLBOARD_TYPE_BARREL) ? DOOM_RADIUS_BARREL
-                                                       : DOOM_RADIUS_MONSTER);
+                                            billboard_doom_radius(object));
         if (damage == 0) continue;
         if (bsp_segment_crosses_wall(bx, by, object->x, object->y)) continue;
 

@@ -67,7 +67,7 @@ def lines(path):
 def main():
     with tempfile.TemporaryDirectory() as temp:
         temp = Path(temp)
-        for name in ("E1M1", "E1M2", "E1M3", "E1M4"):
+        for name in ("E1M1", "E1M2", "E1M3", "E1M4", "E1M5"):
             output = temp / (name.lower() + ".waypoints")
             subprocess.check_call([sys.executable, str(GENERATOR), "--map", name,
                                    "--out", str(output)])
@@ -117,8 +117,10 @@ def main():
         # theirs: E1M3 reaches its blue door only because the route is pinned
         # to the normal exit -- released, it beelines to the secret exit in
         # 4304 units and touches no key -- and that coverage must not vanish
-        # silently if the pinning ever regresses.
-        for name in ("E1M2", "E1M3"):
+        # silently if the pinning ever regresses.  E1M5 has three blue doors;
+        # its scenario must press group 8, the one its route crosses after the
+        # key, not whichever blue SEG comes first in the map.
+        for name in ("E1M2", "E1M3", "E1M5"):
             rows = lines(temp / (name.lower() + ".waypoints"))
             locked = [row for row in rows if row[5] == "USE" and row[6] == "20"]
             unlocked = [row for row in rows if row[5] == "USE" and row[6] == "40"]

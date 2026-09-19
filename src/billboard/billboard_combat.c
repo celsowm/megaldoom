@@ -18,14 +18,16 @@ static bool is_position_blocked(s32 x, s32 y) {
 // Doom's P_DamageMobj on a monster, for the parts that are not hit points.
 //
 // Knockback: thrust = damage * 100 / mass (mass 100 for the zombieman, the
-// shotgun guy and the imp) along the shot, which the monster's ground
-// friction (29/32 a tic) bleeds off over its slide: damage * 8192 * 32/3 in
-// Q16, i.e. about damage * 4/3 world units in all. This engine has no monster
+// shotgun guy and the imp, 400 for the demon) along the shot, which the
+// monster's ground friction (29/32 a tic) bleeds off over its slide:
+// damage * 8192 * 32/3 in Q16, i.e. about damage * 4/3 world units in all, a
+// quarter of that for the demon. This engine has no monster
 // momentum, so the slide is applied at once, in steps of at most 16 units per
 // axis so it stops at the first wall instead of tunnelling. The chainsaw
 // pushes nothing, as in Doom.
 #define DOOM_MONSTER_SLIDE_NUM 4
 #define DOOM_MONSTER_SLIDE_DEN 3
+#define DOOM_DEMON_MASS_RATIO 4
 #define MONSTER_SLIDE_STEP 16
 static void knock_back_dummy(u16 index, BillboardObject *object, const PlayerState *player,
                              u16 damage) {
@@ -33,7 +35,9 @@ static void knock_back_dummy(u16 index, BillboardObject *object, const PlayerSta
         return;
     }
     const u16 angle = billboard_vector_angle(object->x - player->x, object->y - player->y);
-    const s32 slide = ((s32)damage * DOOM_MONSTER_SLIDE_NUM) / DOOM_MONSTER_SLIDE_DEN;
+    const s32 slide = ((s32)damage * DOOM_MONSTER_SLIDE_NUM) /
+        ((object->visual_id == BILLBOARD_VISUAL_DEMON)
+             ? (DOOM_MONSTER_SLIDE_DEN * DOOM_DEMON_MASS_RATIO) : DOOM_MONSTER_SLIDE_DEN);
     // fx_cos/fx_sin carry the 303/256 basis gain; divide it back out.
     s32 remaining_x = (slide * fx_cos(angle)) / 303;
     s32 remaining_y = (slide * fx_sin(angle)) / 303;
@@ -60,16 +64,23 @@ static void knock_back_dummy(u16 index, BillboardObject *object, const PlayerSta
 }
 
 // Pain: a monster that survives rolls P_Random() < painchance (zombieman and
-// imp 200, shotgun guy 170). On a pain it holds its pain state -- POSS/SPOS
-// 3 + 3 tics, TROO 2 + 2 -- and MF_JUSTHIT makes its next attack check fire
-// at once. Otherwise it keeps doing what it was doing.
+// imp 200, shotgun guy 170, demon 180). On a pain it holds its pain state --
+// POSS/SPOS 3 + 3 tics, TROO and SARG 2 + 2 -- and MF_JUSTHIT makes its next
+// attack check fire at once. Otherwise it keeps doing what it was doing. A
+// pain also cuts a demon's attack short, bite and all: P_SetMobjState leaves
+// S_SARG_ATK* before A_SargAttack runs.
 static void roll_dummy_pain(BillboardObject *object) {
-    const bool is_imp = (bool)(object->visual_id == BILLBOARD_VISUAL_IMP);
-    const u8 painchance = object->shotgun_guy ? 170 : 200;
+    const bool is_demon = (bool)(object->visual_id == BILLBOARD_VISUAL_DEMON);
+    const bool short_pain = is_demon || (object->visual_id == BILLBOARD_VISUAL_IMP);
+    const u8 painchance = object->shotgun_guy ? 170 : (is_demon ? 180 : 200);
     if (doom_random() >= painchance) {
         return;
     }
-    const u8 pain_tics = is_imp ? 4 : 6;
+    if (object->bite_pending) {
+        object->bite_pending = 0;
+        object->attack_anim = 0;
+    }
+    const u8 pain_tics = short_pain ? 4 : 6;
     if (object->move_cooldown < pain_tics) {
         object->move_cooldown = pain_tics;
     }
@@ -262,8 +273,7 @@ BillboardFireResult billboard_fire_hitscan(const PlayerState *player, s16 spread
         if ((dx > 2048) || (dx < -2048) || (dy > 2048) || (dy < -2048)) {
             continue;
         }
-        const s32 radius = (object->type_id == BILLBOARD_TYPE_BARREL) ?
-            DOOM_RADIUS_BARREL : DOOM_RADIUS_MONSTER;
+        const s32 radius = billboard_doom_radius(object);
         s32 lateral = ((s32)dir_x * (s16)dy) - ((s32)dir_y * (s16)dx);
         if (lateral < 0) {
             lateral = -lateral;

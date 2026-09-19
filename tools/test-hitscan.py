@@ -348,9 +348,10 @@ assert "billboard_damage_thrust(object->x, object->y, player->x, player->y, dama
 
 # --- the monsters' side ------------------------------------------------------------------
 for token in (
-    "const u8 painchance = object->shotgun_guy ? 170 : 200;",  # info.c
+    "const u8 painchance = object->shotgun_guy ? 170 : (is_demon ? 180 : 200);",  # info.c
     "if (doom_random() >= painchance) {",
-    "const u8 pain_tics = is_imp ? 4 : 6;",                    # POSS/SPOS 3+3, TROO 2+2
+    "const u8 pain_tics = short_pain ? 4 : 6;",   # POSS/SPOS 3+3, TROO/SARG 2+2
+    "const bool short_pain = is_demon || (object->visual_id == BILLBOARD_VISUAL_IMP);",
     "object->attack_cooldown = 0;",                            # MF_JUSTHIT
     "#define DOOM_MONSTER_SLIDE_NUM 4",                        # damage * 4/3 units
     "#define DOOM_MONSTER_SLIDE_DEN 3",
@@ -369,7 +370,10 @@ assert "DUMMY_HIT_PUSH_STEP" not in INTERNAL_H and "DUMMY_HIT_STUN_FRAMES" not i
 for token in ("#define DOOM_RADIUS_MONSTER 20", "#define DOOM_RADIUS_BARREL 10",
               "#define DOOM_RADIUS_PLAYER 16", "#define BARREL_EXPLOSION_RADIUS 128"):
     assert token in INTERNAL_H, token
-assert "DOOM_RADIUS_BARREL : DOOM_RADIUS_MONSTER;" in COMBAT_C
+assert "const s32 radius = billboard_doom_radius(object);" in COMBAT_C
+for token in ("if (object->type_id == BILLBOARD_TYPE_BARREL) return DOOM_RADIUS_BARREL;",
+              "return (object->visual_id == BILLBOARD_VISUAL_DEMON) ? DOOM_RADIUS_DEMON"):
+    assert token in INTERNAL_H, token
 assert "return (u16)(BARREL_EXPLOSION_DAMAGE - distance);" in EXPLOSION_C
 assert "#define DOOM_IMP_HEALTH 60" in BILLBOARD_C
 assert "#define DOOM_SHOTGUN_GUY_HEALTH 30" in BILLBOARD_C
@@ -568,6 +572,115 @@ for token in (
 assert "automatic" not in WEAPONS_H and "spread_cols" not in WEAPONS_H
 assert "cooldown_vblanks" not in WEAPONS_H
 
+# --- the demon: MT_SERGEANT, and MT_SHADOWS (the spectre), which is the same monster -----
+# info.c: spawnhealth 150, radius 30, mass 400, painchance 180. S_SARG_ATK1..3 are
+# 8 tics each and A_SargAttack is ATK3's action; S_SARG_PAIN is 2 + 2 tics.
+SARG_ATTACK = [(8, "A_FaceTarget"), (8, "A_FaceTarget"), (8, "A_SargAttack")]
+SARG_PAIN = [2, 2]
+attack_tics = sum(tics for tics, _ in SARG_ATTACK)
+bite_after = sum(tics for tics, _ in SARG_ATTACK[:2])
+assert f"#define DEMON_ATTACK_TICS {attack_tics}" in ENEMY_C
+assert f"#define DEMON_BITE_AT {attack_tics - bite_after}" in ENEMY_C
+assert sum(SARG_PAIN) == 4 and "is_demon || (object->visual_id == BILLBOARD_VISUAL_IMP)" in COMBAT_C
+assert "#define DOOM_RADIUS_DEMON 30" in INTERNAL_H
+assert "#define DOOM_DEMON_HEALTH 150" in BILLBOARD_C
+assert "case 3002: case 58: *visual = BILLBOARD_VISUAL_DEMON; return BILLBOARD_TYPE_DUMMY;" in BILLBOARD_C
+assert "#define DOOM_DEMON_MASS_RATIO 4" in COMBAT_C          # mass 400 against 100
+assert "damage = (u16)(((doom_random() % 10) + 1) * 4);" in ENEMY_C
+assert {((p % 10) + 1) * 4 for p in range(256)} == set(range(4, 41, 4))
+# A pain cancels the pending bite (P_SetMobjState leaves the attack states).
+pain = COMBAT_C[COMBAT_C.index("static void roll_dummy_pain"):]
+assert pain.index("object->bite_pending = 0;") < pain.index("const u8 pain_tics")
+# The bite re-checks range and sight when it lands, not when the attack began.
+demon_block = ENEMY_C[ENEMY_C.index("    if (is_demon) {"):]
+assert (demon_block.index("if (object->bite_pending && (object->attack_anim <= DEMON_BITE_AT)) {") <
+        demon_block.index("if (visible && demon_in_melee_range(player_dx, player_dy)) {") <
+        demon_block.index("enemy_attack(object, player, update);"))
+
+# P_CheckMeleeRange: P_AproxDistance in 16.16 against MELEERANGE - 20 + player radius.
+assert "#define DEMON_MELEE_RANGE (64 - 20 + DOOM_RADIUS_PLAYER)" in ENEMY_C
+for token in ("const s32 approx2 = 2 * (dx + dy) - ((dx < dy) ? dx : dy);",
+              "return approx2 < 2 * DEMON_MELEE_RANGE;"):
+    assert token in ENEMY_C, token
+
+
+def doom_in_melee(dx, dy):
+    fr = 1 << 16
+    ax, ay = abs(dx) * fr, abs(dy) * fr
+    dist = ax + ay - (min(ax, ay) >> 1)
+    return not dist >= (64 - 20 + 16) * fr
+
+
+def c_in_melee(dx, dy, variant=None):
+    ax, ay = abs(dx), abs(dy)
+    if variant == "floor-half":     # halving the integer instead of the 16.16
+        return ax + ay - (min(ax, ay) >> 1) < 60
+    if variant == "no-minus-20":    # MELEERANGE + player radius
+        return 2 * (ax + ay) - min(ax, ay) < 2 * 80
+    return 2 * (ax + ay) - min(ax, ay) < 2 * 60
+
+
+melee_grid = [(x, y) for x in range(-100, 101) for y in range(-100, 101)]
+assert all(c_in_melee(x, y) == doom_in_melee(x, y) for x, y in melee_grid)
+for variant in ("floor-half", "no-minus-20"):
+    wrong = sum(c_in_melee(x, y, variant) != doom_in_melee(x, y) for x, y in melee_grid)
+    assert wrong > 0, f"negative control {variant!r} was not caught"
+
+# The approach (demon_step_toward, x then y, each against the box as it stands):
+# from anywhere around the player it must end inside the bite range without
+# ever entering the player's box -- the player at the origin, standing still.
+DEMON_GAP = 16 + 24
+DEMON_STEP = 32
+for token in ("#define DEMON_PLAYER_GAP (DOOM_RADIUS_PLAYER + ENEMY_RADIUS)",
+              "if (magnitude > DUMMY_MOVE_STEP) magnitude = DUMMY_MOVE_STEP;",
+              "if (abs_other < DEMON_PLAYER_GAP) {",
+              "const s32 room = abs_delta - DEMON_PLAYER_GAP;",
+              "step_x = demon_step_toward(player_dx, player_dy);",
+              "step_y = demon_step_toward(player->y - object->y, player->x - object->x);"):
+    assert token in ENEMY_C, token
+
+
+def demon_step(delta, other, variant=None):
+    magnitude = min(abs(delta), DEMON_STEP)
+    if variant == "full-step":      # get_step_toward: always a whole step
+        magnitude = DEMON_STEP if delta else 0
+    if variant not in ("full-step", "no-box") and abs(other) < DEMON_GAP:
+        room = abs(delta) - DEMON_GAP
+        if room <= 0:
+            return 0
+        magnitude = min(magnitude, room)
+    return magnitude if delta > 0 else -magnitude
+
+
+def approach(x, y, variant=None):
+    """(bites, entered_box). 'full-step' refuses a step into the box instead."""
+    for _ in range(64):
+        step_x = demon_step(-x, -y, variant)
+        if variant == "full-step" and abs(x + step_x) < DEMON_GAP and abs(y) < DEMON_GAP:
+            step_x = 0
+        x += step_x
+        step_y = demon_step(-y, -x, variant)
+        if variant == "full-step" and abs(x) < DEMON_GAP and abs(y + step_y) < DEMON_GAP:
+            step_y = 0
+        y += step_y
+        if abs(x) < DEMON_GAP and abs(y) < DEMON_GAP:
+            return c_in_melee(x, y), True
+        if step_x == 0 and step_y == 0:
+            break
+    return c_in_melee(x, y), False
+
+
+starts = [(x, y) for x in range(-400, 401, 12) for y in range(-400, 401, 12)
+          if not (abs(x) < DEMON_GAP and abs(y) < DEMON_GAP)]
+for x, y in starts:
+    bites, entered = approach(x, y)
+    assert bites and not entered, (x, y)
+for variant in ("full-step", "no-box"):
+    broken = sum(1 for x, y in starts if approach(x, y, variant) != (True, False))
+    assert broken > 0, f"negative control {variant!r} was not caught"
+
 print(f"ok    hitscan: Doom box crossing matches a float reference on {compared} traces; "
       "monster aim matches Doom's hit share; weapon timelines match info.c tic for tic; "
-      "5 negative controls caught; P_DamageMobj, radii, HP and P_Random pinned")
+      f"demon melee matches P_CheckMeleeRange on {len(melee_grid)} offsets and closes in "
+      f"from {len(starts)} starts; 9 negative controls caught; P_DamageMobj, radii, HP and "
+      "P_Random pinned")

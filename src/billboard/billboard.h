@@ -47,7 +47,10 @@ typedef enum {
     BILLBOARD_VISUAL_BARREL_EXPLODING = 24,
     BILLBOARD_VISUAL_PUFF = 25,
     BILLBOARD_VISUAL_BLOOD = 26,
-    BILLBOARD_VISUAL_IMP = 27
+    BILLBOARD_VISUAL_IMP = 27,
+    // Doom's demon (3002), and for now the spectre (58) too: MT_SHADOWS is
+    // MT_SERGEANT plus MF_SHADOW, and the fuzz is not drawn yet.
+    BILLBOARD_VISUAL_DEMON = 28
 } BillboardVisualId;
 
 typedef struct {

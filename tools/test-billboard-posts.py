@@ -96,7 +96,8 @@ def main() -> None:
     #   * the posts above equal "texel != 0" (asserted per pixel), so skipping
     #     the per-pixel post walk cannot change a pixel.
     for name in ("FREEDOOM_BILLBOARD_WORLD_TEXTURES[", "FREEDOOM_BILLBOARD_ENEMY_FRAMES[",
-                 "FREEDOOM_BILLBOARD_IMP_FRAMES[", "FREEDOOM_BILLBOARD_BARREL_EXPLOSION_FRAMES[",
+                 "FREEDOOM_BILLBOARD_IMP_FRAMES[", "FREEDOOM_BILLBOARD_DEMON_FRAMES[",
+                 "FREEDOOM_BILLBOARD_BARREL_EXPLOSION_FRAMES[",
                  "FREEDOOM_BILLBOARD_PUFF_FRAMES[", "FREEDOOM_BILLBOARD_BLOOD_FRAMES["):
         pixels = initializer(header, name)
         dims = re.search(re.escape(name) + r"[^=]*=", header).group(0)

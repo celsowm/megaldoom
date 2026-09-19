@@ -28,7 +28,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 from doom_map import SEG_TRIGGER, load_map  # noqa: E402
 from wad_reader import WadFile  # noqa: E402
 
-MAPS = ("E1M1", "E1M2", "E1M3", "E1M4")
+MAPS = ("E1M1", "E1M2", "E1M3", "E1M4", "E1M5")
 PLAYER_COLLISION_RADIUS = 16          # src/raycast.h
 PLAYER_HIT_PUSH_STEP = 64             # the pre-2026-09-18 knockback jump
 DOOM_MAX_MOVE = 30                    # src/player_controller.c, per axis per tic

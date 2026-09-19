@@ -17,8 +17,8 @@ extern const u8 *const megaldoom_level_door_bases[];
 
 _Static_assert(MEGALDOOM_LEVEL_PACK_COUNT == MEGALDOOM_MAP_COUNT,
                "every campaign map needs exactly one banked wall pack");
-_Static_assert(MEGALDOOM_LEVEL_PACK_COUNT == 4,
-               "tools/md_banked.ld places exactly four .wallpackN sections");
+_Static_assert(MEGALDOOM_LEVEL_PACK_COUNT == 5,
+               "tools/md_banked.ld places exactly five .wallpackN sections");
 
 // Power-on mapping is the identity, which is level 0's banks.
 const u8 *const *g_level_wall_bases = megaldoom_level_wall_bases;

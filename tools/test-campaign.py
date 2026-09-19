@@ -34,6 +34,7 @@ def main():
     e1m2 = generated("e1m2")
     e1m3 = generated("e1m3")
     e1m4 = generated("e1m4")
+    e1m5 = generated("e1m5")
     limits = (ROOT / "src" / "bsp" / "generated_map_limits.h").read_text()
     header = (ROOT / "src" / "bsp" / "bsp_map.h").read_text()
     runtime = (ROOT / "src" / "bsp" / "bsp_map.c").read_text()
@@ -50,10 +51,10 @@ def main():
         # openings at 64 units split E1M2's 38 window lines into collinear wall
         # pieces (1089 segs, 1006 lattice-extended vertices). That is 121 bytes
         # of seg query bits and 300 of vertex cache in work RAM.
-        "MEGALDOOM_MAP_COUNT 4", "MEGALDOOM_MAP_MAX_SEGS 1089",
+        "MEGALDOOM_MAP_COUNT 5", "MEGALDOOM_MAP_MAX_SEGS 1089",
         "MEGALDOOM_MAP_MAX_VERTICES 1006", "MEGALDOOM_MAP_MAX_SUBSECTORS 461",
         "MEGALDOOM_MAP_MAX_NODES 460", "MEGALDOOM_MAP_MAX_SECTORS 200",
-        "MEGALDOOM_MAP_MAX_ACTIVE_THINGS 317",
+        "MEGALDOOM_MAP_MAX_ACTIVE_THINGS 326",
     ):
         assert token in limits
     assert "const BspMapData g_e1m1_map" in e1m1
@@ -65,12 +66,17 @@ def main():
     # resized it shows up here rather than as a boot-time heap panic.
     assert "const BspMapData g_e1m4_map" in e1m4
     assert "779u, 784u, 355u, 354u, 8u, 254u, 139u, 3u" in e1m4
+    # E1M5 rode in under the same ceilings (857 segs, 778 vertices, 384
+    # subsectors, 143 sectors, 293 things): MAP_COUNT is again the only limit
+    # that moved.
+    assert "const BspMapData g_e1m5_map" in e1m5
+    assert "857u, 778u, 384u, 383u, 20u, 293u, 143u, 9u" in e1m5
     assert "1089u, 1006u, 448u, 447u, 12u, 262u, 200u, 6u" in e1m2
     assert E1M1_HEADER_ROW in e1m1
     assert "typedef struct {" in header and "BspMapData" in header
     assert "bsp_select_map(u16 level_index)" in runtime
     assert "static const BspMapData *const maps[MEGALDOOM_MAP_COUNT]" in runtime
-    assert "&g_e1m1_map, &g_e1m2_map, &g_e1m3_map, &g_e1m4_map," in runtime
+    assert "&g_e1m1_map, &g_e1m2_map, &g_e1m3_map, &g_e1m4_map, &g_e1m5_map," in runtime
     assert "level_index >= MEGALDOOM_MAP_COUNT) return FALSE" in runtime
 
     bits1 = secret_bits(e1m1, "e1m1")
@@ -115,6 +121,8 @@ def main():
         "frontend_intermission_stats_e1m3",
         "frontend_intermission_entering_e1m4",
         "frontend_intermission_stats_e1m4",
+        "frontend_intermission_entering_e1m5",
+        "frontend_intermission_stats_e1m5",
         "INTERMISSION_NODES[MEGALDOOM_MAP_COUNT]",
     ):
         assert token in frontend
@@ -133,7 +141,7 @@ def main():
     assert "DEBUG_CHECKPOINT_KEY" in main_source
     assert "DEBUG_CHECKPOINT_EXIT" in main_source
 
-    print("ok    campaign: E1M1..E1M4 descriptors, carry/rebirth, stats and secrets")
+    print("ok    campaign: E1M1..E1M5 descriptors, carry/rebirth, stats and secrets")
 
 
 if __name__ == "__main__":

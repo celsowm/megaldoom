@@ -60,6 +60,8 @@ ENEMY_FRAME_NAMES = ["POSSA1", "POSSB1", "POSSC1", "POSSD1", "POSSF1",
                      "POSSH0", "POSSI0", "POSSJ0", "POSSK0", "POSSL0"]
 IMP_FRAME_NAMES = ["TROOA1", "TROOB1", "TROOC1", "TROOD1", "TROOF1",
                    "TROOH1", "TROOI0", "TROOJ0", "TROOK0", "TROOL0"]
+DEMON_FRAME_NAMES = ["SARGA1", "SARGB1", "SARGC1", "SARGD1", "SARGF1",
+                     "SARGI0", "SARGJ0", "SARGK0", "SARGM0", "SARGN0"]
 SPRITE_OFFSETS = ROOT / "res" / "originaldoom" / "sprites" / "_offsets.json"
 
 
@@ -142,6 +144,20 @@ def check_enemy_frame_geometry(billboard_internal: str) -> None:
     corpse = actual[9]
     if corpse[1] - corpse[3] != 0:
         raise ValueError("the POSSL0 corpse no longer rests exactly on the floor line")
+
+
+def check_demon_frame_geometry(billboard_internal: str) -> None:
+    if "#define DEMON_FRAME_GEOMETRY_COUNT 10" not in billboard_internal:
+        raise ValueError("DEMON_FRAME_GEOMETRY_COUNT no longer covers the 10 demon poses")
+    actual = extract_frame_geometry(billboard_internal, "DEMON_FRAME_GEOMETRY")
+    expected = expected_frame_geometry(DEMON_FRAME_NAMES)
+    if actual != expected:
+        raise ValueError(
+            "DEMON_FRAME_GEOMETRY drifted from the Doom picture headers:\n"
+            f"  expected {expected}\n  actual   {actual}")
+    corpse = actual[9]
+    if corpse[1] - corpse[3] != 0:
+        raise ValueError("the SARGN0 corpse no longer rests exactly on the floor line")
 
 
 def check_imp_frame_geometry(billboard_internal: str) -> None:
@@ -273,12 +289,19 @@ def main() -> int:
         raise ValueError("enemy geometry is no longer selected per pose")
     check_enemy_frame_geometry(billboard_internal)
     check_imp_frame_geometry(billboard_internal)
+    check_demon_frame_geometry(billboard_internal)
+    if "DEMON_FRAME_GEOMETRY[" not in billboard:
+        raise ValueError("demon geometry is no longer selected per pose")
+    if "case 3002: case 58: *visual = BILLBOARD_VISUAL_DEMON;" not in billboard:
+        raise ValueError("Doom 3002/58 THINGs are not mapped to the demon visual")
     if "case 3001: *visual = BILLBOARD_VISUAL_IMP; return BILLBOARD_TYPE_DUMMY;" not in billboard:
         raise ValueError("Doom 3001 THINGs are not mapped to the imp visual")
     assets = (ROOT / "src" / "billboard" / "generated_billboard_assets.h").read_text(
         encoding="utf-8")
     if "FREEDOOM_BILLBOARD_IMP_FRAMES" not in assets:
         raise ValueError("generated imp billboard frames are missing")
+    if "FREEDOOM_BILLBOARD_DEMON_FRAMES" not in assets:
+        raise ValueError("generated demon billboard frames are missing")
     if "#define BILLBOARD_ENEMY_ATLAS_WIDTH 24" not in billboard_internal or \
             "#define BILLBOARD_ENEMY_ATLAS_HEIGHT 48" not in billboard_internal:
         raise ValueError("enemy atlas art dimensions changed unexpectedly")

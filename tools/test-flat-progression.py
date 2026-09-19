@@ -123,7 +123,7 @@ def main():
         out_assets.write_bytes(b"valid-assets-sentinel\n")
         process = subprocess.run(
             [sys.executable, str(EXTRACTOR), "--wad", str(bad_wad),
-             "--maps", "E1M1", "E1M2", "E1M3", "E1M4",
+             "--maps", "E1M1", "E1M2", "E1M3", "E1M4", "E1M5",
              "--map-out-dir", str(temp),
              "--assets-out", str(out_assets),
              "--limits-out", str(temp / "limits.h")],

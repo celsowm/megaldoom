@@ -311,7 +311,8 @@ def main():
     # rare-material tail onto the generic head. It held at 34 through E1M3
     # because everything that map added had a head to fold onto; E1M4 brought
     # nine materials that do not, so this is the first map that grew the atlas.
-    assert len(wall_textures) == 43
+    # E1M5 adds one: SW1STONE, a switch plate with no head to fold onto.
+    assert len(wall_textures) == 44
     # What actually reaches the screen: one texel per displayed pixel, which is
     # what FREEDOOM_WALL_PACKED_PAIRS carries. Every quality contract below is
     # measured on this, and emit_world_assets certifies the very same grids, so
@@ -397,7 +398,9 @@ def main():
     # table (they only ever sample the wall plane), dropping 25 door textures to
     # 17 -- BROWN96, BROWNHUG, COMPSPAN, COMPTALL, SLADWALL, STARG3, STARTAN1 and
     # SUPPORT2 were door textures only through secret doors. -256 KB.
-    assert packed_pair_bytes == 1966080
+    # 2031616 with E1M5: SW1STONE is one more wall texture and SW1COMP one
+    # more door face (a door drawn with the switch plate), 44 + 18.
+    assert packed_pair_bytes == 2031616
     # Since 2026-09-17 the cartridge does not carry that atlas: each level's
     # banked pack holds only the textures it draws (tools/md_banked.ld), so
     # a texture used by several levels is stored once per level. 4423680 is
@@ -701,7 +704,7 @@ def main():
         subprocess.run([
             sys.executable, str(EXTRACTOR_PATH),
             "--wad", str(ROOT / "DOOM1.WAD"),
-            "--maps", "E1M1", "E1M2", "E1M3", "E1M4",
+            "--maps", "E1M1", "E1M2", "E1M3", "E1M4", "E1M5",
             "--map-out-dir", str(temp_root),
             "--assets-out", str(generated_assets),
             "--limits-out", str(generated_limits),

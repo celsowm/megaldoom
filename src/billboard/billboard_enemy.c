@@ -48,6 +48,44 @@ static s16 get_step_toward(s32 delta) {
     return 0;
 }
 
+// The demon (A_SargAttack) bites only inside P_CheckMeleeRange: Doom's
+// P_AproxDistance to the player below MELEERANGE - 20 + the player's radius,
+// 64 - 20 + 16 = 60, and in sight. Its attack is S_SARG_ATK1..3, 8 tics each;
+// the bite is ATK3's action, so it lands 16 tics in and re-checks the range
+// then -- backing away in time makes it miss, as in Doom.
+#define DEMON_MELEE_RANGE (64 - 20 + DOOM_RADIUS_PLAYER)
+#define DEMON_ATTACK_TICS 24
+#define DEMON_BITE_AT 8
+// It closes to the player's box but not into it: the player's 16 plus this
+// engine's 24-unit monster collision radius, the same gap the player's own
+// collision keeps from it.
+#define DEMON_PLAYER_GAP (DOOM_RADIUS_PLAYER + ENEMY_RADIUS)
+
+// P_AproxDistance halves the smaller axis in 16.16, exactly, so compare in
+// half units: a floor-halved integer would miss a bite at 59.5.
+static bool demon_in_melee_range(s32 dx, s32 dy) {
+    if (dx < 0) dx = -dx;
+    if (dy < 0) dy = -dy;
+    const s32 approx2 = 2 * (dx + dy) - ((dx < dy) ? dx : dy);
+    return approx2 < 2 * DEMON_MELEE_RANGE;
+}
+
+// One axis of the demon's approach: at most DUMMY_MOVE_STEP, never past the
+// player's line on this axis (so the approach squares up), and never into
+// the player's box when the other axis already overlaps it.
+static s16 demon_step_toward(s32 delta, s32 other) {
+    s32 magnitude = (delta < 0) ? -delta : delta;
+    if (magnitude > DUMMY_MOVE_STEP) magnitude = DUMMY_MOVE_STEP;
+    const s32 abs_delta = (delta < 0) ? -delta : delta;
+    const s32 abs_other = (other < 0) ? -other : other;
+    if (abs_other < DEMON_PLAYER_GAP) {
+        const s32 room = abs_delta - DEMON_PLAYER_GAP;
+        if (room <= 0) return 0;
+        if (magnitude > room) magnitude = room;
+    }
+    return (s16)((delta < 0) ? -magnitude : magnitude);
+}
+
 static bool is_position_blocked(s32 x, s32 y) {
 #if DEBUG_PERF
     bsp_debug_set_query_owner(BSP_QUERY_ENEMY);
@@ -144,7 +182,9 @@ static u8 separate_dummies(u16 left_index, BillboardObject *left,
 //                +-22.4 degrees, triangular), ((P % 5) + 1) * 3 = 3..15;
 //   shotgun guy  A_SPosAttack: three such pellets;
 //   imp          A_TroopAttack: ((P % 8) + 1) * 3 = 3..24, by claw inside
-//                melee range and by fireball beyond it.
+//                melee range and by fireball beyond it;
+//   demon        A_SargAttack:  ((P % 10) + 1) * 4 = 4..40, a bite, only
+//                inside melee range (see DEMON_MELEE_RANGE).
 // A bullet connects only if its trace crosses the player's 32-unit box, so
 // accuracy falls off with distance as in Doom. This engine has no projectile
 // object, so the imp's fireball lands at once instead of flying at 10 units a
@@ -155,7 +195,10 @@ static void enemy_attack(const BillboardObject *object, const PlayerState *playe
     const s32 dy = player->y - object->y;
     u16 damage = 0;
 
-    if (object->visual_id == BILLBOARD_VISUAL_IMP) {
+    if (object->visual_id == BILLBOARD_VISUAL_DEMON) {
+        // A_SargAttack; the caller has already checked the melee range.
+        damage = (u16)(((doom_random() % 10) + 1) * 4);
+    } else if (object->visual_id == BILLBOARD_VISUAL_IMP) {
         damage = (u16)(((doom_random() % 8) + 1) * 3);
     } else if ((dx > -0x8000) && (dx < 0x8000) && (dy > -0x8000) && (dy < 0x8000)) {
         // The aim vector toward the player, scaled to 8192..16383 on its
@@ -213,6 +256,7 @@ static bool update_dummy_alive(u16 index, BillboardObject *object, const PlayerS
         object->spot_cooldown = 0;
         object->anim_frame = 0;
         object->anim_timer = 0;
+        object->bite_pending = 0;
         return FALSE;
     }
     const s32 player_dist_sq = (player_dx * player_dx) + (player_dy * player_dy);
@@ -220,6 +264,8 @@ static bool update_dummy_alive(u16 index, BillboardObject *object, const PlayerS
         (player_dist_sq <= DUMMY_WAKE_RANGE_SQ) || object->has_last_seen;
     const bool visible = perception_candidate && billboard_has_line_of_sight(index, player);
     const bool engaged = visible || object->has_last_seen;
+    const bool is_demon = (bool)(object->visual_id == BILLBOARD_VISUAL_DEMON);
+    bool melee_chase = FALSE;
     bool moved = FALSE;
 
     // A dormant enemy is completely outside the simulation working set: no
@@ -230,6 +276,7 @@ static bool update_dummy_alive(u16 index, BillboardObject *object, const PlayerS
         object->spot_cooldown = 0;
         object->anim_frame = 0;
         object->anim_timer = 0;
+        object->bite_pending = 0;
         return FALSE;
     }
 
@@ -280,13 +327,36 @@ static bool update_dummy_alive(u16 index, BillboardObject *object, const PlayerS
         object->spot_cooldown = 0;
     }
 
-    if (visible && (object->spot_cooldown == 0) && (player_dist_sq <= DUMMY_ATTACK_RANGE_SQ) &&
+    if (!is_demon && visible && (object->spot_cooldown == 0) &&
+        (player_dist_sq <= DUMMY_ATTACK_RANGE_SQ) &&
         (object->attack_cooldown == 0)) {
         object->attack_cooldown = DUMMY_ATTACK_COOLDOWN;
         object->move_cooldown = DUMMY_ATTACK_RECOVERY_FRAMES;
         object->attack_anim = ENEMY_ATTACK_ANIM_FRAMES;
         enemy_attack(object, player, update);
         return FALSE;
+    }
+
+    if (is_demon) {
+        // The bite lands 16 tics into the attack, if the player is still
+        // there to be bitten.
+        if (object->bite_pending && (object->attack_anim <= DEMON_BITE_AT)) {
+            object->bite_pending = 0;
+            if (visible && demon_in_melee_range(player_dx, player_dy)) {
+                enemy_attack(object, player, update);
+            }
+        }
+        // A_Chase: in melee range, go to the melee state. The demon stands
+        // still for all 24 tics of it and chases again once it ends.
+        if (visible && !object->bite_pending && (object->spot_cooldown == 0) &&
+            (object->attack_cooldown == 0) &&
+            demon_in_melee_range(player_dx, player_dy)) {
+            object->attack_cooldown = DEMON_ATTACK_TICS;
+            object->move_cooldown = DEMON_ATTACK_TICS;
+            object->attack_anim = DEMON_ATTACK_TICS;
+            object->bite_pending = 1;
+            return FALSE;
+        }
     }
 
     if (object->move_cooldown != 0) {
@@ -306,6 +376,11 @@ static bool update_dummy_alive(u16 index, BillboardObject *object, const PlayerS
         if ((home_dist_sq > DUMMY_LEASH_RANGE_SQ) && (home_dist_sq > DUMMY_HOME_RANGE_SQ)) {
             step_x = get_step_toward(home_dx);
             step_y = get_step_toward(home_dy);
+        } else if (visible && is_demon && (player_dist_sq <= DUMMY_CHASE_RANGE_SQ)) {
+            // No stop range: a melee monster closes right up to the player.
+            melee_chase = TRUE;
+            step_x = 0;
+            step_y = 0;
         } else if (visible && (player_dist_sq > DUMMY_STOP_RANGE_SQ) && (player_dist_sq <= DUMMY_CHASE_RANGE_SQ)) {
             step_x = get_step_toward(player_dx);
             step_y = get_step_toward(player_dy);
@@ -324,7 +399,18 @@ static bool update_dummy_alive(u16 index, BillboardObject *object, const PlayerS
             return FALSE;
         }
 
-        if ((step_x < 0 ? -step_x : step_x) >= (step_y < 0 ? -step_y : step_y)) {
+        if (melee_chase) {
+            // Each axis clamped against the player's box as it stands after
+            // the previous axis moved.
+            step_x = demon_step_toward(player_dx, player_dy);
+            if (step_x != 0) {
+                moved = try_move_dummy(index, object, step_x, 0);
+            }
+            step_y = demon_step_toward(player->y - object->y, player->x - object->x);
+            if (step_y != 0) {
+                moved = try_move_dummy(index, object, 0, step_y) || moved;
+            }
+        } else if ((step_x < 0 ? -step_x : step_x) >= (step_y < 0 ? -step_y : step_y)) {
             moved = try_move_dummy(index, object, step_x, 0);
             if (!moved) {
                 moved = try_move_dummy(index, object, 0, step_y);

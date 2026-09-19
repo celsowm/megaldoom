@@ -74,6 +74,18 @@ shifts. Monster aim is checked as above; with the first aim scaling
 (128-255), 45 degrees at 192 units was 1.4% off, so the scale was raised to
 8192-16383.
 
+**E2E route fix.** The new timing moved where E1M3's follower stopped before
+the group 11 press: (-4, +33) from the certified cell, at heading 250.
+Heading 250 is inside the runner's USE dead-band, and from there the press
+resolved to nothing. That was a hole in `stable_use_pose`, not a game
+regression. It promised the press works across the arrival disc but checked
+only 9 points, and applied the heading dead-band at the centre only; its own
+`use_target` model agrees the stop pose fails. The generator now requires the
+full dead-band at the centre plus two rings of eight points. The E1M3 press
+moved to an aim point that holds across the disc. The old aim fails the
+same probe, which is the negative control. Route generation takes up to 45 s
+per map.
+
 **Still not Doom:**
 - The imp's fireball lands at once; there is no projectile object, so it
   cannot be dodged.

@@ -64,9 +64,9 @@ def main():
     assert "return (u16)(BARREL_EXPLOSION_DAMAGE - distance);" in explosion_c
     assert "#define BARREL_EXPLOSION_RADIUS 128" in internal_h
     # Doom's radii, not the movement-collision ones: player 16, barrel 10,
-    # monsters 20.
+    # monsters 20, the demon 30 (billboard_doom_radius).
     assert "bx, by, player->x, player->y, DOOM_RADIUS_PLAYER);" in explosion_c
-    assert "(object->type_id == BILLBOARD_TYPE_BARREL) ? DOOM_RADIUS_BARREL" in explosion_c
+    assert "billboard_doom_radius(object));" in explosion_c
     assert doom_radius_damage(0, 0, 16) == 128
     assert doom_radius_damage(36, 0, 16) == 108
     assert doom_radius_damage(64, 0, 16) == 80

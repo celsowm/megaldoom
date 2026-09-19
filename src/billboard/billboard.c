@@ -13,6 +13,7 @@
 // the zombieman (whose 20 is the type's own hit_points).
 #define DOOM_IMP_HEALTH 60
 #define DOOM_SHOTGUN_GUY_HEALTH 30
+#define DOOM_DEMON_HEALTH 150
 
 static const BillboardType BILLBOARD_TYPES[BILLBOARD_TYPE_COUNT] = {
     {BILLBOARD_VISUAL_BONUS,       BILLBOARD_EFFECT_HEALTH, 1, 20, BILLBOARD_PICKUP_VISUAL_SCALE, BILLBOARD_MAX_DEPTH, TRUE,  FALSE, FALSE},
@@ -97,6 +98,8 @@ static u8 map_thing_type(u16 doom_type, u8 *visual) {
         case 2035: *visual = BILLBOARD_VISUAL_BARREL; return BILLBOARD_TYPE_BARREL;
         case 9: case 3004: *visual = BILLBOARD_VISUAL_DUMMY; return BILLBOARD_TYPE_DUMMY;
         case 3001: *visual = BILLBOARD_VISUAL_IMP; return BILLBOARD_TYPE_DUMMY;
+        // The spectre is the demon without its fuzz for now.
+        case 3002: case 58: *visual = BILLBOARD_VISUAL_DEMON; return BILLBOARD_TYPE_DUMMY;
         default: return 0xFF;
     }
 }
@@ -109,8 +112,9 @@ u8 billboard_get_object_visual_id(const BillboardObject *object, const Billboard
     (void)type;
     if (object->type_id == BILLBOARD_TYPE_KEY) return object->hp;
     if (object->type_id == BILLBOARD_TYPE_DUMMY) {
-        return (object->visual_id == BILLBOARD_VISUAL_IMP) ?
-            BILLBOARD_VISUAL_IMP : BILLBOARD_VISUAL_DUMMY;
+        return ((object->visual_id == BILLBOARD_VISUAL_IMP) ||
+                (object->visual_id == BILLBOARD_VISUAL_DEMON)) ?
+            object->visual_id : BILLBOARD_VISUAL_DUMMY;
     }
     if ((object->type_id == BILLBOARD_TYPE_BARREL) && (object->life_state != ENEMY_ALIVE)) {
         return BILLBOARD_VISUAL_BARREL_EXPLODING;
@@ -201,6 +205,7 @@ static void billboard_get_geometry(const BillboardObject *object,
                                    BillboardGeometry *geometry) {
     u8 visual_id = billboard_get_object_visual_id(object, type);
     const bool is_imp = (visual_id == BILLBOARD_VISUAL_IMP);
+    const bool is_demon = (visual_id == BILLBOARD_VISUAL_DEMON);
     if (visual_id == BILLBOARD_VISUAL_BARREL_EXPLODING) {
         const u8 frame = billboard_get_object_frame(object);
         const s16 *source = FREEDOOM_BILLBOARD_BARREL_EXPLOSION_GEOMETRY[frame];
@@ -241,6 +246,9 @@ static void billboard_get_geometry(const BillboardObject *object,
         if (is_imp) {
             source = IMP_FRAME_GEOMETRY[
                 (frame < IMP_FRAME_GEOMETRY_COUNT) ? frame : 0];
+        } else if (is_demon) {
+            source = DEMON_FRAME_GEOMETRY[
+                (frame < DEMON_FRAME_GEOMETRY_COUNT) ? frame : 0];
         } else {
             source = ENEMY_FRAME_GEOMETRY[
                 (frame < ENEMY_FRAME_GEOMETRY_COUNT) ? frame : 0];
@@ -376,6 +384,8 @@ void billboard_init(u16 phase_index, DoomSkill skill) {
                      billboard_get_type(type)->hit_points;
         if (bsp_things[i].type == 3001) {
             object->hp = DOOM_IMP_HEALTH;
+        } else if (visual == BILLBOARD_VISUAL_DEMON) {
+            object->hp = DOOM_DEMON_HEALTH;
         } else if (bsp_things[i].type == 9) {
             object->hp = DOOM_SHOTGUN_GUY_HEALTH;
             object->shotgun_guy = 1;

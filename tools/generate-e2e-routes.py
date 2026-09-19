@@ -563,20 +563,26 @@ def stable_use_pose(map_data, nodes, index, seg, before=None, first_only=False):
             # makes the tolerance it promises true.
             stable_radius = 0
             for edge in (USE_ARRIVAL_RADIUS, 40, 32, 24, 16):
-                corner_offset = int(edge * 0.7071)
-                samples = ((0, 0), (edge, 0), (-edge, 0), (0, edge), (0, -edge),
-                           (corner_offset, corner_offset),
-                           (corner_offset, -corner_offset),
-                           (-corner_offset, corner_offset),
-                           (-corner_offset, -corner_offset))
+                # Two rings of eight plus the centre, and the runner's whole
+                # heading dead-band at every one of them. Until 2026-09-18 only
+                # the centre carried the band ("the edge samples already vary
+                # the angle by moving the origin"), which is false: the runner
+                # presses anywhere in the band from wherever it stopped. E1M3's
+                # group 11 press certified r=48 that way, and the follower,
+                # stopped at (-4, +33) on heading 250 (in band), found no
+                # target -- this model agrees, once asked.
+                samples = [(0, 0)]
+                for ring in (edge, edge // 2):
+                    diagonal = int(ring * 0.7071)
+                    samples += [(ring, 0), (-ring, 0), (0, ring), (0, -ring),
+                                (diagonal, diagonal), (diagonal, -diagonal),
+                                (-diagonal, diagonal), (-diagonal, -diagonal)]
                 good = True
-                for sample_index, (ox, oy) in enumerate(samples):
+                for ox, oy in samples:
                     try:
-                        # Only the centre carries the heading spread; the edge
-                        # samples already vary the angle by moving the origin.
                         if use_target_across_doors(
                                 map_data, x + ox, y + oy, *aim, owned_keys,
-                                spread=(USE_AIM_SPREAD if sample_index == 0 else 0),
+                                spread=USE_AIM_SPREAD,
                                 door_states=door_states_by_index[node_index]
                         )[1] != expected_target:
                             good = False
@@ -625,6 +631,13 @@ LOCK_DETOUR_REACH = 128
 # Stay this far beyond PICKUP_RADIUS from every key while detouring, or the
 # follower could pick the key up on the way and the "locked" press would unlock.
 LOCK_DETOUR_KEY_MARGIN = 32
+# Tried only when no detour keeps the full margin. E1M5's blue key sits in the
+# middle of a 240-unit room that joins the two corridors of its route; the only
+# way round it keeps 156 units from the key, clear of the runtime's 128-unit
+# collect radius (BILLBOARD_COLLECT_RADIUS) but not of 128 + 32. The route's
+# own LOCKED press is the check that the follower really left the key alone:
+# had it picked the key up, the door would answer UNLOCKED and the run fails.
+LOCK_DETOUR_KEY_MARGIN_TIGHT = 16
 LOCK_DETOUR_MAX_CELLS = 200000
 LOCK_DETOUR_POSE_TRIES = 24
 
@@ -647,7 +660,8 @@ def _compact_grid_path(cells):
     return kept
 
 
-def _press_detour(map_data, nodes, key_index, faces, expected_action=2):
+def _press_detour(map_data, nodes, key_index, faces, expected_action=2,
+                  key_margin=LOCK_DETOUR_KEY_MARGIN):
     """Insert a walk from the pre-key path to a cell that presses `faces` and back.
 
     Movement is a breadth-first search over the certificate's 16-unit grid with
@@ -676,7 +690,7 @@ def _press_detour(map_data, nodes, key_index, faces, expected_action=2):
     blockers = [(x, y, BLOCKING_THING_RADIUS[thing_type])
                 for x, y, thing_type, _, _ in things if thing_type in BLOCKING_THING_RADIUS]
     keys = [(x, y) for x, y, thing_type, _, _ in things if thing_type in KEY_THING_MASK]
-    key_clearance2 = (PICKUP_RADIUS + LOCK_DETOUR_KEY_MARGIN) ** 2
+    key_clearance2 = (PICKUP_RADIUS + key_margin) ** 2
     memo = {}
 
     def free(x, y):
@@ -759,12 +773,34 @@ def _press_detour(map_data, nodes, key_index, faces, expected_action=2):
                          "before node %d" % (map_data.mapn, group, key_index))
 
 
+def lock_scenario_door(map_data, nodes, key_segs, key_index):
+    """The locked door a key's scenario presses: the first door of that key the
+    route steps across after picking the key up, as its first SEG.
+
+    A map can hold several doors for one key and the route need not use them
+    all. E1M5 has three blue doors; its route crosses group 8 after the key,
+    while the first blue SEG in the map belongs to group 9, 880 units off the
+    path, which no pre-key walk reaches without opening other doors. With no
+    crossing at all this falls back to the first SEG carrying the key."""
+    first_by_group = {}
+    for seg in key_segs:
+        first_by_group.setdefault(seg["door_group"], seg)
+    vertices = map_data.vertices
+    for index in range(key_index + 1, len(nodes)):
+        a = (nodes[index - 1]["x"], nodes[index - 1]["y"])
+        b = (nodes[index]["x"], nodes[index]["y"])
+        for seg in key_segs:
+            if segments_intersect(a, b, vertices[seg["v1"]], vertices[seg["v2"]]):
+                return first_by_group[seg["door_group"]]
+    return key_segs[0]
+
+
 def add_lock_detours(map_data, nodes):
     """Make every collected key's locked door reachable for a press before the key.
 
-    Mirrors the selection in route_lines' lock-scenario block: the door is the
-    first SEG carrying that key, and a detour is added only where the certified
-    path never comes within USE_RADIUS of it before the pickup."""
+    Mirrors the selection in route_lines' lock-scenario block: the door is
+    lock_scenario_door's, and a detour is added only where the certified path
+    never comes within USE_RADIUS of it before the pickup."""
     faces_by_key = {}
     for seg in map_data.out_segs:
         if seg["type"] == SEG_DOOR and seg["required_key"] != KEY_NONE:
@@ -775,14 +811,18 @@ def add_lock_detours(map_data, nodes):
                          None)
         if key_index is None:
             continue
-        door = faces_by_key[required_key][0]
+        door = lock_scenario_door(map_data, nodes, faces_by_key[required_key], key_index)
         before = nearest_index(nodes, midpoint(map_data.vertices, door), 0, key_index)
         if point_segment_dist2(*map_data.vertices[door["v1"]], *map_data.vertices[door["v2"]],
                                nodes[before]["x"], nodes[before]["y"]) <= USE_RADIUS ** 2:
             continue
         faces = [seg for seg in faces_by_key[required_key]
                  if seg["door_group"] == door["door_group"]]
-        nodes = _press_detour(map_data, nodes, key_index, faces)
+        try:
+            nodes = _press_detour(map_data, nodes, key_index, faces)
+        except AssertionError:
+            nodes = _press_detour(map_data, nodes, key_index, faces,
+                                  key_margin=LOCK_DETOUR_KEY_MARGIN_TIGHT)
     return nodes
 
 def key_pickup_legs(map_data, node):
@@ -960,13 +1000,14 @@ def route_lines(map_data):
     doors = {}
     for seg in map_data.out_segs:
         if seg["type"] == SEG_DOOR and seg["required_key"] != KEY_NONE:
-            doors.setdefault(seg["required_key"], seg)
+            doors.setdefault(seg["required_key"], []).append(seg)
     injected = {}
-    for required_key, door in sorted(doors.items()):
+    for required_key, key_segs in sorted(doors.items()):
         key_index = next((index for index, node in collected
                           if node["detail"] & required_key), None)
         if key_index is None:
             continue
+        door = lock_scenario_door(map_data, nodes, key_segs, key_index)
         target = midpoint(map_data.vertices, door)
         before = nearest_index(nodes, target, 0, key_index)
         # The nearest certified node to the door, by raw distance, can lie

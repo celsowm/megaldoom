@@ -217,7 +217,7 @@ Add-Type -AssemblyName System.Drawing
 # hand afterwards. The campaign list belongs in one place, and this is it.
 & python (Join-Path $PSScriptRoot "wad-map-extract.py") `
     --wad (Join-Path $Root "DOOM1.WAD") `
-    --maps E1M1 E1M2 E1M3 E1M4 `
+    --maps E1M1 E1M2 E1M3 E1M4 E1M5 `
     --map-out-dir (Split-Path -Parent $MapOutPath) `
     --assets-out $OutPath
 if ($LASTEXITCODE -ne 0) {
@@ -1251,6 +1251,11 @@ $EnemyFrameNames = @("POSSA1", "POSSB1", "POSSC1", "POSSD1", "POSSF1",
                      "POSSH0", "POSSI0", "POSSJ0", "POSSK0", "POSSL0")
 $ImpFrameNames = @("TROOA1", "TROOB1", "TROOC1", "TROOD1", "TROOF1",
                    "TROOH1", "TROOI0", "TROOJ0", "TROOK0", "TROOL0")
+# The demon (and, for now, the spectre, drawn without its fuzz): 0..3 walk,
+# 4 attack (SARGF1, jaws open), 5..9 death -- SARGI0..K0, M0, and N0 as the
+# corpse (L0 is skipped as the imp skips one collapse frame).
+$DemonFrameNames = @("SARGA1", "SARGB1", "SARGC1", "SARGD1", "SARGF1",
+                     "SARGI0", "SARGJ0", "SARGK0", "SARGM0", "SARGN0")
 $EnemySpritesDir = "res\originaldoom\sprites"
 $enemyFrameBlocks = New-Object System.Collections.Generic.List[string]
 foreach ($name in $EnemyFrameNames) {
@@ -1269,6 +1274,15 @@ foreach ($name in $ImpFrameNames) {
     }
     $impFrameRows = Convert-Image $impFramePath $BillboardEnemyW $BillboardEnemyH $true
     $impFrameBlocks.Add("    {" + "`r`n" + ($impFrameRows -join ",`r`n") + "`r`n    }")
+}
+$demonFrameBlocks = New-Object System.Collections.Generic.List[string]
+foreach ($name in $DemonFrameNames) {
+    $demonFramePath = Join-Path $Root (Join-Path $EnemySpritesDir "$name.png")
+    if (-not (Test-Path $demonFramePath)) {
+        throw "Demon frame source not found: $demonFramePath"
+    }
+    $demonFrameRows = Convert-Image $demonFramePath $BillboardEnemyW $BillboardEnemyH $true
+    $demonFrameBlocks.Add("    {" + "`r`n" + ($demonFrameRows -join ",`r`n") + "`r`n    }")
 }
 # Native Doom impact/explosion frames live in fixed transparent canvases while
 # retaining their individual picture-header geometry. This keeps later BEXP
@@ -1319,6 +1333,7 @@ foreach ($name in $BloodFrameNames) {
 
 $enemyFrameCount = $EnemyFrameNames.Count
 $impFrameCount = $ImpFrameNames.Count
+$demonFrameCount = $DemonFrameNames.Count
 $relativeSource = $TexturePath.Replace("\", "/")
 $relativeWallBrownSource = $WallBrownTexturePath.Replace("\", "/")
 $relativeWallGraySource = $WallGrayTexturePath.Replace("\", "/")
@@ -1352,6 +1367,7 @@ $billboardContent = @"
 // Decor billboard source: $relativeBillboardDecorSource
 // Enemy billboard frames: $($EnemyFrameNames -join ", ") (from $EnemySpritesDir)
 // Imp billboard frames: $($ImpFrameNames -join ", ") (from $EnemySpritesDir)
+// Demon billboard frames: $($DemonFrameNames -join ", ") (from $EnemySpritesDir)
 // Generated at: $generatedAt
 // Palette index 0 is transparent for billboard rendering.
 static const u8 FREEDOOM_BILLBOARD_BONUS_TEXTURE[16][16] = {
@@ -1408,6 +1424,15 @@ $($enemyFrameBlocks -join ",`r`n")
 // Imp poses indexed by frame: 0..3 walk, 4 attack, 5..9 death (9 = corpse).
 static const u8 FREEDOOM_BILLBOARD_IMP_FRAMES[FREEDOOM_BILLBOARD_IMP_FRAME_COUNT][$BillboardEnemyH][$BillboardEnemyW] = {
 $($impFrameBlocks -join ",`r`n")
+};
+
+#define FREEDOOM_BILLBOARD_DEMON_W $BillboardEnemyW
+#define FREEDOOM_BILLBOARD_DEMON_H $BillboardEnemyH
+#define FREEDOOM_BILLBOARD_DEMON_FRAME_COUNT $demonFrameCount
+
+// Demon poses indexed by frame: 0..3 walk, 4 attack, 5..9 death (9 = corpse).
+static const u8 FREEDOOM_BILLBOARD_DEMON_FRAMES[FREEDOOM_BILLBOARD_DEMON_FRAME_COUNT][$BillboardEnemyH][$BillboardEnemyW] = {
+$($demonFrameBlocks -join ",`r`n")
 };
 
 // Back-compat alias: frame 0 is the standing/idle pose (POSSA1).

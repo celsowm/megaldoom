@@ -1,4 +1,4 @@
-"""Validate source-faithful E1M1/E1M2 THINGS and runtime populations."""
+"""Validate source-faithful campaign THINGS and runtime populations."""
 
 from pathlib import Path
 import re
@@ -11,10 +11,12 @@ RUNTIME_SOURCE = ROOT / "src" / "billboard" / "billboard.c"
 # Keep in sync with map_thing_type() in src/billboard/billboard.c and with
 # RUNTIME_THING_TYPES in tools/wad-map-extract.py.
 CURATED_TYPES = {
-    5, 6, 9, 13, 2001, 2002, 2005, 2007, 2008, 2011, 2012, 2014, 2015,
-    2018, 2019, 2035, 2048, 2049, 3001, 3004,
+    5, 6, 9, 13, 58, 2001, 2002, 2005, 2007, 2008, 2011, 2012, 2014, 2015,
+    2018, 2019, 2035, 2048, 2049, 3001, 3002, 3004,
 }
-ENEMY_TYPES = {9, 3001, 3004}
+# The demon (3002) and the spectre (58, drawn as the demon for now) joined the
+# runtime with E1M5 on 2026-09-18; E1M3 and E1M4 had been dropping theirs.
+ENEMY_TYPES = {9, 58, 3001, 3002, 3004}
 BARREL_TYPES = {2035}
 SKILL_FLAGS = {
     "easy": 0x0001,
@@ -22,7 +24,7 @@ SKILL_FLAGS = {
     "hard": 0x0004,
 }
 NOT_SINGLE_PLAYER_FLAG = 0x0010
-MAX_RUNTIME_OBJECTS = 207
+LIMITS = ROOT / "src" / "bsp" / "generated_map_limits.h"
 
 # 102 -> 98: the previous WAD did not match any official IWAD checksum (see
 # tools/wad-map-extract.py); its E1M1 carried an extra multiplayer-only loot
@@ -45,11 +47,35 @@ EXPECTED = {
         "normal": (168, 41, 103, 24),
         "hard": (207, 79, 104, 24),
     },
+    # E1M3 on hard is the campaign's largest population, and so sets
+    # MEGALDOOM_MAP_MAX_ACTIVE_THINGS: 317 before its 9 demons were spawned.
+    "e1m3": {
+        "curated": 327,
+        "easy": (216, 34, 156, 26),
+        "normal": (269, 74, 167, 28),
+        "hard": (326, 131, 167, 28),
+    },
+    "e1m4": {
+        "curated": 208,
+        "easy": (136, 21, 83, 32),
+        "normal": (168, 54, 82, 32),
+        "hard": (197, 85, 80, 32),
+    },
+    # Normal: 28 zombiemen, 24 shotgun guys, 26 imps, 4 demons, 9 spectres.
+    "e1m5": {
+        "curated": 265,
+        "easy": (137, 24, 85, 28),
+        "normal": (201, 91, 82, 28),
+        "hard": (242, 131, 83, 28),
+    },
 }
 
 
 def main() -> int:
     runtime_text = RUNTIME_SOURCE.read_text(encoding="utf-8")
+    max_runtime_objects = int(re.search(
+        r"#define MEGALDOOM_MAP_MAX_ACTIVE_THINGS (\d+)",
+        LIMITS.read_text(encoding="utf-8")).group(1))
     mapped_types = {
         int(value)
         for value in re.findall(r"case\s+(\d+)\s*:", runtime_text)
@@ -82,10 +108,10 @@ def main() -> int:
         expected_populations = {name: expected[name] for name in SKILL_FLAGS}
         if actual != expected_populations:
             raise ValueError(f"unexpected {map_name} populations: {actual}")
-        if any(len(runtime) > MAX_RUNTIME_OBJECTS for runtime in populations.values()):
+        if any(len(runtime) > max_runtime_objects for runtime in populations.values()):
             raise ValueError(f"{map_name} population exceeds object pool")
 
-    print("ok    billboard populations: E1M1 62/64/88, E1M2 148/168/207")
+    print("ok    billboard populations: E1M1..E1M5, E1M3 hard 326 = the object pool")
     return 0
 
 

@@ -119,6 +119,7 @@ static const u8 BARREL_DEATH_FRAME_HOLDS[BARREL_DEATH_FRAME_COUNT] = {1, 1, 1, 1
 // Doom's thing radii (info.c), which its hitscan and splash use. The
 // BillboardType radii are this engine's movement-collision tuning instead.
 #define DOOM_RADIUS_MONSTER 20
+#define DOOM_RADIUS_DEMON 30
 #define DOOM_RADIUS_BARREL 10
 #define DOOM_RADIUS_PLAYER 16
 // Per-explosion worklist cap. E1M1's largest barrel cluster is 3; this still
@@ -188,6 +189,23 @@ static const s16 IMP_FRAME_GEOMETRY[IMP_FRAME_GEOMETRY_COUNT][4] = {
     { 63,  90, 32,  98},  // 9 TROOL0 corpse 48x46 ty45
 };
 
+// The demon's poses (SARG), derived by the same rule from the picture headers,
+// so it stands at the imp's scale: Doom's demon is 56 units tall like the imp
+// and only wider. Row 9 (SARGN0) rests flat on the floor.
+#define DEMON_FRAME_GEOMETRY_COUNT 10
+static const s16 DEMON_FRAME_GEOMETRY[DEMON_FRAME_GEOMETRY_COUNT][4] = {
+    { 53, 110, 27, 110},  // 0 SARGA1 walk   40x56 ty51
+    { 57, 114, 29, 114},  // 1 SARGB1 walk   43x58 ty53
+    { 53, 108, 27, 108},  // 2 SARGC1 walk   40x55 ty50
+    { 57, 114, 29, 114},  // 3 SARGD1 walk   43x58 ty53
+    { 58, 108, 29, 112},  // 4 SARGF1 attack 44x55 ty52
+    { 71, 110, 36, 110},  // 5 SARGI0 death  54x56 ty51
+    { 79, 110, 40, 126},  // 6 SARGJ0 death  60x56 ty59  (airborne)
+    { 68, 104, 34, 122},  // 7 SARGK0 death  52x53 ty57  (airborne)
+    { 84,  90, 42,  90},  // 8 SARGM0 death  64x46 ty41
+    { 84,  63, 42,  63},  // 9 SARGN0 corpse 64x32 ty27
+};
+
 // Animation cadence: 4 tics/pose, matching Doom's own POSS walk-state hold.
 #define ENEMY_WALK_HOLD 4
 // The death sequence, like every other AI timer in this file (see the block
@@ -242,7 +260,11 @@ typedef struct {
     // Doom's shotgun guy (thing 9): shares the zombieman's POSS sprites here
     // but fires three pellets (A_SPosAttack) and has 30 HP.
     u8 shotgun_guy : 1;
-    u8 reserved_flags : 4;
+    // A demon's A_SargAttack is due: it lands 16 tics into the attack, when
+    // the attack pose has attack_anim <= DEMON_BITE_AT left, if the player is
+    // still in melee range and in sight.
+    u8 bite_pending : 1;
+    u8 reserved_flags : 3;
     u8 move_cooldown;
     u8 attack_cooldown;
     u8 spot_cooldown;
@@ -253,6 +275,14 @@ typedef struct {
     u8 death_timer;
     u8 attack_anim;
 } BillboardObject;
+
+// A shootable thing's Doom radius (info.c): what hitscan and splash measure
+// against, as opposed to the BillboardType movement-collision radius.
+static inline s32 billboard_doom_radius(const BillboardObject *object) {
+    if (object->type_id == BILLBOARD_TYPE_BARREL) return DOOM_RADIUS_BARREL;
+    return (object->visual_id == BILLBOARD_VISUAL_DEMON) ? DOOM_RADIUS_DEMON
+                                                         : DOOM_RADIUS_MONSTER;
+}
 
 typedef struct {
     const BillboardType *type;

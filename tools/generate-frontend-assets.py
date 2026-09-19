@@ -145,9 +145,9 @@ def expected_outputs() -> tuple[str, ...]:
         "sega_s.png", "sega_e.png", "sega_g.png", "sega_a.png",
         "ending_mars.png", "ending_thanks.png", "intermission_stats.png",
         "intermission_stats_e1m2.png", "intermission_stats_e1m3.png",
-        "intermission_stats_e1m4.png",
+        "intermission_stats_e1m4.png", "intermission_stats_e1m5.png",
         "intermission_entering_e1m2.png", "intermission_entering_e1m3.png",
-        "intermission_entering_e1m4.png",
+        "intermission_entering_e1m4.png", "intermission_entering_e1m5.png",
         "intermission_digits.png",
         "intermission_time_digits.png", "intermission_splat.png",
         "intermission_pointer0.png",
@@ -946,9 +946,11 @@ def generate(source: Path, output: Path) -> None:
     intermission_stats_e1m2 = make_intermission_stats(source, "WILV01")
     intermission_stats_e1m3 = make_intermission_stats(source, "WILV02")
     intermission_stats_e1m4 = make_intermission_stats(source, "WILV03")
+    intermission_stats_e1m5 = make_intermission_stats(source, "WILV04")
     intermission_entering = make_intermission_entering(source)
     intermission_entering_e1m3 = make_intermission_entering(source, "WILV02")
     intermission_entering_e1m4 = make_intermission_entering(source, "WILV03")
+    intermission_entering_e1m5 = make_intermission_entering(source, "WILV04")
     intermission_digits = make_intermission_digits(source)
     intermission_time_digits = make_intermission_time_digits(source)
     intermission_splat = padded_intermission_patch("WISPLAT", 32, 24, source)
@@ -959,6 +961,10 @@ def generate(source: Path, output: Path) -> None:
     # Keep the original Doom title/menu palette selection stable; boot cards
     # are quantized into that same four-line palette afterward.
     palette = build_palette(images)
+    # The palette is fitted to the E1M1..E1M4 screens only. A later level's
+    # cards are the same WIMAP0 art plus a WILVnn name in the same ink, so they
+    # quantize into it cleanly -- and adding a level then leaves every screen
+    # that already shipped byte-identical instead of re-fitting them all.
     ending_mars_palette = build_palette_for_images([
         ending_mars, intermission_stats, intermission_stats_e1m2,
         intermission_stats_e1m3, intermission_stats_e1m4,
@@ -1084,9 +1090,11 @@ def generate(source: Path, output: Path) -> None:
         ("intermission_stats_e1m2.png", intermission_stats_e1m2),
         ("intermission_stats_e1m3.png", intermission_stats_e1m3),
         ("intermission_stats_e1m4.png", intermission_stats_e1m4),
+        ("intermission_stats_e1m5.png", intermission_stats_e1m5),
         ("intermission_entering_e1m2.png", intermission_entering),
         ("intermission_entering_e1m3.png", intermission_entering_e1m3),
         ("intermission_entering_e1m4.png", intermission_entering_e1m4),
+        ("intermission_entering_e1m5.png", intermission_entering_e1m5),
         ("intermission_digits.png", intermission_digits),
         ("intermission_time_digits.png", intermission_time_digits),
         ("intermission_splat.png", intermission_splat),

@@ -1,6 +1,6 @@
 param(
     # Levels to walk; default is the whole campaign.
-    [string[]]$Levels = @("E1M1", "E1M2", "E1M3", "E1M4"),
+    [string[]]$Levels = @("E1M1", "E1M2", "E1M3", "E1M4", "E1M5"),
     # Pass for the negative control: the run is then REQUIRED to report
     # mismatches (bake with tools/bsp_vis.py --negative-control-drop-every N).
     [switch]$ExpectMismatch,

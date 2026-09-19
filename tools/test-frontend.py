@@ -247,11 +247,12 @@ def has_ink(image, y):
 
 assert not any(has_ink(intermission_digits, y) for y in range(4))
 assert any(has_ink(intermission_time_digits, y) for y in range(4))
+# The later levels' cards stand in for one another: take the largest of each
+# kind so a new level's card cannot slip past this budget.
 intermission_map_tiles = sum(unique_tiles(ASSETS / name) for name in (
-    "intermission_entering_e1m2.png", "intermission_entering_e1m4.png",
-    "intermission_stats_e1m4.png", "intermission_splat.png",
+    "intermission_entering_e1m2.png", "intermission_splat.png",
     "intermission_pointer0.png",
-))
+)) + max(unique_tiles(ASSETS / f"intermission_entering_e1m{n}.png") for n in (4, 5))    + max(unique_tiles(ASSETS / f"intermission_stats_e1m{n}.png") for n in (4, 5))
 assert 16 + ending_mars_tiles + intermission_stats_tiles + intermission_digits_tiles + intermission_time_digits_tiles < 1440, \
     "intermission stats exceed user VRAM"
 assert 16 + ending_mars_tiles + intermission_map_tiles < 1440, \
@@ -394,6 +395,7 @@ assert "{ e1m2_music, 75 }," in MAIN
 assert "{ e1m3_music, 120 }," in MAIN
 # E1M4's par is Doom's own 90 seconds, not a continuation of the ramp.
 assert "{ e1m4_music, 90 }," in MAIN
+assert "{ e1m5_music, 165 }," in MAIN
 assert "phase_index + 1 < MEGALDOOM_MAP_COUNT" in MAIN
 assert "game_audio_play_music(intermission_music);" in FRONTEND
 assert "PAL_fadeOut(0, 63, BOOT_FADE_FRAMES, FALSE);\n    frontend_video_init();" in FRONTEND
@@ -403,6 +405,7 @@ assert 'XGM2 intermission_music "music/d_inter.vgm"' in RESOURCES
 assert 'XGM2 e1m2_music  "music/d_e1m2.vgm"' in RESOURCES
 assert 'XGM2 e1m3_music  "music/d_e1m3.vgm"' in RESOURCES
 assert 'XGM2 e1m4_music  "music/d_e1m4.vgm"' in RESOURCES
+assert 'XGM2 e1m5_music  "music/d_e1m5.vgm"' in RESOURCES
 assert 'SPRITE frontend_sega_s        "frontend/sega_s.png" 4 6 FAST 0' in RESOURCES
 assert 'SPRITE frontend_sega_e        "frontend/sega_e.png" 4 6 FAST 0' in RESOURCES
 assert 'SPRITE frontend_sega_g        "frontend/sega_g.png" 4 6 FAST 0' in RESOURCES
