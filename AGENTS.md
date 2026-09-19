@@ -201,7 +201,8 @@ headroom is what `check-rom` prints; look there, not at the image size, before
 calling a precompute unaffordable. The 419 KB of generated wall scalers once
 took the resident end to within 2 KB of the warning line; banking the map
 arrays and composing OPTIONS at runtime (2026-09-19) brought it back to about
-1.09 MB free (resident end 0x16ED88).
+1.09 MB free; 512 KB of that then went to the shared wall blocks (below),
+leaving about 580 KB (resident end 0x1EED88).
 
 **A generated table's shape must be DERIVED from the viewport, never a
 literal.** `MEGALDOOM_WALL_TEX_Y_BY_HEIGHT` was `[641][120]` while the 22x16
@@ -481,6 +482,17 @@ level's map data must do it while that level's banks are mapped.
 back from 0x280000, and `level_bank.c` reads each pack's first bank from the
 linker's `megaldoom_pack_lmaN` symbols; `md_banked.ld` asserts each pack is at
 most the 1.5 MB window. Do not reintroduce a fixed `5 + 3N` bank formula.
+
+**A wall block several levels draw is stored once, resident (LOG,
+2026-09-19).** `tools/world_assets.py` moves the `SHARED_WALL_BLOCK_BUDGET`
+(16) most widely drawn 32 KB blocks into `megaldoom_wallshared` in resident
+ROM and points every level's base table there; a pack holds only the rest.
+It took the cartridge from 12.5 to 9.0 MiB with every base-table entry
+resolving to the same bytes. Resident ROM reads cost what window reads do, so
+this is free at runtime. `check-rom.ps1` fails if the shared blob lands in a
+window section, and `test-wall-quality.py` fails if a pack keeps a copy of a
+shared block or a shared block is drawn by only one level. Growing the
+budget trades resident headroom for cartridge; measure both first.
 
 **Do not ship a menu as the cross product of its settings.** OPTIONS was 144
 full screens, 793 KB of resident ROM. It is now one panel per cursor row plus

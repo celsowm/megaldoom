@@ -8140,12 +8140,13 @@ static const u8 FREEDOOM_WALL_TEXTURES[FREEDOOM_WALL_TEXTURE_COUNT][WALL_TEX_HEI
 // src/bsp/generated_wall_packs.s.
 #define MEGALDOOM_LEVEL_PACK_COUNT 7
 #define MEGALDOOM_LEVEL_PACK_BLOCK_BYTES 32768
-// E1M1: 19 wall + 3 door blocks = 720896 bytes
-// E1M2: 26 wall + 5 door blocks = 1015808 bytes
-// E1M3: 31 wall + 10 door blocks = 1343488 bytes
-// E1M4: 34 wall + 7 door blocks = 1343488 bytes
-// E1M5: 26 wall + 7 door blocks = 1081344 bytes
-// E1M6: 32 wall + 6 door blocks = 1245184 bytes
-// E1M7: 30 wall + 4 door blocks = 1114112 bytes
+// Shared, resident (megaldoom_wallshared): 16 blocks = 524288 bytes
+// E1M1: 19 wall + 3 door blocks, 6 in its pack = 196608 bytes
+// E1M2: 26 wall + 5 door blocks, 16 in its pack = 524288 bytes
+// E1M3: 31 wall + 10 door blocks, 25 in its pack = 819200 bytes
+// E1M4: 34 wall + 7 door blocks, 25 in its pack = 819200 bytes
+// E1M5: 26 wall + 7 door blocks, 17 in its pack = 557056 bytes
+// E1M6: 32 wall + 6 door blocks, 23 in its pack = 753664 bytes
+// E1M7: 30 wall + 4 door blocks, 19 in its pack = 622592 bytes
 
 #endif

@@ -225,6 +225,55 @@ def spatial_palette_error(extractor, palette, texture_name):
     return perceptual, rgb_baseline
 
 
+def check_wall_block_sharing(bsp_dir, shared_blob, block):
+    """Every base-table entry resolves inside its blob, and sharing is real.
+
+    Byte identity with the pre-sharing layout was proven once (LOG,
+    2026-09-19); what must keep holding is that a shared block is drawn by at
+    least two levels, is stored nowhere else, and that each level pack holds
+    only blocks some entry of that level reaches.
+    """
+    asm = (bsp_dir / "generated_wall_packs.s").read_text().splitlines()
+    blobs, label = {}, None
+    for line in asm:
+        found = re.match(r"^(\w+):", line)
+        if found:
+            label = found.group(1)
+        found = re.match(r'\s*\.incbin "(.+)"', line)
+        if found:
+            blobs[label] = (bsp_dir / Path(found.group(1)).name).read_bytes()
+    assert blobs["megaldoom_wallshared"] == shared_blob
+    reached = {name: set() for name in blobs}
+    shared_levels = {}
+    level = None
+    for line in asm:
+        found = re.match(r"\s*/\* (E1M\d) \*/", line)
+        if found:
+            level = found.group(1)
+            continue
+        found = re.match(r"\s*\.long (\w+)\+(\d+) /\*", line)
+        if not found:
+            continue
+        name, offset = found.group(1), int(found.group(2))
+        assert offset % block == 0 and offset + block <= len(blobs[name]), line
+        reached[name].add(offset)
+        if name == "megaldoom_wallshared":
+            shared_levels.setdefault(offset, set()).add(level)
+    for name, offsets in reached.items():
+        assert len(offsets) * block == len(blobs[name]), (
+            "%s holds blocks no entry reaches" % name)
+    assert all(len(levels) >= 2
+               for levels in shared_levels.values()), shared_levels
+    shared_blocks = {shared_blob[i:i + block]
+                     for i in range(0, len(shared_blob), block)}
+    assert len(shared_blocks) * block == len(shared_blob), "duplicate shared block"
+    for name, blob in blobs.items():
+        if name != "megaldoom_wallshared":
+            for i in range(0, len(blob), block):
+                assert blob[i:i + block] not in shared_blocks, (
+                    "%s stores a copy of a shared block" % name)
+
+
 def main():
     extractor = load_extractor()
     raycast = (ROOT / "src" / "raycast.h").read_text()
@@ -408,14 +457,22 @@ def main():
     # 2392064 with E1M7: three wall textures and no new door face, 54 + 19.
     assert packed_pair_bytes == 2392064
     # Since 2026-09-17 the cartridge does not carry that atlas: each level's
-    # banked pack holds only the textures it draws (tools/md_banked.ld), so
-    # a texture used by several levels is stored once per level. 4423680 is
-    # what the four packs actually occupy; each must also fit the 1.5 MB
-    # window, which the extractor enforces.
-    pack_bytes = [(ROOT / "src" / "bsp" / ("generated_wallpack_e1m%d.dat" % level)).stat().st_size
-                  for level in range(1, 5)]
-    assert sum(pack_bytes) == 4423680, pack_bytes
+    # banked pack holds only the textures it draws (tools/md_banked.ld).
+    # Since 2026-09-19 the SHARED_WALL_BLOCK_BUDGET blocks the most levels
+    # draw are stored once, in resident megaldoom_wallshared, and a pack holds
+    # only the rest: 7864320 bytes of packs became 524288 shared + 4292608
+    # (6/16/25/25/17/23/19 blocks for E1M1..E1M7). Each pack must still fit
+    # the 1.5 MB window, which the extractor enforces.
+    bsp_dir = ROOT / "src" / "bsp"
+    pack_bytes = [(bsp_dir / ("generated_wallpack_e1m%d.dat" % level)).stat().st_size
+                  for level in range(1, 8)]
+    shared_blob = (bsp_dir / "generated_wallpack_shared.dat").read_bytes()
+    assert len(shared_blob) == (extractor.SHARED_WALL_BLOCK_BUDGET *
+                                extractor.LEVEL_PACK_BLOCK_BYTES)
+    assert sum(pack_bytes) == 4292608, pack_bytes
     assert max(pack_bytes) <= extractor.LEVEL_PACK_WINDOW_BYTES, pack_bytes
+    check_wall_block_sharing(bsp_dir, shared_blob,
+                             extractor.LEVEL_PACK_BLOCK_BYTES)
 
     curated_metrics = [wall_bake_preview.texture_metrics(name)
                        for name in extractor.TECH_WALL_MATERIALS]
@@ -721,8 +778,9 @@ def main():
         assert generated_map4.read_bytes() == MAP4_PATH.read_bytes()
         assert generated_assets.read_bytes() == ASSETS_PATH.read_bytes()
         assert generated_limits.read_bytes() == LIMITS_PATH.read_bytes()
-        for generated in ["generated_wall_packs.s"] + [
-                "generated_wallpack_e1m%d.dat" % level for level in range(1, 5)]:
+        for generated in ["generated_wall_packs.s",
+                          "generated_wallpack_shared.dat"] + [
+                "generated_wallpack_e1m%d.dat" % level for level in range(1, 8)]:
             assert (temp_root / generated).read_bytes() ==                 (ROOT / "src" / "bsp" / generated).read_bytes(), generated
 
         # Exercise the CLI's complete artifact contract in a disposable tree:

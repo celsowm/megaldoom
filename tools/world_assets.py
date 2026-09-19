@@ -1542,6 +1542,14 @@ def texture_v_scale_q12(size):
 # per-texture resident table keep global ids.
 LEVEL_PACK_WINDOW_BYTES = 0x180000
 LEVEL_PACK_BLOCK_BYTES = WORLD_SHADE_LEVELS * WALL_TEX_WIDTH * WALL_TEX_HEIGHT
+# Blocks drawn by several levels are stored once, in resident ROM, instead of
+# once per pack: the base tables make a block's address free to choose, and
+# resident ROM reads cost what window reads do. Measured 2026-09-19 over
+# E1M1-E1M7: 240 pack blocks, 73 distinct. Sharing the 16 most widely drawn
+# costs 512 KB resident and saves 2.9 MiB of cartridge (20 banks -> 13); 25
+# would save 4.1 MiB but leave only ~290 KB resident for everything else.
+SHARED_WALL_BLOCK_BUDGET = 16
+SHARED_WALL_LABEL = "megaldoom_wallshared"
 
 
 def wall_pair_block(rows_by_shade, meta):
@@ -1589,13 +1597,17 @@ def door_pair_block(rows_by_shade, meta):
 
 
 def emit_level_wall_packs(level_packs, asm_path, texture_names, texture_ids,
-                          texture_meta, converted_planes, door_texture_names):
+                          texture_meta, converted_planes, door_texture_names,
+                          shared_path=None, shared_incbin_path=None):
     """Write each level's banked pack and the assembly that places them.
 
     level_packs: [(map_name, wall_names, door_names, pack_path, incbin_path)]
     in campaign order. wall_names must hold every texture a seg of that level
     can draw; door_names its non-plain door faces, the same rule the global
-    door catalog is built from. Returns the header lines.
+    door catalog is built from. shared_path/shared_incbin_path receive the
+    blocks several levels draw (SHARED_WALL_BLOCK_BUDGET of them), stored once
+    in resident ROM; without them every pack stays self-contained. Returns the
+    header lines.
     """
     wall_blocks = {}
     door_blocks = {}
@@ -1606,15 +1618,19 @@ def emit_level_wall_packs(level_packs, asm_path, texture_names, texture_ids,
         " * Pack N goes in section .wallpackN, which tools/md_banked.ld links at the",
         " * 0x280000 level window and loads at that level's own physical banks.",
         " * megaldoom_level_{wall,door}_bases hold, per level and global texture id,",
-        " * the window address of that texture's 32 KB block; they are resident and",
-        " * only dereferenced while the level's banks are mapped. A wall entry for",
+        " * the address of that texture's 32 KB block; they are resident and only",
+        " * dereferenced while the level's banks are mapped. A block several levels",
+        " * draw is stored once in resident megaldoom_wallshared, readable whatever",
+        " * the window holds; the rest sit in the level's own pack. A wall entry for",
         " * an id the level never draws points at its fallback block; a door entry",
         " * of 0 means the texture has no door framing in that level. */",
     ]
     wall_rows = []
     door_rows = []
-    for index, (map_name, wall_names, door_names, pack_path, incbin_path) in \
-            enumerate(level_packs):
+    # Each level's (kind, name) blocks in pack order: walls, then door faces.
+    # A door block is a different bake of the same texture, so it is its own key.
+    level_blocks = []
+    for map_name, wall_names, door_names, _, _ in level_packs:
         unknown = set(wall_names).difference(texture_ids)
         if unknown:
             raise ValueError("%s uses textures absent from the catalog: %s" %
@@ -1626,28 +1642,70 @@ def emit_level_wall_packs(level_packs, asm_path, texture_names, texture_ids,
         if missing_doors:
             raise ValueError("%s door faces absent from the door catalog: %s" %
                              (map_name, ", ".join(sorted(missing_doors))))
-        size = (len(walls) + len(doors)) * LEVEL_PACK_BLOCK_BYTES
+        level_blocks.append([("wall", name) for name in walls] +
+                            [("door", name) for name in doors])
+
+    def block_bytes(key):
+        kind, name = key
+        cache, bake = ((wall_blocks, wall_pair_block) if kind == "wall"
+                       else (door_blocks, door_pair_block))
+        if name not in cache:
+            cache[name] = bake(converted_planes[texture_ids[name]],
+                               texture_meta[name])
+        return cache[name]
+
+    # The most widely drawn blocks, ties broken by (kind, name) so the choice
+    # depends only on the map list. A block only one level draws saves nothing.
+    uses = {}
+    for keys in level_blocks:
+        for key in keys:
+            uses[key] = uses.get(key, 0) + 1
+    ranked = sorted((key for key in uses if uses[key] >= 2),
+                    key=lambda key: (-uses[key], key))
+    shared = ranked[:SHARED_WALL_BLOCK_BUDGET] if shared_path else []
+    shared_offsets = {key: slot * LEVEL_PACK_BLOCK_BYTES
+                      for slot, key in enumerate(shared)}
+    if shared_path:
+        with open(shared_path, "wb") as fh:
+            for key in shared:
+                fh.write(block_bytes(key))
+        asm.extend([
+            "",
+            "    .section .rodata.%s,\"a\"" % SHARED_WALL_LABEL,
+            "    .align 2",
+            "    .globl %s" % SHARED_WALL_LABEL,
+            "%s: /* %s */" % (SHARED_WALL_LABEL, ", ".join(
+                "%s %s" % key for key in shared)),
+            "    .incbin \"%s\"" % shared_incbin_path,
+        ])
+
+    for index, (map_name, _, _, pack_path, incbin_path) in \
+            enumerate(level_packs):
+        own = [key for key in level_blocks[index] if key not in shared_offsets]
+        size = len(own) * LEVEL_PACK_BLOCK_BYTES
         if size > LEVEL_PACK_WINDOW_BYTES:
             raise ValueError("%s wall pack is %d bytes; the banked level window "
                              "holds %d" % (map_name, size,
                                            LEVEL_PACK_WINDOW_BYTES))
         data = bytearray()
         label = "megaldoom_wallpack%d" % index
-        wall_offsets = [0] * len(texture_names)
-        for slot, name in enumerate(walls):
-            if name not in wall_blocks:
-                wall_blocks[name] = wall_pair_block(
-                    converted_planes[texture_ids[name]], texture_meta[name])
-            data += wall_blocks[name]
-            wall_offsets[texture_ids[name]] = slot * LEVEL_PACK_BLOCK_BYTES
-        door_offsets = [None] * len(texture_names)
-        for slot, name in enumerate(doors):
-            if name not in door_blocks:
-                door_blocks[name] = door_pair_block(
-                    converted_planes[texture_ids[name]], texture_meta[name])
-            data += door_blocks[name]
-            door_offsets[texture_ids[name]] = \
-                (len(walls) + slot) * LEVEL_PACK_BLOCK_BYTES
+        addresses = {}
+        for key in level_blocks[index]:
+            if key in shared_offsets:
+                addresses[key] = "%s+%d" % (SHARED_WALL_LABEL,
+                                            shared_offsets[key])
+            else:
+                addresses[key] = "%s+%d" % (label, len(data))
+                data += block_bytes(key)
+        # An id the level never draws points at its fallback block.
+        wall_addresses = [addresses[("wall", FALLBACK_TEXTURE)]] * \
+            len(texture_names)
+        door_addresses = [None] * len(texture_names)
+        for (kind, name), address in addresses.items():
+            (wall_addresses if kind == "wall" else door_addresses)[
+                texture_ids[name]] = address
+        walls = sum(1 for key in level_blocks[index] if key[0] == "wall")
+        doors = len(level_blocks[index]) - walls
         with open(pack_path, "wb") as fh:
             fh.write(data)
         asm.extend([
@@ -1657,18 +1715,18 @@ def emit_level_wall_packs(level_packs, asm_path, texture_names, texture_ids,
             "%s: /* %s */" % (label, map_name),
             "    .incbin \"%s\"" % incbin_path,
         ])
-        wall_rows.append((map_name, label, wall_offsets))
-        door_rows.append((map_name, label, door_offsets))
-        report.append((map_name, len(walls), len(doors), size))
+        wall_rows.append((map_name, wall_addresses))
+        door_rows.append((map_name, door_addresses))
+        report.append((map_name, walls, doors, len(own), size))
 
     def base_table(name, rows):
         out = ["", "    .section .rodata.%s,\"a\"" % name, "    .align 2",
                "    .globl %s" % name, "%s:" % name]
-        for map_name, label, offsets in rows:
+        for map_name, addresses in rows:
             out.append("    /* %s */" % map_name)
-            for texture_index, offset in enumerate(offsets):
+            for texture_index, address in enumerate(addresses):
                 out.append("    .long %s /* %s */" % (
-                    "0" if offset is None else "%s+%d" % (label, offset),
+                    "0" if address is None else address,
                     texture_names[texture_index]))
         return out
 
@@ -1688,16 +1746,19 @@ def emit_level_wall_packs(level_packs, asm_path, texture_names, texture_ids,
         "#define MEGALDOOM_LEVEL_PACK_COUNT %d" % len(level_packs),
         "#define MEGALDOOM_LEVEL_PACK_BLOCK_BYTES %d" % LEVEL_PACK_BLOCK_BYTES,
     ]
-    for map_name, walls, doors, size in report:
-        lines.append("// %s: %d wall + %d door blocks = %d bytes" %
-                     (map_name, walls, doors, size))
+    lines.append("// Shared, resident (%s): %d blocks = %d bytes" %
+                 (SHARED_WALL_LABEL, len(shared),
+                  len(shared) * LEVEL_PACK_BLOCK_BYTES))
+    for map_name, walls, doors, own, size in report:
+        lines.append("// %s: %d wall + %d door blocks, %d in its pack = %d "
+                     "bytes" % (map_name, walls, doors, own, size))
     lines.append("")
     return lines
 
 
 def emit_world_assets(path, texture_usage, sectors, provenance=None,
                       door_texture_names=None, level_packs=None,
-                      pack_asm_path=None):
+                      pack_asm_path=None, shared_pack=None):
     texture_names = [FALLBACK_TEXTURE] + sorted(
         name for name in texture_usage if name != FALLBACK_TEXTURE)
     for name in texture_names:
@@ -1897,7 +1958,8 @@ def emit_world_assets(path, texture_usage, sectors, provenance=None,
     if level_packs:
         lines.extend(emit_level_wall_packs(
             level_packs, pack_asm_path, texture_names, texture_ids,
-            texture_meta, converted_planes, door_texture_names))
+            texture_meta, converted_planes, door_texture_names,
+            *(shared_pack or (None, None))))
     lines.extend(["#endif", ""])
     with open(path, "w", newline="\n") as fh:
         fh.write("\n".join(lines))

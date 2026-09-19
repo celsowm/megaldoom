@@ -8,6 +8,153 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## Shared wall blocks: cartridge 12.5 -> 9.0 MiB (2026-09-19)
+
+**Question.** Can compression shrink the ROM? The wall packs were 7.5 of the
+12.5 MiB, and they compress to 8-10% with zlib and 5% with lzma. But the
+renderer reads them at pixel rate straight from ROM, and there is no RAM to
+unpack a 1.2 MB level into (21.5 KB free). Unpacking per column would sit in
+the pack stage, the hot path. So generic compression is out.
+
+**What the packs actually held.** Hashing their 32 KB blocks gave 240 blocks
+but only 73 distinct ones. Every level carried its own copy of the fallback,
+the door tracks, BIGDOOR2, EXITDOOR, BROWN1 and so on.
+
+**Change.** `tools/world_assets.emit_level_wall_packs` ranks (kind, name)
+blocks by how many levels draw them, breaking ties by name, and writes the top
+`SHARED_WALL_BLOCK_BUDGET` (16) once to `generated_wallpack_shared.dat`. That
+file goes in resident `.rodata.megaldoom_wallshared`. Every level's
+`megaldoom_level_{wall,door}_bases` entry for a shared block points there;
+packs keep only the rest. There is no runtime code change:
+`packed_wall_column` already dereferenced a per-level address table, and
+resident ROM reads cost the same as window reads.
+
+| | before | after |
+|---|---|---|
+| cartridge | 12.5 MiB (20 level banks) | **9.0 MiB** (13) |
+| banks per pack E1M1..E1M7 | 2/3/3/3/3/3/3 | 1/2/2/2/2/2/2 |
+| wall pack bytes | 7.50 MiB | 4.09 MiB + 512 KB shared |
+| resident free | 1.09 MB | 594 KB (end 0x1EED88) |
+| work RAM free | 21572 | 21572 |
+
+Measured, so we took 16 rather than 25: 25 would save 4.1 MiB instead of 2.9
+MiB but leave only about 290 KB resident.
+
+**Proof.**
+- **Old against new layout.** Every entry of both base tables (7 levels ×
+  54 ids × wall/door, 420 non-null) was resolved to its 32 KB block, and all
+  756 entries were byte-identical. Negative control: swapping two shared
+  blocks gave 14 differing entries.
+- **On the ROM.** Old and new ROMs were compared at 8 fixed poses: each
+  route's start (angle 73) and E1M7's worst-PVS leaf (angle 137), frame 3100.
+  All 8 were pixel-identical below row 2. Rows 0-1 differ by 4-17 pixels,
+  which is the capture noise: the old ROM against itself (null control, two
+  poses) shows the same 4-17.
+- **Kept as tests.** `check-rom.ps1` fails if `megaldoom_wallshared` is not
+  resident. Negative control: it caught the blob moved into `.wallpack0`.
+  `test-wall-quality.py::check_wall_block_sharing` fails if a pack stores a
+  copy of a shared block, if a blob holds a block no entry reaches, or if a
+  shared block is drawn by only one level. Negative control: it caught a copy
+  of the fallback block put back into E1M1's pack.
+- **Suite.** The regeneration byte-identity test now also covers the shared
+  blob and all seven packs.
+
+## E1M7 ships; map arrays banked, packs sized by bank, OPTIONS composed (2026-09-19)
+
+E1M7 (Computer Station) is the seventh campaign level. Two ROM changes had to
+land first, and a third came out of `tools/report-rom-resources.py`.
+
+**Map arrays in their level's pack.** After E1M6, 78.8 KB of resident ROM was
+left, and E1M7's map, music and cards come to about 85 KB. Every per-level
+array (`e1mN_bsp_*`, emitted by `tools/bsp_emit.py`) now carries
+`BSP_LEVEL_PACK(n)`, which puts it in `.wallpackN`.
+- The `g_e1mN_map` descriptors stay resident: `generated_bsp_vis.c` compares
+  their addresses to pick a level's vis tables.
+- Only the current map is ever read, through `g_bsp_map`, and
+  `bsp_select_map` maps that level's banks first.
+- Resident ROM left went 78.8 KB -> 374 KB on six levels, with work RAM
+  unchanged.
+- `check-rom.ps1` now fails if an `e1mN_bsp_*` array is in `.text` or in another
+  level's pack. Both negative controls are caught: an array with the attribute
+  dropped, and an array tagged with the wrong pack.
+- The full suite, asm-diff and the E1M6 vis oracle (1380 frames identical) pass
+  unchanged.
+
+**Packs padded to 512 KB banks, not to the 1.5 MB window.**
+- With a fixed window per level, E1M9's pack would have ended at 16 MiB, past
+  the 15.75 MiB image limit.
+- `md_banked.ld` now aligns each pack to 0x80000. The OVERLAY loads them back
+  to back, and the linker exports `megaldoom_pack_lmaN`/`_sizeN`.
+- `level_bank.c` reads each pack's first bank from those symbols, replacing
+  `5 + 3N`. A region past the end of a short pack repeats the pack's first bank.
+- `md_banked.ld` asserts each pack is at most the window. `check-rom` checks
+  that packs are contiguous and a whole number of banks.
+- E1M1 now takes 2 banks. With seven levels the cartridge is 12.5 MiB instead
+  of 13.0. E1M8 and E1M9 both fit.
+
+**OPTIONS composed at runtime.** The report showed the options screen at
+793.5 KiB, 36% of resident ROM. It was 144 full screens, the cross product of
+music, sfx, view size, debug and the cursor row. It is now like CONTROLS:
+- one panel per cursor row (6), plus one 10x2-tile image per setting value (9);
+- `draw_options_panel` stamps the four values at tile columns 15..24, rows
+  7 + 3k.
+- `indexed()` picks each tile's palette line from that tile alone, so the
+  generator can prove every composition equals the full screen it replaces. It
+  checks all 144 before writing.
+- A separate check against the 144 old PNGs also matched index-for-index, and a
+  swapped value was caught.
+- A BlastEm route through the menu shows the cursor moving and SFX, VIEW SIZE
+  and DEBUG changing.
+- OPTIONS is now 48.6 KiB. Resident ROM ends at 0x16ED88: 1.09 MB is free, up
+  from 78.8 KB this morning.
+
+**E1M7 itself.**
+- **RAM:** under every E1M6 ceiling (1014 segs, 299 objects, 150 monsters on
+  hard), so `generated_map_limits.h` changes only MAP_COUNT and work RAM is
+  unchanged.
+- **Textures:** three new wall textures, LITEBLU2, SW1COMM and TEKWALL3, and
+  no new door face: 54 walls + 19 doors.
+  - TEKWALL3 failed vertical churn (0.381 against 0.35). It takes TEKWALL5's
+    magnified facade and reaches 0.232/0.231.
+  - The plain curated low-pass only reached 0.338. An alias onto TEKWALL1 would
+    have replaced its circuit-board art.
+- **Pack 6:** 3 banks, 1.26 MiB used.
+- **Campaign:** par 180, `d_e1m7`, the WIMAP0 node (71,56) -> (6,7) with its
+  arrow at (0,7), and the WILV06 cards.
+- **Route:** the certificate reaches the exit at key mask 0x00, like E1M4, so
+  the route collects no key and has no lock scenario. `requiredKeys` is 0.
+  - That is the flattened model's verdict. Whether Doom's own E1M7 needs a key
+    to finish is not checked here.
+  - The generator needed no change, and the E1M1-E1M6 routes regenerate
+    byte-identical.
+- **Verification:**
+  - `test-level-e2e -Level E1M7`: events 0x8F, keys 0x00.
+  - Vis oracle: 761 frames identical. Its negative control (drop every 7th)
+    shows 542 of 770 frames differ. The bake was restored byte-for-byte.
+  - The full suite with 7 E2E routes, asm-diff and the guardrails all pass.
+- The stale cacodemon boot-sprite PNG regenerated 2 bytes different. The
+  generator is deterministic now; the old PNG predates this session.
+- `INTERMISSION_PATCHES` now fingerprints WILV04-06; before this, E1M5's and
+  E1M6's cards were missing from it.
+
+**Performance (measured only).** God mode, pose-locked, 4 headings, 3200
+frames. Poses were picked by measurement: start, the worst-PVS leaf (447, 161/467),
+and the densest hard monster cluster (14 in a 512-unit box). Captures of both
+worst rows show live gameplay at 100% health.
+
+| pose | best | worst | worst row: cast / pack / proj / bb |
+|---|---|---|---|
+| start (96,-528) | a201 10.9 vb | a73 14.9 vb | 3706 / 3888 / 4944 / 1656 |
+| worst leaf (96,1232) | a73 15.7 vb | a137 23.7 vb | 8580 / 5647 / 4412 / 5592 |
+| cluster (1552,2224) | a201 16.6 vb | a73 19.7 vb | 5394 / 3690 / 3479 / 6414 |
+
+E1M7's worst frame (23.7 vb) is below E1M6's 24.7. Unlike E1M6 it is not
+billboard-only: at the worst leaf, cast is the largest term (8580).
+
+**Still not Doom.** Floor lamps (2028), tech columns (48) and the candelabra
+(35) are dropped, and nukage, the computer map, the soulsphere, invisibility,
+the radsuit and the rocket launcher are not modelled, as on E1M6.
+
 ## E1M6 ships as the sixth level; the object pool is sized per kind (2026-09-19)
 
 E1M6 (Central Processing) is the sixth campaign level. It is the first level

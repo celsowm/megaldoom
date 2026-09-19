@@ -193,6 +193,32 @@ if ($mapArrays -eq 0) {
 elseif (-not $script:failed) {
     Pass ("$mapArrays map arrays, each in its own level's pack.")
 }
+# Wall blocks several levels draw are stored once in megaldoom_wallshared
+# (tools/world_assets.py, SHARED_WALL_BLOCK_BUDGET) and every level's base
+# table points there, so it must be readable whatever the window holds: all
+# of it resident, below 0x280000.
+$sharedPath = Join-Path $Root "src/bsp/generated_wallpack_shared.dat"
+$sharedLine = (& $ObjdumpExe -t $RomOutPath) | Where-Object { $_ -match '\smegaldoom_wallshared$' } |
+    Select-Object -First 1
+if (-not $sharedLine) {
+    Fail "megaldoom_wallshared is not in the symbol table: the shared wall blocks were not linked."
+}
+elseif ($sharedLine -notmatch '^([0-9a-f]{8})\s.*?\s(\S+)\s+[0-9a-f]{8}\s+megaldoom_wallshared$') {
+    Fail "could not parse megaldoom_wallshared's symbol line: $sharedLine"
+}
+else {
+    $sharedAddr = [Convert]::ToInt64($Matches[1], 16)
+    $sharedSection = $Matches[2]
+    $sharedEnd = $sharedAddr + (Get-Item $sharedPath).Length
+    if ($sharedSection -like ".wallpack*" -or $sharedEnd -gt $LevelWindowBase) {
+        Fail ("megaldoom_wallshared is in {0} at 0x{1:X6}..0x{2:X6}; every level reads it, so it must be resident." -f
+              $sharedSection, $sharedAddr, $sharedEnd)
+    }
+    else {
+        Pass ("shared wall blocks resident at 0x{0:X6}..0x{1:X6} ({2} KB)." -f
+              $sharedAddr, $sharedEnd, [int](($sharedEnd - $sharedAddr) / 1024))
+    }
+}
 foreach ($other in $sections.Keys) {
     $sec = $sections[$other]
     if ($other -notlike ".wallpack*" -and $sec.Size -gt 0 -and

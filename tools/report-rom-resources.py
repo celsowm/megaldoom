@@ -187,6 +187,10 @@ def build_report(root: Path, rom_out: Path, rom_bin: Path, objdump: str) -> dict
         for section in (".text.megaldoom_wall_scalers", ".rodata.megaldoom_wall_scaler_ends")
     )
 
+    # Wall blocks several levels draw, stored once in resident ROM
+    # (tools/world_assets.py, SHARED_WALL_BLOCK_BUDGET).
+    shared_wall_path = root / "src/bsp/generated_wallpack_shared.dat"
+    shared_wall_bytes = shared_wall_path.stat().st_size if shared_wall_path.exists() else 0
     wallpacks = level_file_sizes(root, "wallpack")
     visibility = level_file_sizes(root, "bsp_vis")
     maps = level_map_sizes(objdump, rom_out)
@@ -222,7 +226,9 @@ def build_report(root: Path, rom_out: Path, rom_bin: Path, objdump: str) -> dict
     audio_bytes = resource_groups_by_name.get("audio:sfx", 0) + resource_groups_by_name.get(
         "audio:music", 0
     )
-    resident_other = max(0, resident_bytes - frontend_bytes - audio_bytes - scaler_bytes)
+    resident_other = max(
+        0, resident_bytes - frontend_bytes - audio_bytes - scaler_bytes - shared_wall_bytes
+    )
 
     return {
         "rom": {
@@ -237,6 +243,7 @@ def build_report(root: Path, rom_out: Path, rom_bin: Path, objdump: str) -> dict
             "frontend_graphics": frontend_bytes,
             "audio": audio_bytes,
             "wall_scalers": scaler_bytes,
+            "shared_wall_blocks": shared_wall_bytes,
             "engine_and_other": resident_other,
             "resource_object_bytes": resource_object_bytes,
             "groups": resource_groups_by_name,
@@ -280,6 +287,7 @@ def render_markdown(report: dict) -> str:
         ("Frontend graphics", resources["frontend_graphics"]),
         ("Audio", resources["audio"]),
         ("Pre-generated wall scalers", resources["wall_scalers"]),
+        ("Shared wall blocks (drawn by several levels)", resources["shared_wall_blocks"]),
         ("Engine and other resident data", resources["engine_and_other"]),
     ]
     for name, size in resident_rows:

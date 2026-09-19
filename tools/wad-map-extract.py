@@ -226,6 +226,9 @@ def main():
         temp_paths.extend((asset_temp, limits_temp))
         pack_asm = os.path.join(args.map_out_dir, "generated_wall_packs.s")
         temp_paths.append(pack_asm + ".tmp")
+        shared_pack = os.path.join(args.map_out_dir,
+                                   "generated_wallpack_shared.dat")
+        temp_paths.append(shared_pack + ".tmp")
         level_packs = []
         for campaign_map in campaign_maps:
             target = wall_pack_path(args.map_out_dir, campaign_map.mapn)
@@ -250,7 +253,9 @@ def main():
 
         texture_ids, texture_meta, _, palette = world_assets.emit_world_assets(
             asset_temp, combined_usage, sector_owner.sectors, None,
-            door_texture_names, level_packs, pack_asm + ".tmp")
+            door_texture_names, level_packs, pack_asm + ".tmp",
+            (shared_pack + ".tmp",
+             "src/bsp/" + os.path.basename(shared_pack)))
         reports = []
         for pack_index, (campaign_map, _, temp) in enumerate(map_outputs):
             reports.append(bsp_emit.emit_map_c(
@@ -261,6 +266,7 @@ def main():
         os.replace(asset_temp, args.assets_out)
         os.replace(limits_temp, args.limits_out)
         os.replace(pack_asm + ".tmp", pack_asm)
+        os.replace(shared_pack + ".tmp", shared_pack)
         for _, _, _, temp, _ in level_packs:
             os.replace(temp, temp[:-len(".tmp")])
         for _, target, temp in map_outputs:
