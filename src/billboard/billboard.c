@@ -295,9 +295,17 @@ bool billboard_measure_object(const PlayerState *player, s16 cos_a, s16 sin_a,
             ((s32)geometry.source_w - geometry.left_offset) * geometry_scale;
         const s32 left_numerator = (side - left_extent) * RAY_PROJ_X;
         const s32 right_numerator = (side + right_extent) * RAY_PROJ_X;
-        const s32 left_clip = -((s32)(RAY_VIEW_CENTER_X + 2) * forward);
-        const s32 right_clip =
-            (s32)(RAY_VIEW_COLS - RAY_VIEW_CENTER_X + 2) * forward;
+        // RAY_VIEW_CENTER_X and RAY_VIEW_COLS are #defines for the runtime
+        // variables g_view_center_x / g_view_cols, so a plain `*` here cannot be
+        // strength-reduced and emits the generic 32x32 __mulsi3 helper -- twice
+        // for every object that clears the depth gate. Both products provably
+        // fit one MULS.W: the gate above pins forward to
+        // (BILLBOARD_MIN_DEPTH, BILLBOARD_MAX_DEPTH] = (32, 1536], and the view
+        // extents are at most RAY_VIEW_COLS_MAX + 2.
+        const s32 left_clip =
+            -billboard_muls_word((s16)(RAY_VIEW_CENTER_X + 2), (s16)forward);
+        const s32 right_clip = billboard_muls_word(
+            (s16)(RAY_VIEW_COLS - RAY_VIEW_CENTER_X + 2), (s16)forward);
         if ((right_numerator < left_clip) || (left_numerator >= right_clip)) {
             return FALSE;
         }

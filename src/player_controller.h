@@ -71,4 +71,17 @@ void player_controller_set_poll_active(bool active);
 // Atomically read and clear the latch. Call once per main-loop iteration.
 u16 player_controller_consume_latched(void);
 
+// No FIRE edge has been stamped since this was last read.
+#define PLAYER_FIRE_LATCH_NONE 0xFFFF
+// How many 35 Hz tics have elapsed since the ISR saw the FIRE edge, or
+// PLAYER_FIRE_LATCH_NONE if there is no unread edge. Reads and clears the
+// stamp, so call it once per main-loop iteration.
+//
+// This exists because a main-loop iteration is not a tic. On a heavy level it
+// spans 10+ vblanks, and the weapon timeline has to know WHERE inside that
+// window the trigger was pulled: assuming the worst case (the very end of the
+// window, which is what discarding the iteration's tics amounts to) postpones
+// every shot by a whole iteration.
+u16 player_controller_consume_fire_latch_tics(void);
+
 #endif

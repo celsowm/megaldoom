@@ -72,6 +72,13 @@ static s16 s_weapon_chord_dir = 0;
 static volatile u16 s_latched_pressed = 0;
 static u16 s_poll_prev = 0;
 static volatile bool s_poll_active = FALSE;
+// The vblank the FIRE edge landed on, and whether one is waiting to be read.
+// The latch alone only says "the trigger was pulled sometime since the last
+// main-loop iteration", and an iteration can be 10+ vblanks on a heavy level --
+// far too coarse to pay a 4-tic windup against. Keeping the OLDEST unread edge
+// is deliberate: that is the press the windup belongs to.
+static volatile u16 s_fire_latch_vtimer = 0;
+static volatile bool s_fire_latch_pending = FALSE;
 static s32 s_momentum_x = 0;
 static s32 s_momentum_y = 0;
 static s32 s_position_remainder_x = 0;
@@ -223,6 +230,7 @@ void player_controller_reset(void) {
     s_position_remainder_y = 0;
     s_doom_tic_accumulator = 0;
     s_tics_last_update = 0;
+    s_fire_latch_pending = FALSE;
     s_turn_speed_fp = 0;
     s_turn_remainder_fp = 0;
     s_turn_dir = 0;
@@ -236,14 +244,38 @@ void player_controller_vint_poll(void) {
     if (!s_poll_active) return;
     JOY_update();
     const u16 now = JOY_readJoypad(JOY_1);
-    s_latched_pressed |= (u16)(now & (u16)~s_poll_prev);
+    const u16 newly = (u16)(now & (u16)~s_poll_prev);
+    s_latched_pressed |= newly;
+    // The latch stays physical, so ask the binding for FIRE's physical button
+    // and test that bit directly rather than translating here. FIRE is BUTTON_B
+    // only in the default layout; OPTIONS > CONTROLS can move it.
+    if (!s_fire_latch_pending && ((newly & controls_button(CONTROL_FIRE)) != 0)) {
+        s_fire_latch_vtimer = (u16)vtimer;
+        s_fire_latch_pending = TRUE;
+    }
     s_poll_prev = now;
+}
+
+u16 player_controller_consume_fire_latch_tics(void) {
+    SYS_disableInts();
+    const bool pending = s_fire_latch_pending;
+    const u16 stamp = s_fire_latch_vtimer;
+    s_fire_latch_pending = FALSE;
+    SYS_enableInts();
+    if (!pending) return PLAYER_FIRE_LATCH_NONE;
+    u16 vblanks = (u16)((u16)vtimer - stamp);
+    if (vblanks > VIDEO_VBLANKS_PER_SECOND) vblanks = VIDEO_VBLANKS_PER_SECOND;
+    return (u16)(((u32)vblanks * DOOM_TICS_PER_SECOND) / VIDEO_VBLANKS_PER_SECOND);
 }
 
 void player_controller_set_poll_active(bool active) {
     if (active) {
         s_poll_prev = JOY_readJoypad(JOY_1);
         s_latched_pressed = 0;
+        // Drop any stamp from before the gap: its age would be measured across
+        // the pause/menu and credit the windup with time the player was not
+        // even in the level.
+        s_fire_latch_pending = FALSE;
     }
     s_poll_active = active;
 }

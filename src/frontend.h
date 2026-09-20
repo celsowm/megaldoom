@@ -28,6 +28,14 @@ typedef enum {
 } FrontendIntermissionAction;
 
 DoomSkill frontend_run(void);
+// The secret A+C level select was not opened, so the caller keeps whatever
+// starting level it already had. Never conflate this with level 0: a debug
+// build can legitimately start on any level, and overwriting that with 0 drops
+// the player into another map's coordinates, i.e. the void.
+#define FRONTEND_START_LEVEL_NONE 0xFFFF
+// Level picked in the secret A+C level select of the last frontend_run(), or
+// FRONTEND_START_LEVEL_NONE if the menu was not used.
+u16 frontend_start_level(void);
 FrontendPauseAction frontend_run_pause(u16 tile_base);
 FrontendIntermissionAction frontend_run_intermission(
     const FrontendIntermissionStats *stats);

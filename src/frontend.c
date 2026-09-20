@@ -1053,10 +1053,74 @@ static void run_options(u16 tile_base) {
     wait_for_release(MENU_INPUT);
 }
 
+/* Secret level select, opened by confirming the difficulty with A+C held.
+ * Plain SGDK font text: no art exists for it, and it is a tester aid. */
+static u16 s_start_level = FRONTEND_START_LEVEL_NONE;
+
+static void draw_level_select(u16 selected) {
+    char label[5] = { 'E', '1', 'M', '1', 0 };
+
+    VDP_drawTextBG(BG_A, "LEVEL SELECT", 14, 6);
+    for (u16 i = 0; i < MEGALDOOM_MAP_COUNT; i++) {
+        label[3] = (char)('1' + i);
+        VDP_drawTextBG(BG_A, i == selected ? ">" : " ", 15, (u16)(9 + i * 2));
+        VDP_drawTextBG(BG_A, label, 17, (u16)(9 + i * 2));
+    }
+    VDP_drawTextBG(BG_A, "START: GO   B: BACK", 10, 25);
+}
+
+static bool run_level_select(u16 *level) {
+    u16 selected = 0;
+    u16 previous;
+
+    clear_plane_cpu(BG_A);
+    clear_plane_cpu(BG_B);
+    VDP_setTextPalette(PAL0);
+    PAL_setColor(0, RGB24_TO_VDPCOLOR(0x000000));
+    PAL_setColor(1, RGB24_TO_VDPCOLOR(0xFFFFFF));
+    PAL_setColor(15, RGB24_TO_VDPCOLOR(0xFFFFFF));
+    draw_level_select(selected);
+    wait_for_release(MENU_INPUT);
+    previous = JOY_readJoypad(JOY_1);
+    while (TRUE) {
+        const u16 pressed = read_pressed(&previous);
+        if ((pressed & BUTTON_UP) != 0) {
+            selected = (u16)((selected + MEGALDOOM_MAP_COUNT - 1) % MEGALDOOM_MAP_COUNT);
+            draw_level_select(selected);
+        }
+        if ((pressed & BUTTON_DOWN) != 0) {
+            selected = (u16)((selected + 1) % MEGALDOOM_MAP_COUNT);
+            draw_level_select(selected);
+        }
+        if ((pressed & MENU_BACK) != 0) return FALSE;
+        if ((pressed & MENU_ACCEPT) != 0) {
+            *level = selected;
+            wait_for_release(MENU_INPUT);
+            return TRUE;
+        }
+        VDP_waitVSync();
+    }
+}
+
+/* A and C rarely land on the same frame, so after one of them is pressed give
+ * the other a short grace window before deciding it was a plain accept. */
+static bool chord_ac_held(u16 pressed) {
+    const u16 both = (u16)(BUTTON_A | BUTTON_C);
+
+    if ((pressed & both) == 0) return FALSE;
+    for (u16 i = 0; i < 8; i++) {
+        if ((JOY_readJoypad(JOY_1) & both) == both) return TRUE;
+        VDP_waitVSync();
+        JOY_update();
+    }
+    return (JOY_readJoypad(JOY_1) & both) == both;
+}
+
 static bool run_skill_menu(u16 tile_base, DoomSkill *skill) {
     u16 selected = DOOM_SKILL_HURT_ME_PLENTY;
     u16 previous;
 
+    s_start_level = FRONTEND_START_LEVEL_NONE;
     draw_panel(skill_panel(selected), tile_base);
     wait_for_release(MENU_INPUT);
     previous = JOY_readJoypad(JOY_1);
@@ -1073,6 +1137,15 @@ static bool run_skill_menu(u16 tile_base, DoomSkill *skill) {
         }
         if ((pressed & MENU_BACK) != 0) return FALSE;
         if ((pressed & MENU_ACCEPT) != 0) {
+            if (chord_ac_held(pressed)) {
+                if (!run_level_select(&s_start_level)) {
+                    clear_plane_cpu(BG_A);
+                    draw_panel(skill_panel(selected), tile_base);
+                    wait_for_release(MENU_INPUT);
+                    previous = JOY_readJoypad(JOY_1);
+                    continue;
+                }
+            }
             *skill = (DoomSkill)selected;
             wait_for_release(MENU_INPUT);
             return TRUE;
@@ -1185,6 +1258,10 @@ static bool run_main_menu(u16 menu_base, u16 overlay_base, DoomSkill *skill) {
         if (redraw) draw_main_cursor(overlay_base, selected, last_frame);
         VDP_waitVSync();
     }
+}
+
+u16 frontend_start_level(void) {
+    return s_start_level;
 }
 
 DoomSkill frontend_run(void) {

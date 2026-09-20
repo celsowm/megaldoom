@@ -42,9 +42,73 @@ typedef struct {
 // Doom raises a new weapon before it can fire. Kept at the shipped ~10
 // vblanks (6 tics), shorter than Doom's lower-and-raise.
 #define WEAPON_RAISE_TICS 6
-// Safety cap on fire actions resolved in one main-loop iteration. A 4-tic
-// weapon over the 3 tics an iteration can credit never reaches it.
+// Safety cap on fire actions resolved in one main-loop iteration. The weapon
+// clock now credits REAL elapsed tics (see weapon_tics below), so a heavy frame
+// can hand an automatic weapon enough tics to reach this; it is a real valve
+// now, not a formality.
 #define MAX_SHOTS_PER_ITERATION 4
+// The weapon timeline runs on the real clock, not on the movement clamp.
+// elapsed_frames is capped at 4 vblanks (see the main loop) because every
+// credited tic re-runs collision; that cap delivers only ~2.3 tics per
+// iteration, so on a heavy level the game simulates roughly a third of the time
+// that actually passed. Movement can live with that. The weapon cannot: its
+// phases are pure timers with no per-tic cost, and paying the pistol's 4-tic
+// windup at 2.3 tics per iteration stretched a 114 ms Doom delay into two whole
+// iterations (0.33-0.8 s on E1M7), which reads as the trigger not responding.
+// Movement, turning and enemy AI on the real clock instead of a 4-vblank cap.
+// The cap made the whole simulation run in slow motion exactly when the frame
+// got heavy: it credits ~2.3 Doom tics per iteration however long the frame
+// took, so at E1M7's 10-24 vblanks the game simulated 17-40% of the time that
+// actually passed. Every credited tic re-runs collision, but a tic is cheap
+// next to a ~30000-subtick frame, and each one is collision-checked
+// individually, so catching up cannot tunnel through a wall.
+//
+// The ceiling is 30 vblanks (half a second), above any measured frame (E1M7's
+// worst is 23.7) and low enough that a stall cannot spin the view: a held turn
+// at TURN_MAX_FP covers ~135 angle units in a 24-vblank iteration already.
+// Build with -DMOVEMENT_REALTIME_CLOCK=0 to restore the clamp from the same
+// source.
+// DEFAULT 0 -- NOT SAFE TO ENABLE YET. Removing the clamp speeds the PLAYER up
+// to real time but not the enemies: enemy pursuit advances at most one
+// DUMMY_MOVE_STEP per main-loop iteration (billboard_internal.h:85-89) and
+// advance_death at most one pose per call (billboard_enemy.c:463-468), both
+// explicitly documented as relying on "elapsed_frames clamps to 4, so at most 3
+// tics". With the clamp gone the player moves 2.5-6x further per iteration
+// while monsters do not, which re-caps pursuit at the iteration rate -- the
+// exact bug their Phase 1 fixed -- and fails the E1M1 E2E combat waypoint
+// ("target dead/moved or out of ammo" at wp 125).
+//
+// To enable: make update_dummy_alive advance floor(tics / DUMMY_MOVE_INTERVAL)
+// steps instead of one, and advance_death consume its full tic budget across
+// poses. Both change monster behaviour, so they need judging in motion, not a
+// green suite.
+#ifndef MOVEMENT_REALTIME_CLOCK
+#define MOVEMENT_REALTIME_CLOCK 0
+#endif
+#define MOVEMENT_MAX_CREDITED_VBLANKS 30
+// Same-source A/B switch: build with -DWEAPON_REALTIME_CLOCK=0 to restore the
+// pre-fix behaviour (weapon clock on the movement clamp, windup paid from an
+// empty tic budget) so both arms of a comparison come from one tree.
+#ifndef WEAPON_REALTIME_CLOCK
+#define WEAPON_REALTIME_CLOCK 1
+#endif
+#define WEAPON_DOOM_TICS_PER_SECOND 35
+#define WEAPON_VBLANKS_PER_SECOND 60
+// Ceiling on the real elapsed window the weapon clock will credit at once, so a
+// long stall (menu, level load) cannot dump a burst of tics into the timeline.
+// 29 vblanks is 16-17 tics, and 17 is the largest window at which the fastest
+// weapon (the chainsaw, one shot every 4 tics) still fits inside
+// MAX_SHOTS_PER_ITERATION without falling behind: past that the cap throttles
+// its sustained rate and the carry below can only defer the loss, not undo it.
+// tools/test-hitscan.py derives this window from here and proves the cadence,
+// so raising it fails the build rather than silently dropping chainsaw hits.
+// It is comfortably above E1M7's worst measured frame (23.7 vblanks).
+#define WEAPON_MAX_CREDITED_VBLANKS 29
+// Ceiling on the carried backlog, in tics. One second of weapon time: enough to
+// absorb any single heavy frame, small enough that a sustained overload cannot
+// bank a burst. tools/test-hitscan.py proves the carry keeps the shot count
+// batch-invariant at every credited window up to WEAPON_MAX_CREDITED_VBLANKS.
+#define WEAPON_MAX_TIC_CARRY 35
 // Doom locks respawn input for roughly a second after death (PST_REBORN) so a
 // still-held fire button from the killing blow cannot instantly restart the
 // level. Counted in real vblanks, same unit as elapsed_vblanks.
@@ -152,7 +216,8 @@ static void weapon_state_raise(void) {
 // `held` is the button state A_ReFire sees. An attack only starts, or
 // refires, with ammo for it (P_CheckAmmo).
 static bool weapon_state_step(const WeaponDef *weapon, u16 *tics, bool *trigger,
-                              bool held, bool has_ammo, bool *accurate) {
+                              bool held, bool has_ammo, u16 fire_latch_tics,
+                              bool *accurate) {
     WeaponState *st = &g_weapon_state;
     for (;;) {
         if (st->phase == WEAPON_PHASE_READY) {
@@ -160,10 +225,22 @@ static bool weapon_state_step(const WeaponDef *weapon, u16 *tics, bool *trigger,
                 return FALSE;
             }
             *trigger = held;  // a tap starts one attack, not one per step
-            // The button is sampled after this iteration's tics ran, so the
-            // attack starts on the last of them; as in Doom, the tic that
-            // sees the press does not count toward the windup.
+            // As in Doom, the tic that sees the press does not count toward the
+            // windup -- but the tics AFTER it do, and an iteration can be a dozen
+            // of them. The ISR stamps the vblank the edge landed on, so credit
+            // exactly the tics that really elapsed since the trigger was pulled.
+            // Without the stamp there is no way to place the press inside the
+            // window, so fall back to the conservative end-of-window assumption.
+#if WEAPON_REALTIME_CLOCK
+            if (fire_latch_tics == PLAYER_FIRE_LATCH_NONE) {
+                *tics = 0;
+            } else if (fire_latch_tics < *tics) {
+                *tics = fire_latch_tics;
+            }
+#else
+            (void)fire_latch_tics;
             *tics = 0;
+#endif
             st->phase = WEAPON_PHASE_WINDUP;
             st->timer = weapon->windup_tics;
             st->shots_fired = 0;
@@ -614,6 +691,14 @@ int main(bool hard) {
         PlayerArsenal arsenal;
         u8 player_keys = BSP_KEY_NONE;
         u16 shot_cooldown = 0;
+        // Sub-tic remainder of the weapon's own clock. Carried across iterations
+        // so the 35 Hz timeline does not lose time to integer division.
+        u16 weapon_tic_accumulator = 0;
+        // Whole tics the previous iteration could not spend because it hit
+        // MAX_SHOTS_PER_ITERATION. Discarding them loses damage output on heavy
+        // frames (a held chainsaw drops shots from 7 credited tics up), so they
+        // are carried instead: shots resolve later, never fewer of them.
+        u16 weapon_tic_carry = 0;
         u16 previous_system_joy;
         u32 prev_vtimer;
         DoomSkill skill;
@@ -625,6 +710,12 @@ int main(bool hard) {
         skill = DOOM_SKILL_HURT_ME_PLENTY;
 #else
         skill = frontend_run();
+        {
+            // Only the secret level select overrides the starting level;
+            // otherwise DEBUG_START_LEVEL (and the release default) stands.
+            const u16 chosen = frontend_start_level();
+            if (chosen != FRONTEND_START_LEVEL_NONE) phase_index = chosen;
+        }
 #endif
         game_audio_stop_music();
         renderer_init();
@@ -687,7 +778,12 @@ int main(bool hard) {
         elapsed_vblanks = (u16)(cur_vtimer - prev_vtimer);
         prev_vtimer = cur_vtimer;
         if (elapsed_vblanks < 1) elapsed_vblanks = 1;
+#if MOVEMENT_REALTIME_CLOCK
+        elapsed_frames = (elapsed_vblanks > MOVEMENT_MAX_CREDITED_VBLANKS)
+            ? MOVEMENT_MAX_CREDITED_VBLANKS : elapsed_vblanks;
+#else
         elapsed_frames = (elapsed_vblanks > 4) ? 4 : elapsed_vblanks;
+#endif
 
         six_button_pad = (bool)(JOY_getJoypadType(JOY_1) == JOY_TYPE_PAD6);
         automap_input = (!player_dead && !level_cleared) ?
@@ -982,17 +1078,42 @@ int main(bool hard) {
         // the ISR latched between iterations starts one attack.
         const WeaponDef *weapon = &WEAPON_DEFS[arsenal.current];
         {
-            u16 weapon_tics = player_dead ? 0 : player_controller_tics_last_update();
+            // Real elapsed vblanks, NOT player_controller_tics_last_update():
+            // that one is derived from the clamped elapsed_frames and is what
+            // made the trigger feel unresponsive. See WEAPON_DOOM_TICS_PER_SECOND.
+            u16 weapon_tics = 0;
+#if WEAPON_REALTIME_CLOCK
+            if (!player_dead) {
+                const u16 credited = (elapsed_vblanks > WEAPON_MAX_CREDITED_VBLANKS)
+                    ? WEAPON_MAX_CREDITED_VBLANKS : elapsed_vblanks;
+                weapon_tic_accumulator = (u16)(weapon_tic_accumulator +
+                    (u16)(credited * WEAPON_DOOM_TICS_PER_SECOND));
+                while (weapon_tic_accumulator >= WEAPON_VBLANKS_PER_SECOND) {
+                    weapon_tic_accumulator =
+                        (u16)(weapon_tic_accumulator - WEAPON_VBLANKS_PER_SECOND);
+                    weapon_tics++;
+                }
+                weapon_tics = (u16)(weapon_tics + weapon_tic_carry);
+                weapon_tic_carry = 0;
+            }
+#else
+            (void)weapon_tic_accumulator;
+            weapon_tics = player_dead ? 0 : player_controller_tics_last_update();
+#endif
             bool trigger = (bool)((control & (PLAYER_CONTROL_FIRE |
                                               PLAYER_CONTROL_FIRE_HELD)) != 0);
             const bool held = (bool)((control & PLAYER_CONTROL_FIRE_HELD) != 0);
             bool accurate = FALSE;
             u8 shots = 0;
+            // Drained every iteration, not just when the weapon is ready, so a
+            // stamp can never outlive the press it belongs to and get spent on
+            // a later one.
+            const u16 fire_latch_tics = player_controller_consume_fire_latch_tics();
 
             while ((shots < MAX_SHOTS_PER_ITERATION) &&
                    weapon_state_step(weapon, &weapon_tics, &trigger, held,
                                      weapon_has_ammo(arsenal.current, arsenal.ammo),
-                                     &accurate)) {
+                                     fire_latch_tics, &accurate)) {
                 // A_FireCGun's own ammo check: the second shot of a pair
                 // needs a bullet too.
                 if (!weapon_has_ammo(arsenal.current, arsenal.ammo)) {
@@ -1010,6 +1131,13 @@ int main(bool hard) {
                         (u16)(arsenal.ammo[weapon->ammo_type] - weapon->ammo_per_shot);
                 }
             }
+#if WEAPON_REALTIME_CLOCK
+            // Whatever the shot cap left unspent waits for the next iteration.
+            // Bounded so a weapon that can never keep up cannot accumulate a
+            // backlog it would then fire off in a burst.
+            weapon_tic_carry = (weapon_tics > WEAPON_MAX_TIC_CARRY)
+                ? WEAPON_MAX_TIC_CARRY : weapon_tics;
+#endif
             shot_cooldown = g_weapon_state.timer;
 
             const BillboardShotResult shot = fire_result.status;

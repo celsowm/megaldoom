@@ -471,25 +471,41 @@ def weapon_row(name):
             "tail": int(f[8]), "release": int(f[9])}
 
 
-def c_fire_tics(w, held_at, total, batch=1, variant=None):
+MAX_SHOTS_PER_ITERATION = int(
+    re.search(r"#define MAX_SHOTS_PER_ITERATION (\d+)", MAIN_C).group(1))
+MAX_TIC_CARRY = int(
+    re.search(r"#define WEAPON_MAX_TIC_CARRY (\d+)", MAIN_C).group(1))
+
+
+def c_fire_tics(w, held_at, total, batch=1, variant=None, latch_age=None):
     """main.c weapon_state_step, driven one main-loop iteration per `batch`
-    tics with the button sampled once per iteration."""
+    tics with the button sampled once per iteration.
+
+    `latch_age` is how many tics had already elapsed since the trigger edge when
+    the iteration was processed -- what the V-Int stamp measures. None means no
+    stamp was available, i.e. the conservative end-of-window assumption the code
+    falls back to. At batch=1 every choice collapses to 0, which is why the Doom
+    parity comparisons above are unaffected by the real-time weapon clock.
+    """
     READY, WINDUP, GAP, TAIL, RELEASE = range(5)
     phase, timer, fired, refire = READY, 0, 0, 0
     shots = []
     t = 0
+    carry = 0
     while t < total:
         held = held_at(t)
         trigger = held
-        tics = batch
+        tics = batch + carry
+        carry = 0
         guard = 0
-        while guard < 16:
+        fired_this_iteration = 0
+        while guard < 16 and fired_this_iteration < MAX_SHOTS_PER_ITERATION:
             guard += 1
             if phase == READY:
                 if not trigger:
                     break
                 trigger = held
-                tics = 0
+                tics = 0 if latch_age is None else min(tics, latch_age)
                 phase, timer, fired = WINDUP, w["windup"], 0
                 continue
             if timer > tics:
@@ -501,6 +517,7 @@ def c_fire_tics(w, held_at, total, batch=1, variant=None):
             if phase in (WINDUP, GAP):
                 shots.append((t + batch - 1 - tics, w["accurate_first"] and refire == 0))
                 fired += 1
+                fired_this_iteration += 1
                 if fired < w["shots"]:
                     phase, timer = GAP, w["gap"]
                 else:
@@ -516,6 +533,9 @@ def c_fire_tics(w, held_at, total, batch=1, variant=None):
                     refire, phase, timer = 0, RELEASE, w["release"]
                 continue
             phase = READY
+        # Tics the shot cap left unspent wait for the next iteration, as main.c
+        # carries them in weapon_tic_carry.
+        carry = min(tics, MAX_TIC_CARRY)
         t += batch
     return shots
 
@@ -549,21 +569,46 @@ assert [acc for _, acc in c_fire_tics(weapon_row("CHAINGUN"), PATTERNS["held"], 
 # fire sooner than Doom does.
 assert c_fire_tics(pistol, PATTERNS["quick-repress"], 200, variant="no-release") != \
     [(t, a) for t, a in doom_fire_tics(DOOM_STATES["PISTOL"], PATTERNS["quick-repress"], 200)]
-# Batched iterations (up to 3 tics each, as player_controller credits them)
-# must not change how many shots a hold fires, only when they resolve.
+# Batched iterations must not change how many shots a hold fires, only when they
+# resolve. The weapon clock credits REAL elapsed vblanks (not the movement
+# clamp's ~3 tics), so one iteration on a heavy frame carries far more than it
+# used to -- and the invariant has to hold wherever inside the window the
+# trigger edge landed, because the V-Int stamp can report any age in [0, batch).
+#
+# "How many" cannot be counted from t=0: a big window delays the FIRST shot by
+# up to one window (the press is only known at the iteration boundary), and over
+# a fixed 210 tics that startup shift alone drops whole cycles. The property that
+# actually matters is the SUSTAINED one -- once firing starts, the cadence must
+# be bit-identical to the unbatched run, which is what proves the shot cap never
+# eats a shot (main.c carries unspent tics in weapon_tic_carry).
+MAX_WEAPON_TICS = (int(re.search(
+    r"#define WEAPON_MAX_CREDITED_VBLANKS (\d+)", MAIN_C).group(1)) * 35) // 60
 for name in DOOM_STATES:
     w = weapon_row(name)
-    exact = len(c_fire_tics(w, PATTERNS["held"], 210))
-    for batch in (2, 3):
-        batched = len(c_fire_tics(w, PATTERNS["held"], 210, batch=batch))
-        assert abs(batched - exact) <= 1, (name, batch, exact, batched)
+    exact = [t for t, _ in c_fire_tics(w, PATTERNS["held"], 400)]
+    for batch in (2, 3, 6, 10, 14, MAX_WEAPON_TICS):
+        for age in {None, 0, batch // 2, batch - 1}:
+            got = [t for t, _ in c_fire_tics(w, PATTERNS["held"], 400,
+                                             batch=batch, latch_age=age)]
+            assert got, (name, batch, age)
+            # Start-up: the trigger is only observed at an iteration boundary.
+            assert 0 <= got[0] - exact[0] <= batch, (name, batch, age, got[0])
+            # Cadence: every later shot lands the same distance from the first.
+            span = min(len(got), len(exact))
+            assert [t - got[0] for t in got[:span]] == \
+                   [t - exact[0] for t in exact[:span]], (name, batch, age)
+            # And nothing is dropped mid-stream: the same number of shots fit in
+            # the time that remained after the first one.
+            assert len(got) >= len([t for t in exact if t <= 400 - got[0]]) - 1, \
+                (name, batch, age, len(got), len(exact))
 for token in (
     "static bool weapon_state_step(const WeaponDef *weapon, u16 *tics, bool *trigger,",
     "*trigger = held;  // a tap starts one attack, not one per step",
     "*accurate = (bool)(weapon->accurate_first && (st->refire == 0));",
     "if (held && has_ammo) {",
     "st->timer = weapon->release_tics;",
-    "u16 weapon_tics = player_dead ? 0 : player_controller_tics_last_update();",
+    "const u16 fire_latch_tics = player_controller_consume_fire_latch_tics();",
+    "weapon_tic_accumulator = (u16)(weapon_tic_accumulator +",
     "turn_to_melee_target(arsenal.current, &hit)",
     "#define SAW_TURN_STEP 3",
     "} else if (fire_result.pain) {",
