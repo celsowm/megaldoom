@@ -8,6 +8,28 @@ done, add the rule there too rather than relying on anyone reading this far.
 Numbers are release-cadence subticks unless stated otherwise; ~100 m68k cycles
 each, ~1282 to a vblank. See AGENTS.md for how to reproduce a measurement.
 
+## Cast split misses the baked-program path (2026-09-20, inspection only)
+
+While planning the next performance experiment, inspection of
+`bsp_render_traversal.c` found that `CADENCE_DRAWSEG_SPLIT` brackets
+`bsp_draw_seg` only in `bsp_visit_leaf`. The shipping baked-program walker
+calls `bsp_draw_seg` / `bsp_draw_seg_facing` directly, outside that bracket.
+The sample-loop timer inside `draw_seg` still runs on both paths.
+
+An existing report, `out/sweep/drawseg-e1m7split-x96y1232a137.json`, demonstrates
+the inconsistent attribution: 97 segs tested/rebuild, drawseg total 0,
+sample loop 4248 subticks, and a negative derived fixed cost per seg.
+`CADENCE_TRAVERSE_SPLIT` likewise brackets boxes in `bsp_render_boxed_child`,
+but not GROUP box projections in `bsp_run_vis_program`.
+
+These splits cannot attribute the current list-walk cast cost until both paths
+are covered without double counting. This does not invalidate the ordinary
+whole-cast timer. No runtime code was changed and no new benchmark was run.
+The measurement repair and candidate refactors are planned in
+`docs/PERFORMANCE_NEXT_EXPERIMENT_PLAN.md`. A `draw_seg` refactor needs an
+old-vs-new reference as well: the visibility oracle alone shares that routine
+on both sides and cannot establish its correctness.
+
 ## Shared wall blocks: cartridge 12.5 -> 9.0 MiB (2026-09-19)
 
 **Question.** Can compression shrink the ROM? The wall packs were 7.5 of the
