@@ -633,9 +633,16 @@ def _classify(poly, f):
     return lo, hi
 
 
-def leaf_program(vm, leaf, pvs, group_min=None, drop_every=None, group_seg_cost=None):
-    """group_min=None prices each GROUP with group_pays_off(); an integer keeps
-    the old fixed threshold (every run of at least that many segs), for A/B."""
+def leaf_program(vm, leaf, pvs, group_min=None, drop_every=None, group_seg_cost=None,
+                 seg_keep=None):
+    """Build one leaf program.
+
+    ``seg_keep`` is an analysis hook: when supplied it is called as
+    ``seg_keep(leaf, seg_index)`` and can remove a segment from a temporary
+    experiment.  The shipped emitter leaves it unset, so the runtime bake is
+    unchanged.  Keeping the hook here avoids copying this ordering/grouping
+    logic into an offline cost model.
+    """
     md = vm.m
     v = vm.vertices
     poly = vm.leaf_cell[leaf]
@@ -653,6 +660,8 @@ def leaf_program(vm, leaf, pvs, group_min=None, drop_every=None, group_seg_cost=
                 continue  # bsp_draw_seg returns at once: never drawn
             if drop_every and k % drop_every == 0:
                 continue  # negative control only: a deliberately broken bake
+            if seg_keep is not None and not seg_keep(leaf, k):
+                continue  # analysis-only directional visibility filter
             flag = 0
             if poly is not None:
                 ax, ay = v[seg["v1"]]

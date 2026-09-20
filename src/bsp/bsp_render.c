@@ -122,8 +122,22 @@ void bsp_cast_frame(const PlayerState *player, RayColumn *columns, RaySceneColor
     g_vis_row = bsp_vis_row(bsp_current_map(), subsector);
 #endif
 #if BSP_VIS_LIST
+#if BSP_VIS_DIRECTIONAL
+    // Experimental heading-binned programs are selected only when the
+    // generated prototype is linked.  Maps without a directional data set
+    // fall back to the shipped all-heading program.
+    g_vis_program = bsp_vis_directional_program(
+        bsp_current_map(), subsector,
+        (u8)(player->angle >> BSP_VIS_DIRECTIONAL_BIN_SHIFT),
+        &g_vis_program_length);
+    if (!g_vis_program) {
+        g_vis_program = bsp_vis_program(bsp_current_map(), subsector,
+                                        &g_vis_program_length);
+    }
+#else
     g_vis_program = bsp_vis_program(bsp_current_map(), subsector,
                                     &g_vis_program_length);
+#endif
 #endif
     if (sector >= FREEDOOM_SECTOR_VISUAL_COUNT) sector = 0;
     const u8 *visual = FREEDOOM_SECTOR_VISUALS[sector];

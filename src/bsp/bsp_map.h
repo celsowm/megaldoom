@@ -265,6 +265,20 @@ const u8 *bsp_vis_row(const BspMapData *map, u16 subsector);
 const u16 *bsp_vis_program(const BspMapData *map, u16 subsector, u16 *length);
 #endif
 
+// Offline prototype: select a heading-binned draw program when the
+// directional data set is present.  It is deliberately off in shipped builds;
+// the interval bake still needs the independent visibility oracle.
+#ifndef BSP_VIS_DIRECTIONAL
+#define BSP_VIS_DIRECTIONAL 0
+#endif
+#ifndef BSP_VIS_DIRECTIONAL_BIN_SHIFT
+#define BSP_VIS_DIRECTIONAL_BIN_SHIFT 6
+#endif
+#if BSP_VIS_LIST && BSP_VIS_DIRECTIONAL
+const u16 *bsp_vis_directional_program(const BspMapData *map, u16 subsector,
+                                       u8 bin, u16 *length);
+#endif
+
 // Differential check for BSP_VIS_LIST (tools/test-bsp-vis-oracle.ps1): cast
 // every frame both ways and count frames whose columns differ.
 #ifndef BSP_VIS_ORACLE

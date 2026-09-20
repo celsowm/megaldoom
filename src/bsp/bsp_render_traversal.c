@@ -389,8 +389,6 @@ void bsp_visit_leaf(u16 subsector_id) {
     for (u16 i = 0; i < ss->seg_count; i++) {
 #if DEBUG_PERF
         const u32 raster_start = g_bsp_dbg_measure_segment ? getSubTick() : 0;
-#elif CADENCE_STAGE_PROBE && CADENCE_DRAWSEG_SPLIT
-        const u32 raster_start = getSubTick();
 #endif
         bsp_draw_seg((u16)(ss->first_seg + i));
 #if DEBUG_PERF
@@ -399,9 +397,6 @@ void bsp_visit_leaf(u16 subsector_id) {
             g_bsp_dbg_segment_raster_subticks += elapsed;
             renderer_perf_record_deep(RENDERER_PERF_DEEP_BSP_SEGMENT, elapsed, 1);
         }
-#elif CADENCE_STAGE_PROBE && CADENCE_DRAWSEG_SPLIT
-        g_cadence_drawseg_subticks += getSubTick() - raster_start;
 #endif
     }
 }
-

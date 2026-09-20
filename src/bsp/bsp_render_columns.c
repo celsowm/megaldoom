@@ -1,6 +1,11 @@
 /* BSP wall-column projection and raster payload generation. */
 #include "bsp_render_internal.h"
 
+#ifndef BSP_EARLY_REJECT
+#define BSP_EARLY_REJECT 1
+#endif
+
+
 void bsp_seed_column_default(RayColumn *col) {
     col->height = 1;
     col->projected_height = 1;
@@ -100,6 +105,37 @@ static inline __attribute__((always_inline)) void draw_seg(u16 seg_index,
     }
 
     const s32 span = xR - xL; // > 0 (xa != xb guarded above, ordered xL < xR)
+    // Reject a segment before preparing perspective interpolation or texture
+    // metadata when its projected interval has no visible sample left. This is
+    // especially useful after the baked visibility walk has already closed most
+    // columns: all later arithmetic is then dead.
+#if BSP_EARLY_REJECT
+    s32 x0 = xL;
+    s32 x1 = xR - 1;
+    if (x0 < 0) x0 = 0;
+    if (x1 > RAY_VIEW_COLS - 1) x1 = RAY_VIEW_COLS - 1;
+    if (x0 > x1) {
+        return;
+    }
+
+    const u16 first_sample = (u16)((x0 + RAY_COL_STRIDE - 1) / RAY_COL_STRIDE);
+    const u16 last_sample = (u16)(x1 / RAY_COL_STRIDE);
+    if (first_sample > last_sample) {
+        return;
+    }
+    u16 sample = bsp_find_next_open(first_sample);
+    if (sample > last_sample) {
+        return;
+    }
+#else
+    s32 x0 = xL;
+    s32 x1 = xR - 1;
+    if (x0 < 0) x0 = 0;
+    if (x1 > RAY_VIEW_COLS - 1) x1 = RAY_VIEW_COLS - 1;
+    const u16 first_sample = (u16)((x0 + RAY_COL_STRIDE - 1) / RAY_COL_STRIDE);
+    const u16 last_sample = (u16)(x1 / RAY_COL_STRIDE);
+#endif
+
     // Perspective-correct interpolation is linear in 1/depth and u/depth.
     const s32 invzL = bsp_reciprocal_depth(depthL);
     const s32 invzR = bsp_reciprocal_depth(depthR);
@@ -118,25 +154,16 @@ static inline __attribute__((always_inline)) void draw_seg(u16 seg_index,
     // repeat period.  Q12 avoids a division in the sampled-column loop.
     const u16 u_scale_q12 = FREEDOOM_WALL_TEXTURE_USCALE_Q12[tid];
 
-    s32 x0 = xL;
-    s32 x1 = xR - 1;
-    if (x0 < 0) x0 = 0;
-    if (x1 > RAY_VIEW_COLS - 1) x1 = RAY_VIEW_COLS - 1;
-    if (x0 > x1) {
-        return;
-    }
-
-    const u16 first_sample = (u16)((x0 + RAY_COL_STRIDE - 1) / RAY_COL_STRIDE);
-    const u16 last_sample = (u16)(x1 / RAY_COL_STRIDE);
-    if (first_sample > last_sample) {
-        return;
-    }
-
     bool drew_any = FALSE;
 #if CADENCE_STAGE_PROBE && CADENCE_DRAWSEG_SPLIT
     const u32 sample_loop_start = getSubTick();
 #endif
+#if !BSP_EARLY_REJECT
+    if (x0 > x1 || first_sample > last_sample) {
+        return;
+    }
     u16 sample = bsp_find_next_open(first_sample);
+#endif
     while (sample <= last_sample) {
         const s32 x = (s32)sample * RAY_COL_STRIDE;
         // x - xL fits u16: x <= 159 and xL >= -(s16 quotient + margin), so the
@@ -287,12 +314,24 @@ static inline __attribute__((always_inline)) void draw_seg(u16 seg_index,
 }
 
 void bsp_draw_seg(u16 seg_index) {
+#if CADENCE_STAGE_PROBE && CADENCE_DRAWSEG_SPLIT
+    const u32 drawseg_start = getSubTick();
+#endif
     draw_seg(seg_index, FALSE);
+#if CADENCE_STAGE_PROBE && CADENCE_DRAWSEG_SPLIT
+    g_cadence_drawseg_subticks += getSubTick() - drawseg_start;
+#endif
 }
 
 #if BSP_VIS_LIST
 void bsp_draw_seg_facing(u16 seg_index) {
+#if CADENCE_STAGE_PROBE && CADENCE_DRAWSEG_SPLIT
+    const u32 drawseg_start = getSubTick();
+#endif
     draw_seg(seg_index, TRUE);
+#if CADENCE_STAGE_PROBE && CADENCE_DRAWSEG_SPLIT
+    g_cadence_drawseg_subticks += getSubTick() - drawseg_start;
+#endif
 }
 #endif
 

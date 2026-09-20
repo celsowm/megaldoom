@@ -1,7 +1,9 @@
 # Próximo experimento de performance — 2026-09-20
 
-Status: plano baseado no LOG e na leitura do código de `8758cb6`.
-Nenhuma otimização foi implementada ou medida nesta análise.
+Status: o plano foi executado na frente BSP. A rejeição antecipada já está
+ativa por padrão; a especialização direcional tem um protótipo guardado por
+flag e passou o oracle completo de E1M6, mas ainda não foi promovida ao bake
+de campanha.
 
 ## Decisão
 
